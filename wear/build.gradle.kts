@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "inga.bpmetrics.wear"
-        minSdk = 30
+        minSdk = 31
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
