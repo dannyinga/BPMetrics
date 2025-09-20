@@ -23,9 +23,8 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
 import androidx.wear.tooling.preview.devices.WearDevices
-import inga.bpmetrics.wear.theme.BPMetricsTheme
 
-class RecordingActivity : ComponentActivity() {
+class BpmWatchActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
 
