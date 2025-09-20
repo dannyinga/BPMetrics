@@ -27,7 +27,7 @@
             android:value="true" />
 
         <activity
-            android:name="inga.bpmetrics.wear.RecordingActivity"
+            android:name="inga.bpmetrics.wear.BpmWatchActivity"
             android:exported="true"
             android:taskAffinity=""
             android:theme="@style/RecordingActivityTheme.Starting">
