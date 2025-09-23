@@ -56,4 +56,9 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+
+    implementation(libs.androidx.health.services)
+    implementation(libs.guava)
+    implementation(libs.concurrent.futures)
+    implementation(libs.gson)
 }
