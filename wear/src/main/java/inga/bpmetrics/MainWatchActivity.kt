@@ -3,11 +3,14 @@
  * most up to date changes to the libraries and their usages.
  */
 
-package inga.bpmetrics.wear
+package inga.bpmetrics
 
 import android.Manifest
+import android.R
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -15,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,37 +33,64 @@ import androidx.core.content.ContextCompat
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 
 /**
  * The Watch Activity and UI. Handles flow between application start, permissions, and the
  * recording screen. Contains logic to allow the user to communicate with the controller.
  */
-class MainActivity : ComponentActivity() {
+class MainWatchActivity : ComponentActivity() {
     //TODO: Allow HealthServices to continue recording even when application isn't in focus
     private lateinit var controller: BpmWatchController
+    private var _isRecording = false
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
 
-        setTheme(android.R.style.Theme_DeviceDefault)
-        controller = BpmWatchController(applicationContext)
+        setTheme(R.style.Theme_DeviceDefault)
+        controller = BpmWatchController.getInstance(applicationContext)
+        controller.bindService()
 
         setContent {
-            BpmApp()
+            PermissionScreen {
+                setContent { BPMStartStopScreen() }
+            }
         }
     }
 
-    /**
-     * Main App content setting. First displays the permissions screen and if permission is granted,
-     * will then display the start/stop screen.
-     */
-    @Composable
-    fun BpmApp() {
-        PermissionScreen {
-            // This block runs only if permission is granted
-            setContent { BPMStartStopScreen() }
+    override fun onPause() {
+        super.onPause()
+        Log.d("UI", "Activity Paused")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (!_isRecording) {
+            controller.unbindService()
         }
+        Log.d("UI", "Activity Stopped with isRecording value: $_isRecording")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!_isRecording) {
+            controller.bindService()
+        }
+        Log.d("UI", "Activity Resumed with isRecording value: $_isRecording")
+    }
+
+    override fun onRestart() {
+        super.onRestart()
+        Log.d("UI", "Activity Restarted")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        controller.stopRecording()
+        controller.unbindService()
     }
 
     /**
@@ -139,27 +170,42 @@ class MainActivity : ComponentActivity() {
      */
     @Composable
     fun BPMStartStopScreen() {
-        var bpm by remember { mutableStateOf<Double?>(null) }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         var isRecording by remember { mutableStateOf(false) }
+        val liveBpm by controller.bpmFlow.collectAsState()
+        val liveBpmText = when (liveBpm) {
+            null -> "Unavailable"
+            0.0 -> "Acquiring"
+            else -> liveBpm.toString()
+        }
 
         Column(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(text = bpm?.toString() ?: "--", style = MaterialTheme.typography.body1)
+            Text(
+                text = liveBpmText,
+                style = MaterialTheme.typography.body1)
 
-            Button(onClick = {
-                if (isRecording) {
-                    controller.stopRecording()
-                    bpm = null
-                } else {
-                    controller.startRecording { newBpm ->
-                        bpm = newBpm
+            Spacer(
+                modifier = Modifier.fillMaxWidth().height(18.dp)
+            )
+
+            Button(
+                enabled = (liveBpm != null && liveBpm!! > 0) || isRecording,
+                onClick = {
+                    if (isRecording) {
+                        controller.stopRecording()
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        controller.startRecording()
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
+                    isRecording = !isRecording
+                    _isRecording = isRecording
                 }
-                isRecording = !isRecording
-            }) {
+            ) {
                 Text(if (isRecording) "Stop" else "Start")
             }
         }

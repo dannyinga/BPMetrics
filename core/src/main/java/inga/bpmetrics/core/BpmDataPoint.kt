@@ -1,8 +1,11 @@
 package inga.bpmetrics.core
 
+import androidx.room.Entity
+
 /**
  * A single data point for a BPM reading : (timestamp: Long, bpm: Double)
  */
+@Entity()
 data class BpmDataPoint(
     val timestamp: Long, // time since start of recording
     val bpm: Double

@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "inga.bpmetrics.wear"
+    namespace = "inga.bpmetrics"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "inga.bpmetrics.wear"
+        applicationId = "inga.bpmetrics"
         minSdk = 31
         targetSdk = 36
         versionCode = 1
@@ -52,6 +52,7 @@ dependencies {
     implementation(libs.androidx.wear.tooling.preview)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.splashscreen)
+    implementation(libs.androidx.lifecycle.service)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)

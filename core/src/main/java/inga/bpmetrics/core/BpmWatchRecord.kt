@@ -10,6 +10,8 @@ import java.time.ZoneId
  * A record as created by the watch. Contains only the data, data points, start time, end time,
  * and duration. The phone will receive this record and give it additional info (title, tags,
  * statistics, etc.)
+ *
+ * @
  */
 data class BpmWatchRecord(
     val date: Date,
@@ -17,7 +19,7 @@ data class BpmWatchRecord(
     val startTime: Long,
     val endTime: Long,
 ) : Comparable<BpmWatchRecord> {
-    val duration: Long = endTime - startTime
+    val durationMs: Long = endTime - startTime
 
     init {
         validateParams()
@@ -49,9 +51,9 @@ data class BpmWatchRecord(
                                                         .atZone(ZoneId.systemDefault())
                                                         .format(formatter)}")
 
-        val durationMin = duration / (1000 * 60) % 60
-        val durationSec = duration / 1000 % 60
-        val durationMillis = duration % 1000
+        val durationMin = durationMs / (1000 * 60) % 60
+        val durationSec = durationMs / 1000 % 60
+        val durationMillis = durationMs % 1000
         outputBuilder.appendLine("Duration: ${durationMin}m ${durationSec}s ${durationMillis}ms")
         outputBuilder.appendLine()
         outputBuilder.appendLine("Raw Data")

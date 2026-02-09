@@ -26,7 +26,8 @@ class SampleBpmData {
                 bpmDataPoint5)
                 .sorted()
 
-            return BpmWatchRecord(Date(System.currentTimeMillis()),
+            return BpmWatchRecord(
+                Date(System.currentTimeMillis()),
                 bpmDataPointList1,
                 startTime,
                 startTime + 6000L)

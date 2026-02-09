@@ -1,4 +1,4 @@
-package inga.bpmetrics.wear.theme
+package inga.bpmetrics.theme
 
 import androidx.compose.runtime.Composable
 import androidx.wear.compose.material.MaterialTheme
