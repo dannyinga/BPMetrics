@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "inga.bpmetrics"
-        minSdk = 31
+        minSdk = 34
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -53,6 +53,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.lifecycle.service)
+    implementation(libs.androidx.navigation.compose)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
@@ -62,4 +63,5 @@ dependencies {
     implementation(libs.guava)
     implementation(libs.concurrent.futures)
     implementation(libs.gson)
+    implementation(libs.androidx.wear.ongoing)
 }
