@@ -78,7 +78,7 @@ class BpmRepository {
                 )
                 _liveBpm.value = dataPoint.bpm
                 dataPoints.add(dataPoint)
-                Log.d(tag, "Exercise added point. current sample size = ${dataPoints.size}")
+//                Log.d(tag, "Exercise added point. current sample size = ${dataPoints.size}")
             }
         }
     }

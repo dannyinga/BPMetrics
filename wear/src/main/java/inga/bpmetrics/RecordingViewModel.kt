@@ -1,6 +1,8 @@
 package inga.bpmetrics
 
 import android.util.Log
+import android.view.Window
+import android.view.WindowManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
@@ -12,6 +14,7 @@ import kotlinx.coroutines.launch
  * Gets the state from the repository for the UI
  */
 class RecordingViewModel(
+    private val window: Window,
     private val spotMeasureManager: BpmSpotMeasureManager,
     private val serviceManager: BpmServiceManager,
     private val syncManager: BpmSyncManager
@@ -47,37 +50,57 @@ class RecordingViewModel(
     )
 
     fun onStartClicked() {
-        viewModelScope.launch {
-            spotMeasureManager.stop()
-        }
-        serviceManager.startAndBind()
-        repository.startRecording()
+        stopRecordingAndSendRecord()
+        startExerciseService()
+        stopSpotMeasurement()
     }
 
     fun onStopClicked() {
+        stopRecordingAndSendRecord()
+        stopExerciseService()
+        startSpotMeasurement()
+    }
+
+    private fun startSpotMeasurement() {
+        spotMeasureManager.start()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    private fun stopRecordingAndSendRecord() {
         val record = repository.stopRecording()
         if (record != null)
             viewModelScope.launch {
                 syncManager.sendRecordToPhone(record)
             }
-        serviceManager.unbindAndStop()
-        spotMeasureManager.start()
     }
 
-    fun onStop() {
+    private fun startExerciseService() {
+        serviceManager.startAndBind()
+        repository.startRecording()
+    }
+
+    private fun stopExerciseService() {
+        serviceManager.unbindAndStop()
+    }
+
+    private fun stopSpotMeasurement() {
         viewModelScope.launch {
-//            if (repository.serviceMode.value == BpmServiceMode.IDLE) {
-                spotMeasureManager.stop()
-                Log.d(tag, "Stopping spot measurement")
-//            }
+            spotMeasureManager.stop()
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
-    fun onResume() {
+    fun onActivityStop() {
+        viewModelScope.launch {
+            spotMeasureManager.stop()
+            Log.d(tag, "Stopping spot measurement")
+        }
+    }
+
+    fun onActivityResume() {
         viewModelScope.launch {
             if (repository.serviceMode.value == BpmServiceMode.IDLE) {
-                spotMeasureManager.start()
-
+                startSpotMeasurement()
                 Log.d(tag, "Starting spot measurement")
             }
         }

@@ -121,11 +121,6 @@ fun BpmContent(
     onStart: () -> Unit,
     onStop: () -> Unit) {
 
-    val context = LocalContext.current
-    val window = context.findActivity()?.window
-
-    window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -157,10 +152,8 @@ fun BpmContent(
             onClick = {
                 if (isRecording) {
                     onStop()
-                    window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 } else {
                     onStart()
-                    window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
             }
         ) {

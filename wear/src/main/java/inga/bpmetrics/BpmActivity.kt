@@ -37,7 +37,7 @@ class BpmActivity : ComponentActivity() {
         PermissionsViewModel(applicationContext)
     }
     private val recordingViewModel by lazy {
-        RecordingViewModel(spotMeasureManager, serviceManager, syncManager)
+        RecordingViewModel(window, spotMeasureManager, serviceManager, syncManager)
     }
 
 
@@ -54,13 +54,13 @@ class BpmActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        recordingViewModel.onStop()
+        recordingViewModel.onActivityStop()
         Log.d(tag, "Activity Stopped")
     }
 
     override fun onResume() {
         super.onResume()
-        recordingViewModel.onResume()
+        recordingViewModel.onActivityResume()
         Log.d(tag, "Activity Resumed")
     }
 
