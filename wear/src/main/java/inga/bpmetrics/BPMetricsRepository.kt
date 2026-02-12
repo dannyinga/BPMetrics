@@ -54,10 +54,6 @@ class BPMetricsRepository {
     }
 
     fun onExerciseUpdate(update: ExerciseUpdate) {
-        if (update.exerciseStateInfo.state == ExerciseState.USER_STARTING) {
-            resetDataForNewRecord()
-        }
-
         if (update.exerciseStateInfo.state.isEnded) {
             Log.d(tag, "Service state changing to ASLEEP")
             resetDataForNewRecord()
@@ -84,6 +80,7 @@ class BPMetricsRepository {
     fun startRecording() {
         Log.d(tag, "Service state changing to RECORDING")
         _serviceState.value = BpmServiceState.RECORDING
+        resetDataForNewRecord()
     }
 
     fun stopRecording()  {
@@ -93,7 +90,6 @@ class BPMetricsRepository {
     }
 
     fun resetService() {
-        resetDataForNewRecord()
         stopRecording()
     }
 
