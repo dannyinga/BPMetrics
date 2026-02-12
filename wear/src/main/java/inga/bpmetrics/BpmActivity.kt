@@ -8,13 +8,18 @@ package inga.bpmetrics
 import android.R
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.launch
 
 /**
  * The Watch BpmActivity and UI. Handles flow between application start, permissions, and the
@@ -22,14 +27,9 @@ import androidx.navigation.compose.rememberNavController
  */
 class BpmActivity : ComponentActivity() {
     private val tag = "BpmActivity"
-    //TODO: Allow HealthServices to continue recording even when application isn't in focus
     private val serviceManager by lazy {
         (application as BpmApp).serviceManager
     }
-    private val spotMeasureManager by lazy {
-        (application as BpmApp).spotMeasureManager
-    }
-
     private val syncManager by lazy {
         (application as BpmApp).syncManager
     }
@@ -37,36 +37,66 @@ class BpmActivity : ComponentActivity() {
         PermissionsViewModel(applicationContext)
     }
     private val recordingViewModel by lazy {
-        RecordingViewModel(window, spotMeasureManager, serviceManager, syncManager)
+        RecordingViewModel(window)
     }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Log.d(tag, "Activity creating")
         installSplashScreen()
         super.onCreate(savedInstanceState)
-
         setTheme(R.style.Theme_DeviceDefault)
+
+        addLifecycleObservers()
+        setWindowFlags()
+
         setContent {
             BpmNavHost()
         }
-        Log.d(tag, "Activity Created")
     }
 
     override fun onStop() {
+        Log.d(tag, "Activity stopping")
         super.onStop()
-        recordingViewModel.onActivityStop()
-        Log.d(tag, "Activity Stopped")
     }
 
     override fun onResume() {
+        Log.d(tag, "Activity resuming")
         super.onResume()
-        recordingViewModel.onActivityResume()
-        Log.d(tag, "Activity Resumed")
     }
 
     override fun onDestroy() {
+        Log.d(tag, "Activity destroying")
         super.onDestroy()
     }
+
+    private fun addLifecycleObservers() {
+        lifecycle.addObserver(serviceManager)
+        lifecycle.addObserver(syncManager)
+    }
+
+    private fun setWindowFlags() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        Log.d(tag, "Turned on Keep Screen On")
+
+        lifecycleScope.launch {
+            BPMetricsRepository.instance.serviceState.collect { state ->
+                when (state) {
+                    BpmServiceState.RECORDING -> {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        Log.d(tag, "Turned off Keep Screen On")
+                    }
+
+                    BpmServiceState.PREPARING -> {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        Log.d(tag, "Turned on Keep Screen On")
+                    }
+                    else -> { }
+                }
+            }
+        }
+    }
+
 
     @Composable
     fun BpmNavHost() {
@@ -91,6 +121,5 @@ class BpmActivity : ComponentActivity() {
                 RecordingScreen(recordingViewModel)
             }
         }
-
     }
 }

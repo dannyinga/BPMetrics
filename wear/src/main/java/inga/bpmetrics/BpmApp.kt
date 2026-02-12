@@ -6,20 +6,15 @@ import android.util.Log
 class BpmApp: Application() {
 
     private val tag = "BpmApplication"
-    lateinit var serviceManager: BpmServiceManager
+    lateinit var serviceManager: BpmExerciseServiceManager
         private set
-    lateinit var syncManager: BpmSyncManager
-        private set
-
-    lateinit var spotMeasureManager: BpmSpotMeasureManager
+    lateinit var syncManager: BpmPhoneSyncManager
         private set
 
     override fun onCreate() {
         super.onCreate()
-        serviceManager = BpmServiceManager(this)
-        serviceManager.unbindAndStop()
-        syncManager = BpmSyncManager(this)
-        spotMeasureManager = BpmSpotMeasureManager(this)
+        serviceManager = BpmExerciseServiceManager(this)
+        syncManager = BpmPhoneSyncManager(this)
         Log.d(tag, "Application created")
     }
 

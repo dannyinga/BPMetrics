@@ -22,7 +22,9 @@ import androidx.health.services.client.data.ExerciseType
 import androidx.health.services.client.data.ExerciseUpdate
 import androidx.health.services.client.data.WarmUpConfig
 import androidx.health.services.client.endExercise
+import androidx.health.services.client.startExercise
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
 import androidx.wear.ongoing.OngoingActivity
 import androidx.wear.ongoing.Status
 import kotlinx.coroutines.CoroutineScope
@@ -35,7 +37,7 @@ class BpmExerciseService: LifecycleService() {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val healthClient by lazy { HealthServices.getClient(this) }
     private val exerciseClient by lazy { healthClient.exerciseClient }
-    private val repository = BpmRepository.instance
+    private val repository = BPMetricsRepository.instance
     private var hasNecessaryCapabilities = false
     private lateinit var notificationManager: NotificationManager
 
@@ -60,16 +62,14 @@ class BpmExerciseService: LifecycleService() {
             dataType: DataType<*, *>,
             availability: Availability
         ) {
-            if (availability == DataTypeAvailability.AVAILABLE) {
-                exerciseClient.startExerciseAsync(exerciseConfig)
-                repository.onExerciseStarted()
-            }
+            repository.onExerciseAvailabilityChanged(availability)
 
         }
 
 
         override fun onExerciseUpdateReceived(update: ExerciseUpdate) {
             repository.onExerciseUpdate(update)
+
         }
 
         override fun onLapSummaryReceived(lapSummary: ExerciseLapSummary) {
@@ -98,6 +98,16 @@ class BpmExerciseService: LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
+        lifecycleScope.launch {
+            repository.serviceState.collect { state ->
+                when (state) {
+                    BpmServiceState.ASLEEP -> prepareExercise()
+                    BpmServiceState.RECORDING -> startExercise()
+                    BpmServiceState.ENDING -> endExercise()
+                    else -> {}
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -110,30 +120,15 @@ class BpmExerciseService: LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        checkExerciseCapabilities()
-        setExerciseCallback()
 
         notificationManager = applicationContext.getSystemService(NotificationManager::class.java)
         startForegroundWithNotification()
-        prepareExercise()
-
+        setExerciseCallback()
         Log.d(tag, "Service started")
 
         return START_STICKY
     }
 
-    private fun checkExerciseCapabilities() {
-        scope.launch {
-            val capabilities = exerciseClient.getCapabilitiesAsync().await()
-            if (ExerciseType.WORKOUT in capabilities.supportedExerciseTypes) {
-                val workoutCapabilities =
-                    capabilities.getExerciseTypeCapabilities(ExerciseType.WORKOUT)
-                hasNecessaryCapabilities =
-                    DataType.HEART_RATE_BPM in workoutCapabilities.supportedDataTypes
-                Log.d(tag, "Has necessary capabilities")
-            }
-        }
-    }
 
     private fun startForegroundWithNotification() {
         val titleText = "BPMetrics Service"
@@ -199,18 +194,24 @@ class BpmExerciseService: LifecycleService() {
     private fun prepareExercise() {
         try {
             exerciseClient.prepareExerciseAsync(warmUpConfig)
-            Log.d(tag, "Exercise prepared")
+            Log.d(tag, "Preparing exercise")
         } catch (e: Exception) {
             Log.e(tag, "Exercise prepare failed", e)
         }
 
     }
 
-    private suspend fun endExercise() {
-        try {
-            exerciseClient.endExercise()
-        } catch (_: Exception) {
-            Log.e(tag, "Exercise end failed")
+    private fun startExercise() {
+        exerciseClient.startExerciseAsync(exerciseConfig)
+    }
+
+    private fun endExercise() {
+        scope.launch {
+            try {
+                exerciseClient.endExercise()
+            } catch (_: Exception) {
+                Log.e(tag, "Exercise end failed")
+            }
         }
     }
 
