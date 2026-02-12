@@ -21,9 +21,7 @@ class PermissionsViewModel(
     private val appContext: Context
 ) : ViewModel() {
 
-    private val exerciseClient by lazy {
-        HealthServices.getClient(appContext).exerciseClient
-    }
+    private val repository = BPMetricsRepository.instance
 
     private val heartRatePermissionAdjusted =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) HealthPermissions.READ_HEART_RATE
@@ -36,23 +34,23 @@ class PermissionsViewModel(
         Manifest.permission.POST_NOTIFICATIONS
     )
 
-    private val _readiness = MutableStateFlow<AppReadiness>(AppReadiness.Checking)
-    val readiness = _readiness.asStateFlow()
+    private val _permissions = MutableStateFlow<PermissionState>(PermissionState.Checking)
+    val permissions = _permissions.asStateFlow()
 
     init {
-        refresh()
+        if (repository.hasAllPrerequisites.value)
+                _permissions.value = PermissionState.Ready
+        else {
+            refresh()
+        }
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            checkAll()
-        }
-
-
+        checkPermissions()
     }
 
-    private suspend fun checkAll() {
-        Log.d("PermVM", "Checking all permissions and exercise capabilities")
+    private fun checkPermissions() {
+        Log.d("PermVM", "Checking permissions")
         val missingPermissions = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(
                 appContext,
@@ -61,38 +59,18 @@ class PermissionsViewModel(
         }
 
         if (missingPermissions.isNotEmpty()) {
-            _readiness.value = AppReadiness.MissingPermissions(missingPermissions)
-            return
+            _permissions.value = PermissionState.MissingPermissions(missingPermissions)
         }
 
-//         Permissions granted → now check capabilities
-        try {
-            val capabilities = exerciseClient.getCapabilitiesAsync().await()
-
-            val supportsWorkout = ExerciseType.WORKOUT in capabilities.supportedExerciseTypes
-
-            val workoutCapabilities = capabilities.getExerciseTypeCapabilities(ExerciseType.WORKOUT)
-
-            val supportsBpm = DataType.HEART_RATE_BPM in workoutCapabilities.supportedDataTypes
-
-            if (supportsWorkout && supportsBpm) {
-                Log.d("PermVM", "All permissions and exercise capabilities checked")
-                _readiness.value = AppReadiness.Ready
-            } else {
-                _readiness.value = AppReadiness.UnsupportedDevice
-            }
-
-        } catch (e: Exception) {
-            _readiness.value = AppReadiness.Error(e.message ?: "Unknown error")
+        else {
+            _permissions.value = PermissionState.Ready
         }
     }
 
 }
 
-sealed interface AppReadiness {
-    object Checking : AppReadiness
-    object Ready : AppReadiness
-    data class MissingPermissions(val permissions: List<String>) : AppReadiness
-    object UnsupportedDevice : AppReadiness
-    data class Error(val message: String) : AppReadiness
+sealed interface PermissionState {
+    object Checking : PermissionState
+    object Ready : PermissionState
+    data class MissingPermissions(val permissions: List<String>) : PermissionState
 }

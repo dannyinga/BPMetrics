@@ -19,8 +19,8 @@ class BPMetricsRepository {
 
     private val tag = "Bpm Repository"
 
-    private val _hasExerciseCapabilities = MutableStateFlow<Boolean>(false)
-    val hasExerciseCapabilities = _hasExerciseCapabilities.asStateFlow()
+    private val _hasAllPrerequisites = MutableStateFlow(false)
+    val hasAllPrerequisites = _hasAllPrerequisites.asStateFlow()
     private val _liveBpm = MutableStateFlow<Double?>(null)
     val liveBpm: StateFlow<Double?> = _liveBpm.asStateFlow()
     private val _exerciseDuration = MutableStateFlow<Long>(0)
@@ -89,8 +89,8 @@ class BPMetricsRepository {
         generateRecord()
     }
 
-    fun resetService() {
-        stopRecording()
+    fun grantAllPrerequisites () {
+        _hasAllPrerequisites.value = true
     }
 
     private fun resetDataForNewRecord() {

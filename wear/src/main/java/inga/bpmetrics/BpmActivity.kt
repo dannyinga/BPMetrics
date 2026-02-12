@@ -42,15 +42,16 @@ class BpmActivity : ComponentActivity() {
         RecordingViewModel()
     }
 
+    private val exerciseCapabilitiesViewModel by lazy {
+        ExerciseCapabilitiesViewModel(applicationContext)
+    }
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.d(tag, "Activity creating")
         installSplashScreen()
         super.onCreate(savedInstanceState)
         setTheme(R.style.Theme_DeviceDefault)
-
-        addLifecycleObservers()
-        setWindowFlags()
 
         setContent {
             BpmNavHost()
@@ -115,12 +116,26 @@ class BpmActivity : ComponentActivity() {
                 PermissionsScreen(
                     permissionsViewModel,
                     onReady = {
-                        navController.navigate(Screens.Recording.route) {
+                        navController.navigate(Screens.ExerciseCapabilities.route) {
                             popUpTo(Screens.Permissions.route) { inclusive = true }
                         }
                     }
                 )
             }
+
+            composable(Screens.ExerciseCapabilities.route){
+                ExerciseCapabilitiesScreen(
+                    exerciseCapabilitiesViewModel,
+                    onReady = {
+                        addLifecycleObservers()
+                        setWindowFlags()
+                        navController.navigate(Screens.Recording.route) {
+                            popUpTo(Screens.ExerciseCapabilities.route) { inclusive = true }
+                        }
+                    }
+                )
+            }
+
 
             composable(Screens.Recording.route) {
                 RecordingScreen(recordingViewModel)

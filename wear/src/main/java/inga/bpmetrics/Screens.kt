@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
@@ -35,6 +36,7 @@ import androidx.wear.compose.material.Text
 sealed class Screens(val route: String) {
     object Permissions : Screens("permissions")
     object Recording : Screens("recording")
+    object ExerciseCapabilities : Screens("exercise_capabilities")
 }
 
 @Composable
@@ -42,7 +44,7 @@ fun PermissionsScreen (
     viewModel: PermissionsViewModel,
     onReady: () -> Unit
 ) {
-    val readiness by viewModel.readiness.collectAsState()
+    val permissions by viewModel.permissions.collectAsState()
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -52,32 +54,12 @@ fun PermissionsScreen (
         }
     }
 
-    LaunchedEffect(readiness) {
-        if (readiness is AppReadiness.Ready) {
-            onReady()
-        }
-    }
-
-    when (readiness) {
-        AppReadiness.Checking -> {}
-
-        is AppReadiness.MissingPermissions -> {
-            PermissionsUI(
-                launcher,
-                (readiness as AppReadiness.MissingPermissions).permissions)
-        }
-
-        AppReadiness.UnsupportedDevice -> {
-
-        }
-
-        AppReadiness.Ready -> {
-        }
-
-        is AppReadiness.Error -> {
-
-        }
-
+    when (permissions) {
+        PermissionState.Checking -> {}
+        is PermissionState.MissingPermissions
+            -> PermissionsUI(launcher,
+            (permissions as PermissionState.MissingPermissions).permissions)
+        PermissionState.Ready -> LaunchedEffect(Unit) { onReady() }
     }
 }
 //     Permissions UI
@@ -117,6 +99,31 @@ fun PermissionsUI(
             }
         }
     }
+}
+
+@Composable
+fun ExerciseCapabilitiesScreen(
+    viewModel: ExerciseCapabilitiesViewModel,
+    onReady: () -> Unit
+) {
+    val exerciseCapabilities by viewModel.exerciseCapabilities.collectAsState()
+
+    when (exerciseCapabilities) {
+        ExerciseCapabilitiesState.Checking -> {
+
+        }
+
+        is ExerciseCapabilitiesState.Error -> {
+
+        }
+        ExerciseCapabilitiesState.Ready -> {
+            LaunchedEffect(Unit) { onReady() }
+        }
+        ExerciseCapabilitiesState.UnsupportedDevice -> {
+
+        }
+    }
+
 }
 
 /**
@@ -161,7 +168,9 @@ fun BpmContent(
         )
 
         Spacer(
-            modifier = Modifier.fillMaxWidth().height(18.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(18.dp)
         )
 
         val isRecording = state.serviceState == BpmServiceState.RECORDING

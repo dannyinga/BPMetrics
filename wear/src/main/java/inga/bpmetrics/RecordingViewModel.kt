@@ -39,8 +39,7 @@ class RecordingViewModel() : ViewModel() {
     )
 
     init {
-        if (repository.serviceState.value != BpmServiceState.RECORDING)
-            repository.resetService()
+        repository.grantAllPrerequisites()
     }
 
     fun onStartClicked() {
