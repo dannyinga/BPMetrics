@@ -14,8 +14,10 @@ import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -37,7 +39,7 @@ class BpmActivity : ComponentActivity() {
         PermissionsViewModel(applicationContext)
     }
     private val recordingViewModel by lazy {
-        RecordingViewModel(window)
+        RecordingViewModel()
     }
 
 
@@ -80,20 +82,23 @@ class BpmActivity : ComponentActivity() {
         Log.d(tag, "Turned on Keep Screen On")
 
         lifecycleScope.launch {
-            BPMetricsRepository.instance.serviceState.collect { state ->
-                when (state) {
-                    BpmServiceState.RECORDING -> {
-                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                        Log.d(tag, "Turned off Keep Screen On")
-                    }
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                BPMetricsRepository.instance.serviceState.collect { state ->
+                    when (state) {
+                        BpmServiceState.RECORDING -> {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            Log.d(tag, "Turned off Keep Screen On")
+                        }
 
-                    BpmServiceState.PREPARING -> {
-                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                        Log.d(tag, "Turned on Keep Screen On")
+                        BpmServiceState.PREPARING -> {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            Log.d(tag, "Turned on Keep Screen On")
+                        }
+                        else -> { }
                     }
-                    else -> { }
                 }
             }
+
         }
     }
 

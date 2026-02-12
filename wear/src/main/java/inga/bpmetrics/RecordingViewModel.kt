@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.stateIn
 /**
  * Gets the state from the repository for the UI
  */
-class RecordingViewModel(private val window: Window) : ViewModel() {
+class RecordingViewModel() : ViewModel() {
     private val repository = BPMetricsRepository.instance
     private val tag = "RecordingViewModel"
 
@@ -37,6 +37,11 @@ class RecordingViewModel(private val window: Window) : ViewModel() {
         SharingStarted.WhileSubscribed(5_000),
         RecordingUIState(),
     )
+
+    init {
+        if (repository.serviceState.value != BpmServiceState.RECORDING)
+            repository.resetService()
+    }
 
     fun onStartClicked() {
         repository.startRecording()

@@ -25,7 +25,6 @@ class BpmPhoneSyncManager(
         owner.lifecycleScope.launch {
             owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 repository.currentRecord.collect { record ->
-                    Log.d(tag, "Record update observed. Sending record")
                     sendRecordToPhone(repository.currentRecord.value)
                 }
             }
@@ -42,7 +41,7 @@ class BpmPhoneSyncManager(
 
             Wearable.getDataClient(context).putDataItem(request)
                 .addOnSuccessListener {
-                    Log.d(tag, "Record sent with ${record.dataPoints.size} entries")
+                    Log.d(tag, "Record sent to phone")
                 }
                 .addOnFailureListener { Log.e(tag, it.message ?: "") }
         }

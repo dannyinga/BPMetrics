@@ -50,7 +50,7 @@ class BPMetricsRepository {
                 DataTypeAvailability.ACQUIRING -> BpmServiceState.PREPARING
                 else -> BpmServiceState.ASLEEP
             }
-        Log.d(tag, "Service state changed to ${_serviceState.value}")
+        Log.d(tag, "Availability changed: $availability")
     }
 
     fun onExerciseUpdate(update: ExerciseUpdate) {
@@ -58,9 +58,9 @@ class BPMetricsRepository {
             resetDataForNewRecord()
         }
 
-
         if (update.exerciseStateInfo.state.isEnded) {
             Log.d(tag, "Service state changing to ASLEEP")
+            resetDataForNewRecord()
             _serviceState.value = BpmServiceState.ASLEEP
         }
 
@@ -92,11 +92,17 @@ class BPMetricsRepository {
         generateRecord()
     }
 
+    fun resetService() {
+        resetDataForNewRecord()
+        stopRecording()
+    }
+
     private fun resetDataForNewRecord() {
         dataPoints.clear()
         _exerciseDuration.value = 0
         startTime = System.currentTimeMillis()
         startTimeFromBoot = SystemClock.elapsedRealtime()
+        _currentRecord.value = null
     }
 
     private fun generateRecord(){
