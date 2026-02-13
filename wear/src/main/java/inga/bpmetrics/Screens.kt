@@ -1,8 +1,6 @@
 package inga.bpmetrics
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
+import android.os.SystemClock
 import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -28,10 +27,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavController
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import kotlinx.coroutines.delay
 
 sealed class Screens(val route: String) {
     object Permissions : Screens("permissions")
@@ -134,7 +133,7 @@ fun ExerciseCapabilitiesScreen(
 fun RecordingScreen(viewModel: RecordingViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    BpmContent(
+    RecordingContent(
         state = uiState,
         onStart = viewModel::onStartClicked,
         onStop = viewModel::onStopClicked
@@ -142,7 +141,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
 }
 
 @Composable
-fun BpmContent(
+fun RecordingContent(
     state: RecordingUIState,
     onStart: () -> Unit,
     onStop: () -> Unit) {
@@ -152,8 +151,18 @@ fun BpmContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        val seconds = state.exerciseDuration / 1000 % 60
-        val minutes = state.exerciseDuration / (1000 * 60) % 60
+        val recordingStartTime = state.recordingStartTime
+        val recordingDuration by produceState(0L, recordingStartTime) {
+            if (recordingStartTime == 0L) return@produceState
+
+            while (true) {
+                value = SystemClock.elapsedRealtime() - state.recordingStartTime
+                delay(1000)
+            }
+        }
+
+        val seconds = recordingDuration / 1000 % 60
+        val minutes = recordingDuration / (1000 * 60) % 60
 
         val minutesF = if (minutes > 0) "${minutes}m " else ""
         val formattedTimeStamp = "$minutesF${seconds}s"

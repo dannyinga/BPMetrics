@@ -6,16 +6,10 @@ import android.content.pm.PackageManager
 import android.health.connect.HealthPermissions
 import android.os.Build
 import android.util.Log
-import androidx.concurrent.futures.await
 import androidx.core.content.ContextCompat
-import androidx.health.services.client.HealthServices
-import androidx.health.services.client.data.DataType
-import androidx.health.services.client.data.ExerciseType
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 
 class PermissionsViewModel(
     private val appContext: Context

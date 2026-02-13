@@ -1,11 +1,12 @@
 package inga.bpmetrics
 
-import android.view.Window
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /**
  * Gets the state from the repository for the UI
@@ -16,12 +17,12 @@ class RecordingViewModel() : ViewModel() {
 
     val uiState = combine(
         repository.liveBpm,
-        repository.exerciseDuration,
+        repository.recordingStartTime,
         repository.serviceState,
-    ) { bpm, exerciseDuration, serviceState ->
+    ) { bpm, recordingStartTime, serviceState ->
         RecordingUIState(
             bpm = bpm,
-            exerciseDuration = exerciseDuration,
+            recordingStartTime = recordingStartTime,
             serviceState = serviceState,
             statusText =
                 when (serviceState) {
@@ -53,7 +54,7 @@ class RecordingViewModel() : ViewModel() {
 
 data class RecordingUIState(
     val bpm: Double? = null,
-    val exerciseDuration: Long = 0,
+    val recordingStartTime: Long = 0L,
     val serviceState: BpmServiceState = BpmServiceState.ASLEEP,
     val statusText: String = ""
 )

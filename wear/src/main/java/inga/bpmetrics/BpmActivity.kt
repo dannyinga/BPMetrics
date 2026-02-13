@@ -5,7 +5,7 @@
 
 package inga.bpmetrics
 
-import android.R
+import android.R.style.Theme_DeviceDefault
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
@@ -13,9 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.NavHost
@@ -31,9 +29,6 @@ class BpmActivity : ComponentActivity() {
     private val tag = "BpmActivity"
     private val serviceManager by lazy {
         (application as BpmApp).serviceManager
-    }
-    private val syncManager by lazy {
-        (application as BpmApp).syncManager
     }
     private val permissionsViewModel by lazy {
         PermissionsViewModel(applicationContext)
@@ -51,7 +46,7 @@ class BpmActivity : ComponentActivity() {
         Log.d(tag, "Activity creating")
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        setTheme(R.style.Theme_DeviceDefault)
+        setTheme(Theme_DeviceDefault)
 
         setContent {
             BpmNavHost()

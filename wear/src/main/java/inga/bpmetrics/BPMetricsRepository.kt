@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.health.services.client.data.Availability
 import androidx.health.services.client.data.DataType
 import androidx.health.services.client.data.DataTypeAvailability
-import androidx.health.services.client.data.ExerciseState
 import androidx.health.services.client.data.ExerciseUpdate
 import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.core.BpmWatchRecord
@@ -15,7 +14,7 @@ import java.sql.Date
 /**
  * The core logic class. Takes input from the service and compiles it into records
  */
-class BPMetricsRepository {
+class BPMetricsRepository private constructor() {
 
     private val tag = "Bpm Repository"
 
@@ -23,9 +22,6 @@ class BPMetricsRepository {
     val hasAllPrerequisites = _hasAllPrerequisites.asStateFlow()
     private val _liveBpm = MutableStateFlow<Double?>(null)
     val liveBpm: StateFlow<Double?> = _liveBpm.asStateFlow()
-    private val _exerciseDuration = MutableStateFlow<Long>(0)
-    val exerciseDuration: StateFlow<Long> = _exerciseDuration.asStateFlow()
-
     private val _serviceState = MutableStateFlow(
         BpmServiceState.ASLEEP
     )
@@ -34,53 +30,58 @@ class BPMetricsRepository {
     private val _currentRecord = MutableStateFlow<BpmWatchRecord?>(null)
     val currentRecord = _currentRecord.asStateFlow()
 
+    private val _recordingStartTime = MutableStateFlow(0L)
+    val recordingStartTime = _recordingStartTime.asStateFlow()
+
 
     /**
      * Record creation data
      */
 
     private val dataPoints = mutableListOf<BpmDataPoint>()
-    private var startTime: Long = 0L
-    private var startTimeFromBoot: Long = 0L
+    private var startTimeForDate: Long = 0L
 
     fun onExerciseAvailabilityChanged(availability: Availability) {
-        _serviceState.value =
-            when (availability) {
-                DataTypeAvailability.AVAILABLE -> BpmServiceState.READY
-                DataTypeAvailability.ACQUIRING -> BpmServiceState.PREPARING
-                else -> BpmServiceState.ASLEEP
-            }
-        Log.d(tag, "Availability changed: $availability")
+        if (_serviceState.value != BpmServiceState.RECORDING) {
+            _serviceState.value = when (availability) {
+                    DataTypeAvailability.AVAILABLE -> BpmServiceState.READY
+                    DataTypeAvailability.ACQUIRING -> BpmServiceState.PREPARING
+                    else -> BpmServiceState.ASLEEP
+                }
+            Log.d(tag, "Availability changed: $availability")
+        }
     }
 
     fun onExerciseUpdate(update: ExerciseUpdate) {
+        Log.d(tag, "$update")
+
         if (update.exerciseStateInfo.state.isEnded) {
             Log.d(tag, "Service state changing to ASLEEP")
-            resetDataForNewRecord()
             _serviceState.value = BpmServiceState.ASLEEP
         }
 
         val samples = update.latestMetrics.getData(DataType.HEART_RATE_BPM)
         samples.forEach { point ->
-            _liveBpm.value = point.value
-            val timestamp = point.timeDurationFromBoot.toMillis() - startTimeFromBoot
-            if (_serviceState.value == BpmServiceState.RECORDING && timestamp > 0) {
-                _exerciseDuration.value = timestamp
+            val bpm = point.value
+            val timestamp = point.timeDurationFromBoot.toMillis() - _recordingStartTime.value
 
-                val dataPoint = BpmDataPoint(
-                    timestamp = timestamp,
-                    bpm = point.value
-                )
-                dataPoints.add(dataPoint)
-                Log.d(tag, "Exercise added point. current sample size = ${dataPoints.size}")
+            _liveBpm.value = bpm
+            if (_serviceState.value == BpmServiceState.RECORDING)
+                if (point.value > 0 && timestamp > 0) {
+                    val dataPoint = BpmDataPoint(
+                        timestamp = timestamp,
+                        bpm = bpm
+                    )
+                    dataPoints.add(dataPoint)
+                    Log.d(tag, "Exercise added point $dataPoint")
             }
         }
     }
 
     fun startRecording() {
         Log.d(tag, "Service state changing to RECORDING")
-        _serviceState.value = BpmServiceState.RECORDING
         resetDataForNewRecord()
+        _serviceState.value = BpmServiceState.RECORDING
     }
 
     fun stopRecording()  {
@@ -89,15 +90,15 @@ class BPMetricsRepository {
         generateRecord()
     }
 
-    fun grantAllPrerequisites () {
+    fun grantAllPrerequisites() {
         _hasAllPrerequisites.value = true
     }
 
     private fun resetDataForNewRecord() {
+        Log.d(tag, "Data being reset and recordingStartTime being set")
+        _recordingStartTime.value = SystemClock.elapsedRealtime()
         dataPoints.clear()
-        _exerciseDuration.value = 0
-        startTime = System.currentTimeMillis()
-        startTimeFromBoot = SystemClock.elapsedRealtime()
+        startTimeForDate = System.currentTimeMillis()
         _currentRecord.value = null
     }
 
@@ -107,9 +108,9 @@ class BPMetricsRepository {
                 null
             else
                 BpmWatchRecord(
-            date = Date(startTime),
+            date = Date(startTimeForDate),
             dataPoints = dataPoints.toList().sorted(),
-            startTime = startTime,
+            startTime = startTimeForDate,
             endTime = System.currentTimeMillis()
         )
     }

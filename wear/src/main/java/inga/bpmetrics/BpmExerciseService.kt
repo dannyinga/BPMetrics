@@ -15,14 +15,15 @@ import androidx.health.services.client.HealthServices
 import androidx.health.services.client.clearUpdateCallback
 import androidx.health.services.client.data.Availability
 import androidx.health.services.client.data.DataType
-import androidx.health.services.client.data.DataTypeAvailability
 import androidx.health.services.client.data.ExerciseConfig
 import androidx.health.services.client.data.ExerciseLapSummary
+import androidx.health.services.client.data.ExerciseTrackedStatus.Companion.NO_EXERCISE_IN_PROGRESS
+import androidx.health.services.client.data.ExerciseTrackedStatus.Companion.OTHER_APP_IN_PROGRESS
+import androidx.health.services.client.data.ExerciseTrackedStatus.Companion.OWNED_EXERCISE_IN_PROGRESS
 import androidx.health.services.client.data.ExerciseType
 import androidx.health.services.client.data.ExerciseUpdate
 import androidx.health.services.client.data.WarmUpConfig
 import androidx.health.services.client.endExercise
-import androidx.health.services.client.startExercise
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import androidx.wear.ongoing.OngoingActivity
@@ -34,11 +35,11 @@ import kotlinx.coroutines.launch
 
 class BpmExerciseService: LifecycleService() {
     private val tag = "BPMetrics Exercise Service"
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     private val healthClient by lazy { HealthServices.getClient(this) }
     private val exerciseClient by lazy { healthClient.exerciseClient }
     private val repository = BPMetricsRepository.instance
-    private var hasNecessaryCapabilities = false
     private lateinit var notificationManager: NotificationManager
 
     private val exerciseConfig = ExerciseConfig(
@@ -52,11 +53,6 @@ class BpmExerciseService: LifecycleService() {
         ExerciseType.WORKOUT,
         setOf(DataType.HEART_RATE_BPM)
     )
-
-    /**
-     * Health Services Helpers
-     */
-
     private val exerciseCallback = object : ExerciseUpdateCallback {
         override fun onAvailabilityChanged(
             dataType: DataType<*, *>,
@@ -99,6 +95,19 @@ class BpmExerciseService: LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         lifecycleScope.launch {
+            val currentExerciseInfo = exerciseClient.getCurrentExerciseInfoAsync().await()
+
+            when (currentExerciseInfo.exerciseTrackedStatus) {
+                OTHER_APP_IN_PROGRESS -> {}// Warn user before continuing, will stop the existing workout.
+                OWNED_EXERCISE_IN_PROGRESS -> {
+                    if (repository.serviceState.value != BpmServiceState.RECORDING) {
+                        Log.d(tag, "Exercise already in progress, but not recording")
+                        endExercise()
+                    }
+                }
+                NO_EXERCISE_IN_PROGRESS -> {}
+            }
+
             repository.serviceState.collect { state ->
                 when (state) {
                     BpmServiceState.ASLEEP -> prepareExercise()
@@ -184,11 +193,9 @@ class BpmExerciseService: LifecycleService() {
         Log.d(tag, "Exercise update callback set")
     }
 
-    private fun clearExerciseCallback() {
-        scope.launch {
-            exerciseClient.clearUpdateCallback(exerciseCallback)
-            Log.d(tag, "Exercise update callback cleared")
-        }
+    private suspend fun clearExerciseCallback() {
+        exerciseClient.clearUpdateCallback(exerciseCallback)
+        Log.d(tag, "Exercise update callback cleared")
     }
 
     private fun prepareExercise() {
@@ -205,13 +212,11 @@ class BpmExerciseService: LifecycleService() {
         exerciseClient.startExerciseAsync(exerciseConfig)
     }
 
-    private fun endExercise() {
-        scope.launch {
-            try {
-                exerciseClient.endExercise()
-            } catch (_: Exception) {
-                Log.e(tag, "Exercise end failed")
-            }
+    private suspend fun endExercise() {
+        try {
+            exerciseClient.endExercise()
+        } catch (_: Exception) {
+            Log.e(tag, "Exercise end failed")
         }
     }
 
