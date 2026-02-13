@@ -75,7 +75,6 @@ class BpmActivity : ComponentActivity() {
 
     private fun addLifecycleObservers() {
         lifecycle.addObserver(serviceManager)
-        lifecycle.addObserver(syncManager)
     }
 
     private fun setWindowFlags() {

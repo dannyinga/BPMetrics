@@ -11,24 +11,23 @@ import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import com.google.gson.Gson
 import inga.bpmetrics.core.BpmWatchRecord
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-class BpmPhoneSyncManager(
-    val context: Context
-) : DefaultLifecycleObserver {
+class BpmPhoneSyncManager(val context: Context) {
     private val tag = "BPMetrics Sync Manager"
     private val repository = BPMetricsRepository.instance
     private val gson = Gson()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    override fun onCreate(owner: LifecycleOwner) {
-        super.onCreate(owner)
-        owner.lifecycleScope.launch {
-            owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                repository.currentRecord.collect { record ->
-                    sendRecordToPhone(repository.currentRecord.value)
-                }
+    init {
+        scope.launch {
+            Log.d(tag, "Record collection listening started...")
+            repository.currentRecord.collect { record ->
+                sendRecordToPhone(record)
             }
-
         }
     }
 
