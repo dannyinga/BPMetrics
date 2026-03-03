@@ -1,4 +1,4 @@
-package inga.bpmetrics
+package inga.bpmetrics.ui
 
 import android.content.Context
 import android.util.Log
@@ -8,6 +8,7 @@ import androidx.health.services.client.data.DataType
 import androidx.health.services.client.data.ExerciseType
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import inga.bpmetrics.BPMetricsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -16,7 +17,8 @@ class ExerciseCapabilitiesViewModel (
     private val appContext: Context
 ) : ViewModel() {
 
-    private val repository = BPMetricsRepository.instance
+    private val repository = BPMetricsRepository.Companion.getInstance(appContext)
+
     private val exerciseClient by lazy {
         HealthServices.getClient(appContext).exerciseClient
     }

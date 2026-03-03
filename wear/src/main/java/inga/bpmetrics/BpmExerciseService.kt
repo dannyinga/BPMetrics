@@ -1,12 +1,17 @@
 package inga.bpmetrics
 
-import android.R
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
+import android.os.Build
 import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import androidx.concurrent.futures.await
 import androidx.core.app.NotificationCompat
@@ -28,19 +33,24 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import androidx.wear.ongoing.OngoingActivity
 import androidx.wear.ongoing.Status
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import java.time.Duration
 
-class BpmExerciseService: LifecycleService() {
-    private val tag = "BPMetrics Exercise Service"
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+/**
+ * Foreground service for managing BPM recording and Health Services interaction.
+ */
+class BpmExerciseService : LifecycleService() {
 
+    private val tag = "BpmExerciseService"
     private val healthClient by lazy { HealthServices.getClient(this) }
     private val exerciseClient by lazy { healthClient.exerciseClient }
-    private val repository = BPMetricsRepository.instance
+    private val repository by lazy { BPMetricsRepository.getInstance(this) }
     private lateinit var notificationManager: NotificationManager
+    
+    private var endingTimeoutJob: Job? = null
 
     private val exerciseConfig = ExerciseConfig(
         exerciseType = ExerciseType.WORKOUT,
@@ -53,34 +63,23 @@ class BpmExerciseService: LifecycleService() {
         ExerciseType.WORKOUT,
         setOf(DataType.HEART_RATE_BPM)
     )
+
     private val exerciseCallback = object : ExerciseUpdateCallback {
-        override fun onAvailabilityChanged(
-            dataType: DataType<*, *>,
-            availability: Availability
-        ) {
+        override fun onAvailabilityChanged(dataType: DataType<*, *>, availability: Availability) {
             repository.onExerciseAvailabilityChanged(availability)
-
         }
-
 
         override fun onExerciseUpdateReceived(update: ExerciseUpdate) {
             repository.onExerciseUpdate(update)
-
         }
 
-        override fun onLapSummaryReceived(lapSummary: ExerciseLapSummary) {
-
-        }
-
-        override fun onRegistered() {
-
-        }
-
+        override fun onLapSummaryReceived(lapSummary: ExerciseLapSummary) {}
+        override fun onRegistered() {}
         override fun onRegistrationFailed(throwable: Throwable) {
-
+            Log.e(tag, "Exercise callback registration failed", throwable)
         }
-
     }
+
     private val binder = LocalBinder()
 
     override fun onBind(intent: Intent): IBinder {
@@ -94,130 +93,200 @@ class BpmExerciseService: LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
-        lifecycleScope.launch {
-            val currentExerciseInfo = exerciseClient.getCurrentExerciseInfoAsync().await()
+        notificationManager = getSystemService(NotificationManager::class.java)
+        setExerciseCallback()
 
-            when (currentExerciseInfo.exerciseTrackedStatus) {
-                OTHER_APP_IN_PROGRESS -> {}// Warn user before continuing, will stop the existing workout.
-                OWNED_EXERCISE_IN_PROGRESS -> {
-                    if (repository.serviceState.value != BpmServiceState.RECORDING) {
-                        Log.d(tag, "Exercise already in progress, but not recording")
-                        endExercise()
+        lifecycleScope.launch {
+            checkCurrentExerciseStatus()
+
+            // Fail-safe: Ensure sensors are prepared if we aren't in an active session.
+            val currentState = repository.serviceState.value
+            if (currentState != BpmServiceState.RECORDING && 
+                currentState != BpmServiceState.PAUSED && 
+                currentState != BpmServiceState.ENDING) {
+                Log.d(tag, "Service started in non-active state ($currentState). Triggering sensor warm-up.")
+                prepareExercise()
+            }
+
+            // Use distinctUntilChanged to ensure we only vibrate once per READY transition
+            repository.serviceState
+                .collect { state ->
+                    when (state) {
+                        BpmServiceState.READY -> {
+                            Log.d(tag, "Service state: READY - Vibrating")
+                            vibrateForAcquisition()
+                        }
+                        BpmServiceState.RECORDING -> {
+                            cancelEndingTimeout()
+                            startExercise()
+                        }
+                        BpmServiceState.ENDING -> {
+                            startEndingTimeout()
+                            endExerciseAndStopService()
+                        }
+                        BpmServiceState.PAUSED -> pauseExercise()
+                        BpmServiceState.INACTIVE -> {
+                            prepareExercise()
+                        }
+                        BpmServiceState.PREPARING,
+                        BpmServiceState.ACQUIRING -> {
+                            Log.d(tag, "Service state: $state - waiting for user or sensors")
+                        }
+                        BpmServiceState.UNAVAILABLE -> {
+                            Log.w(tag, "Sensor is unavailable")
+                        }
+                        else -> {}
                     }
                 }
-                NO_EXERCISE_IN_PROGRESS -> {}
-            }
-
-            repository.serviceState.collect { state ->
-                when (state) {
-                    BpmServiceState.ASLEEP -> prepareExercise()
-                    BpmServiceState.RECORDING -> startExercise()
-                    BpmServiceState.ENDING -> endExercise()
-                    else -> {}
-                }
-            }
         }
     }
 
-    override fun onDestroy() {
-        scope.launch {
-            endExercise()
-            clearExerciseCallback()
+    private fun vibrateForAcquisition() {
+        val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+        val vibrator = vibratorManager.defaultVibrator
+
+        if (vibrator.hasVibrator()) {
+            // A short "double pulse" effect to notify acquisition
+            val effect = VibrationEffect.createWaveform(longArrayOf(0, 100, 50, 100), -1)
+            vibrator.vibrate(effect)
         }
-        super.onDestroy()
+    }
+
+    private suspend fun checkCurrentExerciseStatus() {
+        val currentExerciseInfo = exerciseClient.getCurrentExerciseInfoAsync().await()
+
+        when (currentExerciseInfo.exerciseTrackedStatus) {
+            OTHER_APP_IN_PROGRESS -> Log.w(tag, "Another app is tracking an exercise.")
+            OWNED_EXERCISE_IN_PROGRESS -> {
+                Log.d(tag, "Owned exercise in progress detected. Recovering recording state...")
+                
+                val persistedStartTime = repository.getPersistedStartTime()
+                if (persistedStartTime > 0) {
+                    val durationSinceStart = System.currentTimeMillis() - persistedStartTime
+                    repository.resumeRecording(Duration.ofMillis(durationSinceStart))
+                } else {
+                    val firstTimestamp = repository.getFirstRecordedTimestamp()
+                    repository.resumeRecording(Duration.ofMillis(firstTimestamp))
+                }
+                
+                startForegroundWithNotification()
+            }
+            NO_EXERCISE_IN_PROGRESS -> {
+                Log.d(tag, "No exercise in progress. Resetting repository.")
+                repository.forceReset()
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-
-        notificationManager = applicationContext.getSystemService(NotificationManager::class.java)
         startForegroundWithNotification()
-        setExerciseCallback()
-        Log.d(tag, "Service started")
-
         return START_STICKY
     }
 
-
     private fun startForegroundWithNotification() {
-        val titleText = "BPMetrics Service"
+        val titleText = "BPMetrics Recording"
         val channelId = "bpm_service_channel"
         val notificationId = 1
 
-        val channel = NotificationChannel(
-            channelId,
-            titleText,
-            NotificationManager.IMPORTANCE_DEFAULT
-        )
-
+        val channel = NotificationChannel(channelId, "Heart Rate Monitoring", NotificationManager.IMPORTANCE_LOW)
         notificationManager.createNotificationChannel(channel)
 
         val launchActivityIntent = Intent(this, BpmActivity::class.java)
-
-        val activityPendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            launchActivityIntent,
-            PendingIntent.FLAG_IMMUTABLE,
-        )
+        val activityPendingIntent = PendingIntent.getActivity(this, 0, launchActivityIntent, PendingIntent.FLAG_IMMUTABLE)
 
         val notificationBuilder = NotificationCompat.Builder(this, channelId)
             .setContentTitle(titleText)
-            .setContentText("Listening to heart rate…")
-            .setSmallIcon(R.drawable.ic_media_play)
+            .setContentText("Monitoring heart rate…")
+            .setSmallIcon(android.R.drawable.ic_media_play)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_WORKOUT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
-        val ongoingActivityStatus = Status.Builder()
-            // Sets the text used across various surfaces.
-            .addTemplate(titleText)
+        val ongoingActivityStatus = Status.Builder().addTemplate(titleText).build()
+        val ongoingActivity = OngoingActivity.Builder(applicationContext, notificationId, notificationBuilder)
+            .setTouchIntent(activityPendingIntent)
+            .setStatus(ongoingActivityStatus)
             .build()
-
-        val ongoingActivity =
-            OngoingActivity.Builder(applicationContext, notificationId, notificationBuilder)
-                .setStaticIcon(R.drawable.ic_media_play)
-                .setTouchIntent(activityPendingIntent)
-                .setStatus(ongoingActivityStatus)
-                .build()
 
         ongoingActivity.apply(applicationContext)
 
-        startForeground(notificationId, notificationBuilder.build())
-
-        Log.d(tag, "Foreground Service with Notification started")
+        startForeground(
+            notificationId,
+            notificationBuilder.build(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
+        )
     }
 
     private fun setExerciseCallback() {
         exerciseClient.setUpdateCallback(exerciseCallback)
-        Log.d(tag, "Exercise update callback set")
-    }
-
-    private suspend fun clearExerciseCallback() {
-        exerciseClient.clearUpdateCallback(exerciseCallback)
-        Log.d(tag, "Exercise update callback cleared")
     }
 
     private fun prepareExercise() {
-        try {
-            exerciseClient.prepareExerciseAsync(warmUpConfig)
-            Log.d(tag, "Preparing exercise")
-        } catch (e: Exception) {
-            Log.e(tag, "Exercise prepare failed", e)
-        }
-
+        Log.d(tag, "Preparing sensor warm-up")
+        exerciseClient.prepareExerciseAsync(warmUpConfig)
     }
 
     private fun startExercise() {
-        exerciseClient.startExerciseAsync(exerciseConfig)
-    }
-
-    private suspend fun endExercise() {
-        try {
-            exerciseClient.endExercise()
-        } catch (_: Exception) {
-            Log.e(tag, "Exercise end failed")
+        lifecycleScope.launch {
+            try {
+                val info = exerciseClient.getCurrentExerciseInfoAsync().await()
+                if (info.exerciseTrackedStatus != OWNED_EXERCISE_IN_PROGRESS) {
+                    Log.d(tag, "Starting Health Services exercise")
+                    startForegroundWithNotification()
+                    exerciseClient.startExerciseAsync(exerciseConfig)
+                }
+            } catch (e: Exception) {
+                Log.e(tag, "Error checking status before starting exercise", e)
+            }
         }
     }
 
+    private fun pauseExercise() {
+        exerciseClient.pauseExerciseAsync()
+    }
+
+    private fun endExerciseAndStopService() {
+        lifecycleScope.launch {
+            Log.d(tag, "Ending exercise and stopping service")
+            try {
+                val info = exerciseClient.getCurrentExerciseInfoAsync().await()
+                if (info.exerciseTrackedStatus == OWNED_EXERCISE_IN_PROGRESS) {
+                    exerciseClient.endExercise()
+                } else {
+                    repository.forceReset()
+                }
+                exerciseClient.clearUpdateCallback(exerciseCallback)
+            } catch (e: Exception) {
+                Log.e(tag, "Error ending exercise", e)
+                repository.forceReset() 
+            } finally {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
+    }
+
+    private fun startEndingTimeout() {
+        endingTimeoutJob?.cancel()
+        endingTimeoutJob = lifecycleScope.launch {
+            delay(5000) 
+            if (repository.serviceState.value == BpmServiceState.ENDING) {
+                Log.w(tag, "Ending timeout reached! Force resetting repository.")
+                repository.forceReset()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
+    }
+
+    private fun cancelEndingTimeout() {
+        endingTimeoutJob?.cancel()
+        endingTimeoutJob = null
+    }
+
+    override fun onDestroy() {
+        cancelEndingTimeout()
+        super.onDestroy()
+    }
 }

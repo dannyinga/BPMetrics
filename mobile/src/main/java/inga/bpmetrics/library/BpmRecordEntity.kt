@@ -2,12 +2,28 @@ package inga.bpmetrics.library
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import java.sql.Date
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+/**
+ * A Room entity that represents a single BPM recording session's metadata.
+ *
+ * This table stores core information about a heart rate recording, such as its title, 
+ * date, and duration. It also stores pointers to specific data points (min/max) and 
+ * the calculated average BPM.
+ *
+ * @property recordId Unique identifier for the record (auto-generated).
+ * @property title The title given to the recording (e.g., a timestamp-based string or custom name).
+ * @property date The date of the recording in milliseconds since the epoch.
+ * @property startTime The start timestamp in milliseconds.
+ * @property endTime The end timestamp in milliseconds.
+ * @property durationMs The total duration of the recording in milliseconds.
+ * @property maxId The ID of the [BpmDataPointEntity] that contains the maximum heart rate.
+ * @property avg The calculated average BPM for the session.
+ * @property minId The ID of the [BpmDataPointEntity] that contains the minimum heart rate.
+ */
 @Entity(tableName = "bpm_records")
 data class BpmRecordEntity (
     @PrimaryKey(autoGenerate = true) val recordId: Long = 0,
@@ -21,6 +37,9 @@ data class BpmRecordEntity (
     val minId: Long? = 0
     ) {
 
+    /**
+     * Returns a human-readable summary of the record metadata, formatted for debugging or display.
+     */
     override fun toString(): String {
         val outputBuilder = StringBuilder()
         outputBuilder.appendLine("Record ID: $recordId")

@@ -1,4 +1,4 @@
-package inga.bpmetrics
+package inga.bpmetrics.ui
 
 import android.os.SystemClock
 import android.util.Log
@@ -30,14 +30,32 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import inga.bpmetrics.BpmServiceState
 import kotlinx.coroutines.delay
 
+/**
+ * Sealed class representing the different navigation routes in the watch application.
+ * 
+ * @property route The string identifier used for navigation.
+ */
 sealed class Screens(val route: String) {
+    /** Route for the initial permission request screen. */
     object Permissions : Screens("permissions")
+    /** Route for the main heart rate recording and display screen. */
     object Recording : Screens("recording")
+    /** Route for the background hardware capability check screen. */
     object ExerciseCapabilities : Screens("exercise_capabilities")
 }
 
+/**
+ * Composable that handles the high-level permission state logic.
+ *
+ * Redirects the user to [PermissionsUI] if requirements are missing, or triggers
+ * [onReady] if all permissions are granted.
+ *
+ * @param viewModel The view model managing permission state and logic.
+ * @param onReady Callback triggered once all permissions are successfully granted.
+ */
 @Composable
 fun PermissionsScreen (
     viewModel: PermissionsViewModel,
@@ -45,6 +63,7 @@ fun PermissionsScreen (
 ) {
     val permissions by viewModel.permissions.collectAsState()
 
+    // Activity result launcher for handling the system permission request dialog
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
@@ -55,13 +74,24 @@ fun PermissionsScreen (
 
     when (permissions) {
         PermissionState.Checking -> {}
-        is PermissionState.MissingPermissions
-            -> PermissionsUI(launcher,
-            (permissions as PermissionState.MissingPermissions).permissions)
+        is PermissionState.MissingPermissions -> {
+            PermissionsUI(
+                launcher = launcher,
+                missingPermissions = (permissions as PermissionState.MissingPermissions).permissions
+            )
+        }
         PermissionState.Ready -> LaunchedEffect(Unit) { onReady() }
     }
 }
-//     Permissions UI
+
+/**
+ * The visual interface for requesting missing permissions.
+ *
+ * Displays a descriptive message and a button to launch the system permission prompt.
+ *
+ * @param launcher The result launcher used to initiate the permission request.
+ * @param missingPermissions The list of permission strings that need to be requested.
+ */
 @Composable
 fun PermissionsUI(
     launcher: ManagedActivityResultLauncher<Array<String>, Map<String, Boolean>>,
@@ -91,8 +121,10 @@ fun PermissionsUI(
 
             Button(
                 modifier = Modifier.fillMaxWidth(0.8f),
-                onClick = { launcher.launch(missingPermissions.toTypedArray())
-                Log.d("Activity", "Missing permissions = $missingPermissions")}
+                onClick = { 
+                    launcher.launch(missingPermissions.toTypedArray())
+                    Log.d("Activity", "Requesting missing permissions: $missingPermissions")
+                }
             ) {
                 Text("Grant Permission")
             }
@@ -100,6 +132,14 @@ fun PermissionsUI(
     }
 }
 
+/**
+ * Composable that checks if the device supports the required Health Services heart rate capabilities.
+ *
+ * Automatically triggers [onReady] if the device is compatible.
+ *
+ * @param viewModel The view model managing hardware capability detection.
+ * @param onReady Callback triggered once the device hardware is confirmed to be compatible.
+ */
 @Composable
 fun ExerciseCapabilitiesScreen(
     viewModel: ExerciseCapabilitiesViewModel,
@@ -109,25 +149,29 @@ fun ExerciseCapabilitiesScreen(
 
     when (exerciseCapabilities) {
         ExerciseCapabilitiesState.Checking -> {
-
+            // Option to add a loading indicator here
         }
 
         is ExerciseCapabilitiesState.Error -> {
-
+            // Option to display an error or retry message
         }
+        
         ExerciseCapabilitiesState.Ready -> {
             LaunchedEffect(Unit) { onReady() }
         }
+        
         ExerciseCapabilitiesState.UnsupportedDevice -> {
-
+            // Option to display a "not compatible" message to the user
         }
     }
-
 }
 
 /**
- * The start stop screen composed of a live BPM indicator and a start/stop button.
- * The button communicates with the controller to start/stop recording.
+ * The primary interaction screen for the user.
+ * 
+ * Displays the live heart rate, recording status, and controls for starting/stopping the session.
+ *
+ * @param viewModel The view model providing UI state and handling interaction logic.
  */
 @Composable
 fun RecordingScreen(viewModel: RecordingViewModel) {
@@ -140,20 +184,31 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     )
 }
 
+/**
+ * The internal layout and logic for displaying recording content.
+ *
+ * @param state The current UI state containing heart rate, status, and duration info.
+ * @param onStart Callback to trigger when the start button is clicked.
+ * @param onStop Callback to trigger when the stop button is clicked.
+ */
 @Composable
 fun RecordingContent(
     state: RecordingUIState,
     onStart: () -> Unit,
-    onStop: () -> Unit) {
-
+    onStop: () -> Unit
+) {
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        // State-driven timer calculation
         val recordingStartTime = state.recordingStartTime
         val recordingDuration by produceState(0L, recordingStartTime) {
-            if (recordingStartTime == 0L) return@produceState
+            if (recordingStartTime == 0L) {
+                value = 0L
+                return@produceState
+            }
 
             while (true) {
                 value = SystemClock.elapsedRealtime() - state.recordingStartTime
@@ -161,17 +216,22 @@ fun RecordingContent(
             }
         }
 
+        // Formatting logic for the workout timer
         val seconds = recordingDuration / 1000 % 60
         val minutes = recordingDuration / (1000 * 60) % 60
+        val hours = recordingDuration / (1000 * 60 * 60)
 
         val minutesF = if (minutes > 0) "${minutes}m " else ""
-        val formattedTimeStamp = "$minutesF${seconds}s"
+        val hoursF = if (hours > 0) "${hours}h " else ""
+        val formattedTimeStamp = "$hoursF$minutesF${seconds}s"
 
+        // Live Heart Rate Display
         Text(
-            text = if (state.bpm == null) "--" else state.bpm.toString(),
+            text = if (state.bpm == null) "--" else state.bpm.toInt().toString(),
             style = MaterialTheme.typography.body1,
         )
 
+        // Status text (e.g., "Acquiring...", "Ready")
         Text(
             text = state.statusText
         )
@@ -184,32 +244,26 @@ fun RecordingContent(
 
         val isRecording = state.serviceState == BpmServiceState.RECORDING
 
-        val buttonEnabled =
-            state.serviceState == BpmServiceState.READY
-         || state.serviceState == BpmServiceState.RECORDING
-
+        // Button is only enabled when we have a signal lock or are currently recording
+        val buttonEnabled = state.serviceState == BpmServiceState.READY || 
+                           state.serviceState == BpmServiceState.RECORDING
 
         Row(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
-        ){
+        ) {
             Button(
                 enabled = buttonEnabled,
                 onClick = {
-                    if (isRecording) {
-                        onStop()
-                    } else {
-                        onStart()
-                    }
+                    if (isRecording) onStop() else onStart()
                 }
             ) {
                 Text(if (isRecording) "Stop" else "Start")
             }
 
+            // Show timer only when recording
             if (state.serviceState == BpmServiceState.RECORDING) {
-                Spacer(
-                    modifier = Modifier.width(18.dp)
-                )
+                Spacer(modifier = Modifier.width(18.dp))
 
                 Text(
                     text = formattedTimeStamp,
@@ -218,5 +272,4 @@ fun RecordingContent(
             }
         }
     }
-
 }

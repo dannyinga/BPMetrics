@@ -1,11 +1,18 @@
 package inga.bpmetrics.library
 
 import androidx.room.Entity
-import androidx.room.ForeignKey
-import androidx.room.Index
 import androidx.room.PrimaryKey
-import kotlin.math.min
 
+/**
+ * A Room entity that represents a single heart rate reading (BPM) at a specific point in time.
+ *
+ * Each data point is linked to a [BpmRecordEntity] via the [recordOwnerId].
+ *
+ * @property dataPointId Unique identifier for the data point (auto-generated).
+ * @property recordOwnerId The ID of the [BpmRecordEntity] that "owns" this data point.
+ * @property timestamp The timestamp of the reading in milliseconds relative to the record's start.
+ * @property bpm The heart rate in beats per minute recorded at this timestamp.
+ */
 @Entity(
     tableName = "bpm_data_points"
 )
@@ -15,6 +22,10 @@ data class BpmDataPointEntity(
     val timestamp: Long,
     val bpm: Double
 ) {
+    /**
+     * Returns a human-readable representation of the data point, formatting the timestamp 
+     * relative to minutes, seconds, and milliseconds.
+     */
     override fun toString(): String {
         val milliseconds = timestamp % 1000
         val seconds = timestamp / 1000 % 60

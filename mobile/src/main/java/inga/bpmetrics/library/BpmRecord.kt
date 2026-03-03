@@ -1,10 +1,19 @@
 package inga.bpmetrics.library
 
-import androidx.compose.material3.Text
 import androidx.room.Embedded
 import androidx.room.Relation
-import kotlin.math.min
 
+/**
+ * A data class that represents a complete BPM record, combining metadata with its associated data points.
+ *
+ * This class uses Room's [@Relation] annotation to perform an automatic join between
+ * the [BpmRecordEntity] and its associated [BpmDataPointEntity] records.
+ *
+ * @property metadata The core information about the BPM record session (title, date, duration, etc.).
+ * @property dataPoints The full list of individual BPM readings recorded during the session.
+ * @property minDataPoint The specific data point representing the minimum BPM recorded during the session.
+ * @property maxDataPoint The specific data point representing the maximum BPM recorded during the session.
+ */
 data class BpmRecord(
     @Embedded val metadata: BpmRecordEntity,
 
@@ -27,6 +36,10 @@ data class BpmRecord(
     val maxDataPoint: BpmDataPointEntity?
 ) {
 
+    /**
+     * Returns a string representation of the complete BPM record,
+     * including its metadata and key analysis results (Max, Avg, Min).
+     */
     override fun toString(): String {
         val outputBuilder = StringBuilder()
 
@@ -35,11 +48,6 @@ data class BpmRecord(
         outputBuilder.appendLine("Max: $maxDataPoint")
         outputBuilder.appendLine("Avg: ${metadata.avg}")
         outputBuilder.appendLine("Min: $minDataPoint")
-
-        outputBuilder.appendLine("Data Points:")
-        for (dataPoint in dataPoints) {
-            outputBuilder.appendLine("$dataPoint")
-        }
 
         return outputBuilder.toString()
     }

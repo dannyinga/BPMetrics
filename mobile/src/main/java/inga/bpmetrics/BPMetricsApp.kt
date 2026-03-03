@@ -1,22 +1,42 @@
 package inga.bpmetrics
 
 import android.app.Application
-import android.content.Context
-import android.util.Log
-class BPMetricsApp : Application() {
-    companion object {
-        private lateinit var instance: BPMetricsApp
+import com.google.android.gms.wearable.Wearable
+import inga.bpmetrics.datasync.DataClientListener
+import inga.bpmetrics.datasync.DataClientProcessor
+import inga.bpmetrics.library.LibraryRepository
 
-        fun getAppContext(): Context = instance.applicationContext
+/**
+ * Custom Application class for the BPMetrics mobile app.
+ */
+class BPMetricsApp : Application() {
+
+    private val dataClient by lazy {
+        Wearable.getDataClient(this)
+    }
+
+    /**
+     * Singleton instance of [LibraryRepository] to manage BPM record storage.
+     */
+    val libraryRepository by lazy {
+        LibraryRepository(this)
+    }
+
+    /**
+     * Singleton instance of [DataClientProcessor] to handle incoming records from the watch.
+     */
+    val dataClientProcessor by lazy {
+        DataClientProcessor(dataClient, libraryRepository)
+    }
+
+    /**
+     * Singleton instance of [DataClientListener] to listen for Wearable data events.
+     */
+    val dataClientListener by lazy {
+        DataClientListener(dataClient, dataClientProcessor)
     }
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
     }
-
-    override fun onTerminate() {
-        super.onTerminate()
-    }
-
 }

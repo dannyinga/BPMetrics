@@ -1,11 +1,5 @@
-/* While this template provides a good starting point for using Wear Compose, you can always
- * take a look at https://github.com/android/wear-os-samples/tree/main/ComposeStarter to find the
- * most up to date changes to the libraries and their usages.
- */
-
 package inga.bpmetrics
 
-import android.R.style.Theme_DeviceDefault
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
@@ -16,97 +10,119 @@ import androidx.compose.runtime.Composable
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import inga.bpmetrics.ui.ExerciseCapabilitiesScreen
+import inga.bpmetrics.ui.ExerciseCapabilitiesViewModel
+import inga.bpmetrics.ui.PermissionsScreen
+import inga.bpmetrics.ui.PermissionsViewModel
+import inga.bpmetrics.ui.RecordingScreen
+import inga.bpmetrics.ui.RecordingViewModel
+import inga.bpmetrics.ui.Screens
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * The Watch BpmActivity and UI. Handles flow between application start, permissions, and the
- * recording screen. Contains logic to allow the user to communicate with the controller.
+ * The main [ComponentActivity] for the watch app.
+ *
+ * Handles navigation between permissions, exercise capabilities, and the recording screen.
+ * It also manages window flags (like keeping the screen on) based on the current recording state.
  */
 class BpmActivity : ComponentActivity() {
     private val tag = "BpmActivity"
+
     private val serviceManager by lazy {
         (application as BpmApp).serviceManager
     }
+
+    private val repository by lazy {
+        BPMetricsRepository.getInstance(applicationContext)
+    }
+
     private val permissionsViewModel by lazy {
         PermissionsViewModel(applicationContext)
-    }
-    private val recordingViewModel by lazy {
-        RecordingViewModel()
     }
 
     private val exerciseCapabilitiesViewModel by lazy {
         ExerciseCapabilitiesViewModel(applicationContext)
     }
 
-
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.d(tag, "Activity creating")
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        setTheme(Theme_DeviceDefault)
+        
+        // Apply the device default theme for Wear OS
+        setTheme(android.R.style.Theme_DeviceDefault)
 
         setContent {
             BpmNavHost()
         }
+        
+        // Observe lifecycle to manage window flags and service connection
+        addLifecycleObservers()
+        setWindowFlags()
     }
 
-    override fun onStop() {
-        Log.d(tag, "Activity stopping")
-        super.onStop()
-    }
-
-    override fun onResume() {
-        Log.d(tag, "Activity resuming")
-        super.onResume()
-    }
-
-    override fun onDestroy() {
-        Log.d(tag, "Activity destroying")
-        super.onDestroy()
-    }
-
+    /**
+     * Connects the activity's lifecycle to the [BpmExerciseServiceManager].
+     */
     private fun addLifecycleObservers() {
         lifecycle.addObserver(serviceManager)
     }
 
+    /**
+     * Observes the repository's service state to manage screen wake lock flags.
+     * Keeps the screen awake during the "Acquisition/Warm-up" phase.
+     */
     private fun setWindowFlags() {
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        Log.d(tag, "Turned on Keep Screen On")
-
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                BPMetricsRepository.instance.serviceState.collect { state ->
-                    when (state) {
-                        BpmServiceState.RECORDING -> {
-                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                            Log.d(tag, "Turned off Keep Screen On")
-                        }
-
-                        BpmServiceState.PREPARING -> {
-                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                            Log.d(tag, "Turned on Keep Screen On")
-                        }
-                        else -> { }
+                repository.serviceState
+                    .map { state ->
+                        // Only "Warm Up" states trigger the screen-on flag
+                        state == BpmServiceState.PREPARING
+                                || state == BpmServiceState.ACQUIRING
+                                || state == BpmServiceState.INACTIVE
                     }
-                }
+                    .distinctUntilChanged() // Prevents redundant calls when switching between PREPARING and ACQUIRING
+                    .collect { isWarmingUp ->
+                        if (isWarmingUp) {
+                            addKeepScreenOnFlag()
+                        } else {
+                            clearKeepScreenOnFlag()
+                        }
+                    }
             }
-
         }
     }
 
+    private fun clearKeepScreenOnFlag() {
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        Log.d(tag, "Disabled Keep Screen On")
+    }
 
+    private fun addKeepScreenOnFlag() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        Log.d(tag, "Enabled Keep Screen On")
+    }
+
+    /**
+     * Composable that manages navigation within the watch app.
+     */
     @Composable
     fun BpmNavHost() {
         val navController = rememberNavController()
 
         NavHost(
-            navController,
+            navController = navController,
             startDestination = Screens.Permissions.route
         ) {
-            composable(Screens.Permissions.route){
+            // Screen 1: Permissions
+            composable(Screens.Permissions.route) {
                 PermissionsScreen(
                     permissionsViewModel,
                     onReady = {
@@ -117,12 +133,11 @@ class BpmActivity : ComponentActivity() {
                 )
             }
 
-            composable(Screens.ExerciseCapabilities.route){
+            // Screen 2: Exercise Capabilities Check
+            composable(Screens.ExerciseCapabilities.route) {
                 ExerciseCapabilitiesScreen(
                     exerciseCapabilitiesViewModel,
                     onReady = {
-                        addLifecycleObservers()
-                        setWindowFlags()
                         navController.navigate(Screens.Recording.route) {
                             popUpTo(Screens.ExerciseCapabilities.route) { inclusive = true }
                         }
@@ -130,8 +145,17 @@ class BpmActivity : ComponentActivity() {
                 )
             }
 
-
+            // Screen 3: Recording Control Screen
             composable(Screens.Recording.route) {
+                // Initialize the RecordingViewModel with the repository instance
+                val recordingViewModel: RecordingViewModel = viewModel(
+                    factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+                        @Suppress("UNCHECKED_CAST")
+                        override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                            return RecordingViewModel(repository) as T
+                        }
+                    }
+                )
                 RecordingScreen(recordingViewModel)
             }
         }
