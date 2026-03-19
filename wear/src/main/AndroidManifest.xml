@@ -14,7 +14,7 @@
     <uses-feature android:name="android.hardware.type.watch" />
 
     <application
-        android:name=".BpmApp"
+        android:name=".BPMetricsApp"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -31,7 +31,7 @@
             android:value="true" />
 
         <activity
-            android:name="inga.bpmetrics.BpmActivity"
+            android:name="inga.bpmetrics.MainActivity"
             android:exported="true"
             android:taskAffinity=""
             android:theme="@style/RecordingActivityTheme.Starting">
@@ -42,7 +42,7 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".BpmExerciseService"
+            android:name=".health.HealthService"
             android:exported="false"
             android:foregroundServiceType="health" />
     </application>

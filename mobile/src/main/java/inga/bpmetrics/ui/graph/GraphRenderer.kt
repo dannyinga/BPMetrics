@@ -1,0 +1,197 @@
+package inga.bpmetrics.ui.graph
+
+import android.graphics.Paint
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.dp
+import inga.bpmetrics.library.BpmDataPointEntity
+import inga.bpmetrics.library.BpmRecord
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
+
+/**
+ * A stateless component that renders the BPM graph's visual elements.
+ * 
+ * @param record The data to visualize.
+ * @param state The current transformation and inspection state.
+ * @param modifier Modifier for the renderer.
+ */
+@Composable
+fun GraphRenderer(
+    record: BpmRecord,
+    state: GraphState,
+    modifier: Modifier = Modifier
+) {
+    val gridColor = MaterialTheme.colorScheme.outlineVariant
+    val labelColor = MaterialTheme.colorScheme.onSurface
+    val secondaryLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val lowBpmColor = Color(0xFF2196F3)
+    val highBpmColor = Color(0xFFF44336)
+
+    // Paint objects for drawing text
+    val valueLabelPaint = remember(labelColor) {
+        Paint().apply {
+            color = labelColor.toArgb()
+            textAlign = Paint.Align.RIGHT
+            textSize = 36f
+        }
+    }
+
+    val axisTitlePaint = remember(secondaryLabelColor) {
+        Paint().apply {
+            color = secondaryLabelColor.toArgb()
+            textAlign = Paint.Align.CENTER
+            textSize = 42f
+            isFakeBoldText = true
+        }
+    }
+
+    val globalMinBpm = floor(record.minDataPoint!!.bpm / 10) * 10
+    val globalMaxBpm = ceil(record.maxDataPoint!!.bpm / 10) * 10
+    val globalBpmRange = (globalMaxBpm - globalMinBpm).coerceAtLeast(1.0)
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(300.dp)
+            .padding(horizontal = 16.dp)
+            .pointerInput(state.totalDuration) {
+                detectTransformGestures { centroid, pan, zoom, _ ->
+                    val paddingLeft = 120f
+                    val paddingRight = 40f
+                    val graphWidth = size.width - paddingLeft - paddingRight
+                    state.transform(centroid.x - paddingLeft, graphWidth, pan.x, zoom)
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    val paddingLeft = 120f
+                    val paddingRight = 40f
+                    val graphWidth = size.width - paddingLeft - paddingRight
+                    if (offset.x > paddingLeft && offset.x < size.width - paddingRight) {
+                        state.inspectedRatio = (offset.x - paddingLeft) / graphWidth
+                    }
+                }
+            }
+    ) {
+        val width = size.width
+        val height = size.height
+        val paddingLeft = 120f
+        val paddingBottom = 100f
+        val paddingTop = 40f
+        val paddingRight = 40f
+        val graphWidth = width - paddingLeft - paddingRight
+        val graphHeight = height - paddingTop - paddingBottom
+
+        // Draw Axes Titles
+        drawContext.canvas.nativeCanvas.drawText("Time", paddingLeft + graphWidth / 2, height - 10f, axisTitlePaint)
+        drawContext.canvas.nativeCanvas.save()
+        drawContext.canvas.nativeCanvas.rotate(-90f, 30f, paddingTop + graphHeight / 2)
+        drawContext.canvas.nativeCanvas.drawText("BPM", 30f, paddingTop + graphHeight / 2, axisTitlePaint)
+        drawContext.canvas.nativeCanvas.restore()
+
+        val zoomRange = state.zoomRange
+        val visibleDataPoints = record.dataPoints.filter { it.timestamp in zoomRange }
+        if (visibleDataPoints.isEmpty()) return@Canvas
+
+        val timeRangeMs = (zoomRange.last - zoomRange.first).coerceAtLeast(1)
+
+        fun mapPoint(point: BpmDataPointEntity): Offset {
+            val relativeTimestamp = point.timestamp - zoomRange.first
+            val xRatio = relativeTimestamp.toFloat() / timeRangeMs
+            val yRatio = (point.bpm - globalMinBpm) / globalBpmRange
+            return Offset(paddingLeft + (xRatio * graphWidth), paddingTop + (1.0f - yRatio.toFloat()) * graphHeight)
+        }
+
+        // Draw Grid and Labels
+        val gridCount = 4
+        for (i in 0..gridCount) {
+            val x = paddingLeft + (graphWidth / gridCount) * i
+            val currentTimeMs = zoomRange.first + ((timeRangeMs / gridCount) * i)
+            drawLine(gridColor, Offset(x, paddingTop), Offset(x, paddingTop + graphHeight), 1f)
+            drawContext.canvas.nativeCanvas.drawText(
+                TimeUtils.formatMs(currentTimeMs),
+                x, paddingTop + graphHeight + 45f,
+                valueLabelPaint.apply { textAlign = Paint.Align.CENTER }
+            )
+        }
+
+        val horizontalGridLines = 5
+        val bpmStep = (globalBpmRange / horizontalGridLines).roundToInt().coerceAtLeast(1)
+        for (i in 0..horizontalGridLines) {
+            val currentBpm = globalMinBpm + (i * bpmStep)
+            val yRatio = (currentBpm - globalMinBpm) / globalBpmRange
+            val y = paddingTop + (1.0 - yRatio) * graphHeight
+            drawLine(gridColor, Offset(paddingLeft, y.toFloat()), Offset(width - paddingRight, y.toFloat()), 1f)
+            drawContext.canvas.nativeCanvas.drawText(
+                currentBpm.roundToInt().toString(),
+                paddingLeft - 20f, y.toFloat() + 12f,
+                valueLabelPaint.apply { textAlign = Paint.Align.RIGHT }
+            )
+        }
+
+        // Curve path
+        val path = Path()
+        val firstPoint = mapPoint(visibleDataPoints.first())
+        path.moveTo(firstPoint.x, firstPoint.y)
+        for (i in 1 until visibleDataPoints.size) {
+            val nextPoint = mapPoint(visibleDataPoints[i])
+            path.lineTo(nextPoint.x, nextPoint.y)
+        }
+
+        // Gradient & Shading
+        val gradientBrush = Brush.verticalGradient(
+            colors = listOf(highBpmColor, lowBpmColor),
+            startY = paddingTop,
+            endY = paddingTop + graphHeight
+        )
+        val fillPath = Path().apply {
+            addPath(path)
+            lineTo(mapPoint(visibleDataPoints.last()).x, paddingTop + graphHeight)
+            lineTo(mapPoint(visibleDataPoints.first()).x, paddingTop + graphHeight)
+            close()
+        }
+        drawPath(fillPath, brush = Brush.verticalGradient(
+            colors = listOf(highBpmColor.copy(alpha = 0.2f), lowBpmColor.copy(alpha = 0.02f)),
+            startY = paddingTop, endY = paddingTop + graphHeight
+        ), style = Fill)
+        drawPath(path, brush = gradientBrush, style = Stroke(6f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+
+        // Pointer
+        state.inspectedRatio?.let { ratio ->
+            val x = paddingLeft + (ratio * graphWidth)
+            drawLine(labelColor.copy(alpha = 0.4f), Offset(x, paddingTop), Offset(x, paddingTop + graphHeight), 3f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f)))
+
+            state.inspectedTimeMs?.let { time ->
+                visibleDataPoints.minByOrNull { abs(it.timestamp - time) }?.let { point ->
+                    val offset = mapPoint(point)
+                    drawCircle(labelColor, radius = 12f, center = offset)
+                    drawCircle(Color.White, radius = 6f, center = offset)
+                }
+            }
+        }
+    }
+}

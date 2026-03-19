@@ -5,6 +5,7 @@ import com.google.android.gms.wearable.Wearable
 import inga.bpmetrics.datasync.DataClientListener
 import inga.bpmetrics.datasync.DataClientProcessor
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.ui.settings.SettingsRepository
 
 /**
  * Custom Application class for the BPMetrics mobile app.
@@ -16,10 +17,17 @@ class BPMetricsApp : Application() {
     }
 
     /**
+     * Singleton instance of [SettingsRepository] to manage app preferences.
+     */
+    val settingsRepository by lazy {
+        SettingsRepository(this)
+    }
+
+    /**
      * Singleton instance of [LibraryRepository] to manage BPM record storage.
      */
     val libraryRepository by lazy {
-        LibraryRepository(this)
+        LibraryRepository(this, settingsRepository)
     }
 
     /**

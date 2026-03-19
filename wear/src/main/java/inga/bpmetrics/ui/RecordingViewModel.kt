@@ -2,8 +2,8 @@ package inga.bpmetrics.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import inga.bpmetrics.BPMetricsRepository
-import inga.bpmetrics.BpmServiceState
+import inga.bpmetrics.recording.RecordingRepository
+import inga.bpmetrics.recording.RecordingState
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -12,11 +12,11 @@ import kotlinx.coroutines.flow.stateIn
 /**
  * ViewModel for the [RecordingScreen].
  * 
- * Provides UI state derived from the [inga.bpmetrics.BPMetricsRepository] and handles user interactions.
+ * Provides UI state derived from the [RecordingRepository] and handles user interactions.
  *
  * @param repository The repository that manages the heart rate data and Health Services state.
  */
-class RecordingViewModel(private val repository: BPMetricsRepository) : ViewModel() {
+class RecordingViewModel(private val repository: RecordingRepository) : ViewModel() {
 
     /**
      * UI state representing the current recording session.
@@ -24,21 +24,21 @@ class RecordingViewModel(private val repository: BPMetricsRepository) : ViewMode
     val uiState: StateFlow<RecordingUIState> = combine(
         repository.liveBpm,
         repository.recordingStartTime,
-        repository.serviceState,
+        repository.recordingState,
     ) { bpm, startTime, state ->
         RecordingUIState(
             bpm = bpm,
             recordingStartTime = startTime,
             serviceState = state,
             statusText = when (state) {
-                BpmServiceState.INACTIVE -> "Inactive"
-                BpmServiceState.PREPARING -> "Warming up sensor..."
-                BpmServiceState.UNAVAILABLE -> "Heart rate unavailable"
-                BpmServiceState.ACQUIRING -> "Acquiring heart rate..."
-                BpmServiceState.READY -> "Ready to record"
-                BpmServiceState.RECORDING -> "Recording..."
-                BpmServiceState.PAUSED -> "Paused"
-                BpmServiceState.ENDING -> "Saving record..."
+                RecordingState.INACTIVE -> "Inactive"
+                RecordingState.PREPARING -> "Warming up sensor..."
+                RecordingState.UNAVAILABLE -> "Heart rate unavailable"
+                RecordingState.ACQUIRING -> "Acquiring heart rate..."
+                RecordingState.READY -> "Ready to record"
+                RecordingState.RECORDING -> "Recording..."
+                RecordingState.PAUSED -> "Paused"
+                RecordingState.ENDING -> "Saving record..."
             }
         )
     }.stateIn(
@@ -72,12 +72,12 @@ class RecordingViewModel(private val repository: BPMetricsRepository) : ViewMode
  *
  * @property bpm The most recent heart rate reading.
  * @property recordingStartTime The start timestamp of the current session.
- * @property serviceState The current [BpmServiceState] of the monitor.
+ * @property serviceState The current [RecordingState] of the monitor.
  * @property statusText A human-readable description of the current state.
  */
 data class RecordingUIState(
     val bpm: Double? = null,
     val recordingStartTime: Long = 0L,
-    val serviceState: BpmServiceState = BpmServiceState.INACTIVE,
+    val serviceState: RecordingState = RecordingState.INACTIVE,
     val statusText: String = ""
 )

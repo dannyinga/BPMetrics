@@ -16,6 +16,7 @@ import java.util.Locale
  *
  * @property recordId Unique identifier for the record (auto-generated).
  * @property title The title given to the recording (e.g., a timestamp-based string or custom name).
+ * @property description A user-provided description of the recording session.
  * @property date The date of the recording in milliseconds since the epoch.
  * @property startTime The start timestamp in milliseconds.
  * @property endTime The end timestamp in milliseconds.
@@ -28,6 +29,7 @@ import java.util.Locale
 data class BpmRecordEntity (
     @PrimaryKey(autoGenerate = true) val recordId: Long = 0,
     var title: String,
+    var description: String = "",
     val date: Long,
     val startTime: Long,
     val endTime: Long,
@@ -44,6 +46,7 @@ data class BpmRecordEntity (
         val outputBuilder = StringBuilder()
         outputBuilder.appendLine("Record ID: $recordId")
         outputBuilder.appendLine("Title: $title")
+        outputBuilder.appendLine("Description: $description")
 
         val dateFormatter = DateTimeFormatter.ofPattern("MM/dd/yyyy")
         val dateText = Instant.ofEpochMilli(date).atZone(ZoneId.systemDefault()).format(dateFormatter)

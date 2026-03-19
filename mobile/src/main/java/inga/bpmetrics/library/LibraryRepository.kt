@@ -3,12 +3,15 @@ package inga.bpmetrics.library
 import android.content.Context
 import android.util.Log
 import inga.bpmetrics.core.BpmWatchRecord
+import inga.bpmetrics.ui.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -16,14 +19,18 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * Repository for managing BPM records in the local Room database.
+ * Repository for managing BPM records and metadata (tags/categories) in the local Room database.
  *
  * This class provides an API for accessing and manipulating BPM data,
  * including creating, reading, updating, and deleting records.
  *
  * @param context The application context for initializing the database.
+ * @param settingsRepository The repository for app preferences.
  */
-class LibraryRepository(context: Context) {
+class LibraryRepository(
+    context: Context,
+    private val settingsRepository: SettingsRepository
+) {
 
     // A flow that emits true when a record is being saved, and false otherwise.
     private val _savingRecord = MutableStateFlow(false)
@@ -41,7 +48,9 @@ class LibraryRepository(context: Context) {
 
     private val tag = "LibraryRepository"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val dao = LibraryDatabase.getInstance(context).bpmRecordDao()
+    private val database = LibraryDatabase.getInstance(context)
+    private val recordDao = database.bpmRecordDao()
+    private val tagDao = database.tagDao()
 
     init {
         startRecordFlowFromDB()
@@ -53,7 +62,7 @@ class LibraryRepository(context: Context) {
      */
     private fun startRecordFlowFromDB() {
         scope.launch {
-            dao.getAllRecordsFlow()
+            recordDao.getAllRecordsFlow()
                 .collect { records ->
                     _records.value = records  // send updates to controller/UI
                 }
@@ -63,16 +72,26 @@ class LibraryRepository(context: Context) {
     /**
      * Updates the title of a BPM record.
      *
-     * @param record The record to update.
+     * @param recordId The ID of the record to update.
      * @param newTitle The new title for the record.
      */
-    fun updateRecordTitle(record: BpmRecord, newTitle: String) {
+    fun updateRecordTitle(recordId: Long, newTitle: String) {
         scope.launch {
-            Log.d(tag, "Updating title for record ${record.metadata.recordId} to: $newTitle")
-            // Update the local object immediately for UI snappiness
-            record.metadata.title = newTitle
-            // Update ONLY the title in the DB so we don't touch analysis columns
-            dao.updateTitleOnly(record.metadata.recordId, newTitle)
+            Log.d(tag, "Updating title for record $recordId to: $newTitle")
+            recordDao.updateTitleOnly(recordId, newTitle)
+        }
+    }
+
+    /**
+     * Updates the description of a BPM record.
+     *
+     * @param recordId The ID of the record to update.
+     * @param newDescription The new description for the record.
+     */
+    fun updateRecordDescription(recordId: Long, newDescription: String) {
+        scope.launch {
+            Log.d(tag, "Updating description for record $recordId to: $newDescription")
+            recordDao.updateDescriptionOnly(recordId, newDescription)
         }
     }
 
@@ -83,8 +102,8 @@ class LibraryRepository(context: Context) {
      */
     suspend fun deleteRecordWithId(id: Long) {
         Log.d(tag, "Deleting record and data points for ID: $id")
-        dao.deleteRecordById(id)
-        dao.deleteDataPointsByRecordId(id)
+        recordDao.deleteRecordById(id)
+        recordDao.deleteDataPointsByRecordId(id)
     }
 
     /**
@@ -92,8 +111,8 @@ class LibraryRepository(context: Context) {
      */
     suspend fun deleteAll() {
         Log.d(tag, "Deleting all records and data points from database")
-        dao.deleteAllRecords()
-        dao.deleteAllDataPoints()
+        recordDao.deleteAllRecords()
+        recordDao.deleteAllDataPoints()
     }
 
     /**
@@ -103,7 +122,7 @@ class LibraryRepository(context: Context) {
      * @return The BpmRecord with the specified ID.
      */
     suspend fun getRecordWithId(id: Long) : BpmRecord {
-        return dao.getRecord(id)
+        return recordDao.getRecord(id)
     }
 
     /**
@@ -113,7 +132,7 @@ class LibraryRepository(context: Context) {
      * @return The BpmDataPointEntity with the specified ID.
      */
     suspend fun getDataPointWithId(id: Long) : BpmDataPointEntity{
-        return dao.getDataPoint(id)
+        return recordDao.getDataPoint(id)
     }
 
     /**
@@ -130,11 +149,14 @@ class LibraryRepository(context: Context) {
         
         // 1. Insert base record to get the recordId
         val recordEntity = getBaseRecordEntity(record)
-        val recordId = dao.insertBpmRecordGetId(recordEntity)
+        val recordId = recordDao.insertBpmRecordGetId(recordEntity)
         Log.d(tag, "Base record inserted with ID: $recordId")
         
         // 2. Perform analysis and batch insert data points
         performAnalysisAndSaveDataPoints(record, recordId)
+
+        // 3. Set the initial "Untitled" name
+        autoNameRecord(recordId, "Untitled")
         
         _savingRecord.value = false
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")
@@ -192,7 +214,7 @@ class LibraryRepository(context: Context) {
         }
 
         // 3. Batch insert all data points
-        val dataPointIds = dao.insertAllDataPoints(dataPointEntities)
+        val dataPointIds = recordDao.insertAllDataPoints(dataPointEntities)
         Log.d(tag, "Batch inserted ${dataPointIds.size} data points")
 
         // 4. Update the record with calculated analysis results using the generated IDs
@@ -201,34 +223,144 @@ class LibraryRepository(context: Context) {
         val maxId = dataPointIds.getOrNull(maxIndex)
 
         Log.d(tag, "Updating analysis for record ID: $recordId. Avg: $avg, MinID: $minId, MaxID: $maxId")
-        dao.updateAnalysis(recordId, minId, maxId, avg)
+        recordDao.updateAnalysis(recordId, minId, maxId, avg)
     }
 
     /**
      * Creates a base BpmRecordEntity from a BpmWatchRecord.
      *
-     * The title of the record is generated from the record's date and start time.
-     *
      * @param record The BpmWatchRecord to convert.
      * @return A BpmRecordEntity with initial data.
      */
     private fun getBaseRecordEntity(record: BpmWatchRecord): BpmRecordEntity {
-        var title = record.date.toString()
-
-        val formatter = DateTimeFormatter.ofPattern("hh:mm:ss a", Locale.getDefault())
-
-        title += " ${
-            Instant.ofEpochMilli(record.startTime)
-                .atZone(ZoneId.systemDefault())
-                .format(formatter)
-        }"
-
         return BpmRecordEntity(
-            title = title,
+            title = "New Record", // Temporary title before auto-naming
             date = record.date.time,
             startTime = record.startTime,
             endTime = record.endTime,
             durationMs = record.durationMs
         )
+    }
+
+    /**
+     * Automatically names a record with a prefix and an incrementing count.
+     * Example: "Spiderman 5", "Untitled 2".
+     *
+     * @param recordId The ID of the record to name.
+     * @param prefix The prefix for the name.
+     */
+    private suspend fun autoNameRecord(recordId: Long, prefix: String) {
+        val count = recordDao.countRecordsWithTitlePrefix(prefix)
+        val newTitle = "$prefix ${count + 1}"
+        recordDao.updateTitleOnly(recordId, newTitle)
+    }
+
+    // --- Category & Tag Management ---
+
+    /**
+     * Returns a flow of all available categories.
+     */
+    fun getAllCategories(): Flow<List<CategoryEntity>> = tagDao.getAllCategoriesFlow()
+
+    /**
+     * Returns a flow of all tags within a specific category.
+     * 
+     * @param categoryId The ID of the category.
+     */
+    fun getTagsByCategory(categoryId: Long): Flow<List<TagEntity>> = tagDao.getTagsByCategoryFlow(categoryId)
+
+    /**
+     * Creates a new category.
+     * 
+     * @param name The name of the category.
+     */
+    suspend fun createCategory(name: String) {
+        tagDao.insertCategory(CategoryEntity(name = name))
+    }
+
+    /**
+     * Creates a new tag under a specific category.
+     * 
+     * @param name The name of the tag.
+     * @param categoryId The ID of the category this tag belongs to.
+     */
+    suspend fun createTag(name: String, categoryId: Long) {
+        tagDao.insertTag(TagEntity(name = name, parentCategoryId = categoryId))
+    }
+
+    /**
+     * Deletes a category and all its tags (via cascade).
+     * 
+     * @param category The category entity to delete.
+     */
+    suspend fun deleteCategory(category: CategoryEntity) {
+        tagDao.deleteCategory(category)
+    }
+
+    /**
+     * Deletes a specific tag.
+     * 
+     * @param tag The tag entity to delete.
+     */
+    suspend fun deleteTag(tag: TagEntity) {
+        tagDao.deleteTag(tag)
+    }
+
+    // --- Record-Tag Assignment ---
+
+    /**
+     * Assigns a tag to a record and triggers an auto-rename if it belongs to the 
+     * default naming category defined in settings.
+     * 
+     * @param recordId The ID of the record.
+     * @param tagId The ID of the tag to assign.
+     */
+    suspend fun addTagToRecord(recordId: Long, tagId: Long) {
+        tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
+        
+        // Auto-Rename logic: Pull default naming category from settings
+        val defaultNamingCatId = settingsRepository.defaultNamingCategoryId.first()
+        val tag = tagDao.getTagById(tagId)
+        
+        if (tag != null && tag.parentCategoryId == defaultNamingCatId) {
+            autoNameRecord(recordId, tag.name)
+        }
+    }
+
+    /**
+     * Removes a tag from a record.
+     * 
+     * @param recordId The ID of the record.
+     * @param tagId The ID of the tag to remove.
+     */
+    suspend fun removeTagFromRecord(recordId: Long, tagId: Long) {
+        tagDao.untagRecord(recordId, tagId)
+    }
+
+    /**
+     * Returns a flow of all tags currently assigned to a specific record.
+     * 
+     * @param recordId The ID of the record.
+     */
+    fun getTagsForRecord(recordId: Long): Flow<List<TagEntity>> = tagDao.getTagsForRecordFlow(recordId)
+
+    // --- Analysis ---
+
+    /**
+     * Returns a flow of tag rankings within a category by average BPM.
+     * 
+     * @param categoryId The ID of the category.
+     */
+    fun getCategoryRanking(categoryId: Long): Flow<List<TagRanking>> = tagDao.getCategoryRankingFlow(categoryId)
+
+    /**
+     * Performs an advanced analysis of specified tags within a date range.
+     * 
+     * @param tagIds List of tag IDs to analyze.
+     * @param startDate Start of the date range (ms).
+     * @param endDate End of the date range (ms).
+     */
+    suspend fun getAdvancedTagAnalysis(tagIds: List<Long>, startDate: Long, endDate: Long): List<AdvancedTagAnalysis> {
+        return tagDao.getAdvancedTagAnalysis(tagIds, startDate, endDate)
     }
 }

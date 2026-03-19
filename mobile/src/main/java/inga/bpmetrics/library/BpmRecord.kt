@@ -1,6 +1,7 @@
 package inga.bpmetrics.library
 
 import androidx.room.Embedded
+import androidx.room.Junction
 import androidx.room.Relation
 
 /**
@@ -33,7 +34,14 @@ data class BpmRecord(
         parentColumn = "maxId",
         entityColumn = "dataPointId"
     )
-    val maxDataPoint: BpmDataPointEntity?
+    val maxDataPoint: BpmDataPointEntity?,
+
+    @Relation(
+    parentColumn = "recordId",
+    entityColumn = "tagId",
+    associateBy = Junction(RecordTagCrossRef::class)
+    )
+    val tags: List<TagEntity> = emptyList()
 ) {
 
     /**

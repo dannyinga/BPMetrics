@@ -30,6 +30,8 @@ coroutine-play-services = "1.7.3"
 material-icons-extended = "1.7"
 mockk = "1.13.13"
 kotlinx-coroutines-test = "1.10.1"
+jacoco = "0.8.12"
+datastore = "1.1.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -75,6 +77,7 @@ androidx-compose-runtime = { group = "androidx.compose.runtime", name = "runtime
 kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "coroutine-play-services"}
 mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinx-coroutines-test" }
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

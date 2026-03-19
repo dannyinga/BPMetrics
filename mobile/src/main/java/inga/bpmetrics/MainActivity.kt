@@ -4,7 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import inga.bpmetrics.ui.LibraryNavHost
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import inga.bpmetrics.ui.BPMetricsNavHost
+import inga.bpmetrics.ui.theme.BPMetricsTheme
 
 /**
  * Main activity for the BPMetrics mobile app.
@@ -35,6 +37,9 @@ class MainActivity : ComponentActivity() {
      * recently supplied.
      */
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Install the splash screen before calling super.onCreate()
+        installSplashScreen()
+        
         super.onCreate(savedInstanceState)
         
         // Register the data client listener to the activity's lifecycle
@@ -45,7 +50,9 @@ class MainActivity : ComponentActivity() {
         
         // Load the library screen with navigation
         setContent {
-            LibraryNavHost(libraryRepository)
+            BPMetricsTheme {
+                BPMetricsNavHost(libraryRepository)
+            }
         }
     }
 

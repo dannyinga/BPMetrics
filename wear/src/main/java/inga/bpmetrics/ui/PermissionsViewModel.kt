@@ -8,7 +8,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
-import inga.bpmetrics.BPMetricsRepository
+import inga.bpmetrics.recording.RecordingRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +25,7 @@ class PermissionsViewModel(
     private val appContext: Context
 ) : ViewModel() {
 
-    private val repository = BPMetricsRepository.getInstance(appContext)
+    private val repository = RecordingRepository.getInstance(appContext)
 
     /** The specific permission string for heart rate access, adjusted for newer API levels. */
     private val heartRatePermissionAdjusted =
@@ -59,7 +59,7 @@ class PermissionsViewModel(
 
     /**
      * Checks all required permissions against the [PackageManager] and updates the UI state.
-     * Also notifies the [BPMetricsRepository] once all prerequisites are met.
+     * Also notifies the [RecordingRepository] once all prerequisites are met.
      */
     private fun checkPermissions() {
         Log.d("PermVM", "Checking permissions")

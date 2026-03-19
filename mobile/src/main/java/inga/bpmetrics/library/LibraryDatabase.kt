@@ -1,15 +1,7 @@
 package inga.bpmetrics.library
 
 import android.content.Context
-import androidx.room.Dao
-import androidx.room.Database
-import androidx.room.Delete
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.Transaction
+import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -41,9 +33,21 @@ interface BpmRecordDao {
 
     /**
      * Updates only the title of a specific record.
+     *
+     * @param id The ID of the record to update.
+     * @param newTitle The new title for the record.
      */
     @Query("UPDATE bpm_records SET title = :newTitle WHERE recordId = :id")
     suspend fun updateTitleOnly(id: Long, newTitle: String)
+
+    /**
+     * Updates only the description of a specific record.
+     *
+     * @param id The ID of the record to update.
+     * @param newDescription The new description for the record.
+     */
+    @Query("UPDATE bpm_records SET description = :newDescription WHERE recordId = :id")
+    suspend fun updateDescriptionOnly(id: Long, newDescription: String)
 
     /**
      * Updates a record with its calculated analysis results.
@@ -56,6 +60,13 @@ interface BpmRecordDao {
     @Query("UPDATE bpm_records SET minId = :minId, maxId = :maxId, avg = :avg WHERE recordId = :id")
     suspend fun updateAnalysis(id: Long, minId: Long?, maxId: Long?, avg: Double?)
     
+    /**
+     * Counts how many records have a title starting with the specified prefix.
+     * Used for auto-incrementing titles like "Untitled 5" or "Spiderman 2".
+     */
+    @Query("SELECT COUNT(*) FROM bpm_records WHERE title LIKE :prefix || ' %' OR title = :prefix")
+    suspend fun countRecordsWithTitlePrefix(prefix: String): Int
+
     /**
      * Retrieves all data points associated with a specific record ID.
      */
@@ -81,7 +92,7 @@ interface BpmRecordDao {
     suspend fun getRecordEntity(id: Long) : BpmRecordEntity
 
     /**
-     * Retrieves a complete [BpmRecord] (including all associated data points) by its ID.
+     * Retrieves a complete [BpmRecord] (including all associated data points and tags) by its ID.
      */
     @Transaction
     @Query("SELECT * FROM bpm_records WHERE recordId = :id")
@@ -127,16 +138,26 @@ interface BpmRecordDao {
 }
 
 @Database(
-    entities = [BpmRecordEntity::class, BpmDataPointEntity::class],
-    version = 2,
+    entities = [
+        BpmRecordEntity::class, 
+        BpmDataPointEntity::class,
+        CategoryEntity::class,
+        TagEntity::class,
+        RecordTagCrossRef::class
+    ],
+    version = 4,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
     abstract fun bpmRecordDao(): BpmRecordDao
+    abstract fun tagDao(): TagDao
 
     companion object {
         @Volatile private var INSTANCE: LibraryDatabase? = null
 
+        /**
+         * Returns the singleton instance of [LibraryDatabase].
+         */
         fun getInstance(context: Context): LibraryDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(

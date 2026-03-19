@@ -1,7 +1,6 @@
 package inga.bpmetrics.ui
 
 import android.os.SystemClock
-import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -22,15 +22,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material.Button
+import androidx.wear.compose.material.ButtonDefaults
+import androidx.wear.compose.material.CircularProgressIndicator
+import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
-import inga.bpmetrics.BpmServiceState
+import inga.bpmetrics.R
+import inga.bpmetrics.recording.RecordingState
+import inga.bpmetrics.theme.BpmAccent
+import inga.bpmetrics.theme.HeartRed
 import kotlinx.coroutines.delay
 
 /**
@@ -73,7 +82,9 @@ fun PermissionsScreen (
     }
 
     when (permissions) {
-        PermissionState.Checking -> {}
+        PermissionState.Checking -> {
+            LoadingScreen(label = "Checking permissions...")
+        }
         is PermissionState.MissingPermissions -> {
             PermissionsUI(
                 launcher = launcher,
@@ -105,13 +116,20 @@ fun PermissionsUI(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_heart_plus),
+                contentDescription = null,
+                modifier = Modifier.size(48.dp),
+                tint = HeartRed
+            )
+            Spacer(modifier = Modifier.height(12.dp))
             BoxWithConstraints (
-                modifier = Modifier.fillMaxWidth(0.6f),
+                modifier = Modifier.fillMaxWidth(0.7f),
             ) {
                 val boxWidth : Dp = this.maxWidth
-                val fontSize = (boxWidth.value / 10).sp
+                val fontSize = (boxWidth.value / 11).sp
                 Text(
-                    text = "This app requires heart sensor and notification permissions to function",
+                    text = "BPMetrics needs sensor access to track your heart rate.",
                     fontSize = fontSize,
                     textAlign = TextAlign.Center
                 )
@@ -123,10 +141,10 @@ fun PermissionsUI(
                 modifier = Modifier.fillMaxWidth(0.8f),
                 onClick = { 
                     launcher.launch(missingPermissions.toTypedArray())
-                    Log.d("Activity", "Requesting missing permissions: $missingPermissions")
-                }
+                },
+                colors = ButtonDefaults.buttonColors(backgroundColor = BpmAccent)
             ) {
-                Text("Grant Permission")
+                Text("Grant Access", color = Color.Black)
             }
         }
     }
@@ -149,7 +167,7 @@ fun ExerciseCapabilitiesScreen(
 
     when (exerciseCapabilities) {
         ExerciseCapabilitiesState.Checking -> {
-            // Option to add a loading indicator here
+            LoadingScreen(label = "Checking device support...")
         }
 
         is ExerciseCapabilitiesState.Error -> {
@@ -161,8 +179,29 @@ fun ExerciseCapabilitiesScreen(
         }
         
         ExerciseCapabilitiesState.UnsupportedDevice -> {
-            // Option to display a "not compatible" message to the user
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("This device does not support heart rate tracking.", textAlign = TextAlign.Center)
+            }
         }
+    }
+}
+
+/**
+ * A consistent loading screen used during permission and capability checks.
+ */
+@Composable
+private fun LoadingScreen(label: String) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(32.dp),
+            indicatorColor = BpmAccent
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(text = label, style = MaterialTheme.typography.caption2)
     }
 }
 
@@ -226,27 +265,36 @@ fun RecordingContent(
         val formattedTimeStamp = "$hoursF$minutesF${seconds}s"
 
         // Live Heart Rate Display
-        Text(
-            text = if (state.bpm == null) "--" else state.bpm.toInt().toString(),
-            style = MaterialTheme.typography.body1,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_heart_plus),
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = HeartRed
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = if (state.bpm == null) "--" else state.bpm.toInt().toString(),
+                style = MaterialTheme.typography.display2,
+                fontWeight = FontWeight.Bold
+            )
+        }
 
         // Status text (e.g., "Acquiring...", "Ready")
         Text(
-            text = state.statusText
+            text = state.statusText,
+            style = MaterialTheme.typography.caption2
         )
 
         Spacer(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(18.dp)
+            modifier = Modifier.height(12.dp)
         )
 
-        val isRecording = state.serviceState == BpmServiceState.RECORDING
+        val isRecording = state.serviceState == RecordingState.RECORDING
 
         // Button is only enabled when we have a signal lock or are currently recording
-        val buttonEnabled = state.serviceState == BpmServiceState.READY || 
-                           state.serviceState == BpmServiceState.RECORDING
+        val buttonEnabled = state.serviceState == RecordingState.READY ||
+                           state.serviceState == RecordingState.RECORDING
 
         Row(
             horizontalArrangement = Arrangement.Center,
@@ -256,18 +304,31 @@ fun RecordingContent(
                 enabled = buttonEnabled,
                 onClick = {
                     if (isRecording) onStop() else onStart()
-                }
+                },
+                modifier = Modifier.size(56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    backgroundColor = if (isRecording) Color(0xFFD32F2F) else BpmAccent
+                )
             ) {
-                Text(if (isRecording) "Stop" else "Start")
+                Icon(
+                    painter = if (isRecording) {
+                        painterResource(id = android.R.drawable.ic_delete)
+                    } else {
+                        painterResource(id = R.drawable.ic_heart_plus)
+                    },
+                    contentDescription = if (isRecording) "Stop" else "Start",
+                    modifier = Modifier.size(32.dp),
+                    tint = if (isRecording) Color.White else Color.Black
+                )
             }
 
             // Show timer only when recording
-            if (state.serviceState == BpmServiceState.RECORDING) {
-                Spacer(modifier = Modifier.width(18.dp))
+            if (state.serviceState == RecordingState.RECORDING) {
+                Spacer(modifier = Modifier.width(12.dp))
 
                 Text(
                     text = formattedTimeStamp,
-                    style = MaterialTheme.typography.body1,
+                    style = MaterialTheme.typography.body2,
                 )
             }
         }
