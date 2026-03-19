@@ -40,7 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
-import inga.bpmetrics.ui.graph.BpmGraph
+import inga.bpmetrics.ui.graph.BpmGraphPreview
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.components.FlowRow
 
@@ -50,16 +50,19 @@ import inga.bpmetrics.ui.components.FlowRow
  * @param viewModel The [inga.bpmetrics.ui.detail.BpmRecordViewModel] for the specific record.
  * @param onBack Callback for navigating back.
  * @param onDeleted Callback when the record is successfully deleted.
+ * @param onShowDetailedGraph Callback to navigate to the detailed graph view.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BpmRecordScreen(viewModel: BpmRecordViewModel, onBack: () -> Unit, onDeleted: () -> Unit) {
+fun BpmRecordScreen(
+    viewModel: BpmRecordViewModel, 
+    onBack: () -> Unit, 
+    onDeleted: () -> Unit,
+    onShowDetailedGraph: () -> Unit
+) {
     val record by viewModel.record.collectAsState()
     var isEditing by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
-    
-    // State to track which timestamp to highlight on the graph
-    var highlightedTimestamp by remember { mutableStateOf<Long?>(null) }
 
     record?.let { r ->
         var editedTitle by remember(r.metadata.title) { mutableStateOf(r.metadata.title) }
@@ -116,8 +119,8 @@ fun BpmRecordScreen(viewModel: BpmRecordViewModel, onBack: () -> Unit, onDeleted
                     max = r.maxDataPoint?.bpm?.toInt() ?: 0,
                     iconSize = 32.dp,
                     fontSize = 24.sp,
-                    onLowClick = { highlightedTimestamp = r.minDataPoint?.timestamp },
-                    onMaxClick = { highlightedTimestamp = r.maxDataPoint?.timestamp }
+                    onLowClick = { /* No longer highlighting directly on preview */ },
+                    onMaxClick = { /* No longer highlighting directly on preview */ }
                 )
                 
                 Spacer(Modifier.height(24.dp))
@@ -143,7 +146,7 @@ fun BpmRecordScreen(viewModel: BpmRecordViewModel, onBack: () -> Unit, onDeleted
                         }
                     }
 
-                    // Replaced Row with wrapping FlowRow for tags (Requirement)
+                    // Wrapping FlowRow for tags
                     FlowRow(
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp), 
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -163,11 +166,11 @@ fun BpmRecordScreen(viewModel: BpmRecordViewModel, onBack: () -> Unit, onDeleted
                 }
                 Spacer(Modifier.height(24.dp))
                 
-                // BpmGraph now responds to highlightedTimestamp changes
-                BpmGraph(
+                // Static Preview Graph - Clicking navigates to Detail (Requirement)
+                BpmGraphPreview(
                     record = r, 
-                    modifier = Modifier.height(500.dp),
-                    highlightTimestamp = highlightedTimestamp
+                    modifier = Modifier.height(300.dp),
+                    onClick = onShowDetailedGraph
                 )
                 
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.End) {

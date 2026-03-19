@@ -6,7 +6,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import inga.bpmetrics.library.BpmRecord
 import kotlin.math.abs
 
 /**
@@ -20,6 +19,11 @@ class GraphState(val totalDuration: Long) {
 
     /** Ratio (0..1) relative to graph width where the inspection pointer is locked. */
     var inspectedRatio by mutableStateOf<Float?>(null)
+
+    /** The start of a selection range in milliseconds. */
+    var selectionStartMs by mutableStateOf<Long?>(null)
+    /** The end of a selection range in milliseconds. */
+    var selectionEndMs by mutableStateOf<Long?>(null)
 
     /** Derived: Actual time in ms currently under the screen pointer. */
     val inspectedTimeMs by derivedStateOf {
@@ -71,17 +75,42 @@ class GraphState(val totalDuration: Long) {
 
     /**
      * Highlights a specific timestamp by moving the inspection pointer to it.
-     * If the timestamp is outside the current zoom range, it expands the range to include it.
      */
     fun highlightTimestamp(timestamp: Long) {
         if (timestamp < zoomRange.first || timestamp > zoomRange.last) {
-            // Expand zoom to show everything if we're jumping to a point outside
             zoomRange = 0L..totalDuration
         }
 
         val duration = zoomRange.last - zoomRange.first
         if (duration > 0) {
             inspectedRatio = (timestamp - zoomRange.first).toFloat() / duration
+        }
+    }
+
+    /**
+     * Sets the selection range.
+     */
+    fun setSelection(startMs: Long, endMs: Long) {
+        selectionStartMs = startMs.coerceIn(0L, totalDuration)
+        selectionEndMs = endMs.coerceIn(0L, totalDuration)
+    }
+
+    /**
+     * Clears the current selection.
+     */
+    fun clearSelection() {
+        selectionStartMs = null
+        selectionEndMs = null
+    }
+
+    /**
+     * Updates one side of the selection during dragging.
+     */
+    fun updateSelectionHandle(isStart: Boolean, timeMs: Long) {
+        if (isStart) {
+            selectionStartMs = timeMs.coerceIn(0L, totalDuration)
+        } else {
+            selectionEndMs = timeMs.coerceIn(0L, totalDuration)
         }
     }
 }

@@ -143,20 +143,25 @@ class LibraryRepository(
      *
      * @param record The BpmWatchRecord to save.
      */
-    suspend fun saveWatchRecordToLibrary(record: BpmWatchRecord) {
+    suspend fun saveWatchRecordToLibrary(record: BpmWatchRecord, customTitle: String? = null) {
         Log.d(tag, "Starting saveWatchRecordToLibrary")
         _savingRecord.value = true
-        
-        // 1. Insert base record to get the recordId
-        val recordEntity = getBaseRecordEntity(record)
+
+        val recordEntity = BpmRecordEntity(
+            title = customTitle ?: "New Record",
+            date = record.date.time,
+            startTime = record.startTime,
+            endTime = record.endTime,
+            durationMs = record.durationMs
+        )
         val recordId = recordDao.insertBpmRecordGetId(recordEntity)
-        Log.d(tag, "Base record inserted with ID: $recordId")
-        
-        // 2. Perform analysis and batch insert data points
+
         performAnalysisAndSaveDataPoints(record, recordId)
 
-        // 3. Set the initial "Untitled" name
-        autoNameRecord(recordId, "Untitled")
+        // Only auto-name if it's a fresh recording without a title
+        if (customTitle == null) {
+            autoNameRecord(recordId, "Untitled")
+        }
         
         _savingRecord.value = false
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")

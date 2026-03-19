@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.graph
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,7 +18,36 @@ import inga.bpmetrics.ui.theme.BpmLow
 import kotlin.math.abs
 
 /**
- * The main container for the BPM Graph feature. 
+ * A non-interactive preview of the heart rate graph.
+ * Clicking this should navigate to the detailed graph view.
+ */
+@Composable
+fun BpmGraphPreview(
+    record: BpmRecord,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    if (record.dataPoints.isEmpty() || record.maxDataPoint == null || record.minDataPoint == null) return
+
+    val state = rememberGraphState(totalDuration = record.metadata.durationMs)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        GraphRenderer(
+            record = record,
+            state = state,
+            modifier = Modifier.height(300.dp),
+            isInteractive = false
+        )
+    }
+}
+
+/**
+ * The full interactive BPM Graph feature. 
  * 
  * This component coordinates between the [GraphState] (logic), [GraphRenderer] (visuals),
  * and [GraphManualControls] (user input) to provide an interactive heart rate visualization.
@@ -25,24 +55,23 @@ import kotlin.math.abs
  * @param record The [BpmRecord] to be visualized.
  * @param modifier The modifier to be applied to the outer layout.
  * @param highlightTimestamp Optional timestamp (ms) to highlight on the graph.
+ * @param state The state holder for transformations and selection.
  */
 @Composable
 fun BpmGraph(
     record: BpmRecord,
     modifier: Modifier = Modifier,
-    highlightTimestamp: Long? = null
+    highlightTimestamp: Long? = null,
+    state: GraphState = rememberGraphState(totalDuration = record.metadata.durationMs)
 ) {
     if (record.dataPoints.isEmpty() || record.maxDataPoint == null || record.minDataPoint == null) return
 
-    // 1. Initialize the state holder for transformations and selection
-    val state = rememberGraphState(totalDuration = record.metadata.durationMs)
-
-    // 2. React to external highlight requests (Requirement: clickable Trio)
+    // React to external highlight requests
     LaunchedEffect(highlightTimestamp) {
         highlightTimestamp?.let { state.highlightTimestamp(it) }
     }
 
-    // 3. Calculate derived data for the inspection readout
+    // Calculate derived data for the inspection readout
     val currentInspectedBpm = remember(state.inspectedTimeMs) {
         state.inspectedTimeMs?.let { ms ->
             record.dataPoints.minByOrNull { abs(it.timestamp - ms) }?.bpm
@@ -53,20 +82,23 @@ fun BpmGraph(
         state.inspectedTimeMs?.let { TimeUtils.formatMs(it) }
     }
 
+    val isSelecting = state.selectionStartMs != null && state.selectionEndMs != null
+
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 4. Render the interactive Canvas
+        // Render the interactive Canvas
         GraphRenderer(
             record = record,
             state = state,
-            modifier = Modifier.height(300.dp)
+            modifier = Modifier.height(350.dp),
+            isInteractive = true
         )
 
         Spacer(Modifier.height(32.dp))
 
-        // 5. Display the inspection summary (BPM at current pointer position)
+        // Display the inspection summary (BPM at current pointer position)
         InspectionSummary(
             timeText = currentInspectedTimeText,
             bpm = currentInspectedBpm,
@@ -77,11 +109,19 @@ fun BpmGraph(
 
         Spacer(Modifier.height(24.dp))
 
-        // 6. Manual H:M:S input controls for precision zooming
+        // Manual H:M:S input controls
+        // If selecting, control the selection bounds. Otherwise, control the zoom window.
         GraphManualControls(
-            initialStart = TimeUtils.formatMs(state.zoomRange.first),
-            initialEnd = TimeUtils.formatMs(state.zoomRange.last),
-            onApply = { start, end -> state.updateZoom(start, end) }
+            initialStart = if (isSelecting) TimeUtils.formatMs(state.selectionStartMs!!) else TimeUtils.formatMs(state.zoomRange.first),
+            initialEnd = if (isSelecting) TimeUtils.formatMs(state.selectionEndMs!!) else TimeUtils.formatMs(state.zoomRange.last),
+            labelPrefix = if (isSelecting) "Select" else "Zoom",
+            onApply = { start, end -> 
+                if (isSelecting) {
+                    state.setSelection(start, end)
+                } else {
+                    state.updateZoom(start, end)
+                }
+            }
         )
     }
 }

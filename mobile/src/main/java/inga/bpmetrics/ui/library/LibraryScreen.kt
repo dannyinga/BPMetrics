@@ -1,5 +1,8 @@
 package inga.bpmetrics.ui.library
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FilterAltOff
 import androidx.compose.material.icons.filled.Sell
@@ -40,6 +44,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,6 +53,7 @@ import androidx.navigation.NavController
 import inga.bpmetrics.ui.Routes
 import inga.bpmetrics.ui.analysis.AnalysisFilterDialog
 import inga.bpmetrics.ui.detail.BpmRecordTile
+import inga.bpmetrics.ui.detail.ExportHelpers
 import inga.bpmetrics.ui.theme.BpmAccent
 
 /**
@@ -61,17 +68,34 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
     val currentSort by viewModel.sortOption.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     var showSortMenu by remember { mutableStateOf(false) }
     var showAnalyzeMenu by remember { mutableStateOf(false) }
     var showFilterDialog by remember { mutableStateOf(false) }
     var navigateToAnalysisOnFilterApply by remember { mutableStateOf(false) }
 
+    // Launcher for importing a CSV file
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            val watchRecord = ExportHelpers.importFromCsv(context, it)
+            if (watchRecord != null) {
+                viewModel.importRecord(watchRecord)
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Library", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) },
                 actions = {
+                    // Import CSV button
+                    IconButton(onClick = { importLauncher.launch(arrayOf("text/comma-separated-values", "text/csv")) }) {
+                        Icon(Icons.Default.FileDownload, contentDescription = "Import CSV")
+                    }
                     // Show Clear Filters button only when a filter is active
                     if (filterState != LibraryViewModel.FilterState()) {
                         IconButton(onClick = { viewModel.clearFilters() }) {

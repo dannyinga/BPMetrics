@@ -3,6 +3,7 @@ package inga.bpmetrics.ui.detail
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.LibraryRepository
@@ -97,6 +98,15 @@ class BpmRecordViewModel(
         viewModelScope.launch {
             repository.removeTagFromRecord(recordId, tagId)
             loadRecord()
+        }
+    }
+
+    /**
+     * Saves a split portion of a record as a new entry.
+     */
+    fun splitRecord(newRecord: BpmWatchRecord, title: String) {
+        viewModelScope.launch {
+            repository.saveWatchRecordToLibrary(newRecord, title)
         }
     }
 

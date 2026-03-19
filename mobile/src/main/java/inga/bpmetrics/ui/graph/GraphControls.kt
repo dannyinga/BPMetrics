@@ -58,13 +58,14 @@ fun InspectionSummary(
 }
 
 /**
- * Manual H:M:S input controls for zooming the graph.
+ * Manual H:M:S input controls for zooming or selecting on the graph.
  */
 @Composable
 fun GraphManualControls(
     initialStart: String,
     initialEnd: String,
-    onApply: (Long, Long) -> Unit
+    onApply: (Long, Long) -> Unit,
+    labelPrefix: String = "Zoom"
 ) {
     var startInput by remember(initialStart) { mutableStateOf(initialStart) }
     var endInput by remember(initialEnd) { mutableStateOf(initialEnd) }
@@ -76,7 +77,7 @@ fun GraphManualControls(
         OutlinedTextField(
             value = startInput,
             onValueChange = { startInput = it },
-            label = { Text("Start (H:M:S)", fontSize = 10.sp) },
+            label = { Text("$labelPrefix Start", fontSize = 10.sp) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
             modifier = Modifier.weight(1f),
             textStyle = MaterialTheme.typography.bodySmall
@@ -85,7 +86,7 @@ fun GraphManualControls(
         OutlinedTextField(
             value = endInput,
             onValueChange = { endInput = it },
-            label = { Text("End (H:M:S)", fontSize = 10.sp) },
+            label = { Text("$labelPrefix End", fontSize = 10.sp) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
             modifier = Modifier.weight(1f),
             textStyle = MaterialTheme.typography.bodySmall

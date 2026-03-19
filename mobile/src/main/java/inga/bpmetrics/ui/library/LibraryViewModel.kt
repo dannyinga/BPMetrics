@@ -3,9 +3,11 @@ package inga.bpmetrics.ui.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.LibraryRepository
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 
 /**
  * ViewModel for the [inga.bpmetrics.ui.LibraryScreen], now supporting advanced sorting and filtering.
@@ -120,6 +122,15 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     fun clearFilters() {
         _filterState.value = FilterState()
+    }
+
+    /**
+     * Imports a record from a watch record object (e.g., from a CSV).
+     */
+    fun importRecord(watchRecord: BpmWatchRecord) {
+        viewModelScope.launch {
+            repository.saveWatchRecordToLibrary(watchRecord)
+        }
     }
 
     /**

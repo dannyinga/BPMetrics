@@ -2,6 +2,7 @@ package inga.bpmetrics.ui.graph
 
 import android.graphics.Paint
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,7 +10,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -26,31 +30,33 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.BpmDataPointEntity
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.ui.theme.BpmHigh
+import inga.bpmetrics.ui.theme.BpmLow
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
  * A stateless component that renders the BPM graph's visual elements.
- * 
- * @param record The data to visualize.
- * @param state The current transformation and inspection state.
- * @param modifier Modifier for the renderer.
  */
 @Composable
 fun GraphRenderer(
     record: BpmRecord,
     state: GraphState,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isInteractive: Boolean = true
 ) {
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurface
     val secondaryLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val lowBpmColor = Color(0xFF2196F3)
-    val highBpmColor = Color(0xFFF44336)
+    val selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+    val handleColor = MaterialTheme.colorScheme.primary
+    val lowBpmColor = BpmLow
+    val highBpmColor = BpmHigh
 
-    // Paint objects for drawing text
     val valueLabelPaint = remember(labelColor) {
         Paint().apply {
             color = labelColor.toArgb()
@@ -72,29 +78,83 @@ fun GraphRenderer(
     val globalMaxBpm = ceil(record.maxDataPoint!!.bpm / 10) * 10
     val globalBpmRange = (globalMaxBpm - globalMinBpm).coerceAtLeast(1.0)
 
+    var dragMode by remember { mutableStateOf<DragMode>(DragMode.None) }
+
     Canvas(
         modifier = modifier
             .fillMaxWidth()
             .height(300.dp)
             .padding(horizontal = 16.dp)
-            .pointerInput(state.totalDuration) {
-                detectTransformGestures { centroid, pan, zoom, _ ->
-                    val paddingLeft = 120f
-                    val paddingRight = 40f
-                    val graphWidth = size.width - paddingLeft - paddingRight
-                    state.transform(centroid.x - paddingLeft, graphWidth, pan.x, zoom)
-                }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val paddingLeft = 120f
-                    val paddingRight = 40f
-                    val graphWidth = size.width - paddingLeft - paddingRight
-                    if (offset.x > paddingLeft && offset.x < size.width - paddingRight) {
-                        state.inspectedRatio = (offset.x - paddingLeft) / graphWidth
-                    }
-                }
-            }
+            .then(
+                if (isInteractive) {
+                    Modifier
+                        .pointerInput(state.totalDuration) {
+                            detectTransformGestures { centroid, pan, zoom, _ ->
+                                val paddingLeft = 120f
+                                val paddingRight = 40f
+                                val graphWidth = size.width - paddingLeft - paddingRight
+                                state.transform(centroid.x - paddingLeft, graphWidth, pan.x, zoom)
+                            }
+                        }
+                        .pointerInput(state.totalDuration) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    val paddingLeft = 120f
+                                    val paddingRight = 40f
+                                    val graphWidth = size.width - paddingLeft - paddingRight
+                                    if (offset.x > paddingLeft && offset.x < size.width - paddingRight) {
+                                        val time = state.zoomRange.first + ((offset.x - paddingLeft) / graphWidth * (state.zoomRange.last - state.zoomRange.first)).toLong()
+                                        
+                                        // Hit test for handles
+                                        val handleWidthPx = 40f
+                                        val startX = paddingLeft + (state.selectionStartMs?.let { (it - state.zoomRange.first).toFloat() / (state.zoomRange.last - state.zoomRange.first) * graphWidth } ?: -1000f)
+                                        val endX = paddingLeft + (state.selectionEndMs?.let { (it - state.zoomRange.first).toFloat() / (state.zoomRange.last - state.zoomRange.first) * graphWidth } ?: -1000f)
+                                        
+                                        dragMode = when {
+                                            abs(offset.x - startX) < handleWidthPx -> DragMode.StartHandle
+                                            abs(offset.x - endX) < handleWidthPx -> DragMode.EndHandle
+                                            else -> {
+                                                state.selectionStartMs = time
+                                                state.selectionEndMs = time
+                                                DragMode.NewSelection
+                                            }
+                                        }
+                                    }
+                                },
+                                onDrag = { change, _ ->
+                                    val paddingLeft = 120f
+                                    val paddingRight = 40f
+                                    val graphWidth = size.width - paddingLeft - paddingRight
+                                    val offset = change.position
+                                    if (offset.x > paddingLeft && offset.x < size.width - paddingRight) {
+                                        val ratio = (offset.x - paddingLeft) / graphWidth
+                                        val time = state.zoomRange.first + (ratio * (state.zoomRange.last - state.zoomRange.first)).toLong()
+                                        
+                                        when (dragMode) {
+                                            DragMode.StartHandle -> state.selectionStartMs = time
+                                            DragMode.EndHandle -> state.selectionEndMs = time
+                                            DragMode.NewSelection -> state.selectionEndMs = time
+                                            DragMode.None -> {}
+                                        }
+                                    }
+                                },
+                                onDragEnd = { dragMode = DragMode.None },
+                                onDragCancel = { dragMode = DragMode.None }
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures { offset ->
+                                val paddingLeft = 120f
+                                val paddingRight = 40f
+                                val graphWidth = size.width - paddingLeft - paddingRight
+                                if (offset.x > paddingLeft && offset.x < size.width - paddingRight) {
+                                    state.inspectedRatio = (offset.x - paddingLeft) / graphWidth
+                                    state.clearSelection()
+                                }
+                            }
+                        }
+                } else Modifier
+            )
     ) {
         val width = size.width
         val height = size.height
@@ -118,11 +178,33 @@ fun GraphRenderer(
 
         val timeRangeMs = (zoomRange.last - zoomRange.first).coerceAtLeast(1)
 
-        fun mapPoint(point: BpmDataPointEntity): Offset {
-            val relativeTimestamp = point.timestamp - zoomRange.first
+        fun mapTime(timeMs: Long): Float {
+            val relativeTimestamp = timeMs - zoomRange.first
             val xRatio = relativeTimestamp.toFloat() / timeRangeMs
+            return paddingLeft + (xRatio * graphWidth)
+        }
+
+        fun mapPoint(point: BpmDataPointEntity): Offset {
             val yRatio = (point.bpm - globalMinBpm) / globalBpmRange
-            return Offset(paddingLeft + (xRatio * graphWidth), paddingTop + (1.0f - yRatio.toFloat()) * graphHeight)
+            return Offset(mapTime(point.timestamp), paddingTop + (1.0f - yRatio.toFloat()) * graphHeight)
+        }
+
+        // Draw Selection Overlay & Handles
+        if (state.selectionStartMs != null && state.selectionEndMs != null) {
+            val startX = mapTime(min(state.selectionStartMs!!, state.selectionEndMs!!)).coerceIn(paddingLeft, width - paddingRight)
+            val endX = mapTime(max(state.selectionStartMs!!, state.selectionEndMs!!)).coerceIn(paddingLeft, width - paddingRight)
+            
+            drawRect(
+                color = selectionColor,
+                topLeft = Offset(startX, paddingTop),
+                size = androidx.compose.ui.geometry.Size(endX - startX, graphHeight)
+            )
+            
+            // Handles
+            drawLine(handleColor, Offset(startX, paddingTop), Offset(startX, paddingTop + graphHeight), 4f)
+            drawLine(handleColor, Offset(endX, paddingTop), Offset(endX, paddingTop + graphHeight), 4f)
+            drawCircle(handleColor, radius = 8f, center = Offset(startX, paddingTop + graphHeight / 2))
+            drawCircle(handleColor, radius = 8f, center = Offset(endX, paddingTop + graphHeight / 2))
         }
 
         // Draw Grid and Labels
@@ -195,3 +277,5 @@ fun GraphRenderer(
         }
     }
 }
+
+private enum class DragMode { None, NewSelection, StartHandle, EndHandle }

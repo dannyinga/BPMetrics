@@ -14,6 +14,7 @@ import inga.bpmetrics.BPMetricsApp
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
+import inga.bpmetrics.ui.detail.BpmGraphDetailScreen
 import inga.bpmetrics.ui.detail.BpmRecordScreen
 import inga.bpmetrics.ui.detail.BpmRecordViewModel
 import inga.bpmetrics.ui.library.LibraryScreen
@@ -84,7 +85,22 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             BpmRecordScreen(
                 viewModel = viewModel, 
                 onBack = { navController.popBackStack() }, 
-                onDeleted = { navController.popBackStack() }
+                onDeleted = { navController.popBackStack() },
+                onShowDetailedGraph = { navController.navigate("${Routes.GRAPH_DETAIL}/$recordId") }
+            )
+        }
+
+        composable(
+            route = "${Routes.GRAPH_DETAIL}/{recordId}",
+            arguments = listOf(navArgument("recordId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val recordId = backStackEntry.arguments?.getLong("recordId") ?: return@composable
+            val viewModel: BpmRecordViewModel = viewModel(
+                factory = BpmRecordViewModel.Factory(repository, recordId)
+            )
+            BpmGraphDetailScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
             )
         }
     }
@@ -100,4 +116,5 @@ object Routes {
     const val LIBRARY = "library"
     const val DETAIL = "detail"
     const val SETTINGS = "settings"
+    const val GRAPH_DETAIL = "graph_detail"
 }
