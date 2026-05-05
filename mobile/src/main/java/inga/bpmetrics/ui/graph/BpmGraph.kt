@@ -7,9 +7,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -27,7 +29,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.ui.theme.BpmAvg
@@ -129,54 +134,87 @@ fun BpmGraph(
         state.inspectedTimeMs?.let { TimeUtils.formatMs(it) }
     }
 
-    val isSelecting = state.selectionStartMs != null && state.selectionEndMs != null
+    val currentDuration = state.zoomRange.last - state.zoomRange.first
 
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Render the interactive Canvas
-        GraphRenderer(
-            record = record,
-            state = state,
-            modifier = Modifier.height(350.dp),
-            isInteractive = true
-        )
-
-        // Zoom Slider - Placed above Timeline to prevent jitter when Timeline appears
-        val currentDuration = state.zoomRange.last - state.zoomRange.first
-        Column(modifier = Modifier.padding(horizontal = 32.dp).fillMaxWidth()) {
-            Text(
-                "Zoom Level",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(300.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Render the interactive Canvas
+            GraphRenderer(
+                record = record,
+                state = state,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                isInteractive = true
             )
-            // Logarithmic-like zoom feel: slider 0..1 maps to duration totalDuration..2s
-            val currentZoomLevel = 1f - (currentDuration.toFloat() / state.totalDuration)
-            Slider(
-                value = currentZoomLevel,
-                onValueChange = { zoomFactor ->
-                    // zoomFactor 0 -> duration = totalDuration
-                    // zoomFactor 1 -> duration = 2000ms
-                    val newDuration = (state.totalDuration - (zoomFactor * (state.totalDuration - 2000L))).toLong()
-                    val center = (state.zoomRange.first + state.zoomRange.last) / 2
-                    var newStart = center - (newDuration / 2)
-                    var newEnd = newStart + newDuration
 
-                    // Clamp to bounds
-                    if (newStart < 0) {
-                        newStart = 0
-                        newEnd = newDuration
-                    }
-                    if (newEnd > state.totalDuration) {
-                        newEnd = state.totalDuration
-                        newStart = newEnd - newDuration
-                    }
-                    state.zoomRange = newStart..newEnd
-                },
-                valueRange = 0f..1f,
-                modifier = Modifier.fillMaxWidth()
-            )
+            // Vertical Zoom Slider - Moved to the right for better UX
+            Column(
+                modifier = Modifier
+                    .width(48.dp)
+                    .fillMaxHeight()
+                    .padding(vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Zoom",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                // Logarithmic-like zoom feel: slider 0..1 maps to duration totalDuration..2s
+                val currentZoomLevel = 1f - (currentDuration.toFloat() / state.totalDuration)
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Slider(
+                        value = currentZoomLevel,
+                        onValueChange = { zoomFactor ->
+                            // zoomFactor 0 -> duration = totalDuration
+                            // zoomFactor 1 -> duration = 2000ms
+                            val newDuration = (state.totalDuration - (zoomFactor * (state.totalDuration - 2000L))).toLong()
+                            val center = (state.zoomRange.first + state.zoomRange.last) / 2
+                            var newStart = center - (newDuration / 2)
+                            var newEnd = newStart + newDuration
+
+                            // Clamp to bounds
+                            if (newStart < 0) {
+                                newStart = 0
+                                newEnd = newDuration
+                            }
+                            if (newEnd > state.totalDuration) {
+                                newEnd = state.totalDuration
+                                newStart = newEnd - newDuration
+                            }
+                            state.zoomRange = newStart..newEnd
+                        },
+                        valueRange = 0f..1f,
+                        modifier = Modifier
+                            .graphicsLayer { rotationZ = 270f }
+                            .layout { measurable, constraints ->
+                                val placeable = measurable.measure(
+                                    Constraints(
+                                        minWidth = 0,
+                                        maxWidth = constraints.maxHeight,
+                                        minHeight = 0,
+                                        maxHeight = constraints.maxWidth
+                                    )
+                                )
+                                layout(placeable.height, placeable.width) {
+                                    placeable.placeRelative(
+                                        x = -(placeable.width - placeable.height) / 2,
+                                        y = (placeable.width - placeable.height) / 2
+                                    )
+                                }
+                            }
+                            .fillMaxHeight() // This becomes visual length after rotation logic
+                    )
+                }
+            }
         }
 
         // Timeline Slider for Panning - Animated appearance
@@ -216,18 +254,13 @@ fun BpmGraph(
 
         Spacer(Modifier.height(24.dp))
 
-        // Manual H:M:S input controls
-        // If selecting, control the selection bounds. Otherwise, control the zoom window.
+        // Manual H:M:S input controls for the Zoom window
         GraphManualControls(
-            initialStart = if (isSelecting) TimeUtils.formatMs(state.selectionStartMs!!) else TimeUtils.formatMs(state.zoomRange.first),
-            initialEnd = if (isSelecting) TimeUtils.formatMs(state.selectionEndMs!!) else TimeUtils.formatMs(state.zoomRange.last),
-            labelPrefix = if (isSelecting) "Select" else "Zoom",
+            initialStart = TimeUtils.formatMs(state.zoomRange.first),
+            initialEnd = TimeUtils.formatMs(state.zoomRange.last),
+            labelPrefix = "Zoom",
             onApply = { start, end -> 
-                if (isSelecting) {
-                    state.setSelection(start, end)
-                } else {
-                    state.updateZoom(start, end)
-                }
+                state.updateZoom(start, end)
             }
         )
     }

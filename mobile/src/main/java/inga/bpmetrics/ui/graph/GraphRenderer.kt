@@ -6,7 +6,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -42,7 +41,7 @@ import kotlin.math.roundToInt
 
 /**
  * A stateless component that renders the BPM graph's visual elements.
- * 
+ *
  * Updated to use HSV interpolation for gradients, matching the Image and Video exporters.
  */
 @Composable
@@ -95,7 +94,6 @@ fun GraphRenderer(
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(350.dp)
             .padding(horizontal = 16.dp)
             .then(
                 if (isInteractive) {

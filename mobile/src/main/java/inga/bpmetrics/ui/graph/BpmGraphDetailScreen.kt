@@ -9,6 +9,10 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -178,7 +182,11 @@ fun BpmGraphDetailScreen(
                         state = graphState
                     )
 
-                    AnimatedVisibility(visible = graphState.selectionStartMs != null && graphState.selectionEndMs != null) {
+                    AnimatedVisibility(
+                        visible = graphState.selectionStartMs != null && graphState.selectionEndMs != null,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
+                    ) {
                         val start = graphState.selectionStartMs ?: 0L
                         val end = graphState.selectionEndMs ?: 0L
                         val actualStart = min(start, end)
@@ -191,10 +199,24 @@ fun BpmGraphDetailScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "Selected Range: ${TimeUtils.formatMs(actualStart)} - ${TimeUtils.formatMs(actualEnd)}",
-                                style = MaterialTheme.typography.bodyMedium
+                                text = "Split Selection",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
                             )
+                            
                             Spacer(Modifier.height(8.dp))
+
+                            // Added manual controls for precise selection
+                            GraphManualControls(
+                                initialStart = TimeUtils.formatMs(actualStart),
+                                initialEnd = TimeUtils.formatMs(actualEnd),
+                                labelPrefix = "Split",
+                                onApply = { s, e -> graphState.setSelection(s, e) }
+                            )
+
+                            Spacer(Modifier.height(12.dp))
+                            
                             Button(
                                 onClick = {
                                     val selectedPoints = r.dataPoints
@@ -225,7 +247,7 @@ fun BpmGraphDetailScreen(
             }
         }
 
-        // 1. Get the SettingsRepository (Update this line based on your DI/App structure)
+        // 1. Get the SettingsRepository
         val settingsRepository = remember { (context.applicationContext as BPMetricsApp).settingsRepository }
 
         if (showImageExportDialog) {

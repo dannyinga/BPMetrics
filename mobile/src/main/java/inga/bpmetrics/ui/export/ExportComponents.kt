@@ -218,14 +218,14 @@ fun ImageExportDialog(
                     onSave(ImageExporter.renderGraphToBitmap(record, config), record.metadata.title)
                     onDismiss()
                 }) { Text("Save") }
-                TextButton(onClick = {
-                    val config = createConfig(widthPx, heightPx, startInput, endInput, record, opacity, showAxes, showLabels, showGrid, showTitle)
-                    if (saveAsDefault) {
-                        scope.launch { settingsRepository.setImageDefaults(config) }
-                    }
-                    ImageExporter.shareBitmap(context, ImageExporter.renderGraphToBitmap(record, config), record.metadata.title)
-                    onDismiss()
-                }) { Text("Share") }
+//                TextButton(onClick = {
+//                    val config = createConfig(widthPx, heightPx, startInput, endInput, record, opacity, showAxes, showLabels, showGrid, showTitle)
+//                    if (saveAsDefault) {
+//                        scope.launch { settingsRepository.setImageDefaults(config) }
+//                    }
+//                    ImageExporter.shareBitmap(context, ImageExporter.renderGraphToBitmap(record, config), record.metadata.title)
+//                    onDismiss()
+//                }) { Text("Share") }
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
