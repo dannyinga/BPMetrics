@@ -73,9 +73,13 @@ class AnalysisViewModel(
             return@combine AnalysisUiState(isEmpty = true)
         }
 
-        // Calculate Trio values: Absolute lowest min, Highest average, Absolute highest max
+        // Calculate Trio values: Absolute lowest min, Time-weighted Average, Absolute highest max
         val absoluteMin = records.mapNotNull { it.minDataPoint?.bpm }.minOrNull() ?: 0.0
-        val highestAverage = records.mapNotNull { it.metadata.avg }.maxOrNull() ?: 0.0
+        
+        val totalDuration = records.sumOf { it.metadata.durationMs }
+        val weightedSum = records.sumOf { (it.metadata.avg ?: 0.0) * it.metadata.durationMs }
+        val timeWeightedAverage = if (totalDuration > 0L) weightedSum / totalDuration else 0.0
+        
         val absoluteMax = records.mapNotNull { it.maxDataPoint?.bpm }.maxOrNull() ?: 0.0
 
         // Filtered Records based on the SELECTED metric
@@ -119,7 +123,11 @@ class AnalysisViewModel(
 
                 val value = when (options.metricType) {
                     MetricType.LOW -> groupRecords.mapNotNull { it.minDataPoint?.bpm }.minOrNull() ?: 0.0
-                    MetricType.AVG -> groupRecords.mapNotNull { it.metadata.avg }.average()
+                    MetricType.AVG -> {
+                        val groupTotalDuration = groupRecords.sumOf { it.metadata.durationMs }
+                        val groupWeightedSum = groupRecords.sumOf { (it.metadata.avg ?: 0.0) * it.metadata.durationMs }
+                        if (groupTotalDuration > 0L) groupWeightedSum / groupTotalDuration else 0.0
+                    }
                     MetricType.HIGH -> groupRecords.mapNotNull { it.maxDataPoint?.bpm }.maxOrNull() ?: 0.0
                 }
                 
@@ -146,7 +154,7 @@ class AnalysisViewModel(
 
         AnalysisUiState(
             minTrio = absoluteMin.toInt(),
-            avgTrio = highestAverage.toInt(),
+            avgTrio = timeWeightedAverage.toInt(),
             maxTrio = absoluteMax.toInt(),
             records = sortedRecords,
             categoricalRankings = rankings,
@@ -154,7 +162,7 @@ class AnalysisViewModel(
             currentCategoryId = effectiveCategoryId,
             dateRangeText = if (initialFilter.dateRange == null) "All Time" else "Custom Range",
             categoriesText = if (selectedCategories.isEmpty()) "All" else selectedCategories.joinToString(", ") { it.name },
-            tagsText = if (selectedTags.isEmpty()) "None" else selectedTags.joinToString(", ") { it.name },
+            tagsText = if (selectedTags.isEmpty()) "All" else selectedTags.joinToString(", ") { it.name },
             isEmpty = false
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AnalysisUiState())

@@ -148,7 +148,8 @@ class LibraryRepository(
         _savingRecord.value = true
 
         val recordEntity = BpmRecordEntity(
-            title = customTitle ?: "New Record",
+            title = customTitle ?: record.title?.takeIf { it.isNotBlank() } ?: "New Record",
+            description = record.description ?: "",
             date = record.date.time,
             startTime = record.startTime,
             endTime = record.endTime,
@@ -158,8 +159,24 @@ class LibraryRepository(
 
         performAnalysisAndSaveDataPoints(record, recordId)
 
-        // Only auto-name if it's a fresh recording without a title
-        if (customTitle == null) {
+        // Handle Tags from Import
+        if (record.tagNames.isNotEmpty()) {
+            val allCategories = tagDao.getAllCategoriesFlow().first()
+            val importCategoryId = allCategories.find { it.name == "Imported" }?.categoryId 
+                ?: tagDao.insertCategory(CategoryEntity(name = "Imported"))
+
+            val existingTags = tagDao.getTagsByCategoryFlow(importCategoryId).first()
+            
+            record.tagNames.forEach { tagName ->
+                val tagId = existingTags.find { it.name == tagName }?.tagId
+                    ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = importCategoryId))
+                
+                tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
+            }
+        }
+
+        // Only auto-name if it's a fresh recording without a title (and not from CSV with a title)
+        if (customTitle == null && record.title.isNullOrBlank()) {
             autoNameRecord(recordId, "Untitled")
         }
         
@@ -232,22 +249,6 @@ class LibraryRepository(
     }
 
     /**
-     * Creates a base BpmRecordEntity from a BpmWatchRecord.
-     *
-     * @param record The BpmWatchRecord to convert.
-     * @return A BpmRecordEntity with initial data.
-     */
-    private fun getBaseRecordEntity(record: BpmWatchRecord): BpmRecordEntity {
-        return BpmRecordEntity(
-            title = "New Record", // Temporary title before auto-naming
-            date = record.date.time,
-            startTime = record.startTime,
-            endTime = record.endTime,
-            durationMs = record.durationMs
-        )
-    }
-
-    /**
      * Automatically names a record with a prefix and an incrementing count.
      * Example: "Spiderman 5", "Untitled 2".
      *
@@ -284,6 +285,13 @@ class LibraryRepository(
     }
 
     /**
+     * Updates an existing category (e.g., renaming).
+     */
+    suspend fun updateCategory(category: CategoryEntity) {
+        tagDao.updateCategory(category)
+    }
+
+    /**
      * Creates a new tag under a specific category.
      * 
      * @param name The name of the tag.
@@ -291,6 +299,13 @@ class LibraryRepository(
      */
     suspend fun createTag(name: String, categoryId: Long) {
         tagDao.insertTag(TagEntity(name = name, parentCategoryId = categoryId))
+    }
+
+    /**
+     * Updates an existing tag (e.g., renaming).
+     */
+    suspend fun updateTag(tag: TagEntity) {
+        tagDao.updateTag(tag)
     }
 
     /**

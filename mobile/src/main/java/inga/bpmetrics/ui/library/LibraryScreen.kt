@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FilterAltOff
@@ -44,16 +45,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import inga.bpmetrics.export.CsvExporter
 import inga.bpmetrics.ui.Routes
 import inga.bpmetrics.ui.analysis.AnalysisFilterDialog
-import inga.bpmetrics.ui.detail.BpmRecordTile
-import inga.bpmetrics.ui.detail.ExportHelpers
+import inga.bpmetrics.ui.record.BpmRecordTile
 import inga.bpmetrics.ui.theme.BpmAccent
 
 /**
@@ -80,7 +80,7 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
-            val watchRecord = ExportHelpers.importFromCsv(context, it)
+            val watchRecord = CsvExporter.importFromCsv(context, it)
             if (watchRecord != null) {
                 viewModel.importRecord(watchRecord)
             }
@@ -141,7 +141,7 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                         shape = MaterialTheme.shapes.extraLarge,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Default.Sort, null, Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.Sort, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(currentSort.name.replace("_", " ").lowercase().capitalize())
                     }

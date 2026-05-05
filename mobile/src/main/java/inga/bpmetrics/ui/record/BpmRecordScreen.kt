@@ -1,5 +1,8 @@
-package inga.bpmetrics.ui.detail
+package inga.bpmetrics.ui.record
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,8 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -35,22 +36,30 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import inga.bpmetrics.export.CsvExporter
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.graph.BpmGraphPreview
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.components.DeleteConfirmDialog
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Share
 
 /**
  * The record detail screen, displaying full statistics and allowing editing of metadata and tags.
  *
- * @param viewModel The [inga.bpmetrics.ui.detail.BpmRecordViewModel] for the specific record.
+ * @param viewModel The [inga.bpmetrics.ui.record.BpmRecordViewModel] for the specific record.
  * @param onBack Callback for navigating back.
  * @param onDeleted Callback when the record is successfully deleted.
  * @param onShowDetailedGraph Callback to navigate to the detailed graph view.
+ * @param onManageTags Callback to navigate to the tag management screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,11 +67,26 @@ fun BpmRecordScreen(
     viewModel: BpmRecordViewModel, 
     onBack: () -> Unit, 
     onDeleted: () -> Unit,
-    onShowDetailedGraph: () -> Unit
+    onShowDetailedGraph: () -> Unit,
+    onManageTags: () -> Unit
 ) {
     val record by viewModel.record.collectAsState()
     var isEditing by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val saveCsvLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri: Uri? ->
+        uri?.let {
+            record?.let { r ->
+                context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                    outputStream.write(CsvExporter.getCsvString(r).toByteArray())
+                }
+            }
+        }
+    }
 
     record?.let { r ->
         var editedTitle by remember(r.metadata.title) { mutableStateOf(r.metadata.title) }
@@ -98,6 +122,13 @@ fun BpmRecordScreen(
                         }) {
                             Icon(if (isEditing) Icons.Default.Done else Icons.Default.Edit, contentDescription = if (isEditing) "Save" else "Edit")
                         }
+                        if (!isEditing) {
+                            IconButton(onClick = {
+                                saveCsvLauncher.launch("${r.metadata.title.replace(" ", "_")}.csv")
+                            }) {
+                                Icon(Icons.Default.Save, contentDescription = "Save CSV Locally")
+                            }
+                        }
                     }
                 )
             }
@@ -112,15 +143,13 @@ fun BpmRecordScreen(
             ) {
                 Spacer(Modifier.height(16.dp))
                 
-                // Enhanced BpmTrio: Bigger icons/text and interactive highlighting
+                // Display low, avg, and max BPM metrics.
                 BpmTrio(
                     low = r.minDataPoint?.bpm?.toInt() ?: 0,
                     avg = r.metadata.avg?.toInt() ?: 0,
                     max = r.maxDataPoint?.bpm?.toInt() ?: 0,
                     iconSize = 32.dp,
-                    fontSize = 24.sp,
-                    onLowClick = { /* No longer highlighting directly on preview */ },
-                    onMaxClick = { /* No longer highlighting directly on preview */ }
+                    fontSize = 24.sp
                 )
                 
                 Spacer(Modifier.height(24.dp))
@@ -174,7 +203,7 @@ fun BpmRecordScreen(
                 )
                 
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.End) {
-                    IconButton(onClick = { viewModel.deleteRecord(); onDeleted() }) {
+                    IconButton(onClick = { showDeleteConfirm = true }) {
                         Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
                     }
                 }
@@ -190,8 +219,25 @@ fun BpmRecordScreen(
                     selectedIds.forEach { if (!currentIds.contains(it)) viewModel.addTag(it) }
                     showTagDialog = false
                 },
+                onManageTags = {
+                    showTagDialog = false
+                    onManageTags()
+                },
                 viewModel = viewModel,
                 initialSelectedTagIds = r.tags.map { it.tagId }
+            )
+        }
+
+        if (showDeleteConfirm) {
+            DeleteConfirmDialog(
+                title = "Delete Record",
+                message = "Are you sure you want to permanently delete this record? This action cannot be undone.",
+                onDismiss = { showDeleteConfirm = false },
+                onConfirm = {
+                    showDeleteConfirm = false
+                    viewModel.deleteRecord()
+                    onDeleted()
+                }
             )
         }
     } ?: run { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }

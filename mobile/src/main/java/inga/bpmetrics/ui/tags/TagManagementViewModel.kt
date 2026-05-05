@@ -6,8 +6,10 @@ import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.TagEntity
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -22,13 +24,18 @@ import kotlinx.coroutines.launch
  */
 class TagManagementViewModel(private val repository: LibraryRepository) : ViewModel() {
 
+    private val _isEditing = MutableStateFlow(false)
+    val isEditing: StateFlow<Boolean> = _isEditing.asStateFlow()
+
+    fun toggleEditMode() {
+        _isEditing.value = !_isEditing.value
+    }
+
     /**
      * UI state representing the categories and their associated tags.
      */
     val uiState: StateFlow<TagManagementUIState> = repository.getAllCategories()
         .combine(repository.records) { categories, _ ->
-            // In a real app, we might want to fetch tags for each category more efficiently,
-            // but for now, we'll provide the categories. The UI will handle fetching tags per category.
             TagManagementUIState(categories = categories)
         }.stateIn(
             scope = viewModelScope,
@@ -44,6 +51,12 @@ class TagManagementViewModel(private val repository: LibraryRepository) : ViewMo
     fun createCategory(name: String) {
         viewModelScope.launch {
             repository.createCategory(name)
+        }
+    }
+
+    fun renameCategory(category: CategoryEntity, newName: String) {
+        viewModelScope.launch {
+            repository.updateCategory(category.copy(name = newName))
         }
     }
 
@@ -67,6 +80,12 @@ class TagManagementViewModel(private val repository: LibraryRepository) : ViewMo
     fun createTag(name: String, categoryId: Long) {
         viewModelScope.launch {
             repository.createTag(name, categoryId)
+        }
+    }
+
+    fun renameTag(tag: TagEntity, newName: String) {
+        viewModelScope.launch {
+            repository.updateTag(tag.copy(name = newName))
         }
     }
 

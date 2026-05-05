@@ -2,7 +2,6 @@ package inga.bpmetrics.ui.library
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,6 +23,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
@@ -34,9 +34,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
+import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.components.ExpandableSection
 import java.util.Calendar
 import java.util.TimeZone
 
@@ -204,19 +207,51 @@ fun LibraryFilterDialog(
                     Text("Tags", style = MaterialTheme.typography.titleMedium)
                 }
 
-                items(categories) { category ->
-                    Text(category.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                items(categories, key = { it.categoryId }) { category ->
                     val tags by repository.getTagsByCategory(category.categoryId).collectAsState(initial = emptyList())
-                    FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        tags.forEach { tag ->
-                            val isSelected = selectedTagIds.contains(tag.tagId)
-                            FilterChip(
-                                selected = isSelected,
+                    val categoryTagIds = remember(tags) { tags.map { it.tagId }.toSet() }
+                    val selectedInCategory = remember(categoryTagIds, selectedTagIds) {
+                        categoryTagIds.intersect(selectedTagIds)
+                    }
+
+                    val toggleState = when {
+                        categoryTagIds.isEmpty() -> ToggleableState.Off
+                        selectedInCategory.size == categoryTagIds.size -> ToggleableState.On
+                        selectedInCategory.isEmpty() -> ToggleableState.Off
+                        else -> ToggleableState.Indeterminate
+                    }
+
+                    val hasSelection = selectedInCategory.isNotEmpty()
+                    var isExpanded by remember { mutableStateOf(hasSelection) }
+
+                    ExpandableSection(
+                        title = category.name,
+                        isExpanded = isExpanded,
+                        onToggle = { isExpanded = !isExpanded },
+                        leadingContent = {
+                            TriStateCheckbox(
+                                state = toggleState,
                                 onClick = {
-                                    selectedTagIds = if (isSelected) selectedTagIds - tag.tagId else selectedTagIds + tag.tagId
-                                },
-                                label = { Text(tag.name) }
+                                    selectedTagIds = if (toggleState == ToggleableState.On) {
+                                        selectedTagIds - categoryTagIds
+                                    } else {
+                                        selectedTagIds + categoryTagIds
+                                    }
+                                }
                             )
+                        }
+                    ) {
+                        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            tags.forEach { tag ->
+                                val isSelected = selectedTagIds.contains(tag.tagId)
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        selectedTagIds = if (isSelected) selectedTagIds - tag.tagId else selectedTagIds + tag.tagId
+                                    },
+                                    label = { Text(tag.name) }
+                                )
+                            }
                         }
                     }
                 }

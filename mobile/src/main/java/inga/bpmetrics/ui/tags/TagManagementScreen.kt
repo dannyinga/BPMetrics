@@ -9,9 +9,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EditOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -39,22 +40,68 @@ import androidx.navigation.NavController
 @Composable
 fun TagManagementScreen(navController: NavController, viewModel: TagManagementViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val isEditing by viewModel.isEditing.collectAsStateWithLifecycle()
     var showAddCategoryDialog by remember { mutableStateOf(false) }
     var categoryName by remember { mutableStateOf("") }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Manage Tags") },
-                navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }
+                navigationIcon = { 
+                    IconButton(onClick = { navController.popBackStack() }) { 
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null) 
+                    } 
+                },
+                actions = {
+                    IconButton(onClick = { showAddCategoryDialog = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Category")
+                    }
+                    IconButton(onClick = { viewModel.toggleEditMode() }) {
+                        Icon(
+                            imageVector = if (isEditing) Icons.Default.EditOff else Icons.Default.Edit,
+                            contentDescription = if (isEditing) "Done" else "Edit"
+                        )
+                    }
+                }
             )
-        },
-        floatingActionButton = { FloatingActionButton(onClick = { showAddCategoryDialog = true }) { Icon(Icons.Default.Add, null) } }
+        }
     ) { paddingValues ->
-        LazyColumn(modifier = Modifier.padding(paddingValues).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(uiState.categories) { category -> CategoryCard(category, viewModel) }
+        LazyColumn(
+            modifier = Modifier.padding(paddingValues).fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(uiState.categories) { category -> 
+                CategoryCard(category, viewModel, isEditing) 
+            }
         }
     }
+
     if (showAddCategoryDialog) {
-        AlertDialog(onDismissRequest = { showAddCategoryDialog = false }, title = { Text("New Category") }, text = { OutlinedTextField(value = categoryName, onValueChange = { categoryName = it }, label = { Text("Category Name") }) }, confirmButton = { TextButton(onClick = { if (categoryName.isNotBlank()) { viewModel.createCategory(categoryName); categoryName = ""; showAddCategoryDialog = false } }) { Text("Create") } })
+        AlertDialog(
+            onDismissRequest = { showAddCategoryDialog = false },
+            title = { Text("New Category") },
+            text = { 
+                OutlinedTextField(
+                    value = categoryName,
+                    onValueChange = { categoryName = it },
+                    label = { Text("Category Name") },
+                    singleLine = true
+                ) 
+            },
+            confirmButton = { 
+                TextButton(onClick = { 
+                    if (categoryName.isNotBlank()) { 
+                        viewModel.createCategory(categoryName)
+                        categoryName = ""
+                        showAddCategoryDialog = false 
+                    } 
+                }) { Text("Create") } 
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddCategoryDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }

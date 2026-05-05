@@ -10,14 +10,15 @@ import java.time.ZoneId
  * A record as created by the watch. Contains only the data, data points, start time, end time,
  * and duration. The phone will receive this record and give it additional info (title, tags,
  * statistics, etc.)
- *
- * @
  */
 data class BpmWatchRecord(
     val date: Date,
     val dataPoints: List<BpmDataPoint>,
     val startTime: Long,
     val endTime: Long,
+    val title: String? = null,
+    val description: String? = null,
+    val tagNames: List<String> = emptyList()
 ) : Comparable<BpmWatchRecord> {
     val durationMs: Long = endTime - startTime
 
@@ -26,7 +27,7 @@ data class BpmWatchRecord(
     }
 
     private fun validateParams() {
-        if (endTime <= startTime || startTime < 0)
+        if (startTime < 0 || endTime <= startTime)
             throw IllegalArgumentException("Can't construct record with start time: $startTime and end time: $endTime")
     }
 
@@ -55,6 +56,13 @@ data class BpmWatchRecord(
         val durationSec = durationMs / 1000 % 60
         val durationMillis = durationMs % 1000
         outputBuilder.appendLine("Duration: ${durationMin}m ${durationSec}s ${durationMillis}ms")
+        
+        title?.let { outputBuilder.appendLine("Title: $it") }
+        description?.let { outputBuilder.appendLine("Description: $it") }
+        if (tagNames.isNotEmpty()) {
+            outputBuilder.appendLine("Tags: ${tagNames.joinToString(", ")}")
+        }
+
         outputBuilder.appendLine()
         outputBuilder.appendLine("Raw Data")
 
@@ -62,6 +70,6 @@ data class BpmWatchRecord(
             outputBuilder.appendLine(dataPoint)
         }
 
-        return outputBuilder.toString();
+        return outputBuilder.toString()
     }
 }

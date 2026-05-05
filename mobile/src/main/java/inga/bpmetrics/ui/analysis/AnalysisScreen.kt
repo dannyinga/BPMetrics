@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -66,11 +68,30 @@ fun AnalysisScreen(navController: NavController, viewModel: AnalysisViewModel) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Analysis View", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) },
-                navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
-                actions = {}
-            )
+            Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {
+                TopAppBar(
+                    title = { Text("Analysis View", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) },
+                    navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }
+                )
+                if (!uiState.isEmpty) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AnalysisTrioItem(value = uiState.minTrio, color = BpmLow, isSelected = selectedMetric == AnalysisViewModel.MetricType.LOW) {
+                            viewModel.setSelectedMetric(AnalysisViewModel.MetricType.LOW)
+                        }
+                        AnalysisTrioItem(value = uiState.avgTrio, color = BpmAvg, isSelected = selectedMetric == AnalysisViewModel.MetricType.AVG) {
+                            viewModel.setSelectedMetric(AnalysisViewModel.MetricType.AVG)
+                        }
+                        AnalysisTrioItem(value = uiState.maxTrio, color = BpmHigh, isSelected = selectedMetric == AnalysisViewModel.MetricType.HIGH) {
+                            viewModel.setSelectedMetric(AnalysisViewModel.MetricType.HIGH)
+                        }
+                    }
+                    HorizontalDivider()
+                }
+            }
         }
     ) { paddingValues ->
         if (uiState.isEmpty) {
@@ -85,57 +106,11 @@ fun AnalysisScreen(navController: NavController, viewModel: AnalysisViewModel) {
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
-                Text("categories: ${uiState.categoriesText}", style = MaterialTheme.typography.bodySmall)
-                Text("tags: ${uiState.tagsText}", style = MaterialTheme.typography.bodySmall)
-                Text("date range: ${uiState.dateRangeText}", style = MaterialTheme.typography.bodySmall)
+                Text("Categories: ${uiState.categoriesText}", style = MaterialTheme.typography.bodySmall)
+                Text("Tags: ${uiState.tagsText}", style = MaterialTheme.typography.bodySmall)
+                Text("Date Range: ${uiState.dateRangeText}", style = MaterialTheme.typography.bodySmall)
 
-                Spacer(Modifier.height(16.dp))
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    AnalysisTrioItem(value = uiState.minTrio, color = BpmLow, isSelected = selectedMetric == AnalysisViewModel.MetricType.LOW) {
-                        viewModel.setSelectedMetric(AnalysisViewModel.MetricType.LOW)
-                    }
-                    AnalysisTrioItem(value = uiState.avgTrio, color = BpmAvg, isSelected = selectedMetric == AnalysisViewModel.MetricType.AVG) {
-                        viewModel.setSelectedMetric(AnalysisViewModel.MetricType.AVG)
-                    }
-                    AnalysisTrioItem(value = uiState.maxTrio, color = BpmHigh, isSelected = selectedMetric == AnalysisViewModel.MetricType.HIGH) {
-                        viewModel.setSelectedMetric(AnalysisViewModel.MetricType.HIGH)
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-
-                Card(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 300.dp), 
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            IconButton(onClick = { viewModel.toggleRecordsReverse() }) {
-                                Icon(Icons.Default.SwapVert, null)
-                            }
-                            Text("Filtered Records", fontWeight = FontWeight.Bold)
-                        }
-                        LazyColumn(modifier = Modifier.weight(1f)) {
-                            items(uiState.records) { record ->
-                                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
-                                    navController.navigate("detail/${record.metadata.recordId}")
-                                }, horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text(record.metadata.title, style = MaterialTheme.typography.bodyMedium)
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.FavoriteBorder, null, tint = themeColor, modifier = Modifier.size(14.dp))
-                                        val displayValue = when (selectedMetric) {
-                                            AnalysisViewModel.MetricType.LOW -> record.minDataPoint?.bpm?.toInt() ?: 0
-                                            AnalysisViewModel.MetricType.AVG -> record.metadata.avg?.toInt() ?: 0
-                                            AnalysisViewModel.MetricType.HIGH -> record.maxDataPoint?.bpm?.toInt() ?: 0
-                                        }
-                                        Text("$displayValue", fontWeight = FontWeight.Bold, color = themeColor)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                Spacer(Modifier.height(12.dp))
 
                 // Only display Rankings section if there are categories with multiple tags to compare
                 if (uiState.availableCategories.isNotEmpty()) {
@@ -169,12 +144,13 @@ fun AnalysisScreen(navController: NavController, viewModel: AnalysisViewModel) {
                         Column(modifier = Modifier.padding(8.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Text("Rankings by Tag", fontWeight = FontWeight.Bold)
                                 IconButton(onClick = { viewModel.toggleRankingsReverse() }) {
                                     Icon(Icons.Default.SwapVert, null)
                                 }
-                                Text("Rankings", fontWeight = FontWeight.Bold)
                             }
                             Column(
                                 modifier = Modifier.padding(8.dp),
@@ -195,7 +171,41 @@ fun AnalysisScreen(navController: NavController, viewModel: AnalysisViewModel) {
                         }
                     }
                 }
-                
+
+                Spacer(Modifier.height(16.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 300.dp), 
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Rankings by Record", fontWeight = FontWeight.Bold)
+                            IconButton(onClick = { viewModel.toggleRecordsReverse() }) {
+                                Icon(Icons.Default.SwapVert, null)
+                            }
+                        }
+                        LazyColumn(modifier = Modifier.weight(1f)) {
+                            items(uiState.records) { record ->
+                                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
+                                    navController.navigate("detail/${record.metadata.recordId}")
+                                }, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(record.metadata.title, style = MaterialTheme.typography.bodyMedium)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.FavoriteBorder, null, tint = themeColor, modifier = Modifier.size(14.dp))
+                                        val displayValue = when (selectedMetric) {
+                                            AnalysisViewModel.MetricType.LOW -> record.minDataPoint?.bpm?.toInt() ?: 0
+                                            AnalysisViewModel.MetricType.AVG -> record.metadata.avg?.toInt() ?: 0
+                                            AnalysisViewModel.MetricType.HIGH -> record.maxDataPoint?.bpm?.toInt() ?: 0
+                                        }
+                                        Text("$displayValue", fontWeight = FontWeight.Bold, color = themeColor)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(16.dp))
             }
         }

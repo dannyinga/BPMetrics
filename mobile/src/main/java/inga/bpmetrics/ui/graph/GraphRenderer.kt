@@ -32,6 +32,7 @@ import inga.bpmetrics.library.BpmDataPointEntity
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
+import inga.bpmetrics.ui.util.StringFormatHelpers
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -41,6 +42,8 @@ import kotlin.math.roundToInt
 
 /**
  * A stateless component that renders the BPM graph's visual elements.
+ * 
+ * Updated to use HSV interpolation for gradients, matching the Image and Video exporters.
  */
 @Composable
 fun GraphRenderer(
@@ -49,9 +52,10 @@ fun GraphRenderer(
     modifier: Modifier = Modifier,
     isInteractive: Boolean = true
 ) {
-    val gridColor = MaterialTheme.colorScheme.outlineVariant
-    val labelColor = MaterialTheme.colorScheme.onSurface
-    val secondaryLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    // Colors aligned with Exporter palette
+    val gridColor = Color(0x33CCCCCC)
+    val labelColor = Color.White
+    val secondaryLabelColor = Color(0xFFCCCCCC)
     val selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
     val handleColor = MaterialTheme.colorScheme.primary
     val lowBpmColor = BpmLow
@@ -62,6 +66,14 @@ fun GraphRenderer(
             color = labelColor.toArgb()
             textAlign = Paint.Align.RIGHT
             textSize = 36f
+        }
+    }
+
+    val clockTimeLabelPaint = remember(secondaryLabelColor) {
+        Paint().apply {
+            color = secondaryLabelColor.toArgb()
+            textAlign = Paint.Align.CENTER
+            textSize = 30f
         }
     }
 
@@ -83,7 +95,7 @@ fun GraphRenderer(
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(300.dp)
+            .height(350.dp)
             .padding(horizontal = 16.dp)
             .then(
                 if (isInteractive) {
@@ -159,7 +171,7 @@ fun GraphRenderer(
         val width = size.width
         val height = size.height
         val paddingLeft = 120f
-        val paddingBottom = 100f
+        val paddingBottom = 140f
         val paddingTop = 40f
         val paddingRight = 40f
         val graphWidth = width - paddingLeft - paddingRight
@@ -212,11 +224,22 @@ fun GraphRenderer(
         for (i in 0..gridCount) {
             val x = paddingLeft + (graphWidth / gridCount) * i
             val currentTimeMs = zoomRange.first + ((timeRangeMs / gridCount) * i)
+            val absoluteTimeMs = record.metadata.startTime + currentTimeMs
+
             drawLine(gridColor, Offset(x, paddingTop), Offset(x, paddingTop + graphHeight), 1f)
+            
+            // Relative HMS Time
             drawContext.canvas.nativeCanvas.drawText(
                 TimeUtils.formatMs(currentTimeMs),
                 x, paddingTop + graphHeight + 45f,
                 valueLabelPaint.apply { textAlign = Paint.Align.CENTER }
+            )
+
+            // Absolute Clock Time
+            drawContext.canvas.nativeCanvas.drawText(
+                StringFormatHelpers.getTimeString(absoluteTimeMs).replace(":00 ", " "),
+                x, paddingTop + graphHeight + 85f,
+                clockTimeLabelPaint.apply { textAlign = Paint.Align.CENTER }
             )
         }
 
@@ -243,23 +266,35 @@ fun GraphRenderer(
             path.lineTo(nextPoint.x, nextPoint.y)
         }
 
-        // Gradient & Shading
+        // Gradient & Shading using HSV interpolation for vibrancy (consistent with exporters)
+        val stops = 5
+        val gradientColors = List(stops) { i ->
+            val bpm = globalMinBpm + (globalBpmRange * i / (stops - 1))
+            getBpmColor(bpm, globalMinBpm, globalMaxBpm, lowBpmColor, highBpmColor)
+        }
+        
         val gradientBrush = Brush.verticalGradient(
-            colors = listOf(highBpmColor, lowBpmColor),
+            colors = gradientColors.reversed(), // reversed because paddingTop is max BPM
             startY = paddingTop,
             endY = paddingTop + graphHeight
         )
+        
         val fillPath = Path().apply {
             addPath(path)
             lineTo(mapPoint(visibleDataPoints.last()).x, paddingTop + graphHeight)
             lineTo(mapPoint(visibleDataPoints.first()).x, paddingTop + graphHeight)
             close()
         }
+        
+        val fillColors = gradientColors.reversed().mapIndexed { i, color ->
+            color.copy(alpha = 0.2f * (1f - i.toFloat() / (stops - 1)).coerceAtLeast(0.02f))
+        }
+        
         drawPath(fillPath, brush = Brush.verticalGradient(
-            colors = listOf(highBpmColor.copy(alpha = 0.2f), lowBpmColor.copy(alpha = 0.02f)),
+            colors = fillColors,
             startY = paddingTop, endY = paddingTop + graphHeight
         ), style = Fill)
-        drawPath(path, brush = gradientBrush, style = Stroke(6f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(path, brush = gradientBrush, style = Stroke(4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
 
         // Pointer
         state.inspectedRatio?.let { ratio ->
@@ -270,12 +305,34 @@ fun GraphRenderer(
             state.inspectedTimeMs?.let { time ->
                 visibleDataPoints.minByOrNull { abs(it.timestamp - time) }?.let { point ->
                     val offset = mapPoint(point)
-                    drawCircle(labelColor, radius = 12f, center = offset)
+                    val pointColor = getBpmColor(point.bpm, globalMinBpm, globalMaxBpm, lowBpmColor, highBpmColor)
+                    drawCircle(pointColor, radius = 12f, center = offset)
                     drawCircle(Color.White, radius = 6f, center = offset)
                 }
             }
         }
     }
+}
+
+/**
+ * Interpolates between two colors in HSV space.
+ */
+private fun getBpmColor(bpm: Double, minBpm: Double, maxBpm: Double, lowColor: Color, highColor: Color): Color {
+    val fraction = ((bpm - minBpm) / (maxBpm - minBpm)).coerceIn(0.0, 1.0).toFloat()
+    val hsvStart = FloatArray(3)
+    val hsvEnd = FloatArray(3)
+    android.graphics.Color.colorToHSV(lowColor.toArgb(), hsvStart)
+    android.graphics.Color.colorToHSV(highColor.toArgb(), hsvEnd)
+    
+    val sH = hsvStart[0]
+    var eH = hsvEnd[0]
+    if (eH < sH) eH += 360f
+    
+    return Color(android.graphics.Color.HSVToColor(floatArrayOf(
+        (sH + (eH - sH) * fraction) % 360f,
+        hsvStart[1] + (hsvEnd[1] - hsvStart[1]) * fraction,
+        hsvStart[2] + (hsvEnd[2] - hsvStart[2]) * fraction
+    )))
 }
 
 private enum class DragMode { None, NewSelection, StartHandle, EndHandle }

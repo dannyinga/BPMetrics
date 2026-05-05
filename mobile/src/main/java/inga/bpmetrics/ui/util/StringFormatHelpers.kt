@@ -12,10 +12,10 @@ import java.util.Locale
 object StringFormatHelpers {
 
     /**
-     * Converts a duration in milliseconds into a formatted string (e.g., "1h 2m 3s 456 ms").
+     * Converts a duration in milliseconds into a formatted string (e.g., "1h 2m 3s").
      *
      * @param durationMs The duration to format in milliseconds.
-     * @return A human-readable string representing the hours, minutes, seconds, and milliseconds.
+     * @return A human-readable string representing the hours, minutes, and seconds.
      */
     fun getDurationString(durationMs: Long) : String {
         val durationHour = durationMs / (1000 * 60 * 60)
@@ -30,10 +30,10 @@ object StringFormatHelpers {
         val durationSecText = if (durationSec <= 0) ""
         else "${durationSec}s "
 
-        val durationMillisText = "${durationMs % 1000} ms"
-        val durationString = durationHourText + durationMinText + durationSecText + durationMillisText
+        // Removed ms from recording duration display
+        val durationString = (durationHourText + durationMinText + durationSecText).trim()
 
-        return durationString
+        return if (durationString.isEmpty()) "0s" else durationString
     }
 
     /**

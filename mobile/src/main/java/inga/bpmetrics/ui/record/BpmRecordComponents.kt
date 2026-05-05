@@ -1,5 +1,6 @@
-package inga.bpmetrics.ui.detail
+package inga.bpmetrics.ui.record
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -147,7 +148,11 @@ fun BpmTrio(
             fontSize = fontSize,
             onClick = onLowClick
         )
-        Spacer(Modifier.width(16.dp))
+        
+        if (onLowClick == null && onMaxClick == null) {
+            Spacer(Modifier.width(16.dp))
+        }
+
         BpmMetric(
             value = avg, 
             color = BpmAvg, 
@@ -155,7 +160,11 @@ fun BpmTrio(
             iconSize = iconSize, 
             fontSize = fontSize
         )
-        Spacer(Modifier.width(16.dp))
+
+        if (onLowClick == null && onMaxClick == null) {
+            Spacer(Modifier.width(16.dp))
+        }
+
         BpmMetric(
             value = max, 
             color = BpmHigh, 
@@ -176,22 +185,59 @@ private fun BpmMetric(
     fontSize: TextUnit,
     onClick: (() -> Unit)? = null
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = if (onClick != null) Modifier.clickable { onClick() } else Modifier
-    ) {
-        Icon(
-            imageVector = Icons.Default.Favorite,
-            contentDescription = label,
-            tint = color,
-            modifier = Modifier.size(iconSize)
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            text = value.toString(),
-            style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize),
-            fontWeight = FontWeight.Bold,
-            color = color
-        )
+    if (onClick != null) {
+        Surface(
+            onClick = onClick,
+            shape = MaterialTheme.shapes.medium,
+            color = color.copy(alpha = 0.08f),
+            border = BorderStroke(1.dp, color.copy(alpha = 0.2f)),
+            modifier = Modifier.padding(4.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Favorite,
+                    contentDescription = label,
+                    tint = color,
+                    modifier = Modifier.size(iconSize)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(horizontalAlignment = Alignment.Start) {
+                    Text(
+                        text = value.toString(),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize),
+                        fontWeight = FontWeight.Bold,
+                        color = color
+                    )
+                    Text(
+                        text = "View $label",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = color.copy(alpha = 0.8f),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+    } else {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Favorite,
+                contentDescription = label,
+                tint = color,
+                modifier = Modifier.size(iconSize)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = value.toString(),
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize),
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+        }
     }
 }

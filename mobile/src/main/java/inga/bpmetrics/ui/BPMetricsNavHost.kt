@@ -14,9 +14,9 @@ import inga.bpmetrics.BPMetricsApp
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
-import inga.bpmetrics.ui.detail.BpmGraphDetailScreen
-import inga.bpmetrics.ui.detail.BpmRecordScreen
-import inga.bpmetrics.ui.detail.BpmRecordViewModel
+import inga.bpmetrics.ui.graph.BpmGraphDetailScreen
+import inga.bpmetrics.ui.record.BpmRecordScreen
+import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.library.LibraryScreen
 import inga.bpmetrics.ui.library.LibraryViewModel
 import inga.bpmetrics.ui.settings.SettingsScreen
@@ -86,7 +86,8 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 viewModel = viewModel, 
                 onBack = { navController.popBackStack() }, 
                 onDeleted = { navController.popBackStack() },
-                onShowDetailedGraph = { navController.navigate("${Routes.GRAPH_DETAIL}/$recordId") }
+                onShowDetailedGraph = { navController.navigate("${Routes.GRAPH_DETAIL}/$recordId") },
+                onManageTags = { navController.navigate(Routes.TAG_MANAGEMENT) }
             )
         }
 

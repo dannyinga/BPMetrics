@@ -1,4 +1,4 @@
-package inga.bpmetrics.ui.detail
+package inga.bpmetrics.ui.record
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider

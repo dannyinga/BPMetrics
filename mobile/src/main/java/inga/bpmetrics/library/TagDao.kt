@@ -20,6 +20,9 @@ interface TagDao {
     @Query("SELECT * FROM categories WHERE categoryId = :id")
     suspend fun getCategoryById(id: Long): CategoryEntity?
 
+    @Update
+    suspend fun updateCategory(category: CategoryEntity)
+
     @Delete
     suspend fun deleteCategory(category: CategoryEntity)
 
@@ -33,6 +36,9 @@ interface TagDao {
 
     @Query("SELECT * FROM tags WHERE tagId = :id")
     suspend fun getTagById(id: Long): TagEntity?
+
+    @Update
+    suspend fun updateTag(tag: TagEntity)
 
     @Delete
     suspend fun deleteTag(tag: TagEntity)
