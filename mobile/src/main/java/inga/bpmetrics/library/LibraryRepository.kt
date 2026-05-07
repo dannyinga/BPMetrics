@@ -160,7 +160,7 @@ class LibraryRepository(
         performAnalysisAndSaveDataPoints(record, recordId)
 
         // Handle Tags from Import
-        if (record.tagNames.isNotEmpty()) {
+        if (!record.tagNames.isNullOrEmpty()) {
             val allCategories = tagDao.getAllCategoriesFlow().first()
             val importCategoryId = allCategories.find { it.name == "Imported" }?.categoryId 
                 ?: tagDao.insertCategory(CategoryEntity(name = "Imported"))
