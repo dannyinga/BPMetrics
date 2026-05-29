@@ -78,9 +78,6 @@ fun BpmGraphDetailScreen(
     var showVideoExportDialog by remember { mutableStateOf(false) }
     var pendingBitmap by remember { mutableStateOf<Bitmap?>(null) }
     
-    val isExportingVideo by BpmExportService.isExporting.collectAsState()
-    val exportProgress by BpmExportService.exportProgress.collectAsState()
-
     // Notification Permission Launcher
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -118,8 +115,9 @@ fun BpmGraphDetailScreen(
     ) { uri: Uri? ->
         uri?.let { targetUri ->
             pendingExportConfig?.let { config ->
-                BpmExportService.startExport(context, record?.metadata?.recordId ?: -1L, config, targetUri)
-                Toast.makeText(context, "Export started in background...", Toast.LENGTH_SHORT).show()
+                val title = record?.metadata?.title ?: "Untitled"
+                BpmExportService.startExport(context, record?.metadata?.recordId ?: -1L, title, config, targetUri)
+                Toast.makeText(context, "Added to render queue!", Toast.LENGTH_SHORT).show()
             }
         }
         pendingExportConfig = null
@@ -139,18 +137,11 @@ fun BpmGraphDetailScreen(
                     },
                     actions = {
                         IconButton(
-                            onClick = { 
-                                if (isExportingVideo) {
-                                    Toast.makeText(context, "Export in progress...", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    showVideoExportDialog = true 
-                                }
-                            }
+                            onClick = { showVideoExportDialog = true }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Videocam, 
-                                contentDescription = "Export Video",
-                                tint = if (isExportingVideo) Color.Gray else MaterialTheme.colorScheme.onSurface
+                                contentDescription = "Export Video"
                             )
                         }
                         IconButton(onClick = { showImageExportDialog = true }) {
@@ -212,7 +203,8 @@ fun BpmGraphDetailScreen(
                                 initialStart = TimeUtils.formatMs(actualStart),
                                 initialEnd = TimeUtils.formatMs(actualEnd),
                                 labelPrefix = "Split",
-                                onApply = { s, e -> graphState.setSelection(s, e) }
+                                onApply = { s, e -> graphState.setSelection(s, e) },
+                                baseEpochMs = r.metadata.startTime
                             )
 
                             Spacer(Modifier.height(12.dp))
@@ -279,7 +271,8 @@ fun BpmGraphDetailScreen(
                         )
                     } else {
                         // Pass recordId directly from metadata
-                        BpmExportService.startExport(context, r.metadata.recordId, config, null)
+                        BpmExportService.startExport(context, r.metadata.recordId, r.metadata.title, config, null)
+                        Toast.makeText(context, "Added to render queue!", Toast.LENGTH_SHORT).show()
                     }
                 }
             )

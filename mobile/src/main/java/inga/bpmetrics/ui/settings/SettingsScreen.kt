@@ -69,6 +69,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
     val savedVidW by viewModel.vidWidth.collectAsStateWithLifecycle()
     val savedVidH by viewModel.vidHeight.collectAsStateWithLifecycle()
     val savedVidWin by viewModel.vidWindowSize.collectAsStateWithLifecycle()
+    val savedVidFPS by viewModel.vidFrameRate.collectAsStateWithLifecycle()
     val savedVidO by viewModel.vidOpacity.collectAsStateWithLifecycle()
     val savedVidAxes by viewModel.vidShowAxes.collectAsStateWithLifecycle()
     val savedVidLabels by viewModel.vidShowLabels.collectAsStateWithLifecycle()
@@ -90,6 +91,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
     var vidW by remember(savedVidW) { mutableStateOf(savedVidW) }
     var vidH by remember(savedVidH) { mutableStateOf(savedVidH) }
     var vidWin by remember(savedVidWin) { mutableStateOf(savedVidWin) }
+    var vidFPS by remember(savedVidFPS) { mutableStateOf(savedVidFPS) }
     var vidO by remember(savedVidO) { mutableFloatStateOf(savedVidO) }
     var vidAxes by remember(savedVidAxes) { mutableStateOf(savedVidAxes) }
     var vidLabels by remember(savedVidLabels) { mutableStateOf(savedVidLabels) }
@@ -105,7 +107,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
     val hasUnsavedChanges = imgW != savedImgW || imgH != savedImgH || imgO != savedImgO ||
             imgAxes != savedImgAxes || imgLabels != savedImgLabels || imgGrid != savedImgGrid ||
             imgTitle != savedImgTitle || vidW != savedVidW || vidH != savedVidH ||
-            vidWin != savedVidWin || vidO != savedVidO || vidAxes != savedVidAxes ||
+            vidWin != savedVidWin || vidFPS != savedVidFPS || vidO != savedVidO || vidAxes != savedVidAxes ||
             vidLabels != savedVidLabels || vidGrid != savedVidGrid || vidTitle != savedVidTitle ||
             vidStats != savedVidStats || vidLock != savedVidLock || vidOffset != savedVidOffset.toString()
 
@@ -121,7 +123,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
         )
         val videoConfig = VideoExporter.VideoExportConfig(
             windowSizeMs = (vidWin.toLongOrNull() ?: 30L) * 1000L,
-            syncOffsetMs = vidOffset.toLongOrNull() ?: 0L,
+            frameRate = vidFPS.toIntOrNull() ?: 30,
             imageConfig = imageConfig.copy(
                 width = vidW.toIntOrNull() ?: 1280,
                 height = vidH.toIntOrNull() ?: 720,
@@ -136,6 +138,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
         )
         viewModel.setImageDefaults(imageConfig)
         viewModel.setVideoDefaults(videoConfig)
+        viewModel.setGlobalSyncOffset(vidOffset.toLongOrNull() ?: 0L)
         Toast.makeText(context, "Settings Saved", Toast.LENGTH_SHORT).show()
     }
 
@@ -217,7 +220,10 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
                 OutlinedTextField(value = vidW, onValueChange = { vidW = it }, label = { Text("Width") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 OutlinedTextField(value = vidH, onValueChange = { vidH = it }, label = { Text("Height") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             }
-            OutlinedTextField(value = vidWin, onValueChange = { vidWin = it }, label = { Text("Window Size (Sec)") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                OutlinedTextField(value = vidWin, onValueChange = { vidWin = it }, label = { Text("Window Size (Sec)") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                OutlinedTextField(value = vidFPS, onValueChange = { vidFPS = it }, label = { Text("Frame Rate (FPS)") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            }
             OutlinedTextField(value = vidOffset, onValueChange = { vidOffset = it }, label = { Text("Global Sync Offset (ms)") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
             SettingsToggle("Lock Aspect Ratio", vidLock) { vidLock = it }
             SettingsToggle("Show Title", vidTitle) { vidTitle = it }

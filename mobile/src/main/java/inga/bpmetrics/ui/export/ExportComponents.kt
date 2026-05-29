@@ -245,6 +245,7 @@ fun VideoExportDialog(
     val savedW by viewModel.savedWidth.collectAsStateWithLifecycle()
     val savedH by viewModel.savedHeight.collectAsStateWithLifecycle()
     val savedWin by viewModel.savedWindowSize.collectAsStateWithLifecycle()
+    val savedFPS by viewModel.savedFrameRate.collectAsStateWithLifecycle()
     val savedO by viewModel.savedOpacity.collectAsStateWithLifecycle()
     val savedAxes by viewModel.savedShowAxes.collectAsStateWithLifecycle()
     val savedLabels by viewModel.savedShowLabels.collectAsStateWithLifecycle()
@@ -258,7 +259,7 @@ fun VideoExportDialog(
     val suggestedVideos by produceState(initialValue = emptyList()) {
         value = withContext(Dispatchers.IO) {
             VideoExporter.getOverlappingVideos(context, record)
-        }
+        }.reversed()
     }
 
     var hasPermission by remember { mutableStateOf(VideoExporter.hasVideoPermissions(context)) }
@@ -286,6 +287,7 @@ fun VideoExportDialog(
     var startInput by remember { mutableStateOf(TimeUtils.formatMs(0L)) }
     var endInput by remember { mutableStateOf(TimeUtils.formatMs(record.metadata.durationMs)) }
     var windowSizeSec by remember(savedWin) { mutableStateOf(savedWin) }
+    var frameRateInput by remember(savedFPS) { mutableStateOf(savedFPS) }
     var opacity by remember(savedO) { mutableFloatStateOf(savedO) }
     var overlayScale by remember { mutableFloatStateOf(1.0f) }
 
@@ -331,15 +333,21 @@ fun VideoExportDialog(
                 lockRatio = appliedWidth.toFloat() / appliedHeight.toFloat().coerceAtLeast(1f)
             }
 
+            // Auto-detect frame rate
+            VideoExporter.getVideoFrameRate(context, pickedUri)?.let { fps ->
+                frameRateInput = fps.toString()
+            }
+
             // 2. Smart Placement: Change from Full Screen to "Bottom Strip"
             // We use the lastGraphRect if available, otherwise calculate the standard bottom strip.
             if (!lastGraphRect.isEmpty && lastGraphRect != RectF(0f, 0f, 1f, 1f)) {
                 graphRect = lastGraphRect
             } else {
-                val targetW = 700f
-                val targetH = 280f
-                val nW = (700f * overlayScale / appliedWidth.toFloat()).coerceIn(0.1f, 0.9f)
-                val nH = (280f * overlayScale / appliedHeight.toFloat()).coerceIn(0.1f, 0.9f)
+                val isPortrait = appliedHeight > appliedWidth
+                val refWidth = if (isPortrait) 1080f else 1920f
+                val refHeight = if (isPortrait) 1920f else 1080f
+                val nW = (700f * overlayScale / refWidth).coerceIn(0.1f, 0.9f)
+                val nH = (280f * overlayScale / refHeight).coerceIn(0.1f, 0.9f)
                 graphRect = RectF(0.5f - nW/2, 0.95f - nH, 0.5f + nW/2, 0.95f)
             }
 
@@ -486,9 +494,12 @@ fun VideoExportDialog(
                             val targetW = baseTargetW * overlayScale
                             val targetH = baseTargetH * overlayScale
 
-                            // Normalize these pixels based on current resolution
-                            val w = (targetW / appliedWidth.toFloat()).coerceIn(0.05f, 1f)
-                            val h = (targetH / appliedHeight.toFloat()).coerceIn(0.05f, 1f)
+                            // Normalize these pixels based on orientation-aware reference resolution
+                            val isPortrait = appliedHeight > appliedWidth
+                            val refWidth = if (isPortrait) 1080f else 1920f
+                            val refHeight = if (isPortrait) 1920f else 1080f
+                            val w = (targetW / refWidth).coerceIn(0.05f, 1f)
+                            val h = (targetH / refHeight).coerceIn(0.05f, 1f)
                             val m = 0.05f // 5% margin from edges
 
                             // --- Size Slider ---
@@ -687,6 +698,14 @@ fun VideoExportDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                             )
+                            
+                            OutlinedTextField(
+                                value = frameRateInput,
+                                onValueChange = { frameRateInput = it },
+                                label = { Text("Frame Rate (FPS)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
                         }
 
                         // --- VISUALS SECTION ---
@@ -735,6 +754,7 @@ fun VideoExportDialog(
                     startInput = startInput,
                     endInput = endInput,
                     windowSizeSec = windowSizeSec,
+                    frameRate = frameRateInput,
                     opacity = opacity,
                     showAxes = showAxes,
                     showLabels = showLabels,
@@ -921,6 +941,7 @@ private fun prepareVideoConfig(
     startInput: String,
     endInput: String,
     windowSizeSec: String,
+    frameRate: String,
     opacity: Float,
     showAxes: Boolean,
     showLabels: Boolean,
@@ -934,6 +955,7 @@ private fun prepareVideoConfig(
     val startTime = TimeUtils.parseToMs(startInput) ?: 0L
     val endTime = TimeUtils.parseToMs(endInput) ?: record.metadata.durationMs
     val windowMs = (windowSizeSec.toLongOrNull() ?: 30L) * 1000L
+    val fps = frameRate.toIntOrNull() ?: 30
     
     val imageConfig = ImageExporter.ImageExportConfig(
         width = videoWidth.toIntOrNull() ?: 1280,
@@ -951,9 +973,9 @@ private fun prepareVideoConfig(
     return VideoExporter.VideoExportConfig(
         imageConfig = imageConfig,
         windowSizeMs = windowMs,
+        frameRate = fps,
         overlayVideoUri = overlayVideoUri,
         graphRect = graphRect
-
     )
 }
 

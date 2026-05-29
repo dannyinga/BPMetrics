@@ -25,6 +25,7 @@ class VideoExportViewModel(
     val savedWidth = repository.vidWidth.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1280")
     val savedHeight = repository.vidHeight.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "720")
     val savedWindowSize = repository.vidWindowSize.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "30")
+    val savedFrameRate = repository.vidFrameRate.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "30")
     val savedOpacity = repository.vidOpacity.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 40f)
     val savedShowAxes = repository.vidShowAxes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val savedShowLabels = repository.vidShowLabels.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)

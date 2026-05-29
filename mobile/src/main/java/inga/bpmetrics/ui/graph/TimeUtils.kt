@@ -1,11 +1,18 @@
 package inga.bpmetrics.ui.graph
 
+import java.time.Instant
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
  * Utility functions for formatting and parsing time strings used in the graph.
  */
 object TimeUtils {
+    private val clockFormatter = DateTimeFormatter.ofPattern("hh:mm:ss a", Locale.US)
+    private val clockFormatter24 = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.US)
+
     /**
      * Formats milliseconds into a string: "H:MM:SS.mmm" if hours exist, otherwise "MM:SS.mmm".
      * Supports negative values by prepending a minus sign.
@@ -29,7 +36,7 @@ object TimeUtils {
     }
 
     /**
-     * Parses a string into milliseconds. Supports:
+     * Parses a string into milliseconds relative to 0. Supports:
      * - "[-]H:M:S.mmm"
      * - "[-]M:S.mmm"
      * - "[-]S.mmm"
@@ -79,6 +86,42 @@ object TimeUtils {
             if (result != null) {
                 if (isNegative) -result else result
             } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Formats epoch milliseconds into a clock time string (e.g., "10:30:00 AM").
+     */
+    fun formatClockTime(epochMs: Long): String {
+        return Instant.ofEpochMilli(epochMs)
+            .atZone(ZoneId.systemDefault())
+            .format(clockFormatter)
+    }
+
+    /**
+     * Parses a clock time string and converts it to milliseconds relative to a base start time.
+     * Supports "hh:mm:ss a" (e.g., 10:30:00 AM) or "HH:mm:ss" (e.g., 22:30:00).
+     */
+    fun parseClockTimeToRelativeMs(input: String, baseEpochMs: Long): Long? {
+        return try {
+            val localTime = try {
+                LocalTime.parse(input.trim().uppercase(), clockFormatter)
+            } catch (e: Exception) {
+                LocalTime.parse(input.trim(), clockFormatter24)
+            }
+            
+            val baseDateTime = Instant.ofEpochMilli(baseEpochMs)
+                .atZone(ZoneId.systemDefault())
+                .toLocalDateTime()
+            
+            val targetDateTime = baseDateTime.with(localTime)
+            
+            // If the record spans across midnight, this might need more complex logic,
+            // but for now, we assume it's on the same day as the start or very close.
+            val targetEpochMs = targetDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            targetEpochMs - baseEpochMs
         } catch (e: Exception) {
             null
         }

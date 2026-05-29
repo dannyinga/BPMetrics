@@ -123,4 +123,23 @@ object CsvExporter {
             e.printStackTrace()
         }
     }
+
+    /**
+     * Shares multiple [BpmRecord]s as CSV files using an Intent.
+     */
+    fun shareCsvs(context: Context, records: List<BpmRecord>) {
+        if (records.isEmpty()) return
+        val files = records.map { record ->
+            val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
+            val fileName = "${sanitizedTitle}_data.csv"
+            val tempFile = File(context.cacheDir, fileName)
+            try {
+                FileWriter(tempFile).use { it.write(getCsvString(record)) }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            tempFile
+        }
+        ExportUtils.shareMultipleFiles(context, files, "text/csv")
+    }
 }

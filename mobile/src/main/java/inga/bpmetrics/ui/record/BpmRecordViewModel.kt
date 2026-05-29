@@ -103,10 +103,17 @@ class BpmRecordViewModel(
 
     /**
      * Saves a split portion of a record as a new entry.
+     * Inherits tags from the original record.
      */
     fun splitRecord(newRecord: BpmWatchRecord, title: String) {
         viewModelScope.launch {
-            repository.saveWatchRecordToLibrary(newRecord, title)
+            val tagsToCopy = _record.value?.tags ?: emptyList()
+            val newRecordId = repository.saveWatchRecordToLibrary(newRecord, title)
+            
+            // Copy tags to the new record
+            tagsToCopy.forEach { tag ->
+                repository.addTagToRecord(newRecordId, tag.tagId)
+            }
         }
     }
 

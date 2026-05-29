@@ -34,6 +34,12 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     val filterState = _filterState.asStateFlow()
 
+    private val _selectedRecordIds = MutableStateFlow<Set<Long>>(emptySet())
+    /**
+     * The set of selected record IDs for bulk actions.
+     */
+    val selectedRecordIds = _selectedRecordIds.asStateFlow()
+
     /**
      * A flow that emits the list of records after applying the current filter state.
      * This is shared to avoid redundant filtering when consumed by multiple components (like Analysis).
@@ -130,6 +136,59 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun importRecord(watchRecord: BpmWatchRecord) {
         viewModelScope.launch {
             repository.saveWatchRecordToLibrary(watchRecord)
+        }
+    }
+
+    /**
+     * Toggles selection for a record.
+     */
+    fun toggleRecordSelection(recordId: Long) {
+        _selectedRecordIds.value = if (_selectedRecordIds.value.contains(recordId)) {
+            _selectedRecordIds.value - recordId
+        } else {
+            _selectedRecordIds.value + recordId
+        }
+    }
+
+    /**
+     * Clears current selection.
+     */
+    fun clearSelection() {
+        _selectedRecordIds.value = emptySet()
+    }
+
+    /**
+     * Selects all records.
+     */
+    fun selectAll(records: List<BpmRecord>) {
+        _selectedRecordIds.value = records.map { it.metadata.recordId }.toSet()
+    }
+
+    /**
+     * Deletes all selected records.
+     */
+    fun deleteSelectedRecords() {
+        val idsToDelete = _selectedRecordIds.value
+        viewModelScope.launch {
+            idsToDelete.forEach { id ->
+                repository.deleteRecordWithId(id)
+            }
+            clearSelection()
+        }
+    }
+
+    /**
+     * Adds selected tags to all selected records.
+     */
+    fun addTagsToSelectedRecords(tagIds: List<Long>) {
+        val idsToTag = _selectedRecordIds.value
+        viewModelScope.launch {
+            idsToTag.forEach { recordId ->
+                tagIds.forEach { tagId ->
+                    repository.addTagToRecord(recordId, tagId)
+                }
+            }
+            clearSelection()
         }
     }
 

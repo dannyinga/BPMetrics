@@ -33,6 +33,22 @@ object ExportUtils {
         })
     }
 
+    /**
+     * Generic method to share multiple [File]s using FileProvider and an Intent.
+     */
+    fun shareMultipleFiles(context: Context, files: List<File>, mimeType: String) {
+        val uris = files.map { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", it) }
+        val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = mimeType
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, java.util.ArrayList(uris))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(intent, "Export BPM Data").apply {
+            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+    }
+
     fun adjustAlpha(color: Int, factor: Float): Int {
         val alpha = (android.graphics.Color.alpha(color) * factor).toInt()
         val r = android.graphics.Color.red(color)

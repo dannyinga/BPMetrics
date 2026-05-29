@@ -137,8 +137,8 @@ object ImageExporter {
         val dims = RenderingDimensions(canvas, graphRect, config)
         val scaleFactor = dims.scaleFactor
 
-        // 2. Setup Ranges (Snippet for color, UI for stability)
-        val ranges = calculateRanges(record, config)
+        // 2. Setup Ranges (Using expanded snippet bounds for stability)
+        val ranges = calculateRanges(record, config, windowSizeMs)
 
         // 3. Setup Viewport (Time window)
         val viewport = calculateViewport(currentTimeMs, windowSizeMs, config, record)
@@ -479,7 +479,13 @@ object ImageExporter {
 
         // Increase space between BPM and Time (from +32f to +40f)
         val timeY = bpmY + 40f * dims.scaleFactor
-        val bpmPillBottom = timeY + 25f * dims.scaleFactor
+        
+        // NEW: Calculate Elapsed Time
+        val elapsedMs = viewport.playhead.toLong()
+        val elapsedStr = StringFormatHelpers.getDurationString(elapsedMs)
+        val elapsedY = timeY + 32f * dims.scaleFactor
+
+        val bpmPillBottom = elapsedY + 25f * dims.scaleFactor
 
         // Define Rect centered on our new centerX
         val hudRect = RectF(
@@ -534,6 +540,9 @@ object ImageExporter {
         paint.color = 0xCCFFFFFF.toInt()
         paint.textAlign = Paint.Align.CENTER
         canvas.drawText(timeStr, hudRect.centerX(), timeY, paint)
+        
+        // 10. Draw Elapsed Recording Time
+        canvas.drawText(elapsedStr, hudRect.centerX(), elapsedY, paint)
     }
 
     // Helper Classes to clean up variable passing
@@ -546,7 +555,8 @@ object ImageExporter {
         val drawAreaBottom = rect.bottom * fullHeight
         val drawAreaWidth = drawAreaRight - drawAreaLeft
         val drawAreaHeight = drawAreaBottom - drawAreaTop
-        val scaleFactor = (drawAreaWidth / 1920f).coerceAtLeast(0.5f)
+        val refWidth = if (fullHeight > fullWidth) 1080f else 1920f
+        val scaleFactor = (drawAreaWidth / refWidth).coerceAtLeast(0.5f * (fullWidth / refWidth))
         val outerRect = RectF(drawAreaLeft, drawAreaTop, drawAreaRight, drawAreaBottom)
 
         // UPDATED: Standardized padding
@@ -575,8 +585,13 @@ object ImageExporter {
 
     private class Viewport(val start: Double, val end: Double, val playhead: Double, val duration: Double, val lookahead: Long)
 
-    private fun calculateRanges(record: BpmRecord, config: ImageExportConfig): BpmRanges {
-        val snippetPoints = record.dataPoints.filter { it.timestamp >= config.startTimeMs && it.timestamp <= config.endTimeMs }
+    private fun calculateRanges(record: BpmRecord, config: ImageExportConfig, windowSizeMs: Long? = null): BpmRanges {
+        // Expand the search range by the window size (or 5s default) to capture everything that will be visible
+        val margin = windowSizeMs ?: 5000L
+        val searchStart = config.startTimeMs - margin
+        val searchEnd = config.endTimeMs + margin
+
+        val snippetPoints = record.dataPoints.filter { it.timestamp >= searchStart && it.timestamp <= searchEnd }
         val sMin = snippetPoints.minOfOrNull { it.bpm } ?: record.minDataPoint?.bpm ?: 60.0
         val sMax = snippetPoints.maxOfOrNull { it.bpm } ?: record.maxDataPoint?.bpm ?: 180.0
         val sRange = (sMax - sMin).coerceAtLeast(1.0)

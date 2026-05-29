@@ -44,6 +44,8 @@ import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.components.ExpandableSection
 import inga.bpmetrics.ui.components.FlowRow
 
+import kotlinx.coroutines.flow.Flow
+
 /**
  * A dialog allowing the user to multi-select tags for a specific record.
  *
@@ -62,6 +64,28 @@ fun TagSelectionDialog(
     initialSelectedTagIds: List<Long>
 ) {
     val categories by viewModel.getAllCategories().collectAsState(initial = emptyList())
+    TagSelectionDialog(
+        onDismiss = onDismiss,
+        onSave = onSave,
+        onManageTags = onManageTags,
+        categories = categories,
+        getTagsByCategoryFlow = { viewModel.getTagsByCategory(it) },
+        initialSelectedTagIds = initialSelectedTagIds
+    )
+}
+
+/**
+ * A decoupled dialog allowing multi-selection of tags, reusable across different view models or screen states.
+ */
+@Composable
+fun TagSelectionDialog(
+    onDismiss: () -> Unit,
+    onSave: (List<Long>) -> Unit,
+    onManageTags: () -> Unit,
+    categories: List<CategoryEntity>,
+    getTagsByCategoryFlow: (Long) -> Flow<List<TagEntity>>,
+    initialSelectedTagIds: List<Long>
+) {
     var selectedTagIds by remember { mutableStateOf(initialSelectedTagIds.toSet()) }
     var expandedCategories by remember { mutableStateOf(emptySet<Long>()) }
 
@@ -96,7 +120,7 @@ fun TagSelectionDialog(
                         },
                         titleStyle = MaterialTheme.typography.titleMedium
                     ) {
-                        val tags by viewModel.getTagsByCategory(category.categoryId).collectAsState(initial = emptyList())
+                        val tags by getTagsByCategoryFlow(category.categoryId).collectAsState(initial = emptyList())
                         Column {
                             tags.forEach { tag ->
                                 val isSelected = selectedTagIds.contains(tag.tagId)

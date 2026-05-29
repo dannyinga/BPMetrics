@@ -27,7 +27,9 @@ import java.io.IOException
 class BpmExportService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var queueJob: Job? = null
     private var exportJob: Job? = null
+    private var currentRunningJobId: String? = null
     private lateinit var notificationManager: NotificationManager
 
     companion object {
@@ -39,15 +41,13 @@ class BpmExportService : Service() {
         val exportProgress = MutableStateFlow(0f)
         val finishedFile = MutableStateFlow<File?>(null)
 
-        fun startExport(context: Context, recordId: Long, config: VideoExporter.VideoExportConfig, targetUri: Uri?) {
+        fun startExport(context: Context, recordId: Long, recordTitle: String, config: VideoExporter.VideoExportConfig, targetUri: Uri?) {
             finishedFile.value = null
-            val intent = Intent(context, BpmExportService::class.java).apply {
-                putExtra("record_id", recordId)
-                putExtra("overlay_uri", config.overlayVideoUri)
-                putExtra("target_uri", targetUri)
-                val configJson = Gson().toJson(config.copy(overlayVideoUri = null))
-                putExtra("config_json", configJson)
-            }
+            
+            // Add job to render queue manager
+            RenderQueueManager.addJob(recordId, recordTitle, config, targetUri)
+
+            val intent = Intent(context, BpmExportService::class.java)
             context.startForegroundService(intent)
         }
 
@@ -63,6 +63,14 @@ class BpmExportService : Service() {
         super.onCreate()
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannel()
+
+        RenderQueueManager.onJobCancelled = { jobId: String ->
+            synchronized(this) {
+                if (jobId == currentRunningJobId) {
+                    exportJob?.cancel()
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -71,33 +79,56 @@ class BpmExportService : Service() {
             return START_NOT_STICKY
         }
 
-        val recordId = intent?.getLongExtra("record_id", -1L) ?: -1L
-        val configJson = intent?.getStringExtra("config_json")
-        val overlayUri = intent?.getParcelableExtra<Uri>("overlay_uri")
-        val targetUri = intent?.getParcelableExtra<Uri>("target_uri")
-
-        if (recordId != -1L && configJson != null) {
-            val repository = (application as BPMetricsApp).libraryRepository
-            val baseConfig = Gson().fromJson(configJson, VideoExporter.VideoExportConfig::class.java)
-            val config = baseConfig.copy(overlayVideoUri = overlayUri)
-
-            startForeground(NOTIFICATION_ID, createNotification(0f))
+        startForeground(NOTIFICATION_ID, createNotification("Queue processing started", 0f))
+        
+        // Ensure the queue processing loop is running
+        if (queueJob == null || queueJob?.isCompleted == true) {
             isExporting.value = true
+            queueJob = serviceScope.launch {
+                processQueue()
+            }
+        }
+
+        return START_NOT_STICKY
+    }
+
+    private suspend fun processQueue() {
+        val repository = (application as BPMetricsApp).libraryRepository
+
+        while (true) {
+            val nextJob = RenderQueueManager.getNextJob() ?: break
+
+            synchronized(this) {
+                currentRunningJobId = nextJob.id
+            }
+            RenderQueueManager.updateJobStatus(nextJob.id, RenderStatus.RENDERING)
             exportProgress.value = 0f
 
-            exportJob = serviceScope.launch {
+            // Create a child coroutine for this specific export job
+            val job = serviceScope.launch {
                 try {
-                    val record = repository.getRecordWithId(recordId)
-                    val file =
-                        VideoExporter.exportVideo(this@BpmExportService, record, config) { progress ->
+                    val record = repository.getRecordWithId(nextJob.recordId)
+
+                    // Update notification with title
+                    notificationManager.notify(
+                        NOTIFICATION_ID,
+                        createNotification("Rendering: ${nextJob.recordTitle}", 0f)
+                    )
+
+                    val file = VideoExporter.exportVideo(this@BpmExportService, record, nextJob.config) { progress ->
+                        RenderQueueManager.updateJobProgress(nextJob.id, progress)
                         exportProgress.value = progress
-                        notificationManager.notify(NOTIFICATION_ID, createNotification(progress))
+                        notificationManager.notify(
+                            NOTIFICATION_ID,
+                            createNotification("Rendering: ${nextJob.recordTitle}", progress)
+                        )
                     }
 
                     if (!file.exists()) {
                         throw IOException("Exported file does not exist: ${file.absolutePath}")
                     }
 
+                    val targetUri = nextJob.targetUri
                     if (targetUri != null) {
                         contentResolver.openOutputStream(targetUri)?.use { outputStream ->
                             file.inputStream().use { inputStream ->
@@ -108,33 +139,42 @@ class BpmExportService : Service() {
                         ExportUtils.shareFile(this@BpmExportService, file, "video/mp4")
                     }
 
-                    showCompletionNotification(true)
+                    RenderQueueManager.updateJobStatus(nextJob.id, RenderStatus.COMPLETED)
+                    showCompletionNotification(nextJob.recordTitle, true)
                 } catch (e: Exception) {
                     e.printStackTrace()
-                    // Don't show failure notification if it was explicitly cancelled
-                    if (exportJob?.isCancelled != true) {
-                        showCompletionNotification(false)
+                    val wasCancelled = coroutineContext[Job]?.isCancelled == true
+                    val status = if (wasCancelled) RenderStatus.CANCELLED else RenderStatus.FAILED
+                    RenderQueueManager.updateJobStatus(nextJob.id, status, e.message ?: e.toString())
+
+                    if (!wasCancelled) {
+                        showCompletionNotification(nextJob.recordTitle, false)
                     }
-                } finally {
-                    isExporting.value = false
-                    exportProgress.value = 0f
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
                 }
             }
-        } else {
-            stopSelf()
+
+            exportJob = job
+            job.join()
+
+            synchronized(this) {
+                currentRunningJobId = null
+                exportJob = null
+            }
         }
 
-        return START_NOT_STICKY
-    }
-
-    private fun cancelCurrentExport() {
-        exportJob?.cancel()
         isExporting.value = false
         exportProgress.value = 0f
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun cancelCurrentExport() {
+        synchronized(this) {
+            currentRunningJobId?.let { jobId ->
+                RenderQueueManager.cancelJob(jobId)
+            }
+        }
+        exportJob?.cancel()
     }
 
     private fun createNotificationChannel() {
@@ -143,7 +183,7 @@ class BpmExportService : Service() {
         notificationManager.createNotificationChannel(channel)
     }
 
-    private fun createNotification(progress: Float): Notification {
+    private fun createNotification(contentTitle: String, progress: Float): Notification {
         val stopIntent = Intent(this, BpmExportService::class.java).apply {
             action = ACTION_STOP
         }
@@ -153,7 +193,7 @@ class BpmExportService : Service() {
         val pendingContentIntent = PendingIntent.getActivity(this, 0, contentIntent, PendingIntent.FLAG_IMMUTABLE)
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Exporting Video")
+            .setContentTitle(contentTitle)
             .setContentText("${(progress * 100).toInt()}% complete")
             .setSmallIcon(R.drawable.stat_sys_download)
             .setProgress(100, (progress * 100).toInt(), false)
@@ -163,20 +203,21 @@ class BpmExportService : Service() {
             .build()
     }
 
-    private fun showCompletionNotification(success: Boolean) {
+    private fun showCompletionNotification(title: String, success: Boolean) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(if (success) "Export Complete" else "Export Failed")
-            .setContentText(if (success) "Your BPM video is ready." else "There was an error during encoding.")
+            .setContentText(if (success) "Your BPM video for '$title' is ready." else "There was an error encoding '$title'.")
             .setSmallIcon(if (success) R.drawable.stat_sys_download_done else R.drawable.stat_notify_error)
             .setAutoCancel(true)
             .build()
-        notificationManager.notify(NOTIFICATION_ID + 1, notification)
+        notificationManager.notify(NOTIFICATION_ID + 1 + System.currentTimeMillis().toInt(), notification)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         super.onDestroy()
+        RenderQueueManager.onJobCancelled = null
         serviceScope.cancel()
     }
 }

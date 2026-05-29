@@ -40,6 +40,7 @@ class SettingsRepository(context: Context) {
         val VID_WIDTH = stringPreferencesKey("vid_width")
         val VID_HEIGHT = stringPreferencesKey("vid_height")
         val VID_WINDOW_SIZE = stringPreferencesKey("vid_window_size")
+        val VID_FRAME_RATE = stringPreferencesKey("vid_frame_rate")
         val VID_OPACITY = floatPreferencesKey("vid_opacity")
         val VID_SHOW_AXES = booleanPreferencesKey("vid_show_axes")
         val VID_SHOW_LABELS = booleanPreferencesKey("vid_show_labels")
@@ -94,6 +95,7 @@ class SettingsRepository(context: Context) {
     val vidWidth = dataStore.data.map { it[PreferencesKeys.VID_WIDTH] ?: "1280" }
     val vidHeight = dataStore.data.map { it[PreferencesKeys.VID_HEIGHT] ?: "720" }
     val vidWindowSize = dataStore.data.map { it[PreferencesKeys.VID_WINDOW_SIZE] ?: "30" }
+    val vidFrameRate = dataStore.data.map { it[PreferencesKeys.VID_FRAME_RATE] ?: "30" }
     val vidOpacity = dataStore.data.map { it[PreferencesKeys.VID_OPACITY] ?: 40f }
     val vidShowAxes = dataStore.data.map { it[PreferencesKeys.VID_SHOW_AXES] ?: true }
     val vidShowLabels = dataStore.data.map { it[PreferencesKeys.VID_SHOW_LABELS] ?: false }
@@ -111,7 +113,10 @@ class SettingsRepository(context: Context) {
 
             // Timing
             p[PreferencesKeys.VID_WINDOW_SIZE] = (config.windowSizeMs / 1000).toString()
-            p[PreferencesKeys.VID_SYNC_OFFSET] = config.syncOffsetMs
+            p[PreferencesKeys.VID_FRAME_RATE] = config.frameRate.toString()
+            
+            // NOTE: Global sync offset (VID_SYNC_OFFSET) is NOT saved here to avoid overwriting 
+            // the calibrated value from the settings screen with transient session values.
 
             // Visuals - Accessing fields from the nested imageConfig
             p[PreferencesKeys.VID_OPACITY] = config.imageConfig.backgroundOpacity.toFloat()
@@ -125,6 +130,13 @@ class SettingsRepository(context: Context) {
             // Overlay Placement (Stored as a CSV string)
             p[PreferencesKeys.VID_GRAPH_RECT] = "${config.graphRect.left},${config.graphRect.top},${config.graphRect.right},${config.graphRect.bottom}"
         }
+    }
+
+    /**
+     * Updates only the global sync offset.
+     */
+    suspend fun setGlobalSyncOffset(offsetMs: Long) {
+        dataStore.edit { it[PreferencesKeys.VID_SYNC_OFFSET] = offsetMs }
     }
 
     /**

@@ -37,19 +37,34 @@ import inga.bpmetrics.ui.theme.BpmAvg
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+
 /**
  * A standard tile for displaying a BPM record in the library list.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun BpmRecordTile(
     record: BpmRecord,
-    onClick: () -> Unit
+    isSelected: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() },
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { onLongClick?.invoke() }
+            ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = if (isSelected) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+        } else {
+            CardDefaults.cardColors()
+        },
+        border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(

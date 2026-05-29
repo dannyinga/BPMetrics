@@ -142,8 +142,9 @@ class LibraryRepository(
      * saves all data points in a single batch, and then updates the record with the results.
      *
      * @param record The BpmWatchRecord to save.
+     * @return The ID of the newly created record.
      */
-    suspend fun saveWatchRecordToLibrary(record: BpmWatchRecord, customTitle: String? = null) {
+    suspend fun saveWatchRecordToLibrary(record: BpmWatchRecord, customTitle: String? = null): Long {
         Log.d(tag, "Starting saveWatchRecordToLibrary")
         _savingRecord.value = true
 
@@ -160,7 +161,7 @@ class LibraryRepository(
         performAnalysisAndSaveDataPoints(record, recordId)
 
         // Handle Tags from Import
-        if (!record.tagNames.isNullOrEmpty()) {
+        if (record.tagNames != null && record.tagNames.isNotEmpty()) {
             val allCategories = tagDao.getAllCategoriesFlow().first()
             val importCategoryId = allCategories.find { it.name == "Imported" }?.categoryId 
                 ?: tagDao.insertCategory(CategoryEntity(name = "Imported"))
@@ -182,6 +183,7 @@ class LibraryRepository(
         
         _savingRecord.value = false
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")
+        return recordId
     }
 
     /**
@@ -363,24 +365,4 @@ class LibraryRepository(
      * @param recordId The ID of the record.
      */
     fun getTagsForRecord(recordId: Long): Flow<List<TagEntity>> = tagDao.getTagsForRecordFlow(recordId)
-
-    // --- Analysis ---
-
-    /**
-     * Returns a flow of tag rankings within a category by average BPM.
-     * 
-     * @param categoryId The ID of the category.
-     */
-    fun getCategoryRanking(categoryId: Long): Flow<List<TagRanking>> = tagDao.getCategoryRankingFlow(categoryId)
-
-    /**
-     * Performs an advanced analysis of specified tags within a date range.
-     * 
-     * @param tagIds List of tag IDs to analyze.
-     * @param startDate Start of the date range (ms).
-     * @param endDate End of the date range (ms).
-     */
-    suspend fun getAdvancedTagAnalysis(tagIds: List<Long>, startDate: Long, endDate: Long): List<AdvancedTagAnalysis> {
-        return tagDao.getAdvancedTagAnalysis(tagIds, startDate, endDate)
-    }
 }

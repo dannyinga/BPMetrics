@@ -43,6 +43,7 @@ class SettingsViewModel(
     val vidWidth = settingsRepository.vidWidth.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1280")
     val vidHeight = settingsRepository.vidHeight.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "720")
     val vidWindowSize = settingsRepository.vidWindowSize.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "30")
+    val vidFrameRate = settingsRepository.vidFrameRate.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "30")
     val vidOpacity = settingsRepository.vidOpacity.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 40f)
     val vidShowAxes = settingsRepository.vidShowAxes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val vidShowLabels = settingsRepository.vidShowLabels.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
@@ -63,6 +64,12 @@ class SettingsViewModel(
     fun setVideoDefaults(config: VideoExporter.VideoExportConfig) {
         viewModelScope.launch {
             settingsRepository.setVideoDefaults(config)
+        }
+    }
+
+    fun setGlobalSyncOffset(offsetMs: Long) {
+        viewModelScope.launch {
+            settingsRepository.setGlobalSyncOffset(offsetMs)
         }
     }
 

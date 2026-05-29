@@ -3,6 +3,7 @@ package inga.bpmetrics.ui.library
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,15 +20,25 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FilterAltOff
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,7 +66,11 @@ import inga.bpmetrics.export.CsvExporter
 import inga.bpmetrics.ui.Routes
 import inga.bpmetrics.ui.analysis.AnalysisFilterDialog
 import inga.bpmetrics.ui.record.BpmRecordTile
+import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.theme.BpmAccent
+import inga.bpmetrics.ui.theme.BpmHigh
+import inga.bpmetrics.export.RenderQueueManager
+import inga.bpmetrics.export.RenderStatus
 
 /**
  * The main record library screen, displaying a list of BPM records with sorting and filtering options.
@@ -68,12 +84,23 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
     val currentSort by viewModel.sortOption.collectAsStateWithLifecycle()
+    val selectedRecordIds by viewModel.selectedRecordIds.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    val isSelectionMode = selectedRecordIds.isNotEmpty()
 
     var showSortMenu by remember { mutableStateOf(false) }
     var showAnalyzeMenu by remember { mutableStateOf(false) }
     var showFilterDialog by remember { mutableStateOf(false) }
     var navigateToAnalysisOnFilterApply by remember { mutableStateOf(false) }
+    var showBulkDeleteDialog by remember { mutableStateOf(false) }
+    var showBulkTagDialog by remember { mutableStateOf(false) }
+
+    if (isSelectionMode) {
+        BackHandler {
+            viewModel.clearSelection()
+        }
+    }
 
     // Launcher for importing a CSV file
     val importLauncher = rememberLauncherForActivityResult(
@@ -89,42 +116,91 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Library", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) },
-                actions = {
-                    // Import CSV button
-                    IconButton(onClick = { importLauncher.launch(arrayOf("text/comma-separated-values", "text/csv")) }) {
-                        Icon(Icons.Default.FileDownload, contentDescription = "Import CSV")
-                    }
-                    // Show Clear Filters button only when a filter is active
-                    if (filterState != LibraryViewModel.FilterState()) {
-                        IconButton(onClick = { viewModel.clearFilters() }) {
-                            Icon(Icons.Default.FilterAltOff, contentDescription = "Clear All Filters")
+            if (isSelectionMode) {
+                TopAppBar(
+                    title = { Text("${selectedRecordIds.size} Selected", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        IconButton(onClick = { viewModel.clearSelection() }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear Selection")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { viewModel.selectAll(uiState.records) }) {
+                            Icon(Icons.Default.SelectAll, contentDescription = "Select All")
+                        }
+                        IconButton(onClick = { showBulkTagDialog = true }) {
+                            Icon(Icons.Default.Sell, contentDescription = "Add Tags in Bulk")
+                        }
+                        IconButton(onClick = {
+                            val selectedRecords = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
+                            CsvExporter.shareCsvs(context, selectedRecords)
+                            viewModel.clearSelection()
+                        }) {
+                            Icon(Icons.Default.Share, contentDescription = "Export CSV in Bulk")
+                        }
+                        IconButton(onClick = { showBulkDeleteDialog = true }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete Selected", tint = MaterialTheme.colorScheme.error)
                         }
                     }
-                    IconButton(onClick = { navController.navigate(Routes.TAG_MANAGEMENT) }) {
-                        Icon(Icons.Default.Sell, contentDescription = "Manage Tags")
+                )
+            } else {
+                TopAppBar(
+                    title = { Text("Library", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) },
+                    actions = {
+                        // Import CSV button
+                        IconButton(onClick = { importLauncher.launch(arrayOf("text/comma-separated-values", "text/csv")) }) {
+                            Icon(Icons.Default.FileDownload, contentDescription = "Import CSV")
+                        }
+                        // Show Clear Filters button only when a filter is active
+                        if (filterState != LibraryViewModel.FilterState()) {
+                            IconButton(onClick = { viewModel.clearFilters() }) {
+                                Icon(Icons.Default.FilterAltOff, contentDescription = "Clear All Filters")
+                            }
+                        }
+                        IconButton(onClick = { navController.navigate(Routes.TAG_MANAGEMENT) }) {
+                            Icon(Icons.Default.Sell, contentDescription = "Manage Tags")
+                        }
+                        
+                        val queue by RenderQueueManager.queue.collectAsState(initial = emptyList())
+                        val activeCount = queue.count { it.status == RenderStatus.RENDERING || it.status == RenderStatus.QUEUED }
+                        IconButton(onClick = { navController.navigate(Routes.RENDER_QUEUE) }) {
+                            Box {
+                                Icon(Icons.Default.VideoLibrary, contentDescription = "Render Queue")
+                                if (activeCount > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(BpmHigh)
+                                            .align(Alignment.TopEnd)
+                                    )
+                                }
+                            }
+                        }
+
+                        IconButton(onClick = { navController.navigate(Routes.SETTINGS) }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
                     }
-                    IconButton(onClick = { navController.navigate(Routes.SETTINGS) }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                }
-            )
+                )
+            }
         },
         bottomBar = {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Button(
-                    onClick = { showAnalyzeMenu = true },
-                    modifier = Modifier.fillMaxWidth(0.7f),
-                    colors = ButtonDefaults.buttonColors(containerColor = BpmAccent)
+            if (!isSelectionMode) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("Analyze", style = MaterialTheme.typography.titleMedium)
+                    Button(
+                        onClick = { showAnalyzeMenu = true },
+                        modifier = Modifier.fillMaxWidth(0.7f),
+                        colors = ButtonDefaults.buttonColors(containerColor = BpmAccent)
+                    ) {
+                        Text("Analyze", style = MaterialTheme.typography.titleMedium)
+                    }
                 }
             }
         }
@@ -185,9 +261,21 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
 
             LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(uiState.records) { record ->
+                    val isSelected = selectedRecordIds.contains(record.metadata.recordId)
                     BpmRecordTile(
-                        record,
-                        onClick = { navController.navigate("detail/${record.metadata.recordId}") })
+                        record = record,
+                        isSelected = isSelected,
+                        onClick = {
+                            if (isSelectionMode) {
+                                viewModel.toggleRecordSelection(record.metadata.recordId)
+                            } else {
+                                navController.navigate("detail/${record.metadata.recordId}")
+                            }
+                        },
+                        onLongClick = {
+                            viewModel.toggleRecordSelection(record.metadata.recordId)
+                        }
+                    )
                 }
             }
         }
@@ -220,6 +308,48 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                 }
             },
             repository = viewModel.repository
+        )
+    }
+
+    if (showBulkDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showBulkDeleteDialog = false },
+            title = { Text("Delete Selected Recordings") },
+            text = { Text("Are you sure you want to permanently delete the ${selectedRecordIds.size} selected recordings? This action cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteSelectedRecords()
+                        showBulkDeleteDialog = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBulkDeleteDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showBulkTagDialog) {
+        val categories by viewModel.repository.getAllCategories().collectAsState(initial = emptyList())
+        TagSelectionDialog(
+            onDismiss = { showBulkTagDialog = false },
+            onSave = { selectedTagIds ->
+                viewModel.addTagsToSelectedRecords(selectedTagIds)
+                showBulkTagDialog = false
+            },
+            onManageTags = {
+                showBulkTagDialog = false
+                navController.navigate(Routes.TAG_MANAGEMENT)
+            },
+            categories = categories,
+            getTagsByCategoryFlow = { viewModel.repository.getTagsByCategory(it) },
+            initialSelectedTagIds = emptyList()
         )
     }
 }

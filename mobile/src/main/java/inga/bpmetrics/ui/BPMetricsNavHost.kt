@@ -23,6 +23,7 @@ import inga.bpmetrics.ui.settings.SettingsScreen
 import inga.bpmetrics.ui.settings.SettingsViewModel
 import inga.bpmetrics.ui.tags.TagManagementScreen
 import inga.bpmetrics.ui.tags.TagManagementViewModel
+import inga.bpmetrics.ui.export.RenderQueueScreen
 
 /**
  * The main navigation host for the mobile application.
@@ -104,6 +105,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 onBack = { navController.popBackStack() }
             )
         }
+
+        composable(Routes.RENDER_QUEUE) {
+            RenderQueueScreen(navController)
+        }
     }
 }
 
@@ -118,4 +123,5 @@ object Routes {
     const val DETAIL = "detail"
     const val SETTINGS = "settings"
     const val GRAPH_DETAIL = "graph_detail"
+    const val RENDER_QUEUE = "render_queue"
 }

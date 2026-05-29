@@ -37,6 +37,24 @@ object StringFormatHelpers {
     }
 
     /**
+     * Converts a duration in milliseconds into a clock-style string (e.g., "01:05:23").
+     *
+     * @param durationMs The duration to format in milliseconds.
+     * @return A formatted string as HH:mm:ss or mm:ss if hours are 0.
+     */
+    fun getElapsedTimeString(durationMs: Long): String {
+        val seconds = (durationMs / 1000) % 60
+        val minutes = (durationMs / (1000 * 60)) % 60
+        val hours = durationMs / (1000 * 60 * 60)
+
+        return if (hours > 0) {
+            String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+        }
+    }
+
+    /**
      * Converts a wall-clock timestamp into a formatted date string (MM/dd/yyyy).
      *
      * @param date The timestamp in milliseconds (epoch time).
