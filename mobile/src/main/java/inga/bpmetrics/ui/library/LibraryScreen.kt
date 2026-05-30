@@ -1,6 +1,7 @@
 package inga.bpmetrics.ui.library
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FilterAltOff
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sell
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sort
@@ -71,6 +73,7 @@ import inga.bpmetrics.ui.theme.BpmAccent
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderStatus
+import inga.bpmetrics.library.BpmRecord
 
 /**
  * The main record library screen, displaying a list of BPM records with sorting and filtering options.
@@ -102,14 +105,41 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
         }
     }
 
-    // Launcher for importing a CSV file
+    // Launcher for importing CSV file(s)
     val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            var successCount = 0
+            uris.forEach { uri ->
+                val watchRecord = CsvExporter.importFromCsv(context, uri)
+                if (watchRecord != null) {
+                    viewModel.importRecord(watchRecord)
+                    successCount++
+                }
+            }
+            if (successCount > 0) {
+                Toast.makeText(context, "Successfully imported $successCount record(s)!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Failed to import CSV record(s).", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    var recordsToExport by remember { mutableStateOf<List<BpmRecord>>(emptyList()) }
+
+    val chooseFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
-        uri?.let {
-            val watchRecord = CsvExporter.importFromCsv(context, it)
-            if (watchRecord != null) {
-                viewModel.importRecord(watchRecord)
+        uri?.let { folderUri ->
+            if (recordsToExport.isNotEmpty()) {
+                val success = CsvExporter.exportToFolder(context, recordsToExport, folderUri)
+                if (success) {
+                    Toast.makeText(context, "Successfully exported ${recordsToExport.size} CSVs!", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "Failed to export CSVs.", Toast.LENGTH_LONG).show()
+                }
+                recordsToExport = emptyList()
             }
         }
     }
@@ -132,11 +162,11 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                             Icon(Icons.Default.Sell, contentDescription = "Add Tags in Bulk")
                         }
                         IconButton(onClick = {
-                            val selectedRecords = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
-                            CsvExporter.shareCsvs(context, selectedRecords)
+                            recordsToExport = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
+                            chooseFolderLauncher.launch(null)
                             viewModel.clearSelection()
                         }) {
-                            Icon(Icons.Default.Share, contentDescription = "Export CSV in Bulk")
+                            Icon(Icons.Default.Save, contentDescription = "Export CSV in Bulk")
                         }
                         IconButton(onClick = { showBulkDeleteDialog = true }) {
                             Icon(Icons.Default.Delete, contentDescription = "Delete Selected", tint = MaterialTheme.colorScheme.error)
@@ -149,7 +179,7 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                     actions = {
                         // Import CSV button
                         IconButton(onClick = { importLauncher.launch(arrayOf("text/comma-separated-values", "text/csv")) }) {
-                            Icon(Icons.Default.FileDownload, contentDescription = "Import CSV")
+                            Icon(Icons.Default.FileDownload, contentDescription = "Import CSV(s)")
                         }
                         // Show Clear Filters button only when a filter is active
                         if (filterState != LibraryViewModel.FilterState()) {

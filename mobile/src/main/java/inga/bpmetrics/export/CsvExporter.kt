@@ -11,6 +11,7 @@ import java.io.File
 import java.io.FileWriter
 import java.io.InputStreamReader
 import java.sql.Date
+import android.provider.DocumentsContract
 
 /**
  * Handles CSV export and import for BPM records.
@@ -141,5 +142,40 @@ object CsvExporter {
             tempFile
         }
         ExportUtils.shareMultipleFiles(context, files, "text/csv")
+    }
+
+    /**
+     * Exports multiple [BpmRecord]s as CSV files into a directory specified by folderUri.
+     */
+    fun exportToFolder(context: Context, records: List<BpmRecord>, folderUri: Uri): Boolean {
+        if (records.isEmpty()) return true
+        return try {
+            val contentResolver = context.contentResolver
+            val parentId = DocumentsContract.getTreeDocumentId(folderUri)
+            val parentUri = DocumentsContract.buildDocumentUriUsingTree(folderUri, parentId)
+
+            records.forEach { record ->
+                val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
+                val fileName = "${sanitizedTitle}_data.csv"
+
+                // Create document inside parent folder
+                val documentUri = DocumentsContract.createDocument(
+                    contentResolver,
+                    parentUri,
+                    "text/csv",
+                    fileName
+                )
+
+                if (documentUri != null) {
+                    contentResolver.openOutputStream(documentUri)?.use { outputStream ->
+                        outputStream.write(getCsvString(record).toByteArray())
+                    }
+                }
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
     }
 }
