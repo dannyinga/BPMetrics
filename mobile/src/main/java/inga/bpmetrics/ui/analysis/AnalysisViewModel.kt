@@ -76,9 +76,9 @@ class AnalysisViewModel(
         // Calculate Trio values: Absolute lowest min, Time-weighted Average, Absolute highest max
         val absoluteMin = records.mapNotNull { it.minDataPoint?.bpm }.minOrNull() ?: 0.0
         
-        val totalDuration = records.sumOf { it.metadata.durationMs }
-        val weightedSum = records.sumOf { (it.metadata.avg ?: 0.0) * it.metadata.durationMs }
-        val timeWeightedAverage = if (totalDuration > 0L) weightedSum / totalDuration else 0.0
+        val totalActiveDuration = records.sumOf { it.calculateActiveDurationMs() }
+        val weightedSum = records.sumOf { (it.metadata.avg ?: 0.0) * it.calculateActiveDurationMs() }
+        val timeWeightedAverage = if (totalActiveDuration > 0L) weightedSum / totalActiveDuration else 0.0
         
         val absoluteMax = records.mapNotNull { it.maxDataPoint?.bpm }.maxOrNull() ?: 0.0
 
@@ -124,9 +124,9 @@ class AnalysisViewModel(
                 val value = when (options.metricType) {
                     MetricType.LOW -> groupRecords.mapNotNull { it.minDataPoint?.bpm }.minOrNull() ?: 0.0
                     MetricType.AVG -> {
-                        val groupTotalDuration = groupRecords.sumOf { it.metadata.durationMs }
-                        val groupWeightedSum = groupRecords.sumOf { (it.metadata.avg ?: 0.0) * it.metadata.durationMs }
-                        if (groupTotalDuration > 0L) groupWeightedSum / groupTotalDuration else 0.0
+                        val groupTotalActiveDuration = groupRecords.sumOf { it.calculateActiveDurationMs() }
+                        val groupWeightedSum = groupRecords.sumOf { (it.metadata.avg ?: 0.0) * it.calculateActiveDurationMs() }
+                        if (groupTotalActiveDuration > 0L) groupWeightedSum / groupTotalActiveDuration else 0.0
                     }
                     MetricType.HIGH -> groupRecords.mapNotNull { it.maxDataPoint?.bpm }.maxOrNull() ?: 0.0
                 }

@@ -45,6 +45,23 @@ data class BpmRecord(
 ) {
 
     /**
+     * Calculates the active (non-gap) duration in milliseconds.
+     */
+    fun calculateActiveDurationMs(): Long {
+        if (dataPoints.isEmpty()) return 0L
+        var totalActiveTime = 0L
+        for (i in dataPoints.indices) {
+            val nextTimestamp = if (i < dataPoints.size - 1) dataPoints[i + 1].timestamp
+                                else metadata.durationMs
+            val dt = nextTimestamp - dataPoints[i].timestamp
+            if (dt <= GAP_THRESHOLD_MS) {
+                totalActiveTime += dt
+            }
+        }
+        return totalActiveTime
+    }
+
+    /**
      * Returns a string representation of the complete BPM record,
      * including its metadata and key analysis results (Max, Avg, Min).
      */
@@ -59,4 +76,9 @@ data class BpmRecord(
 
         return outputBuilder.toString()
     }
+
+    companion object {
+        const val GAP_THRESHOLD_MS = 10000L // 10 seconds
+    }
 }
+

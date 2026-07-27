@@ -100,4 +100,47 @@ class LibraryRepositoryTest {
             recordDao.updateAnalysis(1L, 10L, 10L, 100.0)
         }
     }
+
+    @Test
+    fun `saveWatchRecordToLibrary ignores gaps in weighted average`() = runTest {
+        // GIVEN: A record with a gap of 20000ms between data points
+        // Point 1: 60 BPM at 0L, then gap of 20000ms (to 20000L)
+        // Point 2: 80 BPM at 20000L, then duration of 1000ms (to 21000L)
+        // Total duration: 21000ms
+        val dataPoints = listOf(
+            BpmDataPoint(timestamp = 0L, bpm = 60.0),
+            BpmDataPoint(timestamp = 20000L, bpm = 80.0)
+        )
+        val watchRecord = BpmWatchRecord(
+            date = Date(0L),
+            dataPoints = dataPoints,
+            startTime = 0L,
+            endTime = 21000L,
+            durationMs = 21000L
+        )
+
+        coEvery { recordDao.insertBpmRecordGetId(any()) } returns 123L
+        coEvery { recordDao.insertAllDataPoints(any()) } returns listOf(1L, 2L)
+        every { settingsRepository.defaultNamingCategoryId } returns flowOf(null)
+
+        // WHEN: The record is saved
+        repository.saveWatchRecordToLibrary(watchRecord)
+
+        // THEN: Verify the weighted average calculation
+        // Interval 1: 0 to 20000L -> 20000ms (GAP - ignored)
+        // Interval 2: 20000L to 21000L -> 1000ms (Included: 80 BPM * 1000ms = 80,000)
+        // Total active time = 1000ms
+        // Expected Avg = 80.0
+        val expectedAvg = 80.0
+        
+        coVerify { 
+            recordDao.updateAnalysis(
+                id = 123L, 
+                minId = 1L, 
+                maxId = 2L, 
+                avg = withArg { assertEquals(expectedAvg, it, 0.01) }
+            ) 
+        }
+    }
 }
+

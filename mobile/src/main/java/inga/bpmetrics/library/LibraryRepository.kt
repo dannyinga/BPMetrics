@@ -214,11 +214,14 @@ class LibraryRepository(
 
         val dataPointEntities = record.dataPoints.mapIndexed { i, dataPoint ->
             // Calculate weighted average components
-            val dt = (if (i < record.dataPoints.size - 1) record.dataPoints[i + 1].timestamp
-                      else record.durationMs) - dataPoint.timestamp
+            val nextTimestamp = if (i < record.dataPoints.size - 1) record.dataPoints[i + 1].timestamp
+                                else record.durationMs
+            val dt = nextTimestamp - dataPoint.timestamp
 
-            bpmWeightedSum += dataPoint.bpm * dt
-            totalTime += dt
+            if (dt <= BpmRecord.GAP_THRESHOLD_MS) {
+                bpmWeightedSum += dataPoint.bpm * dt
+                totalTime += dt
+            }
 
             // Track min/max indices
             if (dataPoint.bpm > maxBpm) {
@@ -242,7 +245,12 @@ class LibraryRepository(
         Log.d(tag, "Batch inserted ${dataPointIds.size} data points")
 
         // 4. Update the record with calculated analysis results using the generated IDs
-        val avg = if (totalTime > 0) bpmWeightedSum / totalTime else 0.0
+        val avg = if (totalTime > 0) {
+            bpmWeightedSum / totalTime
+        } else {
+            record.dataPoints.map { it.bpm }.average().takeIf { !it.isNaN() } ?: 0.0
+        }
+
         val minId = dataPointIds.getOrNull(minIndex)
         val maxId = dataPointIds.getOrNull(maxIndex)
 
