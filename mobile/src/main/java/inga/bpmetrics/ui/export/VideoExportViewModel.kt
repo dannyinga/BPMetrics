@@ -36,6 +36,7 @@ class VideoExportViewModel(
     val savedSyncOffset = repository.vidSyncOffset.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
     val savedGraphRect = repository.vidGraphRect.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RectF(0f, 0f, 1f, 1f)
     )
+    val defaultTimeZone = repository.defaultTimeZone.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), java.time.ZoneId.systemDefault().id)
 
     // --- Transient UI States (Modified by the user in the Dialog) ---
     // These would typically be MutableStateFlows if you want to handle all logic here,

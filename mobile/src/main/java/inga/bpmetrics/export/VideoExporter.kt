@@ -57,7 +57,8 @@ object VideoExporter {
         val regularBitRate: Int = 2500000,
         val overlayVideoUri: Uri? = null,
         val graphRect: RectF = RectF(0f, 0f, 1f, 1f),
-        val lockAspectRatio: Boolean = true
+        val lockAspectRatio: Boolean = true,
+        val syncOffsetMs: Long = 0L
     )
 
     /**
@@ -84,8 +85,23 @@ object VideoExporter {
         val mediaUri: Uri
         val inputMimeType: String?
 
-        // 2. Handle Background and Dynamic Bitrate
-        val targetBitrate = if (config.overlayVideoUri != null) config.overlayBitRate else config.regularBitRate
+        // 2. Handle Background and Dynamic Bitrate based on output dimensions and fps
+        val width = config.imageConfig.width
+        val height = config.imageConfig.height
+        val fps = config.frameRate
+
+        // Scale target bitrate dynamically based on total pixels and frame rate:
+        // Overlay video gets ~0.13 bits per pixel per frame (e.g. ~8 Mbps for 1080p @ 30fps)
+        // Solid black background gets ~0.04 bits per pixel per frame (e.g. ~2.5 Mbps for 1080p @ 30fps)
+        val bitsPerPixel = if (config.overlayVideoUri != null) 0.13 else 0.04
+        val calculatedBitrate = (width.toLong() * height.toLong() * fps.toLong() * bitsPerPixel).toLong()
+
+        // Clamp to sensible ranges (Overlay: 2 Mbps to 50 Mbps; Solid: 1 Mbps to 15 Mbps)
+        val targetBitrate = if (config.overlayVideoUri != null) {
+            calculatedBitrate.coerceIn(2_000_000L, 50_000_000L).toInt()
+        } else {
+            calculatedBitrate.coerceIn(1_000_000L, 15_000_000L).toInt()
+        }
 
         if (config.overlayVideoUri != null) {
             mediaUri = config.overlayVideoUri
@@ -112,6 +128,27 @@ object VideoExporter {
             .apply {
                 if (isInputImage) {
                     setImageDurationMs(outputDurationMs)
+                } else {
+                    val alignment = calculateVideoAlignment(
+                        context,
+                        record,
+                        mediaUri,
+                        config.syncOffsetMs
+                    )
+                    val videoStartRelativeMs = alignment.first
+                    val videoEndRelativeMs = alignment.second
+                    val videoDurationMs = videoEndRelativeMs - videoStartRelativeMs
+
+                    val clipStartMs = (startTimeMs - videoStartRelativeMs).coerceIn(0L, videoDurationMs)
+                    val clipEndMs = (endTimeMs - videoStartRelativeMs).coerceIn(0L, videoDurationMs)
+                    val finalClipEndMs = maxOf(clipStartMs + 1000L, clipEndMs).coerceAtMost(videoDurationMs)
+
+                    setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionMs(clipStartMs)
+                            .setEndPositionMs(finalClipEndMs)
+                            .build()
+                    )
                 }
             }
             .build()
@@ -166,6 +203,7 @@ object VideoExporter {
                         .setRequestedVideoEncoderSettings(
                             VideoEncoderSettings.Builder()
                                 .setBitrate(targetBitrate)
+                                .setBitrateMode(android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                                 .build()
                         )
                         .build()

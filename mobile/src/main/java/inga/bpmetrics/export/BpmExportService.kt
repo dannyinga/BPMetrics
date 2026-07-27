@@ -115,13 +115,19 @@ class BpmExportService : Service() {
                         createNotification("Rendering: ${nextJob.recordTitle}", 0f)
                     )
 
+                    var lastNotificationTime = System.currentTimeMillis()
                     val file = VideoExporter.exportVideo(this@BpmExportService, record, nextJob.config) { progress ->
                         RenderQueueManager.updateJobProgress(nextJob.id, progress)
                         exportProgress.value = progress
-                        notificationManager.notify(
-                            NOTIFICATION_ID,
-                            createNotification("Rendering: ${nextJob.recordTitle}", progress)
-                        )
+                        
+                        val currentTime = System.currentTimeMillis()
+                        if (progress == 0f || progress >= 1f || currentTime - lastNotificationTime >= 1000L) {
+                            lastNotificationTime = currentTime
+                            notificationManager.notify(
+                                NOTIFICATION_ID,
+                                createNotification("Rendering: ${nextJob.recordTitle}", progress)
+                            )
+                        }
                     }
 
                     if (!file.exists()) {

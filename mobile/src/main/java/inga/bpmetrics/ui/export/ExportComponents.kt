@@ -37,6 +37,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccessTime
+import java.time.ZoneId
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Sync
@@ -255,6 +257,7 @@ fun VideoExportDialog(
     val savedLock by viewModel.savedLockAspect.collectAsStateWithLifecycle()
     val globalSyncOffset by viewModel.savedSyncOffset.collectAsStateWithLifecycle()
     val lastGraphRect by viewModel.savedGraphRect.collectAsStateWithLifecycle()
+    val defaultTz by viewModel.defaultTimeZone.collectAsStateWithLifecycle()
 
     val suggestedVideos by produceState(initialValue = emptyList()) {
         value = withContext(Dispatchers.IO) {
@@ -271,6 +274,14 @@ fun VideoExportDialog(
     }
 
     // 2. UI States (Initialized from persistent values)
+    var overlayVideoUri by remember { mutableStateOf<Uri?>(null) }
+    var previewFrame by remember { mutableStateOf<Bitmap?>(null) }
+    var selectedTimeZoneId by remember(defaultTz) { mutableStateOf(defaultTz) }
+    var showTzDialog by remember { mutableStateOf(false) }
+    var graphRect by remember {
+        mutableStateOf(RectF(0f, 0f, 1f, 1f))
+    }
+
     var videoWidthPx by remember(savedW) { mutableStateOf(savedW) }
     var videoHeightPx by remember(savedH) { mutableStateOf(savedH) }
     var appliedWidth by remember(savedW) { mutableIntStateOf(savedW.toIntOrNull() ?: 1280) }
@@ -284,8 +295,63 @@ fun VideoExportDialog(
     }
 
     var syncTrigger by remember { mutableIntStateOf(0) }
-    var startInput by remember { mutableStateOf(TimeUtils.formatMs(0L)) }
-    var endInput by remember { mutableStateOf(TimeUtils.formatMs(record.metadata.durationMs)) }
+    var videoAlignStartMs by remember { mutableStateOf(0L) }
+    var videoAlignEndMs by remember { mutableStateOf(record.metadata.durationMs) }
+    var cropStartMs by remember { mutableStateOf(0L) }
+    var cropEndMs by remember { mutableStateOf(record.metadata.durationMs) }
+
+    var inputMode by remember {
+        mutableStateOf(
+            if (overlayVideoUri != null) TimeInputMode.VIDEO_TIME else TimeInputMode.RECORD_TIME
+        )
+    }
+
+    var startInput by remember { mutableStateOf("") }
+    var endInput by remember { mutableStateOf("") }
+
+    val formatTimeForMode = { offsetMs: Long, mode: TimeInputMode ->
+        when (mode) {
+            TimeInputMode.RECORD_TIME -> TimeUtils.formatMs(offsetMs)
+            TimeInputMode.CLOCK_TIME -> TimeUtils.formatClockTime(record.metadata.startTime + offsetMs, java.time.ZoneId.of(selectedTimeZoneId))
+            TimeInputMode.VIDEO_TIME -> {
+                if (overlayVideoUri != null) {
+                    TimeUtils.formatMs(offsetMs - videoAlignStartMs)
+                } else {
+                    TimeUtils.formatMs(offsetMs)
+                }
+            }
+        }
+    }
+
+    val parseTimeForMode = { input: String, mode: TimeInputMode ->
+        when (mode) {
+            TimeInputMode.RECORD_TIME -> TimeUtils.parseToMs(input)
+            TimeInputMode.CLOCK_TIME -> TimeUtils.parseClockTimeToRelativeMs(input, record.metadata.startTime, java.time.ZoneId.of(selectedTimeZoneId))
+            TimeInputMode.VIDEO_TIME -> {
+                if (overlayVideoUri != null) {
+                    TimeUtils.parseToMs(input)?.let { it + videoAlignStartMs }
+                } else {
+                    TimeUtils.parseToMs(input)
+                }
+            }
+        }
+    }
+
+    val onInputModeChanged = { newMode: TimeInputMode ->
+        inputMode = newMode
+        startInput = formatTimeForMode(cropStartMs, newMode)
+        endInput = formatTimeForMode(cropEndMs, newMode)
+    }
+
+    LaunchedEffect(selectedTimeZoneId) {
+        startInput = formatTimeForMode(cropStartMs, inputMode)
+        endInput = formatTimeForMode(cropEndMs, inputMode)
+    }
+
+    val parsedStart = parseTimeForMode(startInput, inputMode)
+    val parsedEnd = parseTimeForMode(endInput, inputMode)
+    val isTimeRangeValid = parsedStart != null && parsedEnd != null && parsedStart < parsedEnd
+
     var windowSizeSec by remember(savedWin) { mutableStateOf(savedWin) }
     var frameRateInput by remember(savedFPS) { mutableStateOf(savedFPS) }
     var opacity by remember(savedO) { mutableFloatStateOf(savedO) }
@@ -298,12 +364,6 @@ fun VideoExportDialog(
     var showCurrentStats by remember(savedStats) { mutableStateOf(savedStats) }
     var saveAsDefault by remember { mutableStateOf(false) }
 
-    var overlayVideoUri by remember { mutableStateOf<Uri?>(null) }
-    var previewFrame by remember { mutableStateOf<Bitmap?>(null) }
-    var graphRect by remember {
-        mutableStateOf(RectF(0f, 0f, 1f, 1f))
-    }
-
     // Expandable states
     var showVideoSource by remember { mutableStateOf(true) }
     var showResSettings by remember { mutableStateOf(false) }
@@ -314,46 +374,60 @@ fun VideoExportDialog(
 
     val scrollState = rememberScrollState()
 
+    val scope = rememberCoroutineScope()
+
     val onVideoSelected = { pickedUri: Uri ->
         overlayVideoUri = pickedUri
-        val retriever = MediaMetadataRetriever()
-        try {
-            retriever.setDataSource(context, pickedUri)
-            previewFrame = retriever.getFrameAtTime(1000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, pickedUri)
+                    val frame = retriever.getFrameAtTime(1000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
 
-            // 1. Auto-Orientation logic (Keep your existing W/H swap code here)
-            val vW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            val vH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-            val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-            val isVidPortrait = if (rot == 90 || rot == 270) vW > vH else vH > vW
-            val isUiPortrait = appliedHeight > appliedWidth
-            if (isVidPortrait != isUiPortrait) {
-                val tw = videoWidthPx; videoWidthPx = videoHeightPx; videoHeightPx = tw
-                val taw = appliedWidth; appliedWidth = appliedHeight; appliedHeight = taw
-                lockRatio = appliedWidth.toFloat() / appliedHeight.toFloat().coerceAtLeast(1f)
+                    // 1. Auto-Orientation logic
+                    val vW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                    val vH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                    val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                    val fps = VideoExporter.getVideoFrameRate(context, pickedUri)
+                    Triple(frame, Triple(vW, vH, rot), fps)
+                } catch (e: Exception) {
+                    Log.e("VideoExport", "Metadata failed", e)
+                    null
+                } finally {
+                    retriever.release()
+                }
             }
 
-            // Auto-detect frame rate
-            VideoExporter.getVideoFrameRate(context, pickedUri)?.let { fps ->
-                frameRateInput = fps.toString()
-            }
+            result?.let { (frame, dimensions, fps) ->
+                previewFrame = frame
+                val (vW, vH, rot) = dimensions
+                val isVidPortrait = if (rot == 90 || rot == 270) vW > vH else vH > vW
+                val isUiPortrait = appliedHeight > appliedWidth
+                if (isVidPortrait != isUiPortrait) {
+                    val tw = videoWidthPx; videoWidthPx = videoHeightPx; videoHeightPx = tw
+                    val taw = appliedWidth; appliedWidth = appliedHeight; appliedHeight = taw
+                    lockRatio = appliedWidth.toFloat() / appliedHeight.toFloat().coerceAtLeast(1f)
+                }
 
-            // 2. Smart Placement: Change from Full Screen to "Bottom Strip"
-            // We use the lastGraphRect if available, otherwise calculate the standard bottom strip.
-            if (!lastGraphRect.isEmpty && lastGraphRect != RectF(0f, 0f, 1f, 1f)) {
-                graphRect = lastGraphRect
-            } else {
-                val isPortrait = appliedHeight > appliedWidth
-                val refWidth = if (isPortrait) 1080f else 1920f
-                val refHeight = if (isPortrait) 1920f else 1080f
-                val nW = (700f * overlayScale / refWidth).coerceIn(0.1f, 0.9f)
-                val nH = (280f * overlayScale / refHeight).coerceIn(0.1f, 0.9f)
-                graphRect = RectF(0.5f - nW/2, 0.95f - nH, 0.5f + nW/2, 0.95f)
-            }
+                // Auto-detect frame rate
+                fps?.let {
+                    frameRateInput = it.toString()
+                }
 
-        } catch (e: Exception) {
-            Log.e("VideoExport", "Metadata failed", e)
-        } finally { retriever.release() }
+                // 2. Smart Placement: Change from Full Screen to "Bottom Strip"
+                if (!lastGraphRect.isEmpty && lastGraphRect != RectF(0f, 0f, 1f, 1f)) {
+                    graphRect = lastGraphRect
+                } else {
+                    val isPortrait = appliedHeight > appliedWidth
+                    val refWidth = if (isPortrait) 1080f else 1920f
+                    val refHeight = if (isPortrait) 1920f else 1080f
+                    val nW = (700f * overlayScale / refWidth).coerceIn(0.1f, 0.9f)
+                    val nH = (280f * overlayScale / refHeight).coerceIn(0.1f, 0.9f)
+                    graphRect = RectF(0.5f - nW/2, 0.95f - nH, 0.5f + nW/2, 0.95f)
+                }
+            }
+        }
     }
 
     // --- Video Picker Launcher ---
@@ -366,15 +440,21 @@ fun VideoExportDialog(
     // This effect runs when video changes or button is clicked
     LaunchedEffect(overlayVideoUri, syncTrigger) {
         if (overlayVideoUri != null) {
-            val (startOffset, endOffset) = VideoExporter.calculateVideoAlignment(
-                context,
-                record,
-                overlayVideoUri!!,
-                globalSyncOffset
-            )
-
-            startInput = TimeUtils.formatMs(startOffset)
-            endInput = TimeUtils.formatMs(endOffset)
+            val (startOffset, endOffset) = withContext(Dispatchers.IO) {
+                VideoExporter.calculateVideoAlignment(
+                    context,
+                    record,
+                    overlayVideoUri!!,
+                    globalSyncOffset
+                )
+            }
+            videoAlignStartMs = startOffset
+            videoAlignEndMs = endOffset
+            cropStartMs = startOffset
+            cropEndMs = endOffset
+            inputMode = TimeInputMode.VIDEO_TIME
+            startInput = formatTimeForMode(startOffset, TimeInputMode.VIDEO_TIME)
+            endInput = formatTimeForMode(endOffset, TimeInputMode.VIDEO_TIME)
 
             Toast.makeText(
                 context,
@@ -383,8 +463,13 @@ fun VideoExportDialog(
             ).show()
         } else {
             // Reset to default (0 to duration) if no video is present
-            startInput = TimeUtils.formatMs(0L)
-            endInput = TimeUtils.formatMs(record.metadata.durationMs)
+            videoAlignStartMs = 0L
+            videoAlignEndMs = record.metadata.durationMs
+            cropStartMs = 0L
+            cropEndMs = record.metadata.durationMs
+            inputMode = TimeInputMode.RECORD_TIME
+            startInput = formatTimeForMode(0L, TimeInputMode.RECORD_TIME)
+            endInput = formatTimeForMode(record.metadata.durationMs, TimeInputMode.RECORD_TIME)
         }
     }
 
@@ -672,24 +757,94 @@ fun VideoExportDialog(
                                     Spacer(Modifier.width(8.dp))
                                     Text("Auto-sync Graph to Video Start", fontSize = 12.sp)
                                 }
+
+                                Spacer(Modifier.height(8.dp))
                             }
+
+                            Text(
+                                text = "Input Mode",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(start = 2.dp)
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val modes = if (overlayVideoUri != null) {
+                                    listOf(
+                                        TimeInputMode.VIDEO_TIME to "Video Time",
+                                        TimeInputMode.CLOCK_TIME to "Clock Time",
+                                        TimeInputMode.RECORD_TIME to "Record Time"
+                                    )
+                                } else {
+                                    listOf(
+                                        TimeInputMode.CLOCK_TIME to "Clock Time",
+                                        TimeInputMode.RECORD_TIME to "Record Time"
+                                    )
+                                }
+
+                                modes.forEach { (mode, label) ->
+                                    val isSelected = inputMode == mode
+                                    OutlinedButton(
+                                        onClick = { onInputModeChanged(mode) },
+                                        modifier = Modifier.weight(1f).height(36.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                            contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(8.dp))
 
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedTextField(
                                     value = startInput,
-                                    onValueChange = { startInput = it },
+                                    onValueChange = { 
+                                        startInput = it
+                                        parseTimeForMode(it, inputMode)?.let { ms ->
+                                            cropStartMs = ms
+                                        }
+                                    },
                                     label = { Text("Start Time") },
-                                    modifier = Modifier.weight(1f),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                    isError = parsedStart == null,
+                                    modifier = Modifier.weight(1f)
                                 )
                                 OutlinedTextField(
                                     value = endInput,
-                                    onValueChange = { endInput = it },
+                                    onValueChange = { 
+                                        endInput = it
+                                        parseTimeForMode(it, inputMode)?.let { ms ->
+                                            cropEndMs = ms
+                                        }
+                                    },
                                     label = { Text("End Time") },
-                                    modifier = Modifier.weight(1f),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                    isError = parsedEnd == null,
+                                    modifier = Modifier.weight(1f)
                                 )
                             }
+                            if (!isTimeRangeValid) {
+                                val errorMsg = when {
+                                    parsedStart == null -> "Invalid start time format"
+                                    parsedEnd == null -> "Invalid end time format"
+                                    parsedStart >= parsedEnd -> "Start time must be before end time"
+                                    else -> ""
+                                }
+                                Text(
+                                    text = errorMsg,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(start = 4.dp)
+                                )
+                            }
+
+                            Spacer(Modifier.height(8.dp))
 
                             OutlinedTextField(
                                 value = windowSizeSec,
@@ -706,6 +861,35 @@ fun VideoExportDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                             )
+
+                            Spacer(Modifier.height(8.dp))
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showTzDialog = true }
+                            ) {
+                                OutlinedTextField(
+                                    value = selectedTimeZoneId,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Display Time Zone") },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.AccessTime,
+                                            contentDescription = null
+                                        )
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = false,
+                                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                        disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                        disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        disabledLeadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                            }
                         }
 
                         // --- VISUALS SECTION ---
@@ -746,40 +930,111 @@ fun VideoExportDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                // Prepare Video Config
-                val config = prepareVideoConfig(
-                    videoWidth = videoWidthPx,
-                    videoHeight = videoHeightPx,
-                    startInput = startInput,
-                    endInput = endInput,
-                    windowSizeSec = windowSizeSec,
-                    frameRate = frameRateInput,
-                    opacity = opacity,
-                    showAxes = showAxes,
-                    showLabels = showLabels,
-                    showGrid = showGrid,
-                    showTitle = showTitle,
-                    showCurrentStats = showCurrentStats,
-                    overlayVideoUri = overlayVideoUri,
-                    record = record,
-                    graphRect = graphRect
-                )
+            TextButton(
+                onClick = {
+                    // Prepare Video Config
+                    val config = prepareVideoConfig(
+                        videoWidth = videoWidthPx,
+                        videoHeight = videoHeightPx,
+                        startTimeMs = cropStartMs,
+                        endTimeMs = cropEndMs,
+                        windowSizeSec = windowSizeSec,
+                        frameRate = frameRateInput,
+                        opacity = opacity,
+                        showAxes = showAxes,
+                        showLabels = showLabels,
+                        showGrid = showGrid,
+                        showTitle = showTitle,
+                        showCurrentStats = showCurrentStats,
+                        overlayVideoUri = overlayVideoUri,
+                        record = record,
+                        graphRect = graphRect,
+                        syncOffsetMs = globalSyncOffset,
+                        timeZoneId = selectedTimeZoneId
+                    )
 
-                if (saveAsDefault) {
-                    viewModel.saveLastUsedSettings(config) // Save settings
-                }
-                onExport(config, true)            // Trigger export
-                onDismiss()
-            }) { Text("Export") }
+                    if (saveAsDefault) {
+                        viewModel.saveLastUsedSettings(config) // Save settings
+                    }
+                    onExport(config, true)            // Trigger export
+                    onDismiss()
+                },
+                enabled = isTimeRangeValid
+            ) { Text("Export") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+
+    if (showTzDialog) {
+        var tzSearchQuery by remember { mutableStateOf("") }
+        val availableZones = remember { java.time.ZoneId.getAvailableZoneIds().sorted() }
+        val filteredZones = remember(tzSearchQuery) {
+            if (tzSearchQuery.isBlank()) {
+                val priorityZones = listOf(java.time.ZoneId.systemDefault().id, "UTC", "GMT")
+                (priorityZones + availableZones.filter { it !in priorityZones }).take(50)
+            } else {
+                availableZones.filter { it.contains(tzSearchQuery, ignoreCase = true) }.take(50)
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showTzDialog = false },
+            title = { Text("Select Time Zone") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = tzSearchQuery,
+                        onValueChange = { tzSearchQuery = it },
+                        label = { Text("Search Time Zone") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(modifier = Modifier.height(200.dp).fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            filteredZones.forEach { zoneId ->
+                                Text(
+                                    text = zoneId,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedTimeZoneId = zoneId
+                                            showTzDialog = false
+                                        }
+                                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                HorizontalDivider()
+                            }
+                            if (filteredZones.isEmpty()) {
+                                Text(
+                                    text = "No time zones match search",
+                                    color = Color.Gray,
+                                    modifier = Modifier.padding(8.dp)
+                                        .align(Alignment.CenterHorizontally)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTzDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
 }
 
 private enum class DragMode { MOVE, RESIZE_LT, RESIZE_RT, RESIZE_LB, RESIZE_RB, NONE }
+private enum class TimeInputMode { VIDEO_TIME, CLOCK_TIME, RECORD_TIME }
 
 @Composable
 fun VideoOverlayPreview(
@@ -938,8 +1193,8 @@ private fun RowScope.PresetButton(text: String, onClick: () -> Unit) {
 private fun prepareVideoConfig(
     videoWidth: String,
     videoHeight: String,
-    startInput: String,
-    endInput: String,
+    startTimeMs: Long,
+    endTimeMs: Long,
     windowSizeSec: String,
     frameRate: String,
     opacity: Float,
@@ -950,24 +1205,25 @@ private fun prepareVideoConfig(
     showCurrentStats: Boolean,
     overlayVideoUri: Uri?,
     record: BpmRecord,
-    graphRect: RectF
+    graphRect: RectF,
+    syncOffsetMs: Long,
+    timeZoneId: String
 ): VideoExporter.VideoExportConfig {
-    val startTime = TimeUtils.parseToMs(startInput) ?: 0L
-    val endTime = TimeUtils.parseToMs(endInput) ?: record.metadata.durationMs
     val windowMs = (windowSizeSec.toLongOrNull() ?: 30L) * 1000L
     val fps = frameRate.toIntOrNull() ?: 30
     
     val imageConfig = ImageExporter.ImageExportConfig(
         width = videoWidth.toIntOrNull() ?: 1280,
         height = videoHeight.toIntOrNull() ?: 720,
-        startTimeMs = startTime,
-        endTimeMs = endTime,
+        startTimeMs = startTimeMs,
+        endTimeMs = endTimeMs,
         backgroundOpacity = opacity.toInt(),
         showAxes = showAxes,
         showLabels = showLabels,
         showGrid = showGrid,
         showTitle = showTitle,
-        showCurrentStats = showCurrentStats
+        showCurrentStats = showCurrentStats,
+        timeZoneId = timeZoneId
     )
     
     return VideoExporter.VideoExportConfig(
@@ -975,7 +1231,8 @@ private fun prepareVideoConfig(
         windowSizeMs = windowMs,
         frameRate = fps,
         overlayVideoUri = overlayVideoUri,
-        graphRect = graphRect
+        graphRect = graphRect,
+        syncOffsetMs = syncOffsetMs
     )
 }
 
