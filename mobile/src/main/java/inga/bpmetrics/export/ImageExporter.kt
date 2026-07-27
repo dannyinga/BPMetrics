@@ -51,7 +51,8 @@ object ImageExporter {
         val showTitle: Boolean = true,
         val showCurrentStats: Boolean = true,
         val headerXPercent: Float = 0.85f,
-        val futureOpacity: Float = 0.65f
+        val futureOpacity: Float = 0.65f,
+        val timeZoneId: String = java.time.ZoneId.systemDefault().id
     )
 
     /**
@@ -94,17 +95,30 @@ object ImageExporter {
      */
     private fun getInterpolatedBpm(points: List<BpmDataPointEntity>, timestampMs: Double): Double? {
         if (points.isEmpty()) return null
-        if (timestampMs <= (points.firstOrNull()?.timestamp ?: 0)) return points.firstOrNull()?.bpm
-        if (timestampMs >= (points.lastOrNull()?.timestamp ?: 0)) return points.lastOrNull()?.bpm
+        
+        val firstPoint = points.first()
+        if (timestampMs < firstPoint.timestamp) {
+            return if (firstPoint.timestamp - timestampMs <= BpmRecord.GAP_THRESHOLD_MS) firstPoint.bpm else null
+        }
+        
+        val lastPoint = points.last()
+        if (timestampMs > lastPoint.timestamp) {
+            return if (timestampMs - lastPoint.timestamp <= BpmRecord.GAP_THRESHOLD_MS) lastPoint.bpm else null
+        }
         
         val p2Index = points.indexOfFirst { it.timestamp >= timestampMs }
-        if (p2Index <= 0) return points.firstOrNull()?.bpm
+        if (p2Index < 0) return null
+        if (p2Index == 0) return points.first().bpm
         
         val p1 = points[p2Index - 1]
         val p2 = points[p2Index]
         
         val t1 = p1.timestamp.toDouble()
         val t2 = p2.timestamp.toDouble()
+        if (t2 - t1 > BpmRecord.GAP_THRESHOLD_MS) {
+            return null
+        }
+        
         val ratio = (timestampMs - t1) / (t2 - t1)
         return p1.bpm + ratio * (p2.bpm - p1.bpm)
     }
@@ -224,14 +238,14 @@ object ImageExporter {
             if (visiblePoints.isNotEmpty()) {
                 val startBpm = getInterpolatedBpm(record.dataPoints, viewport.start) ?: 60.0
                 val endBpm = getInterpolatedBpm(record.dataPoints, viewport.end) ?: 60.0
-                val currentBpm = getInterpolatedBpm(record.dataPoints, viewport.playhead) ?: 60.0
+                val currentBpm = getInterpolatedBpm(record.dataPoints, viewport.playhead)
 
-                // Determine actual start position based on data availability
+                val playheadX = dims.getX(viewport.playhead, viewport)
+                val midY = dims.getY(currentBpm ?: 60.0, ranges)
+
+                // 1. Continuous Fill Path
                 val firstPoint = visiblePoints.first()
                 val firstPointX = dims.getX(firstPoint.timestamp.toDouble(), viewport)
-
-                // If the first point is after the viewport start, start there.
-                // Otherwise, start at the left edge.
                 val startX = maxOf(dims.graphLeft, firstPointX)
                 val startY = if (firstPointX > dims.graphLeft) {
                     dims.getY(firstPoint.bpm, ranges)
@@ -239,63 +253,105 @@ object ImageExporter {
                     dims.getY(startBpm, ranges)
                 }
 
-                val pastPath = Path()
-                val futurePath = Path()
                 val fillPath = Path()
-                val playheadX = dims.getX(viewport.playhead, viewport)
-                val midY = dims.getY(currentBpm, ranges)
-
-                // Initialize paths at the calculated start point
-                pastPath.moveTo(startX, startY)
                 fillPath.moveTo(startX, dims.graphBottom)
                 fillPath.lineTo(startX, startY)
 
                 var lastX = startX
                 var lastY = startY
 
-                // Build Past
                 visiblePoints.filter { it.timestamp <= viewport.playhead }.forEach { p ->
                     val x = dims.getX(p.timestamp.toDouble(), viewport)
                     val y = dims.getY(p.bpm, ranges)
-
-                    // Skip drawing if the point is at or before our startX
-                    // (prevents drawing backwards if the first point is slightly off-screen)
                     if (x > startX) {
                         val cx = (lastX + x) / 2f
-                        pastPath.cubicTo(cx, lastY, cx, y, x, y)
                         fillPath.cubicTo(cx, lastY, cx, y, x, y)
                         lastX = x
                         lastY = y
                     }
                 }
-
-                // Connect to playhead
+                
                 val cxMid = (lastX + playheadX) / 2f
-                pastPath.cubicTo(cxMid, lastY, cxMid, midY, playheadX, midY)
                 fillPath.cubicTo(cxMid, lastY, cxMid, midY, playheadX, midY)
                 fillPath.lineTo(playheadX, dims.graphBottom)
                 fillPath.close()
 
-                // Build Future
-                futurePath.moveTo(playheadX, midY)
+                // 2. Solid & Dashed past and future paths
+                val pastSolidPath = Path()
+                val pastDashedPath = Path()
+                val futureSolidPath = Path()
+                val futureDashedPath = Path()
+
+                // Build Past Paths
+                pastSolidPath.moveTo(startX, startY)
+                pastDashedPath.moveTo(startX, startY)
+                lastX = startX
+                lastY = startY
+
+                val pastPoints = visiblePoints.filter { it.timestamp <= viewport.playhead }
+                pastPoints.forEachIndexed { index, p ->
+                    val x = dims.getX(p.timestamp.toDouble(), viewport)
+                    val y = dims.getY(p.bpm, ranges)
+                    if (x > startX) {
+                        val cx = (lastX + x) / 2f
+                        
+                        val prevTime = if (index == 0) viewport.start else pastPoints[index - 1].timestamp.toDouble()
+                        val isGap = (p.timestamp - prevTime) > BpmRecord.GAP_THRESHOLD_MS
+
+                        if (isGap) {
+                            pastDashedPath.moveTo(lastX, lastY)
+                            pastDashedPath.cubicTo(cx, lastY, cx, y, x, y)
+                            pastSolidPath.moveTo(x, y)
+                        } else {
+                            pastSolidPath.cubicTo(cx, lastY, cx, y, x, y)
+                            pastDashedPath.moveTo(x, y)
+                        }
+                        lastX = x
+                        lastY = y
+                    }
+                }
+
+                // Connect past to playhead
+                val isGapToPlayhead = pastPoints.isNotEmpty() && (viewport.playhead - pastPoints.last().timestamp) > BpmRecord.GAP_THRESHOLD_MS
+                if (isGapToPlayhead) {
+                    pastDashedPath.moveTo(lastX, lastY)
+                    pastDashedPath.cubicTo(cxMid, lastY, cxMid, midY, playheadX, midY)
+                    pastSolidPath.moveTo(playheadX, midY)
+                } else {
+                    pastSolidPath.cubicTo(cxMid, lastY, cxMid, midY, playheadX, midY)
+                    pastDashedPath.moveTo(playheadX, midY)
+                }
+
+                // Build Future Paths
+                futureSolidPath.moveTo(playheadX, midY)
+                futureDashedPath.moveTo(playheadX, midY)
                 lastX = playheadX
                 lastY = midY
 
-                visiblePoints.filter { it.timestamp > viewport.playhead }.forEach { p ->
+                val futurePoints = visiblePoints.filter { it.timestamp > viewport.playhead }
+                futurePoints.forEachIndexed { index, p ->
                     val x = dims.getX(p.timestamp.toDouble(), viewport)
                     val y = dims.getY(p.bpm, ranges)
                     val cx = (lastX + x) / 2f
-                    futurePath.cubicTo(cx, lastY, cx, y, x, y)
+                    
+                    val prevTime = if (index == 0) viewport.playhead else futurePoints[index - 1].timestamp.toDouble()
+                    val isGap = (p.timestamp - prevTime) > BpmRecord.GAP_THRESHOLD_MS
+
+                    if (isGap) {
+                        futureDashedPath.moveTo(lastX, lastY)
+                        futureDashedPath.cubicTo(cx, lastY, cx, y, x, y)
+                        futureSolidPath.moveTo(x, y)
+                    } else {
+                        futureSolidPath.cubicTo(cx, lastY, cx, y, x, y)
+                        futureDashedPath.moveTo(x, y)
+                    }
                     lastX = x
                     lastY = y
                 }
 
-                // Determine actual end position based on data availability
+                // Anchor future to right edge
                 val lastPoint = visiblePoints.last()
                 val lastPointX = dims.getX(lastPoint.timestamp.toDouble(), viewport)
-
-                // If the last point is before the viewport end, stop there.
-                // Otherwise, anchor exactly to the right edge.
                 val endX = minOf(dims.graphRight, lastPointX)
                 val finalY = if (lastPointX < dims.graphRight) {
                     dims.getY(lastPoint.bpm, ranges)
@@ -303,12 +359,17 @@ object ImageExporter {
                     dims.getY(endBpm, ranges)
                 }
 
-                // Only draw the connecting curve if there's horizontal distance to cover
                 if (endX > lastX) {
-                    futurePath.cubicTo((lastX + endX) / 2f, lastY, (lastX + endX) / 2f, finalY, endX, finalY)
+                    val cx = (lastX + endX) / 2f
+                    val isGapToEnd = (endX - lastPointX) > BpmRecord.GAP_THRESHOLD_MS
+                    if (isGapToEnd) {
+                        futureDashedPath.moveTo(lastX, lastY)
+                        futureDashedPath.cubicTo(cx, lastY, cx, finalY, endX, finalY)
+                    } else {
+                        futureSolidPath.cubicTo(cx, lastY, cx, finalY, endX, finalY)
+                    }
                 }
 
-                // Render with updated bounds
                 renderShaders(
                     canvas = this,
                     dims = dims,
@@ -316,11 +377,13 @@ object ImageExporter {
                     viewport = viewport,
                     config = config,
                     fill = fillPath,
-                    past = pastPath,
-                    future = futurePath,
+                    pastSolid = pastSolidPath,
+                    pastDashed = pastDashedPath,
+                    futureSolid = futureSolidPath,
+                    futureDashed = futureDashedPath,
                     playheadX = playheadX,
                     firstPointX = startX,
-                    lastPointX = endX // Use calculated endX for the fade-out gradient
+                    lastPointX = endX
                 )
             }
         }
@@ -332,38 +395,34 @@ object ImageExporter {
         viewport: Viewport,
         config: ImageExportConfig,
         fill: Path,
-        past: Path,
-        future: Path,
+        pastSolid: Path,
+        pastDashed: Path,
+        futureSolid: Path,
+        futureDashed: Path,
         playheadX: Float,
-        firstPointX: Float, // Pass the X of the first visible point
-        lastPointX: Float   // Pass the X of the last visible point
+        firstPointX: Float,
+        lastPointX: Float
     ) {
         val paint = Paint().apply { isAntiAlias = true }
 
         // --- 1. DEFINE HORIZONTAL ALPHA MASKS ---
-
-        // Past Mask: Fades in from the FIRST DATA POINT to playhead
-        // This ensures no ghost lines appearing before the data starts
         val pastAlphaMask = LinearGradient(
             firstPointX, 0f, playheadX, 0f,
             intArrayOf(android.graphics.Color.TRANSPARENT, android.graphics.Color.BLACK),
             null, Shader.TileMode.CLAMP
         )
 
-        // 1. Calculate the color with current opacity
         val futureAlpha = (config.futureOpacity * 255).toInt().coerceIn(0, 255)
         val futureAlphaColor = android.graphics.Color.argb(futureAlpha, 0, 0, 0)
 
-        // 2. Future Mask: Use color stops to keep it visible for 60% of the distance
-        // then fade to transparent in the last 40%
         val futureAlphaMask = LinearGradient(
             playheadX, 0f, lastPointX, 0f,
             intArrayOf(
-                futureAlphaColor,   // Start at playhead
-                futureAlphaColor,   // Still full "future" opacity at 60% mark
-                android.graphics.Color.TRANSPARENT // Fade out by the end
+                futureAlphaColor,
+                futureAlphaColor,
+                android.graphics.Color.TRANSPARENT
             ),
-            floatArrayOf(0.0f, 0.6f, 1.0f), // The "stops" (0% to 100%)
+            floatArrayOf(0.0f, 0.6f, 1.0f),
             Shader.TileMode.CLAMP
         )
 
@@ -390,15 +449,29 @@ object ImageExporter {
         // --- 4. RENDER FUTURE LINE ---
         paint.shader = ComposeShader(colorGradient, futureAlphaMask, PorterDuff.Mode.DST_IN)
         paint.style = Paint.Style.STROKE
+        
+        // Draw Solid Future
         paint.strokeWidth = 4f * dims.scaleFactor
-        canvas.drawPath(future, paint)
+        paint.pathEffect = null
+        canvas.drawPath(futureSolid, paint)
+        
+        // Draw Dashed Future
+        paint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(15f * dims.scaleFactor, 15f * dims.scaleFactor), 0f)
+        canvas.drawPath(futureDashed, paint)
 
         // --- 5. RENDER PAST LINE ---
         paint.shader = ComposeShader(colorGradient, pastAlphaMask, PorterDuff.Mode.DST_IN)
         paint.strokeWidth = 7f * dims.scaleFactor
         paint.strokeJoin = Paint.Join.ROUND
         paint.strokeCap = Paint.Cap.ROUND
-        canvas.drawPath(past, paint)
+        
+        // Draw Solid Past
+        paint.pathEffect = null
+        canvas.drawPath(pastSolid, paint)
+        
+        // Draw Dashed Past
+        paint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(15f * dims.scaleFactor, 15f * dims.scaleFactor), 0f)
+        canvas.drawPath(pastDashed, paint)
     }
     private fun drawGlowingHead(
         canvas: Canvas,
@@ -409,7 +482,7 @@ object ImageExporter {
         config: ImageExportConfig,
         paint: Paint
     ) {
-        val currentBpm = getInterpolatedBpm(record.dataPoints, viewport.playhead) ?: 60.0
+        val currentBpm = getInterpolatedBpm(record.dataPoints, viewport.playhead) ?: return
         val headColor = getBpmColor(currentBpm, ranges, config)
 
         val headX = dims.getX(viewport.playhead, viewport)
@@ -446,8 +519,8 @@ object ImageExporter {
         config: ImageExportConfig,
         paint: Paint
     ) {
-        val currentBpm = getInterpolatedBpm(record.dataPoints, viewport.playhead) ?: 60.0
-        val hudContentColor = getBpmColor(currentBpm, ranges, config)
+        val currentBpm = getInterpolatedBpm(record.dataPoints, viewport.playhead)
+        val hudContentColor = if (currentBpm != null) getBpmColor(currentBpm, ranges, config) else android.graphics.Color.GRAY
 
         // UPDATED: Center the pill near the right edge of the graph
         val pillMargin = 80f * dims.scaleFactor
@@ -455,7 +528,7 @@ object ImageExporter {
         val hudTop = dims.graphTop + 10f * dims.scaleFactor
 
         // 3. Setup BPM Text
-        val bpmText = currentBpm.roundToInt().toString()
+        val bpmText = currentBpm?.roundToInt()?.toString() ?: "--"
         paint.reset()
         paint.isAntiAlias = true
         paint.isFakeBoldText = true
@@ -507,8 +580,8 @@ object ImageExporter {
         canvas.drawRoundRect(hudRect, cornerRadius, cornerRadius, paint)
 
         // 6. Pulse logic
-        val beatsPerSecond = currentBpm / 60.0
-        val pulseFactor = (sin((viewport.playhead / 1000.0) * 2.0 * Math.PI * beatsPerSecond) * 0.5 + 0.5).toFloat()
+        val beatsPerSecond = (currentBpm ?: 60.0) / 60.0
+        val pulseFactor = if (currentBpm != null) (sin((viewport.playhead / 1000.0) * 2.0 * Math.PI * beatsPerSecond) * 0.5 + 0.5).toFloat() else 0f
         val pulseScale = 1.0f + (0.12f * pulseFactor)
 
         // 7. Draw Pulsating Heart
@@ -535,7 +608,7 @@ object ImageExporter {
 
         // 9. Draw Time
         val absTime = record.metadata.startTime + viewport.playhead.toLong()
-        val timeStr = StringFormatHelpers.getTimeString(absTime)
+        val timeStr = StringFormatHelpers.getTimeString(absTime, java.time.ZoneId.of(config.timeZoneId))
         paint.textSize = 24f * dims.scaleFactor
         paint.color = 0xCCFFFFFF.toInt()
         paint.textAlign = Paint.Align.CENTER

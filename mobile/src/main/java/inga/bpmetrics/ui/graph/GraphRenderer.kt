@@ -255,13 +255,24 @@ fun GraphRenderer(
             )
         }
 
-        // Curve path
-        val path = Path()
-        val firstPoint = mapPoint(visibleDataPoints.first())
-        path.moveTo(firstPoint.x, firstPoint.y)
-        for (i in 1 until visibleDataPoints.size) {
-            val nextPoint = mapPoint(visibleDataPoints[i])
-            path.lineTo(nextPoint.x, nextPoint.y)
+        // Segment visible data points by gap threshold
+        val segments = mutableListOf<List<BpmDataPointEntity>>()
+        var currentSegment = mutableListOf<BpmDataPointEntity>()
+        for (point in visibleDataPoints) {
+            if (currentSegment.isEmpty()) {
+                currentSegment.add(point)
+            } else {
+                val lastPoint = currentSegment.last()
+                if (point.timestamp - lastPoint.timestamp > BpmRecord.GAP_THRESHOLD_MS) {
+                    segments.add(currentSegment)
+                    currentSegment = mutableListOf(point)
+                } else {
+                    currentSegment.add(point)
+                }
+            }
+        }
+        if (currentSegment.isNotEmpty()) {
+            segments.add(currentSegment)
         }
 
         // Gradient & Shading using HSV interpolation for vibrancy (consistent with exporters)
@@ -276,23 +287,76 @@ fun GraphRenderer(
             startY = paddingTop,
             endY = paddingTop + graphHeight
         )
-        
-        val fillPath = Path().apply {
-            addPath(path)
-            lineTo(mapPoint(visibleDataPoints.last()).x, paddingTop + graphHeight)
-            lineTo(mapPoint(visibleDataPoints.first()).x, paddingTop + graphHeight)
-            close()
-        }
-        
+
         val fillColors = gradientColors.reversed().mapIndexed { i, color ->
             color.copy(alpha = 0.2f * (1f - i.toFloat() / (stops - 1)).coerceAtLeast(0.02f))
         }
-        
-        drawPath(fillPath, brush = Brush.verticalGradient(
-            colors = fillColors,
-            startY = paddingTop, endY = paddingTop + graphHeight
-        ), style = Fill)
-        drawPath(path, brush = gradientBrush, style = Stroke(4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+
+        // Render continuous fill path
+        val fillPath = Path().apply {
+            val first = mapPoint(visibleDataPoints.first())
+            moveTo(first.x, first.y)
+            for (i in 1 until visibleDataPoints.size) {
+                val pt = mapPoint(visibleDataPoints[i])
+                lineTo(pt.x, pt.y)
+            }
+            val last = mapPoint(visibleDataPoints.last())
+            lineTo(last.x, paddingTop + graphHeight)
+            lineTo(first.x, paddingTop + graphHeight)
+            close()
+        }
+
+        drawPath(
+            fillPath,
+            brush = Brush.verticalGradient(
+                colors = fillColors,
+                startY = paddingTop,
+                endY = paddingTop + graphHeight
+            ),
+            style = Fill
+        )
+
+        // Render each solid segment path
+        segments.forEach { segment ->
+            if (segment.isEmpty()) return@forEach
+
+            val segmentPath = Path()
+            val firstPt = mapPoint(segment.first())
+            segmentPath.moveTo(firstPt.x, firstPt.y)
+            for (idx in 1 until segment.size) {
+                val nextPt = mapPoint(segment[idx])
+                segmentPath.lineTo(nextPt.x, nextPt.y)
+            }
+
+            drawPath(
+                segmentPath,
+                brush = gradientBrush,
+                style = Stroke(4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+        }
+
+        // Render dashed lines across gaps
+        for (i in 0 until segments.size - 1) {
+            val lastOfPrev = segments[i].last()
+            val firstOfNext = segments[i + 1].first()
+            val gapPath = Path().apply {
+                val start = mapPoint(lastOfPrev)
+                val end = mapPoint(firstOfNext)
+                moveTo(start.x, start.y)
+                lineTo(end.x, end.y)
+            }
+
+            drawPath(
+                gapPath,
+                brush = gradientBrush,
+                style = Stroke(
+                    width = 4f,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
+                )
+            )
+        }
 
         // Pointer
         state.inspectedRatio?.let { ratio ->
@@ -302,10 +366,12 @@ fun GraphRenderer(
 
             state.inspectedTimeMs?.let { time ->
                 visibleDataPoints.minByOrNull { abs(it.timestamp - time) }?.let { point ->
-                    val offset = mapPoint(point)
-                    val pointColor = getBpmColor(point.bpm, globalMinBpm, globalMaxBpm, lowBpmColor, highBpmColor)
-                    drawCircle(pointColor, radius = 12f, center = offset)
-                    drawCircle(Color.White, radius = 6f, center = offset)
+                    if (abs(point.timestamp - time) <= BpmRecord.GAP_THRESHOLD_MS) {
+                        val offset = mapPoint(point)
+                        val pointColor = getBpmColor(point.bpm, globalMinBpm, globalMaxBpm, lowBpmColor, highBpmColor)
+                        drawCircle(pointColor, radius = 12f, center = offset)
+                        drawCircle(Color.White, radius = 6f, center = offset)
+                    }
                 }
             }
         }

@@ -126,12 +126,18 @@ fun BpmGraph(
     // Calculate derived data for the inspection readout
     val currentInspectedBpm = remember(state.inspectedTimeMs) {
         state.inspectedTimeMs?.let { ms ->
-            record.dataPoints.minByOrNull { abs(it.timestamp - ms) }?.bpm
+            record.dataPoints.minByOrNull { abs(it.timestamp - ms) }?.let { point ->
+                if (abs(point.timestamp - ms) <= BpmRecord.GAP_THRESHOLD_MS) point.bpm else null
+            }
         }
     }
     
     val currentInspectedTimeText = remember(state.inspectedTimeMs) {
-        state.inspectedTimeMs?.let { TimeUtils.formatMs(it) }
+        state.inspectedTimeMs?.let { ms ->
+            record.dataPoints.minByOrNull { abs(it.timestamp - ms) }?.let { point ->
+                if (abs(point.timestamp - ms) <= BpmRecord.GAP_THRESHOLD_MS) TimeUtils.formatMs(ms) else null
+            }
+        }
     }
 
     val currentDuration = state.zoomRange.last - state.zoomRange.first
