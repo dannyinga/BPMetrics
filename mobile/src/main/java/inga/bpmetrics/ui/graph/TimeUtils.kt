@@ -94,9 +94,9 @@ object TimeUtils {
     /**
      * Formats epoch milliseconds into a clock time string (e.g., "10:30:00 AM").
      */
-    fun formatClockTime(epochMs: Long): String {
+    fun formatClockTime(epochMs: Long, zoneId: ZoneId = ZoneId.systemDefault()): String {
         return Instant.ofEpochMilli(epochMs)
-            .atZone(ZoneId.systemDefault())
+            .atZone(zoneId)
             .format(clockFormatter)
     }
 
@@ -104,7 +104,7 @@ object TimeUtils {
      * Parses a clock time string and converts it to milliseconds relative to a base start time.
      * Supports "hh:mm:ss a" (e.g., 10:30:00 AM) or "HH:mm:ss" (e.g., 22:30:00).
      */
-    fun parseClockTimeToRelativeMs(input: String, baseEpochMs: Long): Long? {
+    fun parseClockTimeToRelativeMs(input: String, baseEpochMs: Long, zoneId: ZoneId = ZoneId.systemDefault()): Long? {
         return try {
             val localTime = try {
                 LocalTime.parse(input.trim().uppercase(), clockFormatter)
@@ -113,14 +113,14 @@ object TimeUtils {
             }
             
             val baseDateTime = Instant.ofEpochMilli(baseEpochMs)
-                .atZone(ZoneId.systemDefault())
+                .atZone(zoneId)
                 .toLocalDateTime()
             
             val targetDateTime = baseDateTime.with(localTime)
             
             // If the record spans across midnight, this might need more complex logic,
             // but for now, we assume it's on the same day as the start or very close.
-            val targetEpochMs = targetDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val targetEpochMs = targetDateTime.atZone(zoneId).toInstant().toEpochMilli()
             targetEpochMs - baseEpochMs
         } catch (e: Exception) {
             null

@@ -50,6 +50,7 @@ class SettingsRepository(context: Context) {
         val VID_LOCK_ASPECT = booleanPreferencesKey("vid_lock_aspect")
         val VID_SYNC_OFFSET = longPreferencesKey("vid_sync_offset")
         val VID_GRAPH_RECT = stringPreferencesKey("vid_graph_rect")
+        val DEFAULT_TIME_ZONE = stringPreferencesKey("default_timezone")
     }
 
     /**
@@ -150,6 +151,14 @@ class SettingsRepository(context: Context) {
         } else {
             android.graphics.RectF(0f, 0f, 1f, 1f)
         }
+    }
+
+    val defaultTimeZone: Flow<String> = dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.DEFAULT_TIME_ZONE] ?: java.time.ZoneId.systemDefault().id
+    }
+
+    suspend fun setDefaultTimeZone(timeZoneId: String) {
+        dataStore.edit { it[PreferencesKeys.DEFAULT_TIME_ZONE] = timeZoneId }
     }
 
 }

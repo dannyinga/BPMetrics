@@ -53,6 +53,7 @@ class SettingsViewModel(
     val vidLockAspect = settingsRepository.vidLockAspect.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val vidSyncOffset = settingsRepository.vidSyncOffset.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
     val vidGraphRect = settingsRepository.vidGraphRect.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RectF(0f, 0f, 1f, 1f))
+    val defaultTimeZone = settingsRepository.defaultTimeZone.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), java.time.ZoneId.systemDefault().id)
 
     // Refactored Save Methods using Config objects
     fun setImageDefaults(config: ImageExporter.ImageExportConfig) {
@@ -79,6 +80,10 @@ class SettingsViewModel(
 
     fun clearDefaultNamingCategory() {
         viewModelScope.launch { settingsRepository.clearDefaultNamingCategory() }
+    }
+
+    fun setDefaultTimeZone(timeZoneId: String) {
+        viewModelScope.launch { settingsRepository.setDefaultTimeZone(timeZoneId) }
     }
 
     class Factory(

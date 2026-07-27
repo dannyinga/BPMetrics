@@ -67,16 +67,17 @@ object StringFormatHelpers {
     }
 
     /**
-     * Converts a wall-clock timestamp into a formatted time string (hh:mm:ss a).
+     * Converts a wall-clock timestamp into a formatted time string (hh:mm:ss a) in the specified time zone.
      *
      * @param time The timestamp in milliseconds (epoch time).
-     * @return A string representing the time (e.g., "10:30:00 AM") in the local time zone.
+     * @param zoneId The time zone to format the time in. Defaults to the system default time zone.
+     * @return A string representing the time (e.g., "10:30:00 AM") in the selected time zone.
      */
-    fun getTimeString(time: Long) : String {
+    fun getTimeString(time: Long, zoneId: ZoneId = ZoneId.systemDefault()) : String {
         val timeFormatter = DateTimeFormatter.ofPattern("hh:mm:ss a", Locale.getDefault())
         val timeString = "${
             Instant.ofEpochMilli(time)
-            .atZone(ZoneId.systemDefault())
+            .atZone(zoneId)
             .format(timeFormatter)}"
 
         return timeString

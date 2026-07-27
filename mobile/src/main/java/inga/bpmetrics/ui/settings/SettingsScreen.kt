@@ -4,9 +4,11 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -49,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.export.VideoExporter
+import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,6 +81,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
     val savedVidStats by viewModel.vidShowStats.collectAsStateWithLifecycle()
     val savedVidLock by viewModel.vidLockAspect.collectAsStateWithLifecycle()
     val savedVidOffset by viewModel.vidSyncOffset.collectAsStateWithLifecycle()
+    val savedDefaultTz by viewModel.defaultTimeZone.collectAsStateWithLifecycle()
 
     // Local states
     var imgW by remember(savedImgW) { mutableStateOf(savedImgW) }
@@ -100,6 +104,8 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
     var vidStats by remember(savedVidStats) { mutableStateOf(savedVidStats) }
     var vidLock by remember(savedVidLock) { mutableStateOf(savedVidLock) }
     var vidOffset by remember(savedVidOffset) { mutableStateOf(savedVidOffset.toString()) }
+    var defaultTz by remember(savedDefaultTz) { mutableStateOf(savedDefaultTz) }
+    var showTzDialog by remember { mutableStateOf(false) }
 
     var showCategoryDropdown by remember { mutableStateOf(false) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
@@ -109,7 +115,8 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
             imgTitle != savedImgTitle || vidW != savedVidW || vidH != savedVidH ||
             vidWin != savedVidWin || vidFPS != savedVidFPS || vidO != savedVidO || vidAxes != savedVidAxes ||
             vidLabels != savedVidLabels || vidGrid != savedVidGrid || vidTitle != savedVidTitle ||
-            vidStats != savedVidStats || vidLock != savedVidLock || vidOffset != savedVidOffset.toString()
+            vidStats != savedVidStats || vidLock != savedVidLock || vidOffset != savedVidOffset.toString() ||
+            defaultTz != savedDefaultTz
 
     val saveSettings = {
         val imageConfig = ImageExporter.ImageExportConfig(
@@ -139,6 +146,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
         viewModel.setImageDefaults(imageConfig)
         viewModel.setVideoDefaults(videoConfig)
         viewModel.setGlobalSyncOffset(vidOffset.toLongOrNull() ?: 0L)
+        viewModel.setDefaultTimeZone(defaultTz)
         Toast.makeText(context, "Settings Saved", Toast.LENGTH_SHORT).show()
     }
 
@@ -233,8 +241,92 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
             SettingsToggle("Show Grid", vidGrid) { vidGrid = it }
             Text("Background Opacity: ${vidO.toInt()}%", modifier = Modifier.padding(top = 8.dp))
             Slider(value = vidO, onValueChange = { vidO = it }, valueRange = 0f..100f)
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showTzDialog = true }
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Default Video Time Zone", style = MaterialTheme.typography.labelLarge)
+                        Text(defaultTz, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
             Spacer(Modifier.height(32.dp))
         }
+    }
+
+    if (showTzDialog) {
+        var tzSearchQuery by remember { mutableStateOf("") }
+        val availableZones = remember { java.time.ZoneId.getAvailableZoneIds().sorted() }
+        val filteredZones = remember(tzSearchQuery) {
+            if (tzSearchQuery.isBlank()) {
+                val priorityZones = listOf(java.time.ZoneId.systemDefault().id, "UTC", "GMT")
+                (priorityZones + availableZones.filter { it !in priorityZones }).take(50)
+            } else {
+                availableZones.filter { it.contains(tzSearchQuery, ignoreCase = true) }.take(50)
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showTzDialog = false },
+            title = { Text("Select Time Zone") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = tzSearchQuery,
+                        onValueChange = { tzSearchQuery = it },
+                        label = { Text("Search Time Zone") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(modifier = Modifier.height(200.dp).fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            filteredZones.forEach { zoneId ->
+                                Text(
+                                    text = zoneId,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            defaultTz = zoneId
+                                            showTzDialog = false
+                                        }
+                                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                HorizontalDivider()
+                            }
+                            if (filteredZones.isEmpty()) {
+                                Text(
+                                    text = "No time zones match search",
+                                    color = Color.Gray,
+                                    modifier = Modifier.padding(8.dp)
+                                        .align(Alignment.CenterHorizontally)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTzDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 }
 
