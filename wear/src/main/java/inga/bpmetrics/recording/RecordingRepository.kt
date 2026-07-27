@@ -266,17 +266,46 @@ class RecordingRepository private constructor(context: Context) {
                     date = Date(wallClock),
                     dataPoints = points.sortedBy { it.timestamp },
                     startTime = wallClock,
-                    endTime = endTime
+                    endTime = endTime,
+                    deviceId = getDeviceId(),
+                    wearerName = getWearerName()
                 )
                 // Save to persistent "outbox" for reliable synchronization to the phone
                 dao.insertPendingRecord(PendingRecordEntity(recordJson = gson.toJson(record)))
-                Log.d(tag, "Record finalized with ${points.size} points starting at $wallClock")
+                Log.d(tag, "Record finalized with ${points.size} points starting at $wallClock for device: ${record.deviceId}")
             }
             
             cleanupSession()
             
             // Per requirement: Re-warm sensors for the next session
             prepareExercise()
+        }
+    }
+
+    /**
+     * Gets the configured device identifier, defaulting to the system model name.
+     */
+    fun getDeviceId(): String = prefs.getString("device_id", null)?.takeIf { it.isNotBlank() } ?: android.os.Build.MODEL
+
+    /**
+     * Updates the custom device identifier.
+     */
+    fun setDeviceId(id: String) {
+        prefs.edit { putString("device_id", id.trim()) }
+    }
+
+    /**
+     * Gets the configured wearer name for records created on this watch.
+     */
+    fun getWearerName(): String? = prefs.getString("wearer_name", null)?.takeIf { it.isNotBlank() }
+
+    /**
+     * Updates the wearer name preference.
+     */
+    fun setWearerName(name: String?) {
+        prefs.edit {
+            if (name.isNullOrBlank()) remove("wearer_name")
+            else putString("wearer_name", name.trim())
         }
     }
 

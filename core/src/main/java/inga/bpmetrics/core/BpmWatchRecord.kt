@@ -18,7 +18,9 @@ data class BpmWatchRecord(
     val endTime: Long,
     val title: String? = null,
     val description: String? = null,
-    val tagNames: List<String> = emptyList()
+    val tagNames: List<String> = emptyList(),
+    val deviceId: String = "Watch",
+    val wearerName: String? = null
 ) : Comparable<BpmWatchRecord> {
     val durationMs: Long = endTime - startTime
 
@@ -57,6 +59,8 @@ data class BpmWatchRecord(
         val durationMillis = durationMs % 1000
         outputBuilder.appendLine("Duration: ${durationMin}m ${durationSec}s ${durationMillis}ms")
         
+        outputBuilder.appendLine("Device ID: $deviceId")
+        wearerName?.let { outputBuilder.appendLine("Wearer Name: $it") }
         title?.let { outputBuilder.appendLine("Title: $it") }
         description?.let { outputBuilder.appendLine("Description: $it") }
         if (tagNames.isNotEmpty()) {

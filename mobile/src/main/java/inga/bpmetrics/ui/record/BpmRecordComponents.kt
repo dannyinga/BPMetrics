@@ -78,6 +78,16 @@ fun BpmRecordTile(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
+                    val deviceBadge = buildString {
+                        if (record.metadata.wearerName.isNotBlank()) append("👤 ${record.metadata.wearerName}  •  ")
+                        append("⌚ ${record.metadata.deviceId.ifBlank { "Watch" }}")
+                    }
+                    Text(
+                        text = deviceBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        fontWeight = FontWeight.SemiBold
+                    )
                     Text(
                         text = getDurationString(record.metadata.durationMs),
                         style = MaterialTheme.typography.bodySmall,

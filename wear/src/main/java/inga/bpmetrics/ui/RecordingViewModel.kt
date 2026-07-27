@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.recording.RecordingRepository
 import inga.bpmetrics.recording.RecordingState
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -18,6 +19,19 @@ import kotlinx.coroutines.flow.stateIn
  */
 class RecordingViewModel(private val repository: RecordingRepository) : ViewModel() {
 
+    val wearerNameState = MutableStateFlow(repository.getWearerName())
+    val deviceIdState = MutableStateFlow(repository.getDeviceId())
+
+    fun updateWearerName(name: String?) {
+        repository.setWearerName(name)
+        wearerNameState.value = repository.getWearerName()
+    }
+
+    fun updateDeviceId(id: String) {
+        repository.setDeviceId(id)
+        deviceIdState.value = repository.getDeviceId()
+    }
+
     /**
      * UI state representing the current recording session.
      */
@@ -25,11 +39,14 @@ class RecordingViewModel(private val repository: RecordingRepository) : ViewMode
         repository.liveBpm,
         repository.recordingStartTime,
         repository.recordingState,
-    ) { bpm, startTime, state ->
+        wearerNameState
+    ) { bpm, startTime, state, wearer ->
         RecordingUIState(
             bpm = bpm,
             recordingStartTime = startTime,
             serviceState = state,
+            wearerName = wearer,
+            deviceId = deviceIdState.value,
             statusText = when (state) {
                 RecordingState.INACTIVE -> "Inactive"
                 RecordingState.PREPARING -> "Warming up sensor..."
@@ -74,10 +91,14 @@ class RecordingViewModel(private val repository: RecordingRepository) : ViewMode
  * @property recordingStartTime The start timestamp of the current session.
  * @property serviceState The current [RecordingState] of the monitor.
  * @property statusText A human-readable description of the current state.
+ * @property wearerName The configured wearer name.
+ * @property deviceId The configured device ID.
  */
 data class RecordingUIState(
     val bpm: Double? = null,
     val recordingStartTime: Long = 0L,
     val serviceState: RecordingState = RecordingState.INACTIVE,
-    val statusText: String = ""
+    val statusText: String = "Initializing...",
+    val wearerName: String? = null,
+    val deviceId: String = "Watch"
 )

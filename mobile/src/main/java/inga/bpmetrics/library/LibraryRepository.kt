@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -96,6 +97,13 @@ class LibraryRepository(
     }
 
     /**
+     * Updates the device ID and wearer name of a BPM record.
+     */
+    suspend fun updateRecordDeviceAndWearer(recordId: Long, deviceId: String, wearerName: String) {
+        recordDao.updateDeviceAndWearer(recordId, deviceId, wearerName)
+    }
+
+    /**
      * Deletes a BPM record and its associated data points from the database.
      *
      * @param id The ID of the record to delete.
@@ -154,26 +162,17 @@ class LibraryRepository(
             date = record.date.time,
             startTime = record.startTime,
             endTime = record.endTime,
-            durationMs = record.durationMs
+            durationMs = record.durationMs,
+            deviceId = record.deviceId,
+            wearerName = record.wearerName ?: ""
         )
         val recordId = recordDao.insertBpmRecordGetId(recordEntity)
 
         performAnalysisAndSaveDataPoints(record, recordId)
 
-        // Handle Tags from Import
-        if (record.tagNames != null && record.tagNames.isNotEmpty()) {
-            val allCategories = tagDao.getAllCategoriesFlow().first()
-            val importCategoryId = allCategories.find { it.name == "Imported" }?.categoryId 
-                ?: tagDao.insertCategory(CategoryEntity(name = "Imported"))
-
-            val existingTags = tagDao.getTagsByCategoryFlow(importCategoryId).first()
-            
-            record.tagNames.forEach { tagName ->
-                val tagId = existingTags.find { it.name == tagName }?.tagId
-                    ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = importCategoryId))
-                
-                tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
-            }
+        // Handle Tags from Import cleanly without category duplication
+        if (record.tagNames.isNotEmpty()) {
+            attachTagsToRecord(recordId, record.tagNames)
         }
 
         // Only auto-name if it's a fresh recording without a title (and not from CSV with a title)
@@ -184,6 +183,32 @@ class LibraryRepository(
         _savingRecord.value = false
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")
         return recordId
+    }
+
+    /**
+     * Attaches tags to a record, resolving category:tag pairs and reusing existing categories case-insensitively.
+     */
+    suspend fun attachTagsToRecord(recordId: Long, tagNames: List<String>) {
+        if (tagNames.isEmpty()) return
+        val allCategories = tagDao.getAllCategoriesFlow().firstOrNull() ?: emptyList()
+
+        tagNames.forEach { rawTag ->
+            val parts = rawTag.split(":", limit = 2)
+            val categoryName = if (parts.size == 2 && parts[0].isNotBlank()) parts[0].trim() else "Imported"
+            val tagName = if (parts.size == 2) parts[1].trim() else rawTag.trim()
+
+            if (tagName.isBlank()) return@forEach
+
+            val existingCategory = allCategories.find { it.name.equals(categoryName, ignoreCase = true) }
+            val categoryId = existingCategory?.categoryId 
+                ?: tagDao.insertCategory(CategoryEntity(name = categoryName))
+
+            val existingTags = tagDao.getTagsByCategoryFlow(categoryId).firstOrNull() ?: emptyList()
+            val tagId = existingTags.find { it.name.equals(tagName, ignoreCase = true) }?.tagId
+                ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = categoryId))
+
+            tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
+        }
     }
 
     /**

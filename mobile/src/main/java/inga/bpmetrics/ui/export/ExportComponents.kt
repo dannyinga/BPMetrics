@@ -12,7 +12,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -236,7 +238,27 @@ fun ImageExportDialog(
 
 @Composable
 fun VideoExportDialog(
+    record: BpmRecord,
+    records: List<BpmRecord> = listOf(record),
+    onDismiss: () -> Unit,
+    onExport: (VideoExporter.VideoExportConfig, Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    val settingsRepository = remember { inga.bpmetrics.ui.settings.SettingsRepository(context) }
+    val viewModel = remember(record) { VideoExportViewModel(record, settingsRepository) }
+
+    VideoExportDialog(
+        viewModel = viewModel,
+        records = records,
+        onDismiss = onDismiss,
+        onExport = onExport
+    )
+}
+
+@Composable
+fun VideoExportDialog(
     viewModel: VideoExportViewModel,
+    records: List<BpmRecord> = listOf(viewModel.record),
     onDismiss: () -> Unit,
     onExport: (VideoExporter.VideoExportConfig, Boolean) -> Unit
 ) {
@@ -278,6 +300,9 @@ fun VideoExportDialog(
     var previewFrame by remember { mutableStateOf<Bitmap?>(null) }
     var selectedTimeZoneId by remember(defaultTz) { mutableStateOf(defaultTz) }
     var showTzDialog by remember { mutableStateOf(false) }
+    var customRecordColors by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
+    var alignByElapsedTime by remember { mutableStateOf(true) }
+    var showMultiWatchSettings by remember { mutableStateOf(true) }
     var graphRect by remember {
         mutableStateOf(RectF(0f, 0f, 1f, 1f))
     }
@@ -916,6 +941,71 @@ fun VideoExportDialog(
                             )
                         }
 
+                        if (records.size > 1) {
+                            ExpandableSection(
+                                "Multi-Watch Colors & Alignment (${records.size} wearers)",
+                                showMultiWatchSettings,
+                                { showMultiWatchSettings = !showMultiWatchSettings }
+                            ) {
+                                ExportToggle(
+                                    label = "Align graph timelines starting from 0:00",
+                                    checked = alignByElapsedTime,
+                                    onCheckedChange = { alignByElapsedTime = it }
+                                )
+
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Tap a color swatch to customize each wearer's graph line:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(Modifier.height(4.dp))
+
+                                val paletteOptions = listOf(
+                                    0xFF00E5FF.toInt(), // Cyan
+                                    0xFFFF5252.toInt(), // Coral Red
+                                    0xFF00E676.toInt(), // Emerald Green
+                                    0xFFE040FB.toInt(), // Purple
+                                    0xFFFFD700.toInt(), // Amber Gold
+                                    0xFF2979FF.toInt(), // Electric Blue
+                                    0xFFFF9100.toInt(), // Orange
+                                    0xFFFF4081.toInt()  // Pink
+                                )
+
+                                records.forEachIndexed { index, rec ->
+                                    val wearerLabel = rec.metadata.wearerName.ifBlank { rec.metadata.deviceId.ifBlank { rec.metadata.title } }
+                                    val defaultColor = ImageExporter.MULTI_WATCH_PALETTES[index % ImageExporter.MULTI_WATCH_PALETTES.size][0]
+                                    val currentColor = customRecordColors[rec.metadata.recordId] ?: defaultColor
+
+                                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                        Text(text = "👤 $wearerLabel", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            paletteOptions.forEach { colorInt ->
+                                                val isSelected = colorInt == currentColor
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(24.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Color(colorInt))
+                                                        .border(
+                                                            width = if (isSelected) 2.dp else 0.dp,
+                                                            color = if (isSelected) Color.White else Color.Transparent,
+                                                            shape = CircleShape
+                                                        )
+                                                        .clickable {
+                                                            customRecordColors = customRecordColors + (rec.metadata.recordId to colorInt)
+                                                        }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth().clickable { saveAsDefault = !saveAsDefault },
@@ -950,7 +1040,10 @@ fun VideoExportDialog(
                         record = record,
                         graphRect = graphRect,
                         syncOffsetMs = globalSyncOffset,
-                        timeZoneId = selectedTimeZoneId
+                        timeZoneId = selectedTimeZoneId,
+                        records = records,
+                        customRecordColors = customRecordColors,
+                        alignByElapsedTime = alignByElapsedTime
                     )
 
                     if (saveAsDefault) {
@@ -1207,7 +1300,10 @@ private fun prepareVideoConfig(
     record: BpmRecord,
     graphRect: RectF,
     syncOffsetMs: Long,
-    timeZoneId: String
+    timeZoneId: String,
+    records: List<BpmRecord> = emptyList(),
+    customRecordColors: Map<Long, Int> = emptyMap(),
+    alignByElapsedTime: Boolean = true
 ): VideoExporter.VideoExportConfig {
     val windowMs = (windowSizeSec.toLongOrNull() ?: 30L) * 1000L
     val fps = frameRate.toIntOrNull() ?: 30
@@ -1223,7 +1319,9 @@ private fun prepareVideoConfig(
         showGrid = showGrid,
         showTitle = showTitle,
         showCurrentStats = showCurrentStats,
-        timeZoneId = timeZoneId
+        timeZoneId = timeZoneId,
+        customRecordColors = customRecordColors,
+        alignByElapsedTime = alignByElapsedTime
     )
     
     return VideoExporter.VideoExportConfig(
@@ -1232,7 +1330,8 @@ private fun prepareVideoConfig(
         frameRate = fps,
         overlayVideoUri = overlayVideoUri,
         graphRect = graphRect,
-        syncOffsetMs = syncOffsetMs
+        syncOffsetMs = syncOffsetMs,
+        records = records
     )
 }
 

@@ -91,6 +91,8 @@ fun BpmRecordScreen(
     record?.let { r ->
         var editedTitle by remember(r.metadata.title) { mutableStateOf(r.metadata.title) }
         var editedDescription by remember(r.metadata.description) { mutableStateOf(r.metadata.description) }
+        var editedDeviceId by remember(r.metadata.deviceId) { mutableStateOf(r.metadata.deviceId) }
+        var editedWearerName by remember(r.metadata.wearerName) { mutableStateOf(r.metadata.wearerName) }
 
         Scaffold(
             topBar = {
@@ -117,6 +119,7 @@ fun BpmRecordScreen(
                             if (isEditing) {
                                 viewModel.updateTitle(editedTitle)
                                 viewModel.updateDescription(editedDescription)
+                                viewModel.updateDeviceAndWearer(editedDeviceId, editedWearerName)
                             }
                             isEditing = !isEditing
                         }) {
@@ -142,7 +145,7 @@ fun BpmRecordScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Spacer(Modifier.height(16.dp))
-                
+
                 // Display low, avg, and max BPM metrics.
                 BpmTrio(
                     low = r.minDataPoint?.bpm?.toInt() ?: 0,
@@ -151,8 +154,50 @@ fun BpmRecordScreen(
                     iconSize = 32.dp,
                     fontSize = 24.sp
                 )
+
+                Spacer(Modifier.height(16.dp))
+
+                // Device & Wearer Metadata Card
+                if (isEditing) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = editedWearerName,
+                            onValueChange = { editedWearerName = it },
+                            label = { Text("Wearer Name") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = editedDeviceId,
+                            onValueChange = { editedDeviceId = it },
+                            label = { Text("Device ID") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                    }
+                    Spacer(Modifier.height(16.dp))
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val deviceBadge = buildString {
+                            if (r.metadata.wearerName.isNotBlank()) append("👤 ${r.metadata.wearerName}  •  ")
+                            append("⌚ ${r.metadata.deviceId.ifBlank { "Watch" }}")
+                        }
+                        Text(
+                            text = deviceBadge,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
                 
-                Spacer(Modifier.height(24.dp))
                 Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
                     Text("Description", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     if (isEditing) {

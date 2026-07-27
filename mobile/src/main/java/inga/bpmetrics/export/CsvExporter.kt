@@ -29,6 +29,8 @@ object CsvExporter {
         writer.appendLine("BPMetrics Data Export")
         writer.appendLine("Title,${record.metadata.title}")
         writer.appendLine("Description,${record.metadata.description}")
+        writer.appendLine("Device ID,${record.metadata.deviceId}")
+        writer.appendLine("Wearer Name,${record.metadata.wearerName}")
         writer.appendLine("Date,${StringFormatHelpers.getDateString(record.metadata.date)}")
         writer.appendLine("Start Time (ms),${record.metadata.startTime}")
         writer.appendLine("End Time (ms),${record.metadata.endTime}")
@@ -59,6 +61,8 @@ object CsvExporter {
                 val reader = BufferedReader(InputStreamReader(inputStream))
                 var title: String? = null
                 var description: String? = null
+                var deviceId = "Watch"
+                var wearerName: String? = null
                 var startTime = 0L
                 var endTime = 0L
                 var tags = emptyList<String>()
@@ -71,6 +75,8 @@ object CsvExporter {
                         when {
                             line.startsWith("Title,") -> title = parts.getOrNull(1)
                             line.startsWith("Description,") -> description = parts.getOrNull(1)
+                            line.startsWith("Device ID,") -> deviceId = parts.getOrNull(1)?.trim() ?: "Watch"
+                            line.startsWith("Wearer Name,") -> wearerName = parts.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
                             line.startsWith("Start Time (ms),") -> startTime = parts.getOrNull(1)?.toLongOrNull() ?: 0L
                             line.startsWith("End Time (ms),") -> endTime = parts.getOrNull(1)?.toLongOrNull() ?: 0L
                             line.startsWith("Tags,") -> tags = parts.getOrNull(1)?.split(" | ")?.filter { it.isNotBlank() } ?: emptyList()
@@ -96,7 +102,9 @@ object CsvExporter {
                         endTime = endTime,
                         title = title,
                         description = description,
-                        tagNames = tags
+                        tagNames = tags,
+                        deviceId = deviceId,
+                        wearerName = wearerName
                     )
                 } else null
             }

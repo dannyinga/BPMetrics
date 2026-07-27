@@ -135,23 +135,24 @@ class BpmExportService : Service() {
                     }
 
                     val targetUri = nextJob.targetUri
-                    if (targetUri != null) {
+                    val finalUri: Uri? = if (targetUri != null) {
                         contentResolver.openOutputStream(targetUri)?.use { outputStream ->
                             file.inputStream().use { inputStream ->
                                 inputStream.copyTo(outputStream)
                             }
                         }
+                        targetUri
                     } else {
-                        ExportUtils.shareFile(this@BpmExportService, file, "video/mp4")
+                        ExportUtils.saveVideoToGallery(this@BpmExportService, file, nextJob.recordTitle)
                     }
 
-                    RenderQueueManager.updateJobStatus(nextJob.id, RenderStatus.COMPLETED)
-                    showCompletionNotification(nextJob.recordTitle, true)
+                    RenderQueueManager.updateJobStatus(nextJob.id, RenderStatus.COMPLETED, targetUri = finalUri)
+                    showCompletionNotification(nextJob.recordTitle, true, finalUri)
                 } catch (e: Exception) {
                     e.printStackTrace()
                     val wasCancelled = coroutineContext[Job]?.isCancelled == true
                     val status = if (wasCancelled) RenderStatus.CANCELLED else RenderStatus.FAILED
-                    RenderQueueManager.updateJobStatus(nextJob.id, status, e.message ?: e.toString())
+                    RenderQueueManager.updateJobStatus(nextJob.id, status, error = e.message ?: e.toString())
 
                     if (!wasCancelled) {
                         showCompletionNotification(nextJob.recordTitle, false)
@@ -209,12 +210,28 @@ class BpmExportService : Service() {
             .build()
     }
 
-    private fun showCompletionNotification(title: String, success: Boolean) {
+    private fun showCompletionNotification(title: String, success: Boolean, videoUri: Uri? = null) {
+        val contentIntent = if (success && videoUri != null) {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(videoUri, "video/mp4")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        } else null
+
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(if (success) "Export Complete" else "Export Failed")
-            .setContentText(if (success) "Your BPM video for '$title' is ready." else "There was an error encoding '$title'.")
+            .setContentText(if (success) "Saved to Movies/BPMetrics. Tap to play video." else "There was an error encoding '$title'.")
             .setSmallIcon(if (success) R.drawable.stat_sys_download_done else R.drawable.stat_notify_error)
             .setAutoCancel(true)
+            .apply {
+                if (contentIntent != null) setContentIntent(contentIntent)
+            }
             .build()
         notificationManager.notify(NOTIFICATION_ID + 1 + System.currentTimeMillis().toInt(), notification)
     }

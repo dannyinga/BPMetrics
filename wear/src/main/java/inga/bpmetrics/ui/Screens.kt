@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -216,10 +217,17 @@ private fun LoadingScreen(label: String) {
 fun RecordingScreen(viewModel: RecordingViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+    val wearerPresets = listOf(null, "Danny", "Player 1", "Player 2", "Player 3", "Player 4", "Player 5")
+
     RecordingContent(
         state = uiState,
         onStart = viewModel::onStartClicked,
-        onStop = viewModel::onStopClicked
+        onStop = viewModel::onStopClicked,
+        onCycleWearerName = {
+            val currentIndex = wearerPresets.indexOf(uiState.wearerName)
+            val nextIndex = (currentIndex + 1) % wearerPresets.size
+            viewModel.updateWearerName(wearerPresets[nextIndex])
+        }
     )
 }
 
@@ -229,18 +237,41 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
  * @param state The current UI state containing heart rate, status, and duration info.
  * @param onStart Callback to trigger when the start button is clicked.
  * @param onStop Callback to trigger when the stop button is clicked.
+ * @param onCycleWearerName Callback to cycle through wearer names on tap.
  */
 @Composable
 fun RecordingContent(
     state: RecordingUIState,
     onStart: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onCycleWearerName: (() -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        // Wearer Name & Device Tag (Tap to change wearer)
+        val isRecording = state.serviceState == RecordingState.RECORDING
+        val wearerDisplay = state.wearerName?.ifBlank { null } ?: "Set Wearer"
+
+        androidx.wear.compose.material.Chip(
+            label = {
+                Text(
+                    text = "👤 $wearerDisplay",
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    textAlign = TextAlign.Center
+                )
+            },
+            onClick = { onCycleWearerName?.invoke() },
+            enabled = !isRecording,
+            colors = androidx.wear.compose.material.ChipDefaults.secondaryChipColors(),
+            modifier = Modifier
+                .height(28.dp)
+                .padding(bottom = 4.dp)
+        )
+
         // State-driven timer calculation
         val recordingStartTime = state.recordingStartTime
         val recordingDuration by produceState(0L, recordingStartTime) {
@@ -289,8 +320,6 @@ fun RecordingContent(
         Spacer(
             modifier = Modifier.height(12.dp)
         )
-
-        val isRecording = state.serviceState == RecordingState.RECORDING
 
         // Button is only enabled when we have a signal lock or are currently recording
         val buttonEnabled = state.serviceState == RecordingState.READY ||

@@ -78,6 +78,16 @@ class BpmRecordViewModel(
     }
 
     /**
+     * Updates the wearer name and device ID of the record.
+     */
+    fun updateDeviceAndWearer(deviceId: String, wearerName: String) {
+        viewModelScope.launch {
+            repository.updateRecordDeviceAndWearer(recordId, deviceId, wearerName)
+            loadRecord()
+        }
+    }
+
+    /**
      * Assigns a tag to the current record.
      *
      * @param tagId The ID of the tag to assign.

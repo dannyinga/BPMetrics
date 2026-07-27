@@ -2,6 +2,8 @@ package inga.bpmetrics.library
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -48,6 +50,12 @@ interface BpmRecordDao {
      */
     @Query("UPDATE bpm_records SET description = :newDescription WHERE recordId = :id")
     suspend fun updateDescriptionOnly(id: Long, newDescription: String)
+
+    /**
+     * Updates the device ID and wearer name of a specific record.
+     */
+    @Query("UPDATE bpm_records SET deviceId = :deviceId, wearerName = :wearerName WHERE recordId = :id")
+    suspend fun updateDeviceAndWearer(id: Long, deviceId: String, wearerName: String)
 
     /**
      * Updates a record with its calculated analysis results.
@@ -145,7 +153,7 @@ interface BpmRecordDao {
         TagEntity::class,
         RecordTagCrossRef::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -155,17 +163,39 @@ abstract class LibraryDatabase : RoomDatabase() {
     companion object {
         @Volatile private var INSTANCE: LibraryDatabase? = null
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE bpm_records ADD COLUMN deviceId TEXT NOT NULL DEFAULT 'Watch'")
+                db.execSQL("ALTER TABLE bpm_records ADD COLUMN wearerName TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        private fun performPreMigrationBackup(context: Context) {
+            try {
+                val dbFile = context.getDatabasePath("bpmetrics_db") ?: return
+                if (dbFile.exists()) {
+                    val cacheDir = context.cacheDir ?: return
+                    val backupFile = java.io.File(cacheDir, "bpmetrics_db_v4_backup.db")
+                    dbFile.copyTo(backupFile, overwrite = true)
+                    android.util.Log.d("LibraryDatabase", "Pre-migration database backup created at ${backupFile.absolutePath}")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("LibraryDatabase", "Failed to create pre-migration backup", e)
+            }
+        }
+
         /**
          * Returns the singleton instance of [LibraryDatabase].
          */
         fun getInstance(context: Context): LibraryDatabase {
             return INSTANCE ?: synchronized(this) {
+                performPreMigrationBackup(context)
                 Room.databaseBuilder(
                     context.applicationContext,
                     LibraryDatabase::class.java,
                     "bpmetrics_db"
                 )
-                    .fallbackToDestructiveMigration(true)
+                    .addMigrations(MIGRATION_4_5)
                     .build()
                     .also { INSTANCE = it }
             }

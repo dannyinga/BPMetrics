@@ -120,12 +120,28 @@ class BpmWatchRecordTest {
         val expectedString =    "Date: ${Date(3000L)}\n" +
                                 startTime +
                                 endTime +
-                                "Duration: 0m 1s 0ms\n\n" +
+                                "Duration: 0m 1s 0ms\n" +
+                                "Device ID: Watch\n\n" +
                                 "Raw Data\n" +
                                 "Timestamp: 0m 0s 0ms, BPM: 80.0\n" +
                                 "Timestamp: 0m 1s 0ms, BPM: 100.0\n"
 
-
         assertEquals(expectedString, record1.toString())
+    }
+
+    @Test
+    fun `BpmWatchRecord toString with wearerName works`() {
+        val record = BpmWatchRecord(
+            date = Date(3000L),
+            dataPoints = listOf(BpmDataPoint(0L, 80.0)),
+            startTime = 0L,
+            endTime = 1000L,
+            deviceId = "GalaxyWatch5_01",
+            wearerName = "John"
+        )
+
+        val str = record.toString()
+        assertTrue(str.contains("Device ID: GalaxyWatch5_01"))
+        assertTrue(str.contains("Wearer Name: John"))
     }
 }

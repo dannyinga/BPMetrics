@@ -64,6 +64,7 @@ dependencies {
     implementation(libs.androidx.health.services)
     implementation(libs.guava)
     implementation(libs.concurrent.futures)
+    implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.gson)
     implementation(libs.androidx.wear.ongoing)
 

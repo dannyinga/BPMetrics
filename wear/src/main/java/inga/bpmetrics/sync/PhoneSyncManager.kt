@@ -15,6 +15,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+import kotlinx.coroutines.tasks.await
+
 /**
  * Manager responsible for synchronizing recorded BPM data from the watch to the paired phone.
  *
@@ -47,16 +49,13 @@ class PhoneSyncManager(val context: Context) {
     /**
      * Deserializes and sends a pending record to the phone.
      */
-    private fun processPendingRecord(entity: PendingRecordEntity) {
+    private suspend fun processPendingRecord(entity: PendingRecordEntity) {
         try {
             val record = gson.fromJson(entity.recordJson, BpmWatchRecord::class.java)
-            sendRecordToPhone(record) { success ->
-                if (success) {
-                    scope.launch {
-                        repository.removePendingRecord(entity)
-                        Log.d(tag, "Successfully synced and removed record ID: ${entity.id}")
-                    }
-                }
+            val success = sendRecordToPhone(record)
+            if (success) {
+                repository.removePendingRecord(entity)
+                Log.d(tag, "Successfully synced and removed record ID: ${entity.id}")
             }
         } catch (e: Exception) {
             Log.e(tag, "Failed to process pending record ${entity.id}: ${e.message}")
@@ -67,29 +66,28 @@ class PhoneSyncManager(val context: Context) {
      * Encodes a [BpmWatchRecord] into JSON and sends it to the phone via the Wearable network.
      *
      * @param record The record to send.
-     * @param onResult Callback indicating if the DataClient accepted the request.
+     * @return True if the DataClient accepted the request, false otherwise.
      */
-    private fun sendRecordToPhone(record: BpmWatchRecord, onResult: (Boolean) -> Unit) {
-        val recordJson = gson.toJson(record)
-        val bytes = recordJson.toByteArray()
-        val asset = Asset.createFromBytes(bytes)
+    private suspend fun sendRecordToPhone(record: BpmWatchRecord): Boolean {
+        return try {
+            val recordJson = gson.toJson(record)
+            val bytes = recordJson.toByteArray()
+            val asset = Asset.createFromBytes(bytes)
 
-        Log.d(tag, "Attempting to sync record - Points: ${record.dataPoints.size}, Size: ${bytes.size/1024} KB")
+            Log.d(tag, "Attempting to sync record (Device: ${record.deviceId}, Wearer: ${record.wearerName}) - Points: ${record.dataPoints.size}, Size: ${bytes.size/1024} KB")
 
-        val recordId = UUID.randomUUID().toString()
-        val putDataMapRequest = PutDataMapRequest.create("/bpm_record/$recordId")
-            .apply { dataMap.putAsset("record_asset", asset) }
+            val recordId = UUID.randomUUID().toString()
+            val putDataMapRequest = PutDataMapRequest.create("/bpm_record/$recordId")
+                .apply { dataMap.putAsset("record_asset", asset) }
 
-        val request = putDataMapRequest.asPutDataRequest().setUrgent()
+            val request = putDataMapRequest.asPutDataRequest().setUrgent()
 
-        Wearable.getDataClient(context).putDataItem(request)
-            .addOnSuccessListener {
-                Log.d(tag, "Record $recordId successfully queued in DataClient.")
-                onResult(true)
-            }
-            .addOnFailureListener {
-                Log.e(tag, "DataClient sync failed: ${it.message}")
-                onResult(false)
-            }
+            Wearable.getDataClient(context).putDataItem(request).await()
+            Log.d(tag, "Record $recordId successfully queued in DataClient.")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "DataClient sync failed: ${e.message}")
+            false
+        }
     }
 }

@@ -58,7 +58,8 @@ object VideoExporter {
         val overlayVideoUri: Uri? = null,
         val graphRect: RectF = RectF(0f, 0f, 1f, 1f),
         val lockAspectRatio: Boolean = true,
-        val syncOffsetMs: Long = 0L
+        val syncOffsetMs: Long = 0L,
+        val records: List<BpmRecord> = emptyList()
     )
 
     /**
@@ -164,14 +165,26 @@ object VideoExporter {
             override fun getBitmap(presentationTimeUs: Long): Bitmap {
                 reusableCanvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
                 val currentRecordAbsoluteTimeMs = startTimeMs + ((presentationTimeUs / 1000.0))
-                ImageExporter.renderOnCanvas(
-                    canvas = reusableCanvas,
-                    record = record,
-                    config = config.imageConfig,
-                    currentTimeMs = currentRecordAbsoluteTimeMs,
-                    windowSizeMs = config.windowSizeMs,
-                    graphRect = config.graphRect
-                )
+                val exportRecords = if (config.records.isNotEmpty()) config.records else listOf(record)
+                if (exportRecords.size > 1) {
+                    ImageExporter.renderMultiRecordsOnCanvas(
+                        canvas = reusableCanvas,
+                        records = exportRecords,
+                        config = config.imageConfig,
+                        currentTimeMs = currentRecordAbsoluteTimeMs,
+                        windowSizeMs = config.windowSizeMs,
+                        graphRect = config.graphRect
+                    )
+                } else {
+                    ImageExporter.renderOnCanvas(
+                        canvas = reusableCanvas,
+                        record = record,
+                        config = config.imageConfig,
+                        currentTimeMs = currentRecordAbsoluteTimeMs,
+                        windowSizeMs = config.windowSizeMs,
+                        graphRect = config.graphRect
+                    )
+                }
                 return reusableBitmap
             }
         }

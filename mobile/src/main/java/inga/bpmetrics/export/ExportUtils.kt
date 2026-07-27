@@ -34,6 +34,46 @@ object ExportUtils {
     }
 
     /**
+     * Saves a video file into the public MediaStore (Movies/BPMetrics) so it appears in the device Gallery.
+     */
+    fun saveVideoToGallery(context: Context, videoFile: File, title: String): android.net.Uri? {
+        val sanitizedTitle = title.replace("[^a-zA-Z0-9_-]".toRegex(), "_")
+        val displayName = "${sanitizedTitle}_${System.currentTimeMillis()}.mp4"
+
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, displayName)
+            put(android.provider.MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "Movies/BPMetrics")
+                put(android.provider.MediaStore.Video.Media.IS_PENDING, 1)
+            }
+        }
+
+        val resolver = context.contentResolver
+        val uri = resolver.insert(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
+
+        if (uri != null) {
+            try {
+                resolver.openOutputStream(uri)?.use { output ->
+                    videoFile.inputStream().use { input ->
+                        input.copyTo(output)
+                    }
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    contentValues.clear()
+                    contentValues.put(android.provider.MediaStore.Video.Media.IS_PENDING, 0)
+                    resolver.update(uri, contentValues, null, null)
+                }
+                android.util.Log.d("ExportUtils", "Successfully saved video to MediaStore Movies/BPMetrics: $uri")
+                return uri
+            } catch (e: Exception) {
+                android.util.Log.e("ExportUtils", "Failed to copy video to MediaStore: ${e.message}", e)
+            }
+        }
+        return null
+    }
+
+    /**
      * Generic method to share multiple [File]s using FileProvider and an Intent.
      */
     fun shareMultipleFiles(context: Context, files: List<File>, mimeType: String) {

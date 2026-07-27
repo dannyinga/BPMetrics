@@ -1,5 +1,6 @@
 package inga.bpmetrics.library
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import java.time.Instant
@@ -24,6 +25,8 @@ import java.util.Locale
  * @property maxId The ID of the [BpmDataPointEntity] that contains the maximum heart rate.
  * @property avg The calculated average BPM for the session.
  * @property minId The ID of the [BpmDataPointEntity] that contains the minimum heart rate.
+ * @property deviceId The identifier of the watch device that generated the record.
+ * @property wearerName Optional name of the person who wore the watch during the session.
  */
 @Entity(tableName = "bpm_records")
 data class BpmRecordEntity (
@@ -36,7 +39,9 @@ data class BpmRecordEntity (
     val durationMs: Long,
     val maxId: Long? = 0,
     val avg: Double? = 0.0,
-    val minId: Long? = 0
+    val minId: Long? = 0,
+    @ColumnInfo(defaultValue = "Watch") val deviceId: String = "Watch",
+    @ColumnInfo(defaultValue = "") val wearerName: String = ""
     ) {
 
     /**

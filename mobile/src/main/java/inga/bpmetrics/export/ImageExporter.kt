@@ -52,7 +52,9 @@ object ImageExporter {
         val showCurrentStats: Boolean = true,
         val headerXPercent: Float = 0.85f,
         val futureOpacity: Float = 0.65f,
-        val timeZoneId: String = java.time.ZoneId.systemDefault().id
+        val timeZoneId: String = java.time.ZoneId.systemDefault().id,
+        val customRecordColors: Map<Long, Int> = emptyMap(),
+        val alignByElapsedTime: Boolean = true
     )
 
     /**
@@ -711,5 +713,108 @@ object ImageExporter {
         if (eH < sH) eH += 360f
         return android.graphics.Color.HSVToColor(floatArrayOf((sH + (eH - sH) * fraction) % 360f,
             hsvStart[1] + (hsvEnd[1] - hsvStart[1]) * fraction, hsvStart[2] + (hsvEnd[2] - hsvStart[2]) * fraction))
+    }
+
+    val MULTI_WATCH_PALETTES = listOf(
+        intArrayOf(0xFF00E5FF.toInt(), 0xFF00B0FF.toInt()), // Cyan/Blue
+        intArrayOf(0xFFFF5252.toInt(), 0xFFFF1744.toInt()), // Coral/Red
+        intArrayOf(0xFF00E676.toInt(), 0xFF00C853.toInt()), // Emerald/Green
+        intArrayOf(0xFFE040FB.toInt(), 0xFFD500F9.toInt()), // Purple/Violet
+        intArrayOf(0xFFFFD700.toInt(), 0xFFFFAB00.toInt())  // Gold/Amber
+    )
+
+    /**
+     * Renders multiple BPM records on a single canvas with distinct multi-color curves and a legend.
+     */
+    fun renderMultiRecordsOnCanvas(
+        canvas: Canvas,
+        records: List<BpmRecord>,
+        config: ImageExportConfig,
+        currentTimeMs: Double? = null,
+        windowSizeMs: Long? = null,
+        graphRect: RectF = RectF(0f, 0f, 1f, 1f)
+    ) {
+        if (records.isEmpty()) return
+        if (records.size == 1) {
+            renderOnCanvas(canvas, records.first(), config, currentTimeMs, windowSizeMs, graphRect)
+            return
+        }
+
+        val processedRecords = if (config.alignByElapsedTime) {
+            records.map { rec ->
+                val firstTs = rec.dataPoints.firstOrNull()?.timestamp ?: rec.metadata.startTime
+                rec.copy(
+                    dataPoints = rec.dataPoints.map { pt ->
+                        pt.copy(timestamp = pt.timestamp - firstTs)
+                    }
+                )
+            }
+        } else {
+            records
+        }
+
+        val primaryRecord = processedRecords.first()
+        val dims = RenderingDimensions(canvas, graphRect, config)
+        val paint = Paint().apply { isAntiAlias = true }
+
+        val allPoints = processedRecords.flatMap { it.dataPoints }
+        if (allPoints.isEmpty()) return
+        val minBpm = (allPoints.minOf { it.bpm } - 5.0).coerceAtLeast(30.0)
+        val maxBpm = (allPoints.maxOf { it.bpm } + 5.0).coerceAtMost(220.0)
+        val ranges = BpmRanges(minBpm, maxBpm, minBpm, maxBpm, "Multi-Watch Session")
+
+        val maxDurationMs = processedRecords.maxOfOrNull { rec ->
+            rec.dataPoints.lastOrNull()?.timestamp ?: rec.metadata.durationMs
+        } ?: primaryRecord.metadata.durationMs
+
+        val multiConfig = if (config.alignByElapsedTime) config.copy(startTimeMs = 0L, endTimeMs = maxDurationMs) else config
+        val viewport = calculateViewport(currentTimeMs, windowSizeMs, multiConfig, primaryRecord)
+
+        drawContainer(canvas, dims, config, paint)
+        drawGridAndAxes(canvas, dims, ranges, multiConfig, paint)
+
+        processedRecords.forEachIndexed { index, rec ->
+            val origRecordId = records[index].metadata.recordId
+            val assignedColor = config.customRecordColors[origRecordId]
+                ?: MULTI_WATCH_PALETTES[index % MULTI_WATCH_PALETTES.size][0]
+            val customConfig = multiConfig.copy(lowBpmColor = assignedColor, highBpmColor = assignedColor)
+            drawDataCurve(canvas, dims, ranges, viewport, rec, customConfig, paint)
+        }
+
+        drawMultiLegend(canvas, dims, records, config, paint)
+        canvas.restore()
+    }
+
+    private fun drawMultiLegend(
+        canvas: Canvas,
+        dims: RenderingDimensions,
+        records: List<BpmRecord>,
+        config: ImageExportConfig,
+        paint: Paint
+    ) {
+        val legendLeft = dims.graphLeft + 16f * dims.scaleFactor
+        var legendTop = dims.graphTop + 16f * dims.scaleFactor
+        val itemHeight = 32f * dims.scaleFactor
+
+        records.forEachIndexed { index, record ->
+            val wearerLabel = record.metadata.wearerName.takeIf { it.isNotBlank() }
+                ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
+                ?: record.metadata.title
+            val color = config.customRecordColors[record.metadata.recordId]
+                ?: MULTI_WATCH_PALETTES[index % MULTI_WATCH_PALETTES.size][0]
+
+            paint.reset()
+            paint.isAntiAlias = true
+            paint.color = color
+            paint.style = Paint.Style.FILL
+            canvas.drawCircle(legendLeft + 10f * dims.scaleFactor, legendTop + 12f * dims.scaleFactor, 8f * dims.scaleFactor, paint)
+
+            paint.color = android.graphics.Color.WHITE
+            paint.textSize = 20f * dims.scaleFactor
+            paint.isFakeBoldText = true
+            canvas.drawText(wearerLabel, legendLeft + 28f * dims.scaleFactor, legendTop + 18f * dims.scaleFactor, paint)
+
+            legendTop += itemHeight
+        }
     }
 }

@@ -81,6 +81,10 @@ import inga.bpmetrics.library.BpmRecord
  * @param navController The navigation controller used to navigate between screens.
  * @param viewModel The [inga.bpmetrics.ui.library.LibraryViewModel] providing the state and logic for this screen.
  */
+import inga.bpmetrics.export.JsonExporter
+import inga.bpmetrics.ui.export.VideoExportDialog
+import androidx.compose.material.icons.filled.Movie
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
@@ -99,29 +103,42 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
     var showBulkDeleteDialog by remember { mutableStateOf(false) }
     var showBulkTagDialog by remember { mutableStateOf(false) }
 
+    var showMultiVideoDialog by remember { mutableStateOf(false) }
+    var selectedRecordsForMultiVideo by remember { mutableStateOf<List<BpmRecord>>(emptyList()) }
+
     if (isSelectionMode) {
         BackHandler {
             viewModel.clearSelection()
         }
     }
 
-    // Launcher for importing CSV file(s)
+    // Launcher for importing CSV and JSON (.bpmjson) file(s)
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             var successCount = 0
             uris.forEach { uri ->
-                val watchRecord = CsvExporter.importFromCsv(context, uri)
-                if (watchRecord != null) {
-                    viewModel.importRecord(watchRecord)
-                    successCount++
+                val mimeType = context.contentResolver.getType(uri)
+                val isJson = mimeType?.contains("json") == true || uri.path?.lowercase()?.let { it.endsWith(".json") || it.endsWith(".bpmjson") } == true
+                if (isJson) {
+                    val jsonRecords = JsonExporter.importFromJson(context, uri)
+                    jsonRecords.forEach { watchRecord ->
+                        viewModel.importRecord(watchRecord)
+                        successCount++
+                    }
+                } else {
+                    val watchRecord = CsvExporter.importFromCsv(context, uri)
+                    if (watchRecord != null) {
+                        viewModel.importRecord(watchRecord)
+                        successCount++
+                    }
                 }
             }
             if (successCount > 0) {
                 Toast.makeText(context, "Successfully imported $successCount record(s)!", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "Failed to import CSV record(s).", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Failed to import record(s).", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -158,8 +175,21 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                         IconButton(onClick = { viewModel.selectAll(uiState.records) }) {
                             Icon(Icons.Default.SelectAll, contentDescription = "Select All")
                         }
+                        IconButton(onClick = {
+                            selectedRecordsForMultiVideo = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
+                            showMultiVideoDialog = true
+                        }) {
+                            Icon(Icons.Default.Movie, contentDescription = "Export Multi-Watch Video")
+                        }
                         IconButton(onClick = { showBulkTagDialog = true }) {
                             Icon(Icons.Default.Sell, contentDescription = "Add Tags in Bulk")
+                        }
+                        IconButton(onClick = {
+                            val selectedRecs = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
+                            JsonExporter.shareJson(context, selectedRecs)
+                            viewModel.clearSelection()
+                        }) {
+                            Icon(Icons.Default.Share, contentDescription = "Share JSON Package (.bpmjson)")
                         }
                         IconButton(onClick = {
                             recordsToExport = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
@@ -177,9 +207,9 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                 TopAppBar(
                     title = { Text("Library", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) },
                     actions = {
-                        // Import CSV button
-                        IconButton(onClick = { importLauncher.launch(arrayOf("text/comma-separated-values", "text/csv")) }) {
-                            Icon(Icons.Default.FileDownload, contentDescription = "Import CSV(s)")
+                        // Import CSV / JSON button
+                        IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                            Icon(Icons.Default.FileDownload, contentDescription = "Import Record(s)")
                         }
                         // Show Clear Filters button only when a filter is active
                         if (filterState != LibraryViewModel.FilterState()) {
@@ -361,6 +391,27 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                 TextButton(onClick = { showBulkDeleteDialog = false }) {
                     Text("Cancel")
                 }
+            }
+        )
+    }
+
+    if (showMultiVideoDialog && selectedRecordsForMultiVideo.isNotEmpty()) {
+        VideoExportDialog(
+            record = selectedRecordsForMultiVideo.first(),
+            records = selectedRecordsForMultiVideo,
+            onDismiss = {
+                showMultiVideoDialog = false
+                viewModel.clearSelection()
+            },
+            onExport = { config, _ ->
+                inga.bpmetrics.export.BpmExportService.startExport(
+                    context,
+                    selectedRecordsForMultiVideo.first().metadata.recordId,
+                    "Multi-Watch Export (${selectedRecordsForMultiVideo.size} wearers)",
+                    config,
+                    null
+                )
+                Toast.makeText(context, "Multi-watch video export started in background!", Toast.LENGTH_SHORT).show()
             }
         )
     }
