@@ -161,31 +161,91 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun tagDao(): TagDao
 
     companion object {
+        private const val TAG = "LibraryDatabase"
+        private const val DB_NAME = "bpmetrics_db"
+
         @Volatile private var INSTANCE: LibraryDatabase? = null
 
+        /**
+         * Migration from schema version 4 to 5.
+         * Adds deviceId and wearerName columns to bpm_records.
+         * Idempotent: checks if columns already exist before adding them.
+         */
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE bpm_records ADD COLUMN deviceId TEXT NOT NULL DEFAULT 'Watch'")
-                db.execSQL("ALTER TABLE bpm_records ADD COLUMN wearerName TEXT NOT NULL DEFAULT ''")
+                val existingColumns = mutableSetOf<String>()
+                db.query("PRAGMA table_info(bpm_records)").use { cursor ->
+                    val nameIdx = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) {
+                        existingColumns.add(cursor.getString(nameIdx))
+                    }
+                }
+
+                if ("deviceId" !in existingColumns) {
+                    db.execSQL("ALTER TABLE bpm_records ADD COLUMN deviceId TEXT NOT NULL DEFAULT 'Watch'")
+                    android.util.Log.i(TAG, "MIGRATION_4_5: Added deviceId column")
+                } else {
+                    android.util.Log.i(TAG, "MIGRATION_4_5: deviceId column already exists, skipping")
+                }
+
+                if ("wearerName" !in existingColumns) {
+                    db.execSQL("ALTER TABLE bpm_records ADD COLUMN wearerName TEXT NOT NULL DEFAULT ''")
+                    android.util.Log.i(TAG, "MIGRATION_4_5: Added wearerName column")
+                } else {
+                    android.util.Log.i(TAG, "MIGRATION_4_5: wearerName column already exists, skipping")
+                }
             }
         }
 
+        /**
+         * Creates a timestamped backup of the database in a persistent directory.
+         * Backups go to the app's files directory (NOT cache, which can be cleared).
+         */
         private fun performPreMigrationBackup(context: Context) {
             try {
-                val dbFile = context.getDatabasePath("bpmetrics_db") ?: return
-                if (dbFile.exists()) {
-                    val cacheDir = context.cacheDir ?: return
-                    val backupFile = java.io.File(cacheDir, "bpmetrics_db_v4_backup.db")
-                    dbFile.copyTo(backupFile, overwrite = true)
-                    android.util.Log.d("LibraryDatabase", "Pre-migration database backup created at ${backupFile.absolutePath}")
+                val dbFile = context.getDatabasePath(DB_NAME) ?: return
+                if (!dbFile.exists()) return
+
+                val backupDir = java.io.File(context.filesDir, "db_backups")
+                backupDir.mkdirs()
+
+                val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                    .format(java.util.Date())
+                val backupFile = java.io.File(backupDir, "${DB_NAME}_backup_$timestamp.db")
+                dbFile.copyTo(backupFile, overwrite = true)
+
+                // Also copy WAL and SHM files if they exist
+                val walFile = java.io.File(dbFile.path + "-wal")
+                if (walFile.exists()) {
+                    walFile.copyTo(java.io.File(backupDir, "${DB_NAME}_backup_${timestamp}.db-wal"), overwrite = true)
+                }
+                val shmFile = java.io.File(dbFile.path + "-shm")
+                if (shmFile.exists()) {
+                    shmFile.copyTo(java.io.File(backupDir, "${DB_NAME}_backup_${timestamp}.db-shm"), overwrite = true)
+                }
+
+                android.util.Log.i(TAG, "Pre-migration backup saved: ${backupFile.absolutePath}")
+
+                // Keep only the 5 most recent backups to avoid filling storage
+                val allBackups = backupDir.listFiles { f -> f.name.startsWith(DB_NAME) && f.name.endsWith(".db") }
+                    ?.sortedByDescending { it.lastModified() } ?: emptyList()
+                allBackups.drop(5).forEach { old ->
+                    old.delete()
+                    java.io.File(old.path + "-wal").delete()
+                    java.io.File(old.path + "-shm").delete()
+                    android.util.Log.d(TAG, "Cleaned old backup: ${old.name}")
                 }
             } catch (e: Exception) {
-                android.util.Log.e("LibraryDatabase", "Failed to create pre-migration backup", e)
+                android.util.Log.e(TAG, "Failed to create pre-migration backup", e)
             }
         }
 
         /**
          * Returns the singleton instance of [LibraryDatabase].
+         *
+         * CRITICAL: This builder NEVER uses fallbackToDestructiveMigration.
+         * If a migration fails, the app will crash rather than silently wipe data.
+         * All migrations are idempotent and wrapped with safety checks.
          */
         fun getInstance(context: Context): LibraryDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -193,9 +253,11 @@ abstract class LibraryDatabase : RoomDatabase() {
                 Room.databaseBuilder(
                     context.applicationContext,
                     LibraryDatabase::class.java,
-                    "bpmetrics_db"
+                    DB_NAME
                 )
                     .addMigrations(MIGRATION_4_5)
+                    // NEVER add fallbackToDestructiveMigration() here.
+                    // Data loss is unacceptable. If migrations fail, crash loudly.
                     .build()
                     .also { INSTANCE = it }
             }

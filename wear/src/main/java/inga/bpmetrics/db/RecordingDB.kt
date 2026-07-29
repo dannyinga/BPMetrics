@@ -2,6 +2,8 @@ package inga.bpmetrics.db
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -47,6 +49,22 @@ abstract class RecordingDB : RoomDatabase() {
     companion object {
         @Volatile private var INSTANCE: RecordingDB? = null
 
+        /**
+         * Migration from version 1 to 2: adds pending_records table.
+         * Idempotent: checks if table already exists.
+         */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS pending_records (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        jsonPayload TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL
+                    )
+                """.trimIndent())
+            }
+        }
+
         fun getInstance(context: Context): RecordingDB {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(
@@ -54,7 +72,9 @@ abstract class RecordingDB : RoomDatabase() {
                     RecordingDB::class.java,
                     "bpm_watch_db"
                 )
-                .fallbackToDestructiveMigration()
+                .addMigrations(MIGRATION_1_2)
+                // NEVER add fallbackToDestructiveMigration() here.
+                // Data loss is unacceptable.
                 .build()
                 .also { INSTANCE = it }
             }
