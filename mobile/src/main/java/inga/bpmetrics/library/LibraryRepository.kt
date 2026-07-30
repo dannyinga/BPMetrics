@@ -186,7 +186,11 @@ class LibraryRepository(
     }
 
     /**
-     * Attaches tags to a record, resolving category:tag pairs and reusing existing categories case-insensitively.
+     * Attaches tags to a record, resolving category:tag pairs and reusing existing categories/tags case-insensitively.
+     *
+     * Supports two formats:
+     * - "CategoryName:TagName" (new format from v1.1 CSV/JSON exports)
+     * - "TagName" (old format from pre-v1.1 CSV exports — searches all existing tags first)
      */
     suspend fun attachTagsToRecord(recordId: Long, tagNames: List<String>) {
         if (tagNames.isEmpty()) return
@@ -194,20 +198,48 @@ class LibraryRepository(
 
         tagNames.forEach { rawTag ->
             val parts = rawTag.split(":", limit = 2)
-            val categoryName = if (parts.size == 2 && parts[0].isNotBlank()) parts[0].trim() else "Imported"
-            val tagName = if (parts.size == 2) parts[1].trim() else rawTag.trim()
+            val hasCategory = parts.size == 2 && parts[0].isNotBlank()
+            val categoryName = if (hasCategory) parts[0].trim() else null
+            val tagName = if (hasCategory) parts[1].trim() else rawTag.trim()
 
             if (tagName.isBlank()) return@forEach
 
-            val existingCategory = allCategories.find { it.name.equals(categoryName, ignoreCase = true) }
-            val categoryId = existingCategory?.categoryId 
-                ?: tagDao.insertCategory(CategoryEntity(name = categoryName))
+            if (categoryName != null) {
+                // Explicit Category:Tag format — find or create the category, then find or create the tag
+                val existingCategory = allCategories.find { it.name.equals(categoryName, ignoreCase = true) }
+                val categoryId = existingCategory?.categoryId
+                    ?: tagDao.insertCategory(CategoryEntity(name = categoryName))
 
-            val existingTags = tagDao.getTagsByCategoryFlow(categoryId).firstOrNull() ?: emptyList()
-            val tagId = existingTags.find { it.name.equals(tagName, ignoreCase = true) }?.tagId
-                ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = categoryId))
+                val existingTags = tagDao.getTagsByCategoryFlow(categoryId).firstOrNull() ?: emptyList()
+                val tagId = existingTags.find { it.name.equals(tagName, ignoreCase = true) }?.tagId
+                    ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = categoryId))
 
-            tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
+                tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
+            } else {
+                // Bare tag name (old CSV format) — search ALL existing tags across ALL categories
+                var matchedTagId: Long? = null
+                for (cat in allCategories) {
+                    val tagsInCat = tagDao.getTagsByCategoryFlow(cat.categoryId).firstOrNull() ?: emptyList()
+                    val match = tagsInCat.find { it.name.equals(tagName, ignoreCase = true) }
+                    if (match != null) {
+                        matchedTagId = match.tagId
+                        break
+                    }
+                }
+
+                if (matchedTagId != null) {
+                    // Found existing tag — reuse it in its original category
+                    tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, matchedTagId))
+                } else {
+                    // No existing tag found — create under "Uncategorized"
+                    val uncatCategory = allCategories.find { it.name.equals("Uncategorized", ignoreCase = true) }
+                    val uncatId = uncatCategory?.categoryId
+                        ?: tagDao.insertCategory(CategoryEntity(name = "Uncategorized"))
+
+                    val newTagId = tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = uncatId))
+                    tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, newTagId))
+                }
+            }
         }
     }
 

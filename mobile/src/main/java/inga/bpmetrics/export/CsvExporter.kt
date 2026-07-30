@@ -24,7 +24,7 @@ object CsvExporter {
      * @param record The BPM record to format.
      * @return A string containing the record metadata and all data points in CSV format.
      */
-    fun getCsvString(record: BpmRecord): String {
+    fun getCsvString(record: BpmRecord, categoryNames: Map<Long, String> = emptyMap()): String {
         val writer = StringBuilder()
         writer.appendLine("BPMetrics Data Export")
         writer.appendLine("Title,${record.metadata.title}")
@@ -38,7 +38,10 @@ object CsvExporter {
         writer.appendLine("Average BPM,${record.metadata.avg ?: 0.0}")
         writer.appendLine("Min BPM,${record.minDataPoint?.bpm ?: 0.0}")
         writer.appendLine("Max BPM,${record.maxDataPoint?.bpm ?: 0.0}")
-        writer.appendLine("Tags,${record.tags.joinToString(" | ") { it.name }}")
+        writer.appendLine("Tags,${record.tags.joinToString(" | ") { tag ->
+            val catName = categoryNames[tag.parentCategoryId] ?: "Imported"
+            "$catName:${tag.name}"
+        }}")
         writer.appendLine()
 
         writer.appendLine("Timestamp (ms),BPM")
