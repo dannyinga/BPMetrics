@@ -29,11 +29,6 @@ class DataClientProcessor(
     /** Tag used for identifying log entries from this processor. */
     private val tag = "DataClientProcessor"
 
-    private companion object {
-        /** The identifier a watch sends when it has no device name configured. */
-        const val GENERIC_DEVICE_ID = "Watch"
-    }
-
     /**
      * Processes a single [DataItem] received from the watch.
      * 
@@ -60,11 +55,18 @@ class DataClientProcessor(
             try {
                 val record = convertDataItemToRecord(item)
                 if (record != null) {
-                    val attributed = withSourceNodeFallback(record, sourceNodeId)
-                    Log.d(tag, "Record $recordId from node $sourceNodeId, device '${attributed.deviceId}'")
+                    Log.d(
+                        tag,
+                        "Record $recordId from node $sourceNodeId, watch '${record.watchId}', device '${record.deviceId}'"
+                    )
 
-                    // Save to Room database
-                    repository.saveWatchRecordToLibrary(attributed)
+                    // Save to Room database. The repository resolves which watch this came from
+                    // and stamps the name currently registered for it.
+                    repository.saveWatchRecordToLibrary(
+                        record = record,
+                        sourceNodeId = sourceNodeId,
+                        preferRegistryName = true
+                    )
 
                     // Clear the item from the Wearable "cloud" buffer
                     dataClient.deleteDataItems(item.uri).await()
@@ -78,24 +80,6 @@ class DataClientProcessor(
                 synchronized(processedIds) { processedIds.remove(recordId) }
             }
         }
-    }
-
-    /**
-     * Gives a record a usable device identifier when the watch did not supply a meaningful one.
-     *
-     * The watch falls back to `Build.MODEL`, so two watches of the same model send identical
-     * identifiers. Where the record carries nothing distinguishing, the sending node's id is
-     * used instead so records remain attributable to a specific watch.
-     *
-     * A watch that has a device name or wearer name configured keeps it untouched.
-     */
-    private fun withSourceNodeFallback(record: BpmWatchRecord, sourceNodeId: String?): BpmWatchRecord {
-        if (sourceNodeId.isNullOrBlank()) return record
-
-        val hasIdentity = record.deviceId.isNotBlank() && record.deviceId != GENERIC_DEVICE_ID
-        if (hasIdentity) return record
-
-        return record.copy(deviceId = "$GENERIC_DEVICE_ID ${sourceNodeId.take(4)}")
     }
 
     /**

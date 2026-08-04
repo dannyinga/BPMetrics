@@ -404,7 +404,10 @@ class RecordingRepository private constructor(context: Context) {
                         startTime = wallClock,
                         endTime = endTime,
                         deviceId = getDeviceId(),
-                        wearerName = getWearerName()
+                        // The watch no longer names its wearer. The phone owns that, and stamps
+                        // the name it holds for this watch at the moment the record arrives.
+                        wearerName = null,
+                        watchId = getWatchId()
                     )
                     // Save to persistent "outbox" for reliable synchronization to the phone
                     dao.insertPendingRecord(PendingRecordEntity(recordJson = gson.toJson(record)))
@@ -436,18 +439,20 @@ class RecordingRepository private constructor(context: Context) {
     }
 
     /**
-     * Gets the configured wearer name for records created on this watch.
+     * This watch's stable identifier, generated once and kept for the life of the install.
+     *
+     * The device id defaults to the hardware model, so two watches of the same model are
+     * indistinguishable to the phone. This is not: it survives re-pairing and app updates, and is
+     * what lets the phone attribute a recording to the right watch — and therefore the right
+     * person — without anyone configuring anything.
      */
-    fun getWearerName(): String? = prefs.getString("wearer_name", null)?.takeIf { it.isNotBlank() }
+    fun getWatchId(): String {
+        prefs.getString(KEY_WATCH_ID, null)?.takeIf { it.isNotBlank() }?.let { return it }
 
-    /**
-     * Updates the wearer name preference.
-     */
-    fun setWearerName(name: String?) {
-        prefs.edit {
-            if (name.isNullOrBlank()) remove("wearer_name")
-            else putString("wearer_name", name.trim())
-        }
+        val generated = java.util.UUID.randomUUID().toString()
+        prefs.edit { putString(KEY_WATCH_ID, generated) }
+        Log.i(tag, "Generated stable watch id $generated")
+        return generated
     }
 
     /**
@@ -522,6 +527,9 @@ class RecordingRepository private constructor(context: Context) {
     companion object {
         /** Persisted boot epoch, used to notice that a saved anchor predates a reboot. */
         private const val KEY_BOOT_EPOCH = "boot_epoch_ms"
+
+        /** Persisted stable identifier for this watch. */
+        private const val KEY_WATCH_ID = "watch_id"
 
         /**
          * How far the implied boot epoch may drift before a reboot is assumed.

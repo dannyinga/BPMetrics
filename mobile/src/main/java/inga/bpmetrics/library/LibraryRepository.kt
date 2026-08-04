@@ -52,6 +52,7 @@ class LibraryRepository(
     private val database = LibraryDatabase.getInstance(context)
     private val recordDao = database.bpmRecordDao()
     private val tagDao = database.tagDao()
+    private val watchDao = database.watchDao()
 
     init {
         startRecordFlowFromDB()
@@ -152,9 +153,32 @@ class LibraryRepository(
      * @param record The BpmWatchRecord to save.
      * @return The ID of the newly created record.
      */
-    suspend fun saveWatchRecordToLibrary(record: BpmWatchRecord, customTitle: String? = null): Long {
+    suspend fun saveWatchRecordToLibrary(
+        record: BpmWatchRecord,
+        customTitle: String? = null,
+        sourceNodeId: String? = null,
+        preferRegistryName: Boolean = false
+    ): Long {
         Log.d(tag, "Starting saveWatchRecordToLibrary")
         _savingRecord.value = true
+
+        val watch = resolveWatch(record, sourceNodeId)
+
+        // The wearer is stamped here and then frozen: renaming a watch later must not rewrite the
+        // attribution of recordings already made under the old name.
+        //
+        // Records arriving from a watch take the registry's current name, because the watch itself
+        // no longer names its wearer. Imported records keep the name in the file, which is their
+        // own historical attribution and not ours to overwrite.
+        val stampedWearer = if (preferRegistryName) {
+            watch?.customName?.takeIf { it.isNotBlank() }
+                ?: record.wearerName?.takeIf { it.isNotBlank() }
+                ?: ""
+        } else {
+            record.wearerName?.takeIf { it.isNotBlank() }
+                ?: watch?.customName?.takeIf { it.isNotBlank() }
+                ?: ""
+        }
 
         val recordEntity = BpmRecordEntity(
             title = customTitle ?: record.title?.takeIf { it.isNotBlank() } ?: "New Record",
@@ -164,7 +188,8 @@ class LibraryRepository(
             endTime = record.endTime,
             durationMs = record.durationMs,
             deviceId = record.deviceId,
-            wearerName = record.wearerName ?: ""
+            wearerName = stampedWearer,
+            watchId = watch?.watchId
         )
         val recordId = recordDao.insertBpmRecordGetId(recordEntity)
 
@@ -183,6 +208,102 @@ class LibraryRepository(
         _savingRecord.value = false
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")
         return recordId
+    }
+
+    // --- Watch Registry ---
+
+    /** Every known watch, most recently used first. */
+    fun getAllWatches(): Flow<List<WatchEntity>> = watchDao.getAllWatchesFlow()
+
+    suspend fun getWatch(watchId: String): WatchEntity? = watchDao.getWatch(watchId)
+
+    /**
+     * Gives a watch a name. Only affects records that arrive from now on.
+     */
+    suspend fun renameWatch(watchId: String, name: String) {
+        watchDao.updateName(watchId, name.trim())
+        Log.d(tag, "Renamed watch $watchId to '${name.trim()}'")
+    }
+
+    suspend fun setWatchColor(watchId: String, colorArgb: Int?) = watchDao.updateColor(watchId, colorArgb)
+
+    suspend fun countRecordsForWatch(watchId: String): Int = watchDao.countRecordsForWatch(watchId)
+
+    /**
+     * Registers a watch before it has ever sent a record.
+     *
+     * Because names are stamped at ingest, a watch handed out unnamed produces recordings labelled
+     * with its model. Naming it in advance is how that is avoided.
+     */
+    suspend fun registerWatch(watchId: String, name: String, model: String = "") {
+        val now = System.currentTimeMillis()
+        watchDao.insertWatch(
+            WatchEntity(
+                watchId = watchId,
+                customName = name.trim(),
+                lastKnownModel = model,
+                firstSeen = now,
+                lastSeen = now
+            )
+        )
+        // insertWatch ignores conflicts so it cannot clobber an existing name; apply the new one
+        // explicitly for the case where the watch was already known.
+        if (name.isNotBlank()) watchDao.updateName(watchId, name.trim())
+    }
+
+    /**
+     * Re-stamps the wearer on records from one watch within a date range.
+     *
+     * The recovery path for recordings that arrived before their watch had been named.
+     *
+     * @return how many records were changed.
+     */
+    suspend fun reattributeRecords(watchId: String, wearerName: String, fromDate: Long, toDate: Long): Int {
+        val changed = watchDao.reattributeRecords(watchId, wearerName.trim(), fromDate, toDate)
+        Log.d(tag, "Re-attributed $changed record(s) from watch $watchId to '${wearerName.trim()}'")
+        return changed
+    }
+
+    /**
+     * Folds one watch entry into another, moving its records across.
+     *
+     * Needed because a watch that recorded before it could report a stable id is registered under
+     * its model name, and the same watch on a current build registers under its generated id.
+     */
+    suspend fun mergeWatches(fromWatchId: String, intoWatchId: String) {
+        if (fromWatchId == intoWatchId) return
+        watchDao.reassignRecords(fromWatchId, intoWatchId)
+        watchDao.deleteWatch(fromWatchId)
+        Log.d(tag, "Merged watch $fromWatchId into $intoWatchId")
+    }
+
+    /** Removes a watch entry. Records keep their frozen wearer names and lose only the link. */
+    suspend fun deleteWatch(watchId: String) = watchDao.deleteWatch(watchId)
+
+    /**
+     * Finds or creates the registry entry for an incoming record, and notes that it was seen.
+     *
+     * Prefers the stable id the watch generates. Older records only carry a device id, which is
+     * the hardware model unless someone set one, so two identical watches collapse into a single
+     * entry until they are separated by hand.
+     */
+    private suspend fun resolveWatch(record: BpmWatchRecord, sourceNodeId: String?): WatchEntity? {
+        val key = record.watchId?.takeIf { it.isNotBlank() }
+            ?: record.deviceId.takeIf { it.isNotBlank() }
+            ?: return null
+
+        val now = System.currentTimeMillis()
+        watchDao.insertWatch(
+            WatchEntity(
+                watchId = key,
+                lastKnownModel = record.deviceId,
+                lastKnownNodeId = sourceNodeId.orEmpty(),
+                firstSeen = now,
+                lastSeen = now
+            )
+        )
+        watchDao.touchWatch(key, now, record.deviceId, sourceNodeId.orEmpty())
+        return watchDao.getWatch(key)
     }
 
     /**

@@ -147,18 +147,20 @@ interface BpmRecordDao {
 
 @Database(
     entities = [
-        BpmRecordEntity::class, 
+        BpmRecordEntity::class,
         BpmDataPointEntity::class,
         CategoryEntity::class,
         TagEntity::class,
-        RecordTagCrossRef::class
+        RecordTagCrossRef::class,
+        WatchEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
     abstract fun bpmRecordDao(): BpmRecordDao
     abstract fun tagDao(): TagDao
+    abstract fun watchDao(): WatchDao
 
     companion object {
         private const val TAG = "LibraryDatabase"
@@ -195,6 +197,76 @@ abstract class LibraryDatabase : RoomDatabase() {
                     android.util.Log.i(TAG, "MIGRATION_4_5: wearerName column already exists, skipping")
                 }
             }
+        }
+
+        /**
+         * Migration from schema version 5 to 6.
+         *
+         * Adds the watch registry and links records to it. Existing records are grouped by their
+         * reported device id, which is the only identity older records carry — so two watches of
+         * the same model land in one entry and have to be separated by hand afterwards.
+         *
+         * Existing wearer names are left untouched. They are historical attributions and belong
+         * to the record, not to the watch.
+         *
+         * Idempotent: every step checks before it acts.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS watches (
+                        watchId TEXT NOT NULL PRIMARY KEY,
+                        customName TEXT NOT NULL DEFAULT '',
+                        lastKnownModel TEXT NOT NULL DEFAULT '',
+                        lastKnownNodeId TEXT NOT NULL DEFAULT '',
+                        colorArgb INTEGER,
+                        firstSeen INTEGER NOT NULL,
+                        lastSeen INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+
+                if (!columnExists(db, "bpm_records", "watchId")) {
+                    db.execSQL("ALTER TABLE bpm_records ADD COLUMN watchId TEXT DEFAULT NULL")
+                    android.util.Log.i(TAG, "MIGRATION_5_6: Added watchId column")
+                } else {
+                    android.util.Log.i(TAG, "MIGRATION_5_6: watchId column already exists, skipping")
+                }
+
+                // Seed the registry from whatever device ids the existing records carry, using the
+                // record dates as the first and last time each was seen.
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO watches (watchId, customName, lastKnownModel, lastKnownNodeId, colorArgb, firstSeen, lastSeen)
+                    SELECT deviceId, '', deviceId, '', NULL, MIN(date), MAX(date)
+                    FROM bpm_records
+                    WHERE deviceId IS NOT NULL AND deviceId != ''
+                    GROUP BY deviceId
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    """
+                    UPDATE bpm_records
+                    SET watchId = deviceId
+                    WHERE watchId IS NULL AND deviceId IS NOT NULL AND deviceId != ''
+                    """.trimIndent()
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_5_6: Watch registry seeded from existing records")
+            }
+        }
+
+        /** Whether [column] is already present on [table], so a migration can re-run safely. */
+        private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
+            db.query("PRAGMA table_info($table)").use { cursor ->
+                val nameIdx = cursor.getColumnIndex("name")
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(nameIdx) == column) return true
+                }
+            }
+            return false
         }
 
         /**
@@ -255,7 +327,7 @@ abstract class LibraryDatabase : RoomDatabase() {
                     LibraryDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_4_5)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.
                     .build()

@@ -20,13 +20,7 @@ import kotlinx.coroutines.flow.stateIn
  */
 class RecordingViewModel(private val repository: RecordingRepository) : ViewModel() {
 
-    val wearerNameState = MutableStateFlow(repository.getWearerName())
     val deviceIdState = MutableStateFlow(repository.getDeviceId())
-
-    fun updateWearerName(name: String?) {
-        repository.setWearerName(name)
-        wearerNameState.value = repository.getWearerName()
-    }
 
     fun updateDeviceId(id: String) {
         repository.setDeviceId(id)
@@ -41,15 +35,14 @@ class RecordingViewModel(private val repository: RecordingRepository) : ViewMode
         repository.recordingStartTime,
         repository.recordingState,
         repository.signalState,
-        wearerNameState
-    ) { bpm, startTime, state, signal, wearer ->
+        deviceIdState
+    ) { bpm, startTime, state, signal, device ->
         RecordingUIState(
             bpm = bpm,
             recordingStartTime = startTime,
             serviceState = state,
             signalState = signal,
-            wearerName = wearer,
-            deviceId = deviceIdState.value,
+            deviceId = device,
             statusText = statusTextFor(state, signal)
         )
     }.stateIn(
@@ -123,7 +116,6 @@ data class RecordingUIState(
     val serviceState: RecordingState = RecordingState.INACTIVE,
     val signalState: SignalState = SignalState.UNKNOWN,
     val statusText: String = "Initializing...",
-    val wearerName: String? = null,
     val deviceId: String = "Watch"
 ) {
     /**

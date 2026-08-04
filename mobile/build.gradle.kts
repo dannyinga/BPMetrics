@@ -44,6 +44,14 @@ android {
         compose = true
     }
 
+    // Room writes the schema of every version here. Checked in, these are what make a migration
+    // verifiable: without them there is nothing to test a migration against, and a mismatch
+    // between a migration's SQL and the entities is only discovered when it crashes on a user's
+    // device during upgrade.
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

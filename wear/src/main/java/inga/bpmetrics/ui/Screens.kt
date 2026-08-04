@@ -217,17 +217,10 @@ private fun LoadingScreen(label: String) {
 fun RecordingScreen(viewModel: RecordingViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    val wearerPresets = listOf(null, "Danny", "Player 1", "Player 2", "Player 3", "Player 4", "Player 5")
-
     RecordingContent(
         state = uiState,
         onStart = viewModel::onStartClicked,
-        onStop = viewModel::onStopClicked,
-        onCycleWearerName = {
-            val currentIndex = wearerPresets.indexOf(uiState.wearerName)
-            val nextIndex = (currentIndex + 1) % wearerPresets.size
-            viewModel.updateWearerName(wearerPresets[nextIndex])
-        }
+        onStop = viewModel::onStopClicked
     )
 }
 
@@ -243,33 +236,23 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
 fun RecordingContent(
     state: RecordingUIState,
     onStart: () -> Unit,
-    onStop: () -> Unit,
-    onCycleWearerName: (() -> Unit)? = null
+    onStop: () -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Wearer Name & Device Tag (Tap to change wearer)
         val isRecording = state.serviceState == RecordingState.RECORDING
-        val wearerDisplay = state.wearerName?.ifBlank { null } ?: "Set Wearer"
 
-        androidx.wear.compose.material.Chip(
-            label = {
-                Text(
-                    text = "👤 $wearerDisplay",
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    textAlign = TextAlign.Center
-                )
-            },
-            onClick = { onCycleWearerName?.invoke() },
-            enabled = !isRecording,
-            colors = androidx.wear.compose.material.ChipDefaults.secondaryChipColors(),
-            modifier = Modifier
-                .height(28.dp)
-                .padding(bottom = 4.dp)
+        // Which watch this is, so a wearer can confirm they have the right one. Who is wearing it
+        // is named on the phone, which stamps records as they arrive.
+        Text(
+            text = "⌚ ${state.deviceId}",
+            fontSize = 11.sp,
+            maxLines = 1,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(bottom = 4.dp)
         )
 
         // State-driven timer calculation

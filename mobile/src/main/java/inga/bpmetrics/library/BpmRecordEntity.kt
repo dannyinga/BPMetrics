@@ -41,7 +41,15 @@ data class BpmRecordEntity (
     val avg: Double? = 0.0,
     val minId: Long? = 0,
     @ColumnInfo(defaultValue = "Watch") val deviceId: String = "Watch",
-    @ColumnInfo(defaultValue = "") val wearerName: String = ""
+    @ColumnInfo(defaultValue = "") val wearerName: String = "",
+    /**
+     * The watch this record came from, referencing [WatchEntity.watchId].
+     *
+     * Provenance only — it says *which watch*, never *who was wearing it*. The wearer is
+     * [wearerName], stamped when the record arrived and frozen thereafter, so renaming a watch
+     * cannot rewrite the attribution of recordings already made.
+     */
+    @ColumnInfo(defaultValue = "NULL") val watchId: String? = null
     ) {
 
     /**
