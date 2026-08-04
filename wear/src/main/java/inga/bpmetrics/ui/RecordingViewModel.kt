@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.recording.RecordingRepository
 import inga.bpmetrics.recording.RecordingState
+import inga.bpmetrics.recording.SignalState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -39,24 +40,17 @@ class RecordingViewModel(private val repository: RecordingRepository) : ViewMode
         repository.liveBpm,
         repository.recordingStartTime,
         repository.recordingState,
+        repository.signalState,
         wearerNameState
-    ) { bpm, startTime, state, wearer ->
+    ) { bpm, startTime, state, signal, wearer ->
         RecordingUIState(
             bpm = bpm,
             recordingStartTime = startTime,
             serviceState = state,
+            signalState = signal,
             wearerName = wearer,
             deviceId = deviceIdState.value,
-            statusText = when (state) {
-                RecordingState.INACTIVE -> "Inactive"
-                RecordingState.PREPARING -> "Warming up sensor..."
-                RecordingState.UNAVAILABLE -> "Heart rate unavailable"
-                RecordingState.ACQUIRING -> "Acquiring heart rate..."
-                RecordingState.READY -> "Ready to record"
-                RecordingState.RECORDING -> "Recording..."
-                RecordingState.PAUSED -> "Paused"
-                RecordingState.ENDING -> "Saving record..."
-            }
+            statusText = statusTextFor(state, signal)
         )
     }.stateIn(
         scope = viewModelScope,
@@ -82,6 +76,35 @@ class RecordingViewModel(private val repository: RecordingRepository) : ViewMode
     fun onStopClicked() {
         repository.stopRecording()
     }
+
+    private companion object {
+        /**
+         * Describes the session and the sensor together.
+         *
+         * While recording, the sensor's state is what the wearer needs to know — a recording
+         * keeps running through a dropout, and saying only "Recording..." would hide the fact
+         * that nothing is being measured.
+         */
+        fun statusTextFor(state: RecordingState, signal: SignalState): String = when (state) {
+            RecordingState.RECORDING -> when (signal) {
+                SignalState.AVAILABLE -> "Recording..."
+                SignalState.ACQUIRING -> "Recording · finding pulse"
+                SignalState.OFF_BODY -> "Recording · watch off wrist"
+                SignalState.UNAVAILABLE -> "Recording · no signal"
+                SignalState.UNKNOWN -> "Recording · starting sensor"
+            }
+            RecordingState.PAUSED -> "Paused"
+            RecordingState.ENDING -> "Saving record..."
+            RecordingState.PREPARING -> "Warming up sensor..."
+            RecordingState.ACQUIRING -> "Acquiring heart rate..."
+            RecordingState.READY -> "Ready to record"
+            RecordingState.UNAVAILABLE -> when (signal) {
+                SignalState.OFF_BODY -> "Watch not on wrist"
+                else -> "Heart rate unavailable"
+            }
+            RecordingState.INACTIVE -> "Tap to start recording"
+        }
+    }
 }
 
 /**
@@ -98,7 +121,17 @@ data class RecordingUIState(
     val bpm: Double? = null,
     val recordingStartTime: Long = 0L,
     val serviceState: RecordingState = RecordingState.INACTIVE,
+    val signalState: SignalState = SignalState.UNKNOWN,
     val statusText: String = "Initializing...",
     val wearerName: String? = null,
     val deviceId: String = "Watch"
-)
+) {
+    /**
+     * Whether the start/stop control accepts a press.
+     *
+     * Recording no longer waits on the sensor: a session can begin from any state and captures
+     * whatever the sensor delivers once it acquires. Only finalizing blocks input, because the
+     * previous record is still being written.
+     */
+    val isControlEnabled: Boolean get() = serviceState != RecordingState.ENDING
+}

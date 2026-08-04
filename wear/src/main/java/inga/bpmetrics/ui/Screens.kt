@@ -321,9 +321,8 @@ fun RecordingContent(
             modifier = Modifier.height(12.dp)
         )
 
-        // Button is only enabled when we have a signal lock or are currently recording
-        val buttonEnabled = state.serviceState == RecordingState.READY ||
-                           state.serviceState == RecordingState.RECORDING
+        // Recording can begin from any state — waiting on a signal lock is no longer required.
+        val buttonEnabled = state.isControlEnabled
 
         Row(
             horizontalArrangement = Arrangement.Center,

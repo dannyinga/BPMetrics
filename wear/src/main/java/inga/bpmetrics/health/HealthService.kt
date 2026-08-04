@@ -1,5 +1,6 @@
 package inga.bpmetrics.health
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -37,6 +38,12 @@ class HealthService : LifecycleService() {
     private val tag = "HealthService"
     private val repository by lazy { RecordingRepository.Companion.getInstance(this) }
     private lateinit var notificationManager: NotificationManager
+
+    private companion object {
+        const val CHANNEL_ID = "bpm_service_channel"
+        const val NOTIFICATION_ID = 1
+        const val TITLE_TEXT = "BPMetrics"
+    }
 
     private var endingTimeoutJob: Job? = null
     private val binder = LocalBinder()
@@ -139,57 +146,60 @@ class HealthService : LifecycleService() {
     }
 
     /**
-     * Initializes and starts the foreground service with a persistent notification.
-     * Uses [OngoingActivity] to provide a shortcut back to the app from the watch face.
+     * Builds the ongoing notification, wired to the [OngoingActivity] that provides a shortcut
+     * back to the app from the watch face.
      */
-    private fun startForegroundWithNotification(contentText: String = "Preparing...") {
-        val titleText = "BPMetrics"
-        val channelId = "bpm_service_channel"
-        val notificationId = 1
-
-        val channel = NotificationChannel(
-            channelId,
-            "Heart Rate Monitoring",
-            NotificationManager.IMPORTANCE_LOW
-        )
-        notificationManager.createNotificationChannel(channel)
-
+    private fun buildNotification(contentText: String): Notification {
         val launchActivityIntent = Intent(this, MainActivity::class.java)
         val activityPendingIntent = PendingIntent.getActivity(
-            this, 
-            0, 
-            launchActivityIntent, 
+            this,
+            0,
+            launchActivityIntent,
             PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notificationBuilder = NotificationCompat.Builder(this, channelId)
-            .setContentTitle(titleText)
+        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(TITLE_TEXT)
             .setContentText(contentText)
             .setSmallIcon(R.mipmap.ic_launcher_round)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_WORKOUT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
-        val ongoingActivityStatus = Status.Builder().addTemplate(titleText).build()
-        val ongoingActivity = OngoingActivity.Builder(applicationContext, notificationId, notificationBuilder)
+        val ongoingActivityStatus = Status.Builder().addTemplate(TITLE_TEXT).build()
+        OngoingActivity.Builder(applicationContext, NOTIFICATION_ID, notificationBuilder)
             .setTouchIntent(activityPendingIntent)
             .setStatus(ongoingActivityStatus)
             .build()
+            .apply(applicationContext)
 
-        ongoingActivity.apply(applicationContext)
+        return notificationBuilder.build()
+    }
+
+    /**
+     * Promotes the service to the foreground. Called once; later text changes go through
+     * [updateNotification].
+     */
+    private fun startForegroundWithNotification(contentText: String = "Preparing...") {
+        notificationManager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "Heart Rate Monitoring", NotificationManager.IMPORTANCE_LOW)
+        )
 
         startForeground(
-            notificationId,
-            notificationBuilder.build(),
+            NOTIFICATION_ID,
+            buildNotification(contentText),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
         )
     }
 
     /**
      * Updates the existing foreground notification with new status text.
+     *
+     * Only the notification is re-posted. This used to re-run the whole foreground promotion —
+     * recreating the channel and calling startForeground again — on every state change.
      */
     private fun updateNotification(contentText: String) {
-        startForegroundWithNotification(contentText)
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(contentText))
     }
 
     private fun vibrateOnAcquisition() {
@@ -218,6 +228,9 @@ class HealthService : LifecycleService() {
 
     override fun onDestroy() {
         cancelEndingTimeout()
+        // The warm-up started in onCreate keeps the optical sensor lit until something ends it,
+        // so it has to be released here or it outlives the service that asked for it.
+        repository.releaseSensorsIfIdle()
         super.onDestroy()
     }
 }

@@ -85,10 +85,11 @@ class MainActivity : ComponentActivity() {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 repository.recordingState
                     .map { state ->
-                        // Only "Warm Up" states trigger the screen-on flag
-                        state == RecordingState.PREPARING
-                                || state == RecordingState.ACQUIRING
-                                || state == RecordingState.INACTIVE
+                        // Only the warm-up states hold the screen on, and only because the user is
+                        // waiting on them. INACTIVE is not one of them: it is the resting state and
+                        // the fallback for "nothing reported yet", so including it kept the display
+                        // lit the entire time the app sat idle.
+                        state == RecordingState.PREPARING || state == RecordingState.ACQUIRING
                     }
                     .distinctUntilChanged() // Prevents redundant calls when switching between PREPARING and ACQUIRING
                     .collect { isWarmingUp ->
