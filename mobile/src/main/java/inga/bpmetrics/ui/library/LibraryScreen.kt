@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.FilterAltOff
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sort
@@ -87,7 +88,11 @@ import androidx.compose.material.icons.filled.Movie
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
+fun LibraryScreen(
+    navController: NavController,
+    viewModel: LibraryViewModel,
+    onOpenDrawer: () -> Unit
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
     val currentSort by viewModel.sortOption.collectAsStateWithLifecycle()
@@ -206,26 +211,16 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
             } else {
                 TopAppBar(
                     title = { Text("Library", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) },
-                    actions = {
-                        // Import CSV / JSON button
-                        IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
-                            Icon(Icons.Default.FileDownload, contentDescription = "Import Record(s)")
-                        }
-                        // Show Clear Filters button only when a filter is active
-                        if (filterState != LibraryViewModel.FilterState()) {
-                            IconButton(onClick = { viewModel.clearFilters() }) {
-                                Icon(Icons.Default.FilterAltOff, contentDescription = "Clear All Filters")
+                    navigationIcon = {
+                        IconButton(onClick = onOpenDrawer) {
+                            // Renders in progress are announced here too. The drawer carries the
+                            // count, but it is invisible while the drawer is closed.
+                            val queue by RenderQueueManager.queue.collectAsState(initial = emptyList())
+                            val activeCount = queue.count {
+                                it.status == RenderStatus.RENDERING || it.status == RenderStatus.QUEUED
                             }
-                        }
-                        IconButton(onClick = { navController.navigate(Routes.TAG_MANAGEMENT) }) {
-                            Icon(Icons.Default.Sell, contentDescription = "Manage Tags")
-                        }
-                        
-                        val queue by RenderQueueManager.queue.collectAsState(initial = emptyList())
-                        val activeCount = queue.count { it.status == RenderStatus.RENDERING || it.status == RenderStatus.QUEUED }
-                        IconButton(onClick = { navController.navigate(Routes.RENDER_QUEUE) }) {
                             Box {
-                                Icon(Icons.Default.VideoLibrary, contentDescription = "Render Queue")
+                                Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
                                 if (activeCount > 0) {
                                     Box(
                                         modifier = Modifier
@@ -237,9 +232,17 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                                 }
                             }
                         }
-
-                        IconButton(onClick = { navController.navigate(Routes.SETTINGS) }) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    },
+                    actions = {
+                        // Import CSV / JSON button
+                        IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                            Icon(Icons.Default.FileDownload, contentDescription = "Import Record(s)")
+                        }
+                        // Show Clear Filters button only when a filter is active
+                        if (filterState != LibraryViewModel.FilterState()) {
+                            IconButton(onClick = { viewModel.clearFilters() }) {
+                                Icon(Icons.Default.FilterAltOff, contentDescription = "Clear All Filters")
+                            }
                         }
                     }
                 )

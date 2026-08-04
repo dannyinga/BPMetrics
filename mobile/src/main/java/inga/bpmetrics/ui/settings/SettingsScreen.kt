@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -55,7 +56,11 @@ import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
+fun SettingsScreen(
+    viewModel: SettingsViewModel,
+    onOpenDrawer: () -> Unit,
+    onLeave: () -> Unit
+) {
     val context = LocalContext.current
     val categories by viewModel.allCategories.collectAsStateWithLifecycle(initialValue = emptyList())
     val defaultNamingCategoryId by viewModel.defaultNamingCategoryId.collectAsStateWithLifecycle()
@@ -150,27 +155,50 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
         Toast.makeText(context, "Settings Saved", Toast.LENGTH_SHORT).show()
     }
 
-    BackHandler(enabled = hasUnsavedChanges) { showUnsavedDialog = true }
+    // What to do once the user has decided about their unsaved changes. Settings can now be left
+    // two ways -- system back, or opening the drawer -- and the prompt has to guard both, so the
+    // exit itself is deferred until the dialog resolves.
+    var pendingExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    /** Leaves via [exit], prompting first if there is unsaved work. */
+    fun requestExit(exit: () -> Unit) {
+        if (hasUnsavedChanges) {
+            pendingExit = exit
+            showUnsavedDialog = true
+        } else {
+            exit()
+        }
+    }
+
+    BackHandler(enabled = hasUnsavedChanges) {
+        pendingExit = onLeave
+        showUnsavedDialog = true
+    }
 
     if (showUnsavedDialog) {
+        val resolve = { exiting: Boolean ->
+            val exit = pendingExit
+            showUnsavedDialog = false
+            pendingExit = null
+            if (exiting) exit?.invoke()
+        }
+
         AlertDialog(
-            onDismissRequest = { showUnsavedDialog = false },
+            onDismissRequest = { resolve(false) },
             title = { Text("Unsaved Changes") },
             text = { Text("Would you like to save your changes before leaving?") },
             confirmButton = {
                 TextButton(onClick = {
                     saveSettings()
-                    showUnsavedDialog = false
-                    onBack()
+                    resolve(true)
                 }) { Text("Save") }
             },
             dismissButton = {
                 Row {
                     TextButton(onClick = {
-                        showUnsavedDialog = false
-                        onBack()
+                        resolve(true)
                     }) { Text("Discard", color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = { showUnsavedDialog = false }) { Text("Cancel") }
+                    TextButton(onClick = { resolve(false) }) { Text("Cancel") }
                 }
             }
         )
@@ -181,8 +209,8 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) {
             TopAppBar(
                 title = { Text("Settings") },
                 navigationIcon = {
-                    IconButton(onClick = { if (hasUnsavedChanges) showUnsavedDialog = true else onBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null)
+                    IconButton(onClick = { requestExit(onOpenDrawer) }) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
                     }
                 },
                 actions = {

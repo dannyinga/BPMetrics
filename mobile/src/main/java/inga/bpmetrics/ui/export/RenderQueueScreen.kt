@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -76,7 +77,7 @@ import inga.bpmetrics.ui.theme.BpmLow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RenderQueueScreen(navController: NavController) {
+fun RenderQueueScreen(navController: NavController, onOpenDrawer: () -> Unit) {
     val queue by RenderQueueManager.queue.collectAsState()
 
     val totalJobs = queue.size
@@ -90,8 +91,8 @@ fun RenderQueueScreen(navController: NavController) {
             TopAppBar(
                 title = { Text("Video Render Queue", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(onClick = onOpenDrawer) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
                     }
                 },
                 actions = {

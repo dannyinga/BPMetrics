@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -54,7 +55,11 @@ import inga.bpmetrics.ui.theme.BpmLow
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AnalysisScreen(navController: NavController, viewModel: AnalysisViewModel) {
+fun AnalysisScreen(
+    navController: NavController,
+    viewModel: AnalysisViewModel,
+    onOpenDrawer: () -> Unit
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val selectedMetric by viewModel.selectedMetric.collectAsStateWithLifecycle()
     val selectedCategoryId by viewModel.selectedCategoryTabId.collectAsStateWithLifecycle()
@@ -71,7 +76,11 @@ fun AnalysisScreen(navController: NavController, viewModel: AnalysisViewModel) {
             Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {
                 TopAppBar(
                     title = { Text("Analysis View", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) },
-                    navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }
+                    navigationIcon = {
+                        IconButton(onClick = onOpenDrawer) {
+                            Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
+                        }
+                    }
                 )
                 if (!uiState.isEmpty) {
                     Row(

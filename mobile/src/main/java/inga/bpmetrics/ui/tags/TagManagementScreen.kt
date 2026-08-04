@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EditOff
 import androidx.compose.material3.AlertDialog
@@ -38,7 +39,11 @@ import androidx.navigation.NavController
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TagManagementScreen(navController: NavController, viewModel: TagManagementViewModel) {
+fun TagManagementScreen(
+    navController: NavController,
+    viewModel: TagManagementViewModel,
+    onOpenDrawer: () -> Unit
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val isEditing by viewModel.isEditing.collectAsStateWithLifecycle()
     var showAddCategoryDialog by remember { mutableStateOf(false) }
@@ -48,10 +53,10 @@ fun TagManagementScreen(navController: NavController, viewModel: TagManagementVi
         topBar = {
             TopAppBar(
                 title = { Text("Manage Tags") },
-                navigationIcon = { 
-                    IconButton(onClick = { navController.popBackStack() }) { 
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null) 
-                    } 
+                navigationIcon = {
+                    IconButton(onClick = onOpenDrawer) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
+                    }
                 },
                 actions = {
                     IconButton(onClick = { showAddCategoryDialog = true }) {
