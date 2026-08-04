@@ -173,7 +173,9 @@ object ImageExporter {
         drawGlowingHead(canvas, dims, ranges, viewport, record, config, paint)
 
         // 8. Draw HUD (In the 15% Sidebar)
-        drawStatsHUD(canvas, dims, ranges, viewport, record, config, paint)
+        if (config.showCurrentStats) {
+            drawStatsHUD(canvas, dims, ranges, viewport, record, config, paint)
+        }
 
         canvas.restore() // Final restore from drawContainer's save
     }
@@ -475,6 +477,56 @@ object ImageExporter {
         paint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(15f * dims.scaleFactor, 15f * dims.scaleFactor), 0f)
         canvas.drawPath(pastDashed, paint)
     }
+    /**
+     * The size multiplier for a heart beating at [bpm], sampled at [playheadMs].
+     *
+     * Returns 1.0 (no pulse) when there is no reading, so a paused or finished session shows a
+     * still heart rather than one stuck mid-beat.
+     */
+    private fun pulseScaleFor(bpm: Double?, playheadMs: Double): Float {
+        if (bpm == null || bpm <= 0.0) return 1.0f
+        val beatsPerSecond = bpm / 60.0
+        val phase = (sin((playheadMs / 1000.0) * 2.0 * Math.PI * beatsPerSecond) * 0.5 + 0.5).toFloat()
+        return 1.0f + (0.12f * phase)
+    }
+
+    /**
+     * Draws a heart of [radius] centred near ([centerX], [centerY]) using the paint's current color.
+     */
+    private fun drawHeart(canvas: Canvas, centerX: Float, centerY: Float, radius: Float, paint: Paint) {
+        val s = radius
+        val heartPath = Path().apply {
+            moveTo(centerX, centerY + s * 0.5f)
+            cubicTo(centerX - s, centerY - s, centerX - s * 1.5f, centerY + s * 0.5f, centerX, centerY + s * 1.5f)
+            cubicTo(centerX + s * 1.5f, centerY + s * 0.5f, centerX + s, centerY - s, centerX, centerY + s * 0.5f)
+        }
+        canvas.drawPath(heartPath, paint)
+    }
+
+    /** The colour a record's curve, head and pill all share. */
+    private fun colorForRecord(record: BpmRecord, index: Int, config: ImageExportConfig): Int =
+        config.customRecordColors[record.metadata.recordId]
+            ?: MULTI_WATCH_PALETTES[index % MULTI_WATCH_PALETTES.size][0]
+
+    /**
+     * Shortens [text] with a trailing ellipsis until it fits [maxWidth] at the paint's current
+     * text settings. Returns [text] untouched when it already fits.
+     */
+    private fun ellipsize(text: String, maxWidth: Float, paint: Paint): String {
+        if (maxWidth <= 0f) return ""
+        if (paint.measureText(text) <= maxWidth) return text
+
+        var end = text.length
+        while (end > 0 && paint.measureText(text.take(end) + "…") > maxWidth) end--
+        return if (end <= 0) "" else text.take(end) + "…"
+    }
+
+    /** The name to show for whoever wore the watch, falling back to the device then the title. */
+    private fun wearerLabelOf(record: BpmRecord): String =
+        record.metadata.wearerName.takeIf { it.isNotBlank() }
+            ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
+            ?: record.metadata.title
+
     private fun drawGlowingHead(
         canvas: Canvas,
         dims: RenderingDimensions,
@@ -484,15 +536,14 @@ object ImageExporter {
         config: ImageExportConfig,
         paint: Paint
     ) {
+        // No reading means this session is not running at the playhead, so it has no head to mark.
         val currentBpm = getInterpolatedBpm(record.dataPoints, viewport.playhead) ?: return
         val headColor = getBpmColor(currentBpm, ranges, config)
 
         val headX = dims.getX(viewport.playhead, viewport)
         val headY = dims.getY(currentBpm, ranges)
 
-        val beatsPerSecond = currentBpm / 60.0
-        val pulseFactor = (sin((viewport.playhead / 1000.0) * 2.0 * Math.PI * beatsPerSecond) * 0.5 + 0.5).toFloat()
-        val pulseScale = 1.0f + (0.12f * pulseFactor)
+        val pulseScale = pulseScaleFor(currentBpm, viewport.playhead)
 
         paint.reset()
         paint.isAntiAlias = true
@@ -582,22 +633,14 @@ object ImageExporter {
         canvas.drawRoundRect(hudRect, cornerRadius, cornerRadius, paint)
 
         // 6. Pulse logic
-        val beatsPerSecond = (currentBpm ?: 60.0) / 60.0
-        val pulseFactor = if (currentBpm != null) (sin((viewport.playhead / 1000.0) * 2.0 * Math.PI * beatsPerSecond) * 0.5 + 0.5).toFloat() else 0f
-        val pulseScale = 1.0f + (0.12f * pulseFactor)
+        val pulseScale = pulseScaleFor(currentBpm, viewport.playhead)
 
         // 7. Draw Pulsating Heart
         val contentStartX = hudRect.centerX() - (contentWidth / 2f)
         val hCenterX = contentStartX + (heartSize / 2f)
 
         paint.color = hudContentColor
-        val s = (heartSize / 2f) * pulseScale
-        val heartPath = Path().apply {
-            moveTo(hCenterX, hCenterY + s * 0.5f)
-            cubicTo(hCenterX - s, hCenterY - s, hCenterX - s * 1.5f, hCenterY + s * 0.5f, hCenterX, hCenterY + s * 1.5f)
-            cubicTo(hCenterX + s * 1.5f, hCenterY + s * 0.5f, hCenterX + s, hCenterY - s, hCenterX, hCenterY + s * 0.5f)
-        }
-        canvas.drawPath(heartPath, paint)
+        drawHeart(canvas, hCenterX, hCenterY, (heartSize / 2f) * pulseScale, paint)
 
         // 8. Draw BPM Digits
         paint.reset()
@@ -724,6 +767,82 @@ object ImageExporter {
     )
 
     /**
+     * The shared time axis that a set of records is drawn against.
+     *
+     * @property originWallClockMs The wall clock instant that timeline position 0 represents.
+     * Anything aligned against these records — a video in particular — must be positioned
+     * relative to this instant.
+     * @property durationMs Length of the timeline, measured from position 0.
+     */
+    data class Timeline(val originWallClockMs: Long, val durationMs: Long)
+
+    /**
+     * Records whose data point timestamps have been rewritten onto a shared [timeline].
+     */
+    data class AlignedRecords(val records: List<BpmRecord>, val timeline: Timeline)
+
+    /**
+     * Computes the shared time axis for [records] without rewriting any data points.
+     *
+     * Cheap enough to call from the UI; use [alignRecords] when the shifted points are needed.
+     *
+     * Two modes:
+     * - **Elapsed time** ([alignByElapsedTime] true): every record is treated as starting at
+     *   0:00, overlaying sessions that happened at different times so their shapes can be
+     *   compared. The origin stays the first record's start, preserving how video sync behaved
+     *   before clock alignment existed.
+     * - **Clock time** ([alignByElapsedTime] false): the origin is the earliest session start,
+     *   and each record sits at its real distance from it.
+     */
+    fun timelineFor(records: List<BpmRecord>, alignByElapsedTime: Boolean): Timeline {
+        if (records.isEmpty()) return Timeline(0L, 0L)
+
+        return if (alignByElapsedTime) {
+            val duration = records.maxOf { rec -> lastTimestampOf(rec) - firstTimestampOf(rec) }
+            Timeline(records.first().metadata.startTime, duration.coerceAtLeast(0L))
+        } else {
+            val origin = records.minOf { it.metadata.startTime }
+            val duration = records.maxOf { rec ->
+                (rec.metadata.startTime - origin) + lastTimestampOf(rec)
+            }
+            Timeline(origin, duration.coerceAtLeast(0L))
+        }
+    }
+
+    /**
+     * Places several records on one timeline so a single graph can show them together.
+     *
+     * In clock-time mode each record is offset by how long after [Timeline.originWallClockMs] it
+     * actually started, so every record lands exactly where it would if it had been exported on
+     * its own. That is what lets one video stay in sync with all of them at once.
+     *
+     * See [timelineFor] for the meaning of [alignByElapsedTime].
+     */
+    fun alignRecords(records: List<BpmRecord>, alignByElapsedTime: Boolean): AlignedRecords {
+        val timeline = timelineFor(records, alignByElapsedTime)
+        if (records.isEmpty()) return AlignedRecords(emptyList(), timeline)
+
+        val shifted = records.map { rec ->
+            val offset = if (alignByElapsedTime) {
+                -firstTimestampOf(rec)
+            } else {
+                rec.metadata.startTime - timeline.originWallClockMs
+            }
+
+            if (offset == 0L) rec
+            else rec.copy(dataPoints = rec.dataPoints.map { it.copy(timestamp = it.timestamp + offset) })
+        }
+
+        return AlignedRecords(shifted, timeline)
+    }
+
+    private fun firstTimestampOf(record: BpmRecord): Long =
+        record.dataPoints.firstOrNull()?.timestamp ?: 0L
+
+    private fun lastTimestampOf(record: BpmRecord): Long =
+        record.dataPoints.lastOrNull()?.timestamp ?: record.metadata.durationMs
+
+    /**
      * Renders multiple BPM records on a single canvas with distinct multi-color curves and a legend.
      */
     fun renderMultiRecordsOnCanvas(
@@ -740,18 +859,32 @@ object ImageExporter {
             return
         }
 
-        val processedRecords = if (config.alignByElapsedTime) {
-            records.map { rec ->
-                val firstTs = rec.dataPoints.firstOrNull()?.timestamp ?: rec.metadata.startTime
-                rec.copy(
-                    dataPoints = rec.dataPoints.map { pt ->
-                        pt.copy(timestamp = pt.timestamp - firstTs)
-                    }
-                )
-            }
-        } else {
-            records
-        }
+        renderAlignedRecordsOnCanvas(
+            canvas = canvas,
+            aligned = alignRecords(records, config.alignByElapsedTime),
+            config = config,
+            currentTimeMs = currentTimeMs,
+            windowSizeMs = windowSizeMs,
+            graphRect = graphRect
+        )
+    }
+
+    /**
+     * Renders records that have already been placed on a shared timeline by [alignRecords].
+     *
+     * Video export aligns once and then calls this for every frame — re-aligning per frame would
+     * copy every data point of every record thirty times a second.
+     */
+    fun renderAlignedRecordsOnCanvas(
+        canvas: Canvas,
+        aligned: AlignedRecords,
+        config: ImageExportConfig,
+        currentTimeMs: Double? = null,
+        windowSizeMs: Long? = null,
+        graphRect: RectF = RectF(0f, 0f, 1f, 1f)
+    ) {
+        val processedRecords = aligned.records
+        if (processedRecords.isEmpty()) return
 
         val primaryRecord = processedRecords.first()
         val dims = RenderingDimensions(canvas, graphRect, config)
@@ -763,26 +896,185 @@ object ImageExporter {
         val maxBpm = (allPoints.maxOf { it.bpm } + 5.0).coerceAtMost(220.0)
         val ranges = BpmRanges(minBpm, maxBpm, minBpm, maxBpm, "Multi-Watch Session")
 
-        val maxDurationMs = processedRecords.maxOfOrNull { rec ->
-            rec.dataPoints.lastOrNull()?.timestamp ?: rec.metadata.durationMs
-        } ?: primaryRecord.metadata.durationMs
+        // Clock-aligned exports carry a crop chosen against the shared timeline, so it is honoured
+        // as-is. Elapsed mode has no meaningful shared crop, and a caller may supply none at all,
+        // so both fall back to spanning the whole timeline.
+        val hasUsableRange = !config.alignByElapsedTime && config.endTimeMs > config.startTimeMs
+        val multiConfig = if (hasUsableRange) {
+            config
+        } else {
+            config.copy(startTimeMs = 0L, endTimeMs = aligned.timeline.durationMs)
+        }
 
-        val multiConfig = if (config.alignByElapsedTime) config.copy(startTimeMs = 0L, endTimeMs = maxDurationMs) else config
         val viewport = calculateViewport(currentTimeMs, windowSizeMs, multiConfig, primaryRecord)
 
         drawContainer(canvas, dims, config, paint)
         drawGridAndAxes(canvas, dims, ranges, multiConfig, paint)
 
-        processedRecords.forEachIndexed { index, rec ->
-            val origRecordId = records[index].metadata.recordId
-            val assignedColor = config.customRecordColors[origRecordId]
-                ?: MULTI_WATCH_PALETTES[index % MULTI_WATCH_PALETTES.size][0]
-            val customConfig = multiConfig.copy(lowBpmColor = assignedColor, highBpmColor = assignedColor)
-            drawDataCurve(canvas, dims, ranges, viewport, rec, customConfig, paint)
+        val recordConfigs = processedRecords.mapIndexed { index, rec ->
+            val assignedColor = colorForRecord(rec, index, config)
+            multiConfig.copy(lowBpmColor = assignedColor, highBpmColor = assignedColor)
         }
 
-        drawMultiLegend(canvas, dims, records, config, paint)
+        processedRecords.forEachIndexed { index, rec ->
+            drawDataCurve(canvas, dims, ranges, viewport, rec, recordConfigs[index], paint)
+        }
+
+        // Heads go on after every curve, so one wearer's line can never bury another's marker.
+        processedRecords.forEachIndexed { index, rec ->
+            drawGlowingHead(canvas, dims, ranges, viewport, rec, recordConfigs[index], paint)
+        }
+
+        if (config.showCurrentStats) {
+            // The pills name each wearer and colour-match their curve, so they replace the legend.
+            drawMultiStatsHUD(
+                canvas = canvas,
+                dims = dims,
+                viewport = viewport,
+                records = processedRecords,
+                config = config,
+                timelineOriginMs = aligned.timeline.originWallClockMs,
+                paint = paint
+            )
+        } else {
+            drawMultiLegend(canvas, dims, processedRecords, config, paint)
+        }
         canvas.restore()
+    }
+
+    /**
+     * Draws a live BPM pill per wearer, stacked at the top right of the graph.
+     *
+     * Single-record export shows one large readout. With several wearers the same information is
+     * repeated compactly — each heart in that wearer's line colour, beating at their own rate —
+     * so a viewer can follow one person's heart rate without tracing their curve.
+     *
+     * A wearer whose session is not running at the playhead shows "--" instead of vanishing, so
+     * the stack keeps a stable order and height for the whole video. Digits are right-aligned in
+     * a fixed-width slot so the pills do not jitter as the numbers change.
+     *
+     * Clock and elapsed time belong to the shared timeline, so they are drawn once underneath
+     * rather than repeated in every pill.
+     */
+    private fun drawMultiStatsHUD(
+        canvas: Canvas,
+        dims: RenderingDimensions,
+        viewport: Viewport,
+        records: List<BpmRecord>,
+        config: ImageExportConfig,
+        timelineOriginMs: Long,
+        paint: Paint
+    ) {
+        val scale = dims.scaleFactor
+        val digitSize = 44f * scale
+        val labelSize = 22f * scale
+        val heartSize = 30f * scale
+        val gap = 12f * scale
+        val padH = 20f * scale
+        val padV = 10f * scale
+        val rowGap = 8f * scale
+        val cornerRadius = 20f * scale
+        val edgeMargin = 20f * scale
+
+        paint.reset()
+        paint.isAntiAlias = true
+        paint.isFakeBoldText = true
+        paint.textSize = digitSize
+        // Reserve the width of the widest plausible reading so pills share one width.
+        val digitWidth = paint.measureText("888")
+        val digitMetrics = paint.fontMetrics
+        val digitBaselineOffset = (abs(digitMetrics.ascent) - digitMetrics.descent) / 2f
+
+        paint.isFakeBoldText = false
+        paint.textSize = labelSize
+        val labelMetrics = paint.fontMetrics
+        val labelBaselineOffset = (abs(labelMetrics.ascent) - labelMetrics.descent) / 2f
+
+        // Never let a long wearer name — or a fallback to a long record title — grow the pills
+        // across the graph. Half the plot width is the most the HUD may claim.
+        val maxLabelWidth = ((dims.graphRight - dims.graphLeft) * 0.5f) -
+                (padH * 2 + heartSize + gap + digitWidth + gap)
+        val labels = records.map { ellipsize(wearerLabelOf(it), maxLabelWidth, paint) }
+        val labelWidth = labels.maxOf { paint.measureText(it) }
+
+        val contentWidth = heartSize + gap + digitWidth + gap + labelWidth
+        val pillWidth = contentWidth + padH * 2
+        val rowHeight = maxOf(abs(digitMetrics.ascent) + digitMetrics.descent, heartSize) + padV * 2
+
+        val pillRight = minOf(dims.graphRight, dims.drawAreaRight - edgeMargin)
+        val pillLeft = pillRight - pillWidth
+        var rowTop = dims.graphTop + edgeMargin
+
+        records.forEachIndexed { index, record ->
+            val bpm = getInterpolatedBpm(record.dataPoints, viewport.playhead)
+            val rect = RectF(pillLeft, rowTop, pillRight, rowTop + rowHeight)
+
+            paint.reset()
+            paint.isAntiAlias = true
+            paint.color = 0xAA000000.toInt()
+            canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)
+
+            val contentLeft = pillLeft + padH
+            val centerY = rect.centerY()
+
+            paint.style = Paint.Style.FILL
+            paint.color = if (bpm != null) colorForRecord(record, index, config) else android.graphics.Color.GRAY
+            drawHeart(
+                canvas,
+                contentLeft + heartSize / 2f,
+                centerY - heartSize * 0.25f,
+                (heartSize / 2f) * pulseScaleFor(bpm, viewport.playhead),
+                paint
+            )
+
+            paint.textSize = digitSize
+            paint.isFakeBoldText = true
+            paint.textAlign = Paint.Align.RIGHT
+            canvas.drawText(
+                bpm?.roundToInt()?.toString() ?: "--",
+                contentLeft + heartSize + gap + digitWidth,
+                centerY + digitBaselineOffset,
+                paint
+            )
+
+            paint.textSize = labelSize
+            paint.isFakeBoldText = false
+            paint.color = 0xCCFFFFFF.toInt()
+            paint.textAlign = Paint.Align.LEFT
+            canvas.drawText(
+                labels[index],
+                contentLeft + heartSize + gap + digitWidth + gap,
+                centerY + labelBaselineOffset,
+                paint
+            )
+
+            rowTop += rowHeight + rowGap
+        }
+
+        val timeRowHeight = labelSize * 2f + padV * 3f
+        val timeRect = RectF(pillLeft, rowTop, pillRight, rowTop + timeRowHeight)
+        paint.reset()
+        paint.isAntiAlias = true
+        paint.color = 0xAA000000.toInt()
+        canvas.drawRoundRect(timeRect, cornerRadius, cornerRadius, paint)
+
+        val elapsedMs = viewport.playhead.toLong().coerceAtLeast(0L)
+        val absTime = timelineOriginMs + viewport.playhead.toLong()
+        paint.color = 0xCCFFFFFF.toInt()
+        paint.textSize = labelSize
+        paint.textAlign = Paint.Align.CENTER
+        canvas.drawText(
+            StringFormatHelpers.getTimeString(absTime, java.time.ZoneId.of(config.timeZoneId)),
+            timeRect.centerX(),
+            timeRect.top + padV + labelSize,
+            paint
+        )
+        canvas.drawText(
+            StringFormatHelpers.getDurationString(elapsedMs),
+            timeRect.centerX(),
+            timeRect.top + padV * 2f + labelSize * 2f,
+            paint
+        )
     }
 
     private fun drawMultiLegend(
@@ -797,11 +1089,8 @@ object ImageExporter {
         val itemHeight = 32f * dims.scaleFactor
 
         records.forEachIndexed { index, record ->
-            val wearerLabel = record.metadata.wearerName.takeIf { it.isNotBlank() }
-                ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
-                ?: record.metadata.title
-            val color = config.customRecordColors[record.metadata.recordId]
-                ?: MULTI_WATCH_PALETTES[index % MULTI_WATCH_PALETTES.size][0]
+            val wearerLabel = wearerLabelOf(record)
+            val color = colorForRecord(record, index, config)
 
             paint.reset()
             paint.isAntiAlias = true

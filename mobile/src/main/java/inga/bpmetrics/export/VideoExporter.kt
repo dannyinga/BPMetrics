@@ -82,6 +82,17 @@ object VideoExporter {
         val endTimeMs = config.imageConfig.endTimeMs
         val totalDataDurationMs = (endTimeMs - startTimeMs).coerceAtLeast(1000L)
 
+        // Place every record on one timeline up front. Doing it here rather than per frame keeps
+        // the overlay cheap, and — more importantly — means the video is clipped against exactly
+        // the same origin the graph is drawn against, so all records stay in sync with it.
+        val exportRecords = config.records.ifEmpty { listOf(record) }
+        val alignedRecords = if (exportRecords.size > 1) {
+            ImageExporter.alignRecords(exportRecords, config.imageConfig.alignByElapsedTime)
+        } else {
+            null
+        }
+        val timelineOriginMs = alignedRecords?.timeline?.originWallClockMs ?: record.metadata.startTime
+
         var isInputImage = false
         val mediaUri: Uri
         val inputMimeType: String?
@@ -132,8 +143,8 @@ object VideoExporter {
                 } else {
                     val alignment = calculateVideoAlignment(
                         context,
-                        record,
                         mediaUri,
+                        timelineOriginMs,
                         config.syncOffsetMs
                     )
                     val videoStartRelativeMs = alignment.first
@@ -165,11 +176,10 @@ object VideoExporter {
             override fun getBitmap(presentationTimeUs: Long): Bitmap {
                 reusableCanvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
                 val currentRecordAbsoluteTimeMs = startTimeMs + ((presentationTimeUs / 1000.0))
-                val exportRecords = if (config.records.isNotEmpty()) config.records else listOf(record)
-                if (exportRecords.size > 1) {
-                    ImageExporter.renderMultiRecordsOnCanvas(
+                if (alignedRecords != null) {
+                    ImageExporter.renderAlignedRecordsOnCanvas(
                         canvas = reusableCanvas,
-                        records = exportRecords,
+                        aligned = alignedRecords,
                         config = config.imageConfig,
                         currentTimeMs = currentRecordAbsoluteTimeMs,
                         windowSizeMs = config.windowSizeMs,
@@ -357,15 +367,35 @@ object VideoExporter {
     }
 
     /**
-     * Calculates the start and end offsets for a BPM record to align with a video file.
+     * Calculates where a video sits on a single record's timeline.
      */
     fun calculateVideoAlignment(
         context: Context,
         record: BpmRecord,
         videoUri: Uri,
         globalSyncOffsetMs: Long
+    ): Pair<Long, Long> = calculateVideoAlignment(
+        context = context,
+        videoUri = videoUri,
+        timelineOriginMs = record.metadata.startTime,
+        globalSyncOffsetMs = globalSyncOffsetMs
+    )
+
+    /**
+     * Calculates where a video sits on a timeline whose position 0 is [timelineOriginMs].
+     *
+     * For a multi-record export the origin is [ImageExporter.Timeline.originWallClockMs] rather
+     * than any one record's start, so a single video lines up with every record on the graph.
+     *
+     * @return the video's start and end, as offsets from the timeline origin.
+     */
+    fun calculateVideoAlignment(
+        context: Context,
+        videoUri: Uri,
+        timelineOriginMs: Long,
+        globalSyncOffsetMs: Long
     ): Pair<Long, Long> {
-        val sessionStartTs = record.metadata.startTime
+        val sessionStartTs = timelineOriginMs
         val retriever = MediaMetadataRetriever()
         var videoDurationMs = 0L
         var videoStartTs: Long? = null
@@ -386,10 +416,21 @@ object VideoExporter {
     /**
      * Queries the MediaStore for videos that overlap with the heart rate record.
      */
-    fun getOverlappingVideos(context: Context, record: BpmRecord): List<Uri> {
+    fun getOverlappingVideos(context: Context, record: BpmRecord): List<Uri> =
+        getOverlappingVideos(context, listOf(record))
+
+    /**
+     * Queries the MediaStore for videos overlapping any of [records].
+     *
+     * A multi-record export spans from the earliest session to the latest, so a video worth
+     * suggesting may overlap only one of them — searching a single record's window would miss it.
+     */
+    fun getOverlappingVideos(context: Context, records: List<BpmRecord>): List<Uri> {
+        if (records.isEmpty()) return emptyList()
+
         val uris = mutableListOf<Uri>()
-        val recStart = record.metadata.startTime
-        val recEnd = recStart + record.metadata.durationMs
+        val recStart = records.minOf { it.metadata.startTime }
+        val recEnd = records.maxOf { it.metadata.startTime + it.metadata.durationMs }
         val projection = arrayOf(
             android.provider.MediaStore.Video.Media._ID,
             android.provider.MediaStore.Video.Media.DATE_TAKEN,

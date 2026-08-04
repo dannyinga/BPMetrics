@@ -281,9 +281,9 @@ fun VideoExportDialog(
     val lastGraphRect by viewModel.savedGraphRect.collectAsStateWithLifecycle()
     val defaultTz by viewModel.defaultTimeZone.collectAsStateWithLifecycle()
 
-    val suggestedVideos by produceState(initialValue = emptyList()) {
+    val suggestedVideos by produceState(initialValue = emptyList(), records) {
         value = withContext(Dispatchers.IO) {
-            VideoExporter.getOverlappingVideos(context, record)
+            VideoExporter.getOverlappingVideos(context, records)
         }.reversed()
     }
 
@@ -301,7 +301,8 @@ fun VideoExportDialog(
     var selectedTimeZoneId by remember(defaultTz) { mutableStateOf(defaultTz) }
     var showTzDialog by remember { mutableStateOf(false) }
     var customRecordColors by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
-    var alignByElapsedTime by remember { mutableStateOf(true) }
+    // Multiple records default to clock time so a single video stays in sync with all of them.
+    var alignByElapsedTime by remember(records) { mutableStateOf(records.size <= 1) }
     var showMultiWatchSettings by remember { mutableStateOf(true) }
     var graphRect by remember {
         mutableStateOf(RectF(0f, 0f, 1f, 1f))
@@ -319,11 +320,18 @@ fun VideoExportDialog(
         mutableFloatStateOf(w / h.coerceAtLeast(1f))
     }
 
+    // The axis every time field in this dialog is expressed against. With one record it is that
+    // record's own elapsed time; with several it spans from the earliest session start to the
+    // last sample of whichever session ended last.
+    val timeline by remember(records, alignByElapsedTime) {
+        mutableStateOf(ImageExporter.timelineFor(records, alignByElapsedTime))
+    }
+
     var syncTrigger by remember { mutableIntStateOf(0) }
     var videoAlignStartMs by remember { mutableStateOf(0L) }
-    var videoAlignEndMs by remember { mutableStateOf(record.metadata.durationMs) }
+    var videoAlignEndMs by remember(timeline) { mutableStateOf(timeline.durationMs) }
     var cropStartMs by remember { mutableStateOf(0L) }
-    var cropEndMs by remember { mutableStateOf(record.metadata.durationMs) }
+    var cropEndMs by remember(timeline) { mutableStateOf(timeline.durationMs) }
 
     var inputMode by remember {
         mutableStateOf(
@@ -468,8 +476,8 @@ fun VideoExportDialog(
             val (startOffset, endOffset) = withContext(Dispatchers.IO) {
                 VideoExporter.calculateVideoAlignment(
                     context,
-                    record,
                     overlayVideoUri!!,
+                    timeline.originWallClockMs,
                     globalSyncOffset
                 )
             }
@@ -489,12 +497,12 @@ fun VideoExportDialog(
         } else {
             // Reset to default (0 to duration) if no video is present
             videoAlignStartMs = 0L
-            videoAlignEndMs = record.metadata.durationMs
+            videoAlignEndMs = timeline.durationMs
             cropStartMs = 0L
-            cropEndMs = record.metadata.durationMs
+            cropEndMs = timeline.durationMs
             inputMode = TimeInputMode.RECORD_TIME
             startInput = formatTimeForMode(0L, TimeInputMode.RECORD_TIME)
-            endInput = formatTimeForMode(record.metadata.durationMs, TimeInputMode.RECORD_TIME)
+            endInput = formatTimeForMode(timeline.durationMs, TimeInputMode.RECORD_TIME)
         }
     }
 
@@ -948,9 +956,19 @@ fun VideoExportDialog(
                                 { showMultiWatchSettings = !showMultiWatchSettings }
                             ) {
                                 ExportToggle(
-                                    label = "Align graph timelines starting from 0:00",
+                                    label = "Stack all timelines from 0:00",
                                     checked = alignByElapsedTime,
                                     onCheckedChange = { alignByElapsedTime = it }
+                                )
+                                Text(
+                                    if (alignByElapsedTime) {
+                                        "Every wearer starts at 0:00, for comparing shapes. " +
+                                            "A video can only stay in sync with one of them."
+                                    } else {
+                                        "Wearers sit at the time they were actually recorded, so " +
+                                            "one video stays in sync with all of them."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall
                                 )
 
                                 Spacer(Modifier.height(8.dp))
