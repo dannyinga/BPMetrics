@@ -152,15 +152,18 @@ interface BpmRecordDao {
         CategoryEntity::class,
         TagEntity::class,
         RecordTagCrossRef::class,
-        WatchEntity::class
+        WatchEntity::class,
+        SavedAnalysisEntity::class,
+        SavedAnalysisRecordEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
     abstract fun bpmRecordDao(): BpmRecordDao
     abstract fun tagDao(): TagDao
     abstract fun watchDao(): WatchDao
+    abstract fun savedAnalysisDao(): SavedAnalysisDao
 
     companion object {
         private const val TAG = "LibraryDatabase"
@@ -258,6 +261,53 @@ abstract class LibraryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration from schema version 6 to 7.
+         *
+         * Adds storage for saved analyses. Purely additive — nothing existing is touched.
+         *
+         * The SQL must match what Room generates for these entities exactly, down to column
+         * defaults and index names; [LibraryDatabaseMigrationTest] is what checks that.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS saved_analyses (
+                        analysisId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        filterDescription TEXT NOT NULL DEFAULT ''
+                    )
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS saved_analysis_records (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        analysisId INTEGER NOT NULL,
+                        recordId INTEGER NOT NULL,
+                        title TEXT NOT NULL,
+                        date INTEGER NOT NULL,
+                        minBpm REAL,
+                        avgBpm REAL,
+                        maxBpm REAL,
+                        activeDurationMs INTEGER NOT NULL,
+                        tagsEncoded TEXT NOT NULL DEFAULT '',
+                        FOREIGN KEY(analysisId) REFERENCES saved_analyses(analysisId) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_saved_analysis_records_analysisId ON saved_analysis_records (analysisId)"
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_6_7: Saved analysis tables created")
+            }
+        }
+
         /** Whether [column] is already present on [table], so a migration can re-run safely. */
         private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
             db.query("PRAGMA table_info($table)").use { cursor ->
@@ -327,7 +377,7 @@ abstract class LibraryDatabase : RoomDatabase() {
                     LibraryDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.
                     .build()

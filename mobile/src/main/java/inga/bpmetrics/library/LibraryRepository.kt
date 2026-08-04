@@ -53,6 +53,7 @@ class LibraryRepository(
     private val recordDao = database.bpmRecordDao()
     private val tagDao = database.tagDao()
     private val watchDao = database.watchDao()
+    private val savedAnalysisDao = database.savedAnalysisDao()
 
     init {
         startRecordFlowFromDB()
@@ -209,6 +210,101 @@ class LibraryRepository(
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")
         return recordId
     }
+
+    // --- Saved Analyses ---
+
+    /** Saved analyses, newest first. */
+    fun getSavedAnalyses(): Flow<List<SavedAnalysisEntity>> = savedAnalysisDao.getAllFlow()
+
+    /**
+     * Stores an analysis, copying the values it was computed from.
+     *
+     * Copying rather than referencing is the point: the analysis is a statement about a moment,
+     * and must not change when the library does.
+     *
+     * @return the id of the stored analysis.
+     */
+    suspend fun saveAnalysis(
+        name: String,
+        filterDescription: String,
+        records: List<AnalysisSnapshotRecord>
+    ): Long {
+        val analysisId = savedAnalysisDao.insertAnalysis(
+            SavedAnalysisEntity(
+                name = name.trim(),
+                createdAt = System.currentTimeMillis(),
+                filterDescription = filterDescription
+            )
+        )
+
+        savedAnalysisDao.insertRecords(
+            records.map { record ->
+                SavedAnalysisRecordEntity(
+                    analysisId = analysisId,
+                    recordId = record.recordId,
+                    title = record.title,
+                    date = record.date,
+                    minBpm = record.minBpm,
+                    avgBpm = record.avgBpm,
+                    maxBpm = record.maxBpm,
+                    activeDurationMs = record.activeDurationMs,
+                    tagsEncoded = encodeTags(record.tags)
+                )
+            }
+        )
+
+        Log.d(tag, "Saved analysis '$name' with ${records.size} record(s)")
+        return analysisId
+    }
+
+    /** Reads a stored analysis back into the shape the analysis screen works from. */
+    suspend fun loadSavedAnalysis(analysisId: Long): LoadedAnalysis? {
+        val stored = savedAnalysisDao.getAnalysis(analysisId) ?: return null
+        return LoadedAnalysis(
+            metadata = stored.metadata,
+            records = stored.records.map { entity ->
+                AnalysisSnapshotRecord(
+                    recordId = entity.recordId,
+                    title = entity.title,
+                    date = entity.date,
+                    minBpm = entity.minBpm,
+                    avgBpm = entity.avgBpm,
+                    maxBpm = entity.maxBpm,
+                    activeDurationMs = entity.activeDurationMs,
+                    tags = decodeTags(entity.tagsEncoded)
+                )
+            },
+            recordsStillInLibrary = savedAnalysisDao.countRecordsStillPresent(analysisId)
+        )
+    }
+
+    suspend fun renameSavedAnalysis(analysisId: Long, name: String) =
+        savedAnalysisDao.rename(analysisId, name.trim())
+
+    suspend fun deleteSavedAnalysis(analysisId: Long) = savedAnalysisDao.deleteAnalysis(analysisId)
+
+    /**
+     * Flattens tags to `categoryId:categoryName:tagName`, one per line.
+     *
+     * Colons and newlines are stripped from the parts rather than escaped — these are display
+     * labels, and a tag containing a separator is not worth a parser for.
+     */
+    private fun encodeTags(tags: List<AnalysisSnapshotTag>): String =
+        tags.joinToString("\n") { tag ->
+            "${tag.categoryId}:${tag.categoryName.sanitizeForEncoding()}:${tag.tagName.sanitizeForEncoding()}"
+        }
+
+    private fun decodeTags(encoded: String): List<AnalysisSnapshotTag> {
+        if (encoded.isBlank()) return emptyList()
+        return encoded.lineSequence().mapNotNull { line ->
+            val parts = line.split(":", limit = 3)
+            if (parts.size != 3) return@mapNotNull null
+            val categoryId = parts[0].toLongOrNull() ?: return@mapNotNull null
+            AnalysisSnapshotTag(tagName = parts[2], categoryId = categoryId, categoryName = parts[1])
+        }.toList()
+    }
+
+    private fun String.sanitizeForEncoding(): String = replace(":", " ").replace("\n", " ")
 
     // --- Watch Registry ---
 

@@ -183,6 +183,95 @@ class LibraryDatabaseMigrationTest {
     }
 
     /**
+     * The saved-analysis tables must match Room's expectations exactly, down to the index name
+     * and the cascade clause on the foreign key.
+     */
+    @Test
+    fun migrate6To7_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 6).close()
+
+        helper.runMigrationsAndValidate(TEST_DB, 7, true, LibraryDatabase.MIGRATION_6_7).close()
+    }
+
+    /**
+     * Running the whole chain is what a user upgrading from an older install actually experiences.
+     */
+    @Test
+    fun migrate5To7_runsTheWholeChain() {
+        helper.createDatabase(TEST_DB, 5).apply {
+            execSQL(
+                """
+                INSERT INTO bpm_records
+                    (recordId, title, description, date, startTime, endTime, durationMs, maxId, avg, minId, deviceId, wearerName)
+                VALUES
+                    (1, 'Old Recording', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            TEST_DB,
+            7,
+            true,
+            LibraryDatabase.MIGRATION_5_6,
+            LibraryDatabase.MIGRATION_6_7
+        )
+
+        db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Kyle", cursor.getString(0))
+            assertEquals("Watch A", cursor.getString(1))
+        }
+        db.close()
+    }
+
+    /**
+     * Deleting a saved analysis must take its captured records with it, or the database
+     * accumulates orphans invisibly.
+     */
+    @Test
+    fun savedAnalysisRecords_areRemovedWithTheirAnalysis() {
+        helper.createDatabase(TEST_DB, 6).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 7, true, LibraryDatabase.MIGRATION_6_7)
+
+        // The cascade is enforced by SQLite only when foreign keys are switched on.
+        db.execSQL("PRAGMA foreign_keys = ON")
+        db.execSQL("INSERT INTO saved_analyses (analysisId, name, createdAt, filterDescription) VALUES (1, 'Coachella 2026', 1000, '')")
+        db.execSQL(
+            """
+            INSERT INTO saved_analysis_records
+                (analysisId, recordId, title, date, minBpm, avgBpm, maxBpm, activeDurationMs, tagsEncoded)
+            VALUES
+                (1, 10, 'Set One', 1000, 60.0, 90.0, 150.0, 60000, '1:Event:Coachella')
+            """.trimIndent()
+        )
+
+        db.execSQL("DELETE FROM saved_analyses WHERE analysisId = 1")
+
+        db.query("SELECT COUNT(*) FROM saved_analysis_records").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Captured records should cascade with their analysis", 0, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * Migrations must be safe to re-run: a failed upgrade rolls back and is retried on next
+     * launch, so a second pass over an already-migrated table cannot be allowed to throw.
+     */
+    @Test
+    fun migrate6To7_isIdempotent() {
+        helper.createDatabase(TEST_DB, 6).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 7, true, LibraryDatabase.MIGRATION_6_7)
+
+        LibraryDatabase.MIGRATION_6_7.migrate(db)
+
+        assertNotNull(db)
+        db.close()
+    }
+
+    /**
      * Migrations must be safe to re-run: a failed upgrade rolls back and is retried on next
      * launch, so a second pass over an already-migrated table cannot be allowed to throw.
      */

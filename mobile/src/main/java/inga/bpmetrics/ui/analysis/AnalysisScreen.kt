@@ -21,7 +21,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,13 +31,18 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -58,8 +65,12 @@ import inga.bpmetrics.ui.theme.BpmLow
 fun AnalysisScreen(
     navController: NavController,
     viewModel: AnalysisViewModel,
-    onOpenDrawer: () -> Unit
+    onOpenDrawer: () -> Unit,
+    title: String = "Analysis View",
+    onSave: ((name: String, records: List<AnalysisRecord>) -> Unit)? = null
 ) {
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var saveName by remember { mutableStateOf("") }
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val selectedMetric by viewModel.selectedMetric.collectAsStateWithLifecycle()
     val selectedCategoryId by viewModel.selectedCategoryTabId.collectAsStateWithLifecycle()
@@ -75,10 +86,18 @@ fun AnalysisScreen(
         topBar = {
             Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {
                 TopAppBar(
-                    title = { Text("Analysis View", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) },
+                    title = { Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) },
                     navigationIcon = {
                         IconButton(onClick = onOpenDrawer) {
                             Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
+                        }
+                    },
+                    actions = {
+                        // A stored analysis is already frozen; only a live one can be captured.
+                        if (onSave != null && !uiState.isEmpty && !uiState.isFrozen) {
+                            IconButton(onClick = { showSaveDialog = true }) {
+                                Icon(Icons.Default.Save, contentDescription = "Save this analysis")
+                            }
                         }
                     }
                 )
@@ -197,15 +216,15 @@ fun AnalysisScreen(
                         LazyColumn(modifier = Modifier.weight(1f)) {
                             items(uiState.records) { record ->
                                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
-                                    navController.navigate("detail/${record.metadata.recordId}")
+                                    navController.navigate("detail/${record.recordId}")
                                 }, horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text(record.metadata.title, style = MaterialTheme.typography.bodyMedium)
+                                    Text(record.title, style = MaterialTheme.typography.bodyMedium)
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(Icons.Default.FavoriteBorder, null, tint = themeColor, modifier = Modifier.size(14.dp))
                                         val displayValue = when (selectedMetric) {
-                                            AnalysisViewModel.MetricType.LOW -> record.minDataPoint?.bpm?.toInt() ?: 0
-                                            AnalysisViewModel.MetricType.AVG -> record.metadata.avg?.toInt() ?: 0
-                                            AnalysisViewModel.MetricType.HIGH -> record.maxDataPoint?.bpm?.toInt() ?: 0
+                                            AnalysisViewModel.MetricType.LOW -> record.minBpm?.toInt() ?: 0
+                                            AnalysisViewModel.MetricType.AVG -> record.avgBpm?.toInt() ?: 0
+                                            AnalysisViewModel.MetricType.HIGH -> record.maxBpm?.toInt() ?: 0
                                         }
                                         Text("$displayValue", fontWeight = FontWeight.Bold, color = themeColor)
                                     }
@@ -218,5 +237,41 @@ fun AnalysisScreen(
                 Spacer(Modifier.height(16.dp))
             }
         }
+    }
+
+    if (showSaveDialog && onSave != null) {
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            title = { Text("Save this analysis") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = saveName,
+                        onValueChange = { saveName = it },
+                        label = { Text("Name") },
+                        placeholder = { Text("Coachella 2026 Analysis") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Saves these ${uiState.records.size} recordings and their numbers as they " +
+                            "are now. Editing or deleting a recording later will not change it.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = saveName.isNotBlank(),
+                    onClick = {
+                        onSave(saveName, uiState.records)
+                        saveName = ""
+                        showSaveDialog = false
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") } }
+        )
     }
 }

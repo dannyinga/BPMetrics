@@ -24,6 +24,7 @@ import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.ui.about.AboutScreen
 import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
+import inga.bpmetrics.ui.analysis.SavedAnalysesScreen
 import inga.bpmetrics.ui.graph.BpmGraphDetailScreen
 import inga.bpmetrics.ui.record.BpmRecordScreen
 import inga.bpmetrics.ui.record.BpmRecordViewModel
@@ -117,18 +118,59 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 TagManagementScreen(navController, viewModel, onOpenDrawer = openDrawer)
             }
 
+            // The drawer lands on the shelf of stored analyses rather than a live one, because a
+            // saved analysis is the thing worth coming back to.
             composable(Routes.ANALYSIS) {
+                SavedAnalysesScreen(
+                    savedAnalyses = repository.getSavedAnalyses(),
+                    onOpenDrawer = openDrawer,
+                    onOpen = { navController.navigate("${Routes.ANALYSIS_SAVED}/$it") },
+                    onNewAnalysis = { navController.navigate(Routes.ANALYSIS_LIVE) },
+                    onDelete = { id -> scope.launch { repository.deleteSavedAnalysis(id) } }
+                )
+            }
+
+            composable(Routes.ANALYSIS_LIVE) {
                 val filterState by libraryViewModel.filterState.collectAsState()
 
-                // Pass the pre-filtered records flow and current filter state to the AnalysisViewModel
                 val viewModel: AnalysisViewModel = viewModel(
-                    factory = AnalysisViewModel.Factory(
+                    factory = AnalysisViewModel.liveFactory(
                         repository = repository,
                         filteredRecords = libraryViewModel.filteredRecords,
-                        initialFilter = filterState
+                        filter = filterState
                     )
                 )
-                AnalysisScreen(navController, viewModel, onOpenDrawer = openDrawer)
+                AnalysisScreen(
+                    navController = navController,
+                    viewModel = viewModel,
+                    onOpenDrawer = openDrawer,
+                    onSave = { name, records ->
+                        scope.launch {
+                            repository.saveAnalysis(
+                                name = name,
+                                filterDescription = "${records.size} recordings",
+                                records = records.map { it.toSnapshot() }
+                            )
+                            navController.navigateToSection(AppDestination.ANALYSIS)
+                        }
+                    }
+                )
+            }
+
+            composable(
+                route = "${Routes.ANALYSIS_SAVED}/{analysisId}",
+                arguments = listOf(navArgument("analysisId") { type = NavType.LongType })
+            ) { backStackEntry ->
+                val analysisId = backStackEntry.arguments?.getLong("analysisId") ?: return@composable
+                val viewModel: AnalysisViewModel = viewModel(
+                    factory = AnalysisViewModel.savedFactory(repository, analysisId)
+                )
+                AnalysisScreen(
+                    navController = navController,
+                    viewModel = viewModel,
+                    onOpenDrawer = openDrawer,
+                    title = "Saved Analysis"
+                )
             }
 
             composable(Routes.WATCHES) {
@@ -216,4 +258,10 @@ object Routes {
     const val RENDER_QUEUE = "render_queue"
     const val WATCHES = "watches"
     const val ABOUT = "about"
+
+    /** A live analysis of the Library's current filter, which can be saved. */
+    const val ANALYSIS_LIVE = "analysis_live"
+
+    /** A stored analysis, rendered from what was captured when it was saved. */
+    const val ANALYSIS_SAVED = "analysis_saved"
 }
