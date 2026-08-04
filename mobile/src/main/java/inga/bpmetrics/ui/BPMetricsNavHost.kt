@@ -7,6 +7,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -121,8 +122,13 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             // The drawer lands on the shelf of stored analyses rather than a live one, because a
             // saved analysis is the thing worth coming back to.
             composable(Routes.ANALYSIS) {
+                // Room hands back a new Flow per call, and collection is keyed on the instance --
+                // rebuilding it each recomposition would restart the query and blink the empty
+                // state on the way back.
+                val savedAnalyses = remember { repository.getSavedAnalyses() }
+
                 SavedAnalysesScreen(
-                    savedAnalyses = repository.getSavedAnalyses(),
+                    savedAnalyses = savedAnalyses,
                     onOpenDrawer = openDrawer,
                     onOpen = { navController.navigate("${Routes.ANALYSIS_SAVED}/$it") },
                     onNewAnalysis = { navController.navigate(Routes.ANALYSIS_LIVE) },
