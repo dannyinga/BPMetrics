@@ -42,6 +42,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
+    implementation(libs.gson)
     implementation(libs.androidx.room.common.jvm)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)

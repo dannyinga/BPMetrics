@@ -15,6 +15,15 @@ interface RecordingDAO {
     @Insert
     suspend fun insert(point: LocalBpmDataPoint)
 
+    /**
+     * Inserts a whole batch of samples in one transaction.
+     *
+     * Health Services delivers samples in batches, so writing them individually costs one
+     * transaction — and one disk sync — per second for the length of a recording.
+     */
+    @Insert
+    suspend fun insertAll(points: List<LocalBpmDataPoint>)
+
     @Query("DELETE FROM local_bpm_data_points")
     suspend fun deleteAll()
 
@@ -58,8 +67,7 @@ abstract class RecordingDB : RoomDatabase() {
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS pending_records (
                         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        jsonPayload TEXT NOT NULL,
-                        createdAt INTEGER NOT NULL
+                        recordJson TEXT NOT NULL
                     )
                 """.trimIndent())
             }

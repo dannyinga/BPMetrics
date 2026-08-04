@@ -5,10 +5,11 @@ import android.util.Log
 import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
-import com.google.gson.Gson
+import inga.bpmetrics.core.BpmGson
 import inga.bpmetrics.recording.RecordingRepository
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.db.PendingRecordEntity
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,8 +29,19 @@ import kotlinx.coroutines.tasks.await
 class PhoneSyncManager(val context: Context) {
     private val tag = "BPMetrics Sync Manager"
     private val repository = RecordingRepository.Companion.getInstance(context)
-    private val gson = Gson()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val gson = BpmGson.instance
+
+    /**
+     * Keeps sync failures from crashing the watch app.
+     *
+     * The outbox flow opens the database on first collection, so a database-level failure here
+     * would otherwise reach the default uncaught handler and take down the process on launch.
+     */
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(tag, "Unhandled failure in sync scope", throwable)
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     init {
         // Start observing the persistent pending records flow from the repository.
