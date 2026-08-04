@@ -69,6 +69,7 @@ gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 androidx-room-common-jvm = { group = "androidx.room", name = "room-common-jvm", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room"}
+androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room"}
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room"}
 androidx-lifecycle-service = { group = "androidx.lifecycle", name = "lifecycle-service", version.ref = "lifecycleService" }
 androidx-wear-ongoing = { group = "androidx.wear", name = "wear-ongoing", version.ref = "ongoing"}
