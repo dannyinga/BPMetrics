@@ -116,8 +116,16 @@ object ImageExporter {
             return if (timestampMs - lastPoint.timestamp <= BpmRecord.GAP_THRESHOLD_MS) lastPoint.bpm else null
         }
         
-        val p2Index = points.indexOfFirst { it.timestamp >= timestampMs }
-        if (p2Index < 0) return null
+        // Binary search rather than a scan: this runs for every wearer on every frame, and the
+        // ranked pills call it many times more per frame to place their slide. The bounds checks
+        // above already rely on the points being ordered by timestamp.
+        var low = 0
+        var high = points.size - 1
+        while (low < high) {
+            val mid = (low + high) / 2
+            if (points[mid].timestamp >= timestampMs) high = mid else low = mid + 1
+        }
+        val p2Index = low
         if (p2Index == 0) return points.first().bpm
         
         val p1 = points[p2Index - 1]
@@ -960,9 +968,12 @@ object ImageExporter {
      * repeated compactly — each heart in that wearer's line colour, beating at their own rate —
      * so a viewer can follow one person's heart rate without tracing their curve.
      *
-     * A wearer whose session is not running at the playhead shows "--" instead of vanishing, so
-     * the stack keeps a stable order and height for the whole video. Digits are right-aligned in
-     * a fixed-width slot so the pills do not jitter as the numbers change.
+     * Pills are ordered by current heart rate, fastest at the top, and slide between places as
+     * one wearer overtakes another — the order is itself part of the story the video tells.
+     *
+     * A wearer whose session is not running at the playhead shows "--" and sinks to the bottom
+     * rather than vanishing, so the stack keeps a stable height for the whole video. Digits are
+     * right-aligned in a fixed-width slot so the pills do not jitter as the numbers change.
      *
      * Clock and elapsed time belong to the shared timeline, so they are drawn once underneath
      * rather than repeated in every pill.
@@ -977,15 +988,32 @@ object ImageExporter {
         paint: Paint
     ) {
         val scale = dims.scaleFactor
-        val digitSize = 44f * scale
-        val labelSize = 22f * scale
-        val heartSize = 30f * scale
-        val gap = 12f * scale
-        val padH = 20f * scale
-        val padV = 10f * scale
-        val rowGap = 8f * scale
-        val cornerRadius = 20f * scale
         val edgeMargin = 20f * scale
+        val rowGap = 8f * scale
+
+        // Pills are sized to fill the height rather than fixed small, so a two-wearer session
+        // gets large readable numbers instead of the same cramped rows as a six-wearer one. The
+        // ceiling stops a single pill becoming a slab; the floor keeps a crowded session legible
+        // even if the column then runs slightly past the graph.
+        val timeRowHeight = 96f * scale
+        val available = (dims.graphBottom - dims.graphTop) - (edgeMargin * 2) - timeRowHeight
+
+        // Height is also bounded by width. Everything inside a pill scales with its row height,
+        // so on a tall narrow graph the heart and digits would eat the whole pill and leave the
+        // name ellipsized away to nothing. This only binds when the graph is narrow.
+        val widthCap = (dims.graphRight - dims.graphLeft) * 0.14f
+
+        val rowHeight = ((available - rowGap * (records.size - 1)) / records.size)
+            .coerceIn(64f * scale, minOf(170f * scale, widthCap))
+
+        // Everything else follows the row height, so the proportions hold at any size.
+        val digitSize = rowHeight * 0.50f
+        val labelSize = rowHeight * 0.25f
+        val heartSize = rowHeight * 0.42f
+        val gap = rowHeight * 0.14f
+        val padH = rowHeight * 0.22f
+        val padV = rowHeight * 0.14f
+        val cornerRadius = rowHeight * 0.24f
 
         paint.reset()
         paint.isAntiAlias = true
@@ -1010,26 +1038,44 @@ object ImageExporter {
 
         val contentWidth = heartSize + gap + digitWidth + gap + labelWidth
         val pillWidth = contentWidth + padH * 2
-        val rowHeight = maxOf(abs(digitMetrics.ascent) + digitMetrics.descent, heartSize) + padV * 2
 
         val pillRight = minOf(dims.graphRight, dims.drawAreaRight - edgeMargin)
         val pillLeft = pillRight - pillWidth
-        var rowTop = dims.graphTop + edgeMargin
+        val blockTop = dims.graphTop + edgeMargin
+        val slotPitch = rowHeight + rowGap
 
-        records.forEachIndexed { index, record ->
+        val slots = animatedRankSlots(records, viewport.playhead)
+
+        // Pills mid-slide are drawn last so one passes *over* the pill it is overtaking. Two
+        // opaque pills swapping places must cross, and without an order the overlap looks torn.
+        val drawOrder = records.indices.sortedBy { abs(slots[it] - slots[it].roundToInt()) }
+
+        drawOrder.forEach { index ->
+            val record = records[index]
             val bpm = getInterpolatedBpm(record.dataPoints, viewport.playhead)
+            val recordColor = colorForRecord(record, index, config)
+            val rowTop = blockTop + slots[index] * slotPitch
             val rect = RectF(pillLeft, rowTop, pillRight, rowTop + rowHeight)
 
             paint.reset()
             paint.isAntiAlias = true
-            paint.color = 0xAA000000.toInt()
+            // Denser than the single-record HUD: these sit over whatever the video is showing,
+            // and a busy frame behind thin digits is what made them hard to read.
+            paint.color = 0xD9000000.toInt()
+            canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)
+
+            // A rim in the wearer's own colour, which both ties the pill to its curve more firmly
+            // than the heart alone and keeps the edge legible while two pills overlap in a swap.
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = rowHeight * 0.035f
+            paint.color = (recordColor and 0x00FFFFFF) or 0xCC000000.toInt()
             canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)
 
             val contentLeft = pillLeft + padH
             val centerY = rect.centerY()
 
             paint.style = Paint.Style.FILL
-            paint.color = if (bpm != null) colorForRecord(record, index, config) else android.graphics.Color.GRAY
+            paint.color = if (bpm != null) recordColor else android.graphics.Color.GRAY
             drawHeart(
                 canvas,
                 contentLeft + heartSize / 2f,
@@ -1049,8 +1095,8 @@ object ImageExporter {
             )
 
             paint.textSize = labelSize
-            paint.isFakeBoldText = false
-            paint.color = 0xCCFFFFFF.toInt()
+            paint.isFakeBoldText = true
+            paint.color = android.graphics.Color.WHITE
             paint.textAlign = Paint.Align.LEFT
             canvas.drawText(
                 labels[index],
@@ -1058,33 +1104,101 @@ object ImageExporter {
                 centerY + labelBaselineOffset,
                 paint
             )
-
-            rowTop += rowHeight + rowGap
         }
 
-        val timeRowHeight = labelSize * 2f + padV * 3f
-        val timeRect = RectF(pillLeft, rowTop, pillRight, rowTop + timeRowHeight)
+        // Anchored to the number of wearers rather than to wherever the loop finished, so the
+        // clock holds still while the pills above it trade places. Uses the height reserved
+        // above, so what is drawn matches what the pills made room for.
+        val timeTop = blockTop + records.size * slotPitch
+        val timeRect = RectF(pillLeft, timeTop, pillRight, timeTop + timeRowHeight)
         paint.reset()
         paint.isAntiAlias = true
-        paint.color = 0xAA000000.toInt()
+        paint.color = 0xD9000000.toInt()
         canvas.drawRoundRect(timeRect, cornerRadius, cornerRadius, paint)
 
         val elapsedMs = viewport.playhead.toLong().coerceAtLeast(0L)
         val absTime = timelineOriginMs + viewport.playhead.toLong()
-        paint.color = 0xCCFFFFFF.toInt()
-        paint.textSize = labelSize
+
+        // Sized to the time pill rather than to the wearer rows, which change with how many
+        // people are in the session — the clock should not shrink because a fifth watch joined.
+        val timeTextSize = timeRowHeight * 0.30f
+        paint.color = android.graphics.Color.WHITE
+        paint.textSize = timeTextSize
+        paint.isFakeBoldText = true
         paint.textAlign = Paint.Align.CENTER
+
+        // Two lines centred as a block, so the pair sits in the middle whatever the pill height.
+        val lineGap = timeTextSize * 0.30f
+        val firstBaseline = timeRect.centerY() - lineGap / 2f
         canvas.drawText(
             StringFormatHelpers.getTimeString(absTime, java.time.ZoneId.of(config.timeZoneId)),
             timeRect.centerX(),
-            timeRect.top + padV + labelSize,
+            firstBaseline,
             paint
         )
+        paint.isFakeBoldText = false
+        paint.color = 0xCCFFFFFF.toInt()
         canvas.drawText(
             StringFormatHelpers.getDurationString(elapsedMs),
             timeRect.centerX(),
-            timeRect.top + padV * 2f + labelSize * 2f,
+            firstBaseline + timeTextSize + lineGap,
             paint
+        )
+    }
+
+    /**
+     * Where each wearer's pill sits in the stack, as a fractional slot: 0 is the top place, 1 the
+     * next, and anything between the two is a pill part-way through changing places.
+     *
+     * The slide is *derived* from the playhead rather than remembered between frames. Frames are
+     * rendered independently and not necessarily in order, so a carried-over position would drift
+     * apart from the data on a re-render and be simply wrong for a still image. Reading the order
+     * over a short trailing window instead gives the same motion from nothing but the timestamp,
+     * so any frame drawn twice is drawn identically.
+     *
+     * The window is weighted by 6s(1-s), which integrates to a smoothstep: a wearer overtaking
+     * another eases away and eases back into place rather than jumping between them at a constant
+     * rate. [RANK_ANIM_MS] is in playhead time, which video export maps one-to-one onto real time.
+     */
+    /** How long a pill takes to change places, in playhead milliseconds. */
+    private const val RANK_ANIM_MS = 600.0
+
+    /**
+     * How finely the trailing window is read. The slide advances one step per sample, so too few
+     * would stair-step; beyond this the motion is smoother than a frame can show.
+     */
+    private const val RANK_ANIM_SAMPLES = 16
+
+    internal fun animatedRankSlots(records: List<BpmRecord>, playhead: Double): FloatArray {
+        val slots = FloatArray(records.size)
+        if (records.size < 2) return slots
+
+        var totalWeight = 0f
+        repeat(RANK_ANIM_SAMPLES) { step ->
+            val age = (step + 0.5f) / RANK_ANIM_SAMPLES
+            val weight = 6f * age * (1f - age)
+            totalWeight += weight
+
+            rankOrderAt(records, playhead - age * RANK_ANIM_MS)
+                .forEachIndexed { slot, index -> slots[index] += weight * slot }
+        }
+
+        if (totalWeight > 0f) {
+            for (i in slots.indices) slots[i] /= totalWeight
+        }
+        return slots
+    }
+
+    /**
+     * Record indices in the order they should be stacked at [at], fastest heart rate first.
+     *
+     * A wearer with no reading at this instant sorts to the bottom rather than out of the list, and
+     * equal readings keep their original order, so neither a dropout nor a tie shuffles the stack.
+     */
+    internal fun rankOrderAt(records: List<BpmRecord>, at: Double): List<Int> {
+        val bpms = records.map { getInterpolatedBpm(it.dataPoints, at) }
+        return records.indices.sortedWith(
+            compareByDescending<Int> { bpms[it] ?: Double.NEGATIVE_INFINITY }.thenBy { it }
         )
     }
 
