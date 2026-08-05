@@ -54,7 +54,15 @@ object ImageExporter {
         val futureOpacity: Float = 0.65f,
         val timeZoneId: String = java.time.ZoneId.systemDefault().id,
         val customRecordColors: Map<Long, Int> = emptyMap(),
-        val alignByElapsedTime: Boolean = true
+        val alignByElapsedTime: Boolean = true,
+        /**
+         * Heading drawn on the graph.
+         *
+         * A single record uses its own title. Several have no title of their own, so exporting a
+         * named analysis passes its name here — "Subtronics 2026" rather than the generic label
+         * every multi-watch export would otherwise carry. Null keeps that default.
+         */
+        val graphTitle: String? = null
     )
 
     /**
@@ -894,7 +902,10 @@ object ImageExporter {
         if (allPoints.isEmpty()) return
         val minBpm = (allPoints.minOf { it.bpm } - 5.0).coerceAtLeast(30.0)
         val maxBpm = (allPoints.maxOf { it.bpm } + 5.0).coerceAtMost(220.0)
-        val ranges = BpmRanges(minBpm, maxBpm, minBpm, maxBpm, "Multi-Watch Session")
+        val ranges = BpmRanges(
+            minBpm, maxBpm, minBpm, maxBpm,
+            config.graphTitle?.takeIf { it.isNotBlank() } ?: "Multi-Watch Session"
+        )
 
         // Clock-aligned exports carry a crop chosen against the shared timeline, so it is honoured
         // as-is. Elapsed mode has no meaningful shared crop, and a caller may supply none at all,

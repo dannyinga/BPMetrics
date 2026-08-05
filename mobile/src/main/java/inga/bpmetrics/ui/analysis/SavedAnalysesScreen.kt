@@ -63,11 +63,13 @@ fun SavedAnalysesScreen(
     onOpenDrawer: () -> Unit,
     onOpen: (Long) -> Unit,
     onNewAnalysis: (LibraryViewModel.FilterState) -> Unit,
+    onPickForConcurrentAnalysis: () -> Unit,
     onDelete: (Long) -> Unit
 ) {
     val analyses by savedAnalyses.collectAsStateWithLifecycle(initialValue = emptyList())
     var pendingDelete by remember { mutableStateOf<SavedAnalysisEntity?>(null) }
     var showScopeDialog by remember { mutableStateOf(false) }
+    var showKindDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -82,7 +84,7 @@ fun SavedAnalysesScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { showScopeDialog = true },
+                onClick = { showKindDialog = true },
                 icon = { Icon(Icons.Default.Add, contentDescription = null) },
                 text = { Text("New analysis") }
             )
@@ -152,6 +154,41 @@ fun SavedAnalysesScreen(
         }
     }
 
+    // Two questions worth asking of the same recordings, so the kind is chosen before the scope.
+    if (showKindDialog) {
+        AlertDialog(
+            onDismissRequest = { showKindDialog = false },
+            title = { Text("What would you like to compare?") },
+            text = {
+                Column {
+                    AnalysisKindOption(
+                        title = "Compare recordings",
+                        detail = "Highs, lows and averages across a set of recordings, ranked by " +
+                            "wearer, watch or tag. You choose them with a filter. Good for a " +
+                            "whole festival.",
+                        onClick = {
+                            showKindDialog = false
+                            showScopeDialog = true
+                        }
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    AnalysisKindOption(
+                        title = "Compare at the same time",
+                        detail = "Everyone's heart rate on one chart, with the moments you all " +
+                            "reacted together. You pick the recordings by hand, because they " +
+                            "have to be ones that overlapped. Good for one set.",
+                        onClick = {
+                            showKindDialog = false
+                            onPickForConcurrentAnalysis()
+                        }
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showKindDialog = false }) { Text("Cancel") } }
+        )
+    }
+
     // Choosing what to analyse before analysing it, rather than inheriting whatever the Library
     // happened to be filtered to.
     if (showScopeDialog) {
@@ -181,5 +218,17 @@ fun SavedAnalysesScreen(
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } }
         )
+    }
+}
+
+/** One choice of analysis, with enough detail to tell which question it answers. */
+@Composable
+private fun AnalysisKindOption(title: String, detail: String, onClick: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+        Column(Modifier.padding(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text(detail, style = MaterialTheme.typography.bodySmall)
+        }
     }
 }

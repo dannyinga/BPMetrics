@@ -259,6 +259,61 @@ class LibraryRepository(
         return analysisId
     }
 
+    /**
+     * Stores a same-time analysis: which recordings, over what stretch of clock, called what.
+     *
+     * Unlike a group analysis this does **not** freeze its numbers. A group analysis stores every
+     * value it computed, so it stands alone forever. A same-time analysis is a set of curves —
+     * hundreds of kilobytes — and storing those would be a different order of cost, so what is
+     * kept is the analysis's identity and the curves are re-read from the library on opening.
+     *
+     * The consequence is deliberate and visible: delete a recording and it drops out of a saved
+     * same-time analysis, which the screen reports rather than quietly redrawing without it.
+     *
+     * @return the id of the stored analysis.
+     */
+    suspend fun saveConcurrentAnalysis(
+        name: String,
+        recordIds: Set<Long>,
+        windowStartMs: Long,
+        windowEndMs: Long,
+        records: List<AnalysisSnapshotRecord>
+    ): Long {
+        val analysisId = savedAnalysisDao.insertAnalysis(
+            SavedAnalysisEntity(
+                name = name.trim(),
+                createdAt = System.currentTimeMillis(),
+                filterDescription = "${recordIds.size} recordings, same time",
+                kind = SavedAnalysisKind.CONCURRENT,
+                windowStartMs = windowStartMs,
+                windowEndMs = windowEndMs
+            )
+        )
+
+        // The per-record rows still carry each wearer's summary, so the shelf can describe the
+        // analysis without re-reading the library.
+        savedAnalysisDao.insertRecords(
+            records.map { record ->
+                SavedAnalysisRecordEntity(
+                    analysisId = analysisId,
+                    recordId = record.recordId,
+                    title = record.title,
+                    date = record.date,
+                    minBpm = record.minBpm,
+                    avgBpm = record.avgBpm,
+                    maxBpm = record.maxBpm,
+                    activeDurationMs = record.activeDurationMs,
+                    tagsEncoded = "",
+                    wearerName = record.wearerName,
+                    watchName = record.watchName
+                )
+            }
+        )
+
+        Log.d(tag, "Saved same-time analysis '$name' over ${recordIds.size} recording(s)")
+        return analysisId
+    }
+
     /** Reads a stored analysis back into the shape the analysis screen works from. */
     suspend fun loadSavedAnalysis(analysisId: Long): LoadedAnalysis? {
         val stored = savedAnalysisDao.getAnalysis(analysisId) ?: return null

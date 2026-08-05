@@ -197,7 +197,7 @@ class LibraryDatabaseMigrationTest {
      * Running the whole chain is what a user upgrading from an older install actually experiences.
      */
     @Test
-    fun migrate5To9_runsTheWholeChain() {
+    fun migrate5To10_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 5).apply {
             execSQL(
                 """
@@ -212,12 +212,13 @@ class LibraryDatabaseMigrationTest {
 
         val db = helper.runMigrationsAndValidate(
             TEST_DB,
-            9,
+            10,
             true,
             LibraryDatabase.MIGRATION_5_6,
             LibraryDatabase.MIGRATION_6_7,
             LibraryDatabase.MIGRATION_7_8,
-            LibraryDatabase.MIGRATION_8_9
+            LibraryDatabase.MIGRATION_8_9,
+            LibraryDatabase.MIGRATION_9_10
         )
 
         db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
@@ -369,6 +370,48 @@ class LibraryDatabaseMigrationTest {
             assertEquals("", cursor.getString(2))
             assertEquals("", cursor.getString(3))
         }
+        db.close()
+    }
+
+    @Test
+    fun migrate9To10_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 9).close()
+
+        helper.runMigrationsAndValidate(TEST_DB, 10, true, LibraryDatabase.MIGRATION_9_10).close()
+    }
+
+    /**
+     * Everything saved before the two kinds existed was a compared-recordings analysis, and must
+     * keep opening as one.
+     */
+    @Test
+    fun migrate9To10_treatsOlderAnalysesAsGroupAnalyses() {
+        helper.createDatabase(TEST_DB, 9).apply {
+            execSQL("INSERT INTO saved_analyses (analysisId, name, createdAt, filterDescription) VALUES (1, 'Coachella 2026', 1000, '')")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 10, true, LibraryDatabase.MIGRATION_9_10)
+
+        db.query("SELECT name, kind, windowStartMs, windowEndMs FROM saved_analyses WHERE analysisId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Coachella 2026", cursor.getString(0))
+            assertEquals("GROUP", cursor.getString(1))
+            // A group analysis covers no particular stretch of clock.
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+        }
+        db.close()
+    }
+
+    @Test
+    fun migrate9To10_isIdempotent() {
+        helper.createDatabase(TEST_DB, 9).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 10, true, LibraryDatabase.MIGRATION_9_10)
+
+        LibraryDatabase.MIGRATION_9_10.migrate(db)
+
+        assertNotNull(db)
         db.close()
     }
 

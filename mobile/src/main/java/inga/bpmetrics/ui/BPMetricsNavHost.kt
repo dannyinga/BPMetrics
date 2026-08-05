@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -25,10 +26,15 @@ import inga.bpmetrics.datasync.IncomingRecordManager
 import inga.bpmetrics.datasync.isActive
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderStatus
+import inga.bpmetrics.export.BpmExportService
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.LoadedAnalysis
 import inga.bpmetrics.ui.about.AboutScreen
+import inga.bpmetrics.ui.analysis.AnalysisRecord
 import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
+import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
+import inga.bpmetrics.ui.analysis.ConcurrentAnalysisScreen
 import inga.bpmetrics.ui.analysis.SavedAnalysesScreen
 import inga.bpmetrics.ui.graph.BpmGraphDetailScreen
 import inga.bpmetrics.ui.record.BpmRecordScreen
@@ -42,6 +48,7 @@ import inga.bpmetrics.ui.settings.SettingsViewModel
 import inga.bpmetrics.ui.tags.TagManagementScreen
 import inga.bpmetrics.ui.tags.TagManagementViewModel
 import inga.bpmetrics.ui.export.RenderQueueScreen
+import inga.bpmetrics.ui.export.VideoExportDialog
 import inga.bpmetrics.ui.incoming.IncomingScreen
 import inga.bpmetrics.ui.watches.WatchesScreen
 import kotlinx.coroutines.launch
@@ -84,6 +91,18 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
     // are independent: analysing a subset should not re-filter the library underneath the user.
     var analysisFilter by remember { mutableStateOf(LibraryViewModel.FilterState()) }
 
+    // Same-time analysis is chosen by hand rather than filtered. A filter describes a kind of
+    // recording; comparing people at one moment means naming the exact recordings that overlap,
+    // which no filter expresses.
+    var concurrentRecordIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var awaitingConcurrentSelection by remember { mutableStateOf(false) }
+
+    // Hosted here rather than inside the analysis screen so the export survives navigating away
+    // mid-configuration, and so both the saved and unsaved screens share one dialog.
+    var videoExportRequest by remember {
+        mutableStateOf<Pair<List<inga.bpmetrics.library.BpmRecord>, String?>?>(null)
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         // Swiping open is only offered on a top-level section, and never while the Library is in
@@ -97,6 +116,9 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 incomingCount = incomingCount,
                 onNavigate = { destination ->
                     scope.launch { drawerState.close() }
+                    // Leaving for anywhere but the Library abandons a pending pick, so the prompt
+                    // does not linger over an unrelated visit later.
+                    if (destination != AppDestination.LIBRARY) awaitingConcurrentSelection = false
                     navController.navigateToSection(destination)
                 }
             )
@@ -122,7 +144,22 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             startDestination = Routes.LIBRARY
         ) {
             composable(Routes.LIBRARY) {
-                LibraryScreen(navController, libraryViewModel, onOpenDrawer = openDrawer)
+                LibraryScreen(
+                    navController = navController,
+                    viewModel = libraryViewModel,
+                    onOpenDrawer = openDrawer,
+                    awaitingConcurrentSelection = awaitingConcurrentSelection,
+                    onAnalyseTogether = { ids ->
+                        concurrentRecordIds = ids
+                        awaitingConcurrentSelection = false
+                        libraryViewModel.clearSelection()
+                        navController.navigate(Routes.ANALYSIS_CONCURRENT)
+                    },
+                    onAnalyseCurrentFilter = { filter ->
+                        analysisFilter = filter
+                        navController.navigate(Routes.ANALYSIS_LIVE)
+                    }
+                )
             }
 
             composable(Routes.TAG_MANAGEMENT) {
@@ -154,6 +191,12 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                         // the Library is filtered to.
                         analysisFilter = filter
                         navController.navigate(Routes.ANALYSIS_LIVE)
+                    },
+                    onPickForConcurrentAnalysis = {
+                        // No filter dialog for this one: the user picks the exact recordings in
+                        // the Library, because "these three, which overlapped" is not a filter.
+                        awaitingConcurrentSelection = true
+                        navController.navigateToSection(AppDestination.LIBRARY)
                     },
                     onDelete = { id -> scope.launch { repository.deleteSavedAnalysis(id) } }
                 )
@@ -189,15 +232,53 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 arguments = listOf(navArgument("analysisId") { type = NavType.LongType })
             ) { backStackEntry ->
                 val analysisId = backStackEntry.arguments?.getLong("analysisId") ?: return@composable
-                val viewModel: AnalysisViewModel = viewModel(
-                    factory = AnalysisViewModel.savedFactory(repository, analysisId)
-                )
-                AnalysisScreen(
-                    navController = navController,
-                    viewModel = viewModel,
-                    onOpenDrawer = openDrawer,
-                    title = "Saved Analysis"
-                )
+
+                // The two kinds of saved analysis open onto different screens, and only the
+                // stored row knows which this is.
+                val saved by produceState<LoadedAnalysis?>(initialValue = null, analysisId) {
+                    value = repository.loadSavedAnalysis(analysisId)
+                }
+                val metadata = saved?.metadata
+
+                if (metadata?.isConcurrent == true) {
+                    val allRecords by repository.records.collectAsState()
+                    val watches by libraryViewModel.availableWatches.collectAsState()
+                    val savedIds = remember(saved) { saved!!.records.map { it.recordId }.toSet() }
+
+                    val stillPresent = remember(allRecords, savedIds) {
+                        allRecords.filter { it.metadata.recordId in savedIds }
+                    }
+                    val analysis = remember(stillPresent, watches, metadata) {
+                        ConcurrentAnalysis.from(
+                            records = stillPresent,
+                            watches = watches,
+                            window = metadata.windowStartMs?.let { start ->
+                                metadata.windowEndMs?.let { end -> start..end }
+                            }
+                        )
+                    }
+
+                    ConcurrentAnalysisScreen(
+                        analysis = analysis,
+                        title = metadata.name,
+                        records = stillPresent,
+                        graphTitle = metadata.name,
+                        // Already saved, so the action would only create a duplicate.
+                        onSave = null,
+                        onExportVideo = { recs, graphTitle -> videoExportRequest = recs to graphTitle },
+                        onOpenDrawer = openDrawer
+                    )
+                } else {
+                    val viewModel: AnalysisViewModel = viewModel(
+                        factory = AnalysisViewModel.savedFactory(repository, analysisId)
+                    )
+                    AnalysisScreen(
+                        navController = navController,
+                        viewModel = viewModel,
+                        onOpenDrawer = openDrawer,
+                        title = metadata?.name ?: "Saved Analysis"
+                    )
+                }
             }
 
             composable(Routes.WATCHES) {
@@ -206,6 +287,49 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
 
             composable(Routes.INCOMING) {
                 IncomingScreen(onOpenDrawer = openDrawer)
+            }
+
+            composable(Routes.ANALYSIS_CONCURRENT) {
+                val allRecords by repository.records.collectAsState()
+                val watches by libraryViewModel.availableWatches.collectAsState()
+
+                // Curves are heavy, so the analysis is rebuilt only when its inputs actually
+                // change rather than on every recomposition.
+                val analysis = remember(allRecords, watches, concurrentRecordIds) {
+                    ConcurrentAnalysis.from(
+                        records = allRecords.filter { it.metadata.recordId in concurrentRecordIds },
+                        watches = watches
+                    )
+                }
+
+                val selected = remember(allRecords, concurrentRecordIds) {
+                    allRecords.filter { it.metadata.recordId in concurrentRecordIds }
+                }
+
+                ConcurrentAnalysisScreen(
+                    analysis = analysis,
+                    title = "Same-time analysis",
+                    records = selected,
+                    onSave = { name ->
+                        scope.launch {
+                            repository.saveConcurrentAnalysis(
+                                name = name,
+                                recordIds = concurrentRecordIds,
+                                windowStartMs = analysis.windowStartMs,
+                                windowEndMs = analysis.windowEndMs,
+                                // Watches are passed so the stored rows carry each watch's given
+                                // name. Tags are not: a same-time analysis does not rank by them,
+                                // and they are dropped when the rows are written.
+                                records = AnalysisRecord
+                                    .from(selected, categories = emptyList(), watches = watches)
+                                    .map { it.toSnapshot() }
+                            )
+                            navController.navigateToSection(AppDestination.ANALYSIS)
+                        }
+                    },
+                    onExportVideo = { recs, graphTitle -> videoExportRequest = recs to graphTitle },
+                    onOpenDrawer = openDrawer
+                )
             }
 
             composable(Routes.ABOUT) {
@@ -258,6 +382,25 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 RenderQueueScreen(navController, onOpenDrawer = openDrawer)
             }
         }
+
+        videoExportRequest?.let { (recordsToExport, graphTitle) ->
+            VideoExportDialog(
+                record = recordsToExport.first(),
+                records = recordsToExport,
+                graphTitle = graphTitle,
+                onDismiss = { videoExportRequest = null },
+                onExport = { config, _ ->
+                    BpmExportService.startExport(
+                        context,
+                        recordsToExport.first().metadata.recordId,
+                        graphTitle ?: "Same-time export (${recordsToExport.size} wearers)",
+                        config,
+                        null
+                    )
+                    videoExportRequest = null
+                }
+            )
+        }
     }
 }
 
@@ -296,4 +439,7 @@ object Routes {
 
     /** A stored analysis, rendered from what was captured when it was saved. */
     const val ANALYSIS_SAVED = "analysis_saved"
+
+    /** Everyone's curves over one shared stretch of time. */
+    const val ANALYSIS_CONCURRENT = "analysis_concurrent"
 }

@@ -156,7 +156,7 @@ interface BpmRecordDao {
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -383,6 +383,28 @@ abstract class LibraryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration from schema version 9 to 10.
+         *
+         * Lets a saved analysis record which of the two questions it asked, and the stretch of
+         * clock a same-time analysis covered. Everything saved before this was a group analysis,
+         * which is what the default says.
+         */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!columnExists(db, "saved_analyses", "kind")) {
+                    db.execSQL("ALTER TABLE saved_analyses ADD COLUMN kind TEXT NOT NULL DEFAULT 'GROUP'")
+                }
+                if (!columnExists(db, "saved_analyses", "windowStartMs")) {
+                    db.execSQL("ALTER TABLE saved_analyses ADD COLUMN windowStartMs INTEGER")
+                }
+                if (!columnExists(db, "saved_analyses", "windowEndMs")) {
+                    db.execSQL("ALTER TABLE saved_analyses ADD COLUMN windowEndMs INTEGER")
+                }
+                android.util.Log.i(TAG, "MIGRATION_9_10: Saved analyses can record their kind")
+            }
+        }
+
         /** Whether [column] is already present on [table], so a migration can re-run safely. */
         private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
             db.query("PRAGMA table_info($table)").use { cursor ->
@@ -457,7 +479,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_5_6,
                         MIGRATION_6_7,
                         MIGRATION_7_8,
-                        MIGRATION_8_9
+                        MIGRATION_8_9,
+                        MIGRATION_9_10
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

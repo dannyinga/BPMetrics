@@ -240,6 +240,7 @@ fun ImageExportDialog(
 fun VideoExportDialog(
     record: BpmRecord,
     records: List<BpmRecord> = listOf(record),
+    graphTitle: String? = null,
     onDismiss: () -> Unit,
     onExport: (VideoExporter.VideoExportConfig, Boolean) -> Unit
 ) {
@@ -250,6 +251,7 @@ fun VideoExportDialog(
     VideoExportDialog(
         viewModel = viewModel,
         records = records,
+        graphTitle = graphTitle,
         onDismiss = onDismiss,
         onExport = onExport
     )
@@ -259,6 +261,8 @@ fun VideoExportDialog(
 fun VideoExportDialog(
     viewModel: VideoExportViewModel,
     records: List<BpmRecord> = listOf(viewModel.record),
+    /** Heading for the exported graph. A named analysis passes its name; null keeps the default. */
+    graphTitle: String? = null,
     onDismiss: () -> Unit,
     onExport: (VideoExporter.VideoExportConfig, Boolean) -> Unit
 ) {
@@ -1061,7 +1065,8 @@ fun VideoExportDialog(
                         timeZoneId = selectedTimeZoneId,
                         records = records,
                         customRecordColors = customRecordColors,
-                        alignByElapsedTime = alignByElapsedTime
+                        alignByElapsedTime = alignByElapsedTime,
+                        graphTitle = graphTitle
                     )
 
                     if (saveAsDefault) {
@@ -1321,7 +1326,8 @@ private fun prepareVideoConfig(
     timeZoneId: String,
     records: List<BpmRecord> = emptyList(),
     customRecordColors: Map<Long, Int> = emptyMap(),
-    alignByElapsedTime: Boolean = true
+    alignByElapsedTime: Boolean = true,
+    graphTitle: String? = null
 ): VideoExporter.VideoExportConfig {
     val windowMs = (windowSizeSec.toLongOrNull() ?: 30L) * 1000L
     val fps = frameRate.toIntOrNull() ?: 30
@@ -1339,7 +1345,8 @@ private fun prepareVideoConfig(
         showCurrentStats = showCurrentStats,
         timeZoneId = timeZoneId,
         customRecordColors = customRecordColors,
-        alignByElapsedTime = alignByElapsedTime
+        alignByElapsedTime = alignByElapsedTime,
+        graphTitle = graphTitle
     )
     
     return VideoExporter.VideoExportConfig(

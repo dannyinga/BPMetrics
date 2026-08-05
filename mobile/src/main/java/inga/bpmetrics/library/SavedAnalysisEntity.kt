@@ -24,8 +24,26 @@ data class SavedAnalysisEntity(
     @PrimaryKey(autoGenerate = true) val analysisId: Long = 0,
     val name: String,
     val createdAt: Long,
-    @ColumnInfo(defaultValue = "") val filterDescription: String = ""
-)
+    @ColumnInfo(defaultValue = "") val filterDescription: String = "",
+    /** Which of the two questions this analysis asked. See [SavedAnalysisKind]. */
+    @ColumnInfo(defaultValue = "GROUP") val kind: String = SavedAnalysisKind.GROUP,
+    /** For a same-time analysis, the stretch of clock it covered. Null for a group analysis. */
+    val windowStartMs: Long? = null,
+    val windowEndMs: Long? = null
+) {
+    val isConcurrent: Boolean get() = kind == SavedAnalysisKind.CONCURRENT
+}
+
+/**
+ * The kinds of saved analysis.
+ *
+ * Stored as text rather than an ordinal so reordering or inserting a kind later cannot silently
+ * reinterpret existing rows.
+ */
+object SavedAnalysisKind {
+    const val GROUP = "GROUP"
+    const val CONCURRENT = "CONCURRENT"
+}
 
 /**
  * One recording's contribution to a saved analysis, captured at save time.
