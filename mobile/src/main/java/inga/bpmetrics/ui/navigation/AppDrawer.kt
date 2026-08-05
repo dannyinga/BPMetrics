@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Sell
@@ -51,6 +52,7 @@ enum class AppDestination(
     LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.Default.LibraryBooks),
     ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.AutoMirrored.Filled.Sort),
     TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell),
+    INCOMING(inga.bpmetrics.ui.Routes.INCOMING, "Incoming", Icons.Default.CloudDownload),
     RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Render Queue", Icons.Default.VideoLibrary),
     WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch),
     SETTINGS(inga.bpmetrics.ui.Routes.SETTINGS, "Settings", Icons.Default.Settings),
@@ -67,6 +69,7 @@ enum class AppDestination(
  *
  * @param currentRoute The route currently displayed, used to highlight the active section.
  * @param activeRenderCount Number of queued or rendering jobs; shown as a badge on Render Queue.
+ * @param incomingCount Number of records still arriving from watches; badged on Incoming.
  * @param onNavigate Invoked with the chosen destination. The caller is responsible for closing
  * the drawer and performing the navigation.
  */
@@ -74,6 +77,7 @@ enum class AppDestination(
 fun AppDrawerContent(
     currentRoute: String?,
     activeRenderCount: Int,
+    incomingCount: Int,
     onNavigate: (AppDestination) -> Unit
 ) {
     ModalDrawerSheet {
@@ -95,9 +99,12 @@ fun AppDrawerContent(
                     label = { Text(destination.label) },
                     icon = { Icon(destination.icon, contentDescription = null) },
                     badge = {
-                        if (destination == AppDestination.RENDER_QUEUE && activeRenderCount > 0) {
-                            RenderBadge(activeRenderCount)
+                        val count = when (destination) {
+                            AppDestination.RENDER_QUEUE -> activeRenderCount
+                            AppDestination.INCOMING -> incomingCount
+                            else -> 0
                         }
+                        if (count > 0) ActivityBadge(count)
                     },
                     selected = destination.route == currentRoute,
                     onClick = { onNavigate(destination) },
@@ -120,9 +127,9 @@ fun AppDrawerContent(
     }
 }
 
-/** Count of in-flight renders, so queue activity is visible without opening the section. */
+/** Count of in-flight work, so activity is visible without opening the section. */
 @Composable
-private fun RenderBadge(count: Int) {
+private fun ActivityBadge(count: Int) {
     Box(
         modifier = Modifier
             .size(20.dp)

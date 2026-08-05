@@ -48,6 +48,14 @@ import androidx.compose.foundation.combinedClickable
 fun BpmRecordTile(
     record: BpmRecord,
     isSelected: Boolean = false,
+    /**
+     * The watch's given name, resolved from the registry by the caller.
+     *
+     * Unlike the wearer — frozen onto the record when it arrived — a watch's name describes
+     * hardware that still exists, so it is resolved live and renaming a watch updates every
+     * recording it made. Null falls back to the model the watch reported.
+     */
+    watchName: String? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
@@ -80,7 +88,7 @@ fun BpmRecordTile(
                     )
                     val deviceBadge = buildString {
                         if (record.metadata.wearerName.isNotBlank()) append("👤 ${record.metadata.wearerName}  •  ")
-                        append("⌚ ${record.metadata.deviceId.ifBlank { "Watch" }}")
+                        append("⌚ ${record.watchLabel(watchName)}")
                     }
                     Text(
                         text = deviceBadge,
@@ -266,3 +274,14 @@ private fun BpmMetric(
         }
     }
 }
+
+/**
+ * What to call the watch a recording came from.
+ *
+ * Prefers the name given in the Watches section, because that is what the user calls it. Falls
+ * back to the model the watch reported, which is all an unregistered or imported record has.
+ */
+fun BpmRecord.watchLabel(watchName: String?): String =
+    watchName?.takeIf { it.isNotBlank() }
+        ?: metadata.deviceId.takeIf { it.isNotBlank() }
+        ?: "Watch"

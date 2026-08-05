@@ -52,13 +52,22 @@ class DataClientProcessor(
             // It is the only identifier guaranteed to differ between two paired watches.
             val sourceNodeId = item.uri.host
 
+            // Announce the arrival before any of the slow work, so a transfer that stalls is
+            // visible rather than looking like nothing is happening.
+            IncomingRecordManager.started(recordId, label = "Watch ${sourceNodeId?.take(4) ?: "?"}")
+
             try {
-                val record = convertDataItemToRecord(item)
-                if (record != null) {
+                IncomingRecordManager.receiving(recordId)
+                val received = readRecord(item)
+
+                if (received != null) {
+                    val (record, byteCount) = received
                     Log.d(
                         tag,
                         "Record $recordId from node $sourceNodeId, watch '${record.watchId}', device '${record.deviceId}'"
                     )
+
+                    IncomingRecordManager.saving(recordId, label = record.deviceId, receivedBytes = byteCount)
 
                     // Save to Room database. The repository resolves which watch this came from
                     // and stamps the name currently registered for it.
@@ -71,13 +80,18 @@ class DataClientProcessor(
                     // Clear the item from the Wearable "cloud" buffer
                     dataClient.deleteDataItems(item.uri).await()
                     Log.d(tag, "Record $recordId processed and deleted.")
+
+                    IncomingRecordManager.completed(recordId, label = record.deviceId)
                 } else {
                     Log.e(tag, "Record $recordId conversion returned null, removing from processedIds for retry.")
                     synchronized(processedIds) { processedIds.remove(recordId) }
+                    IncomingRecordManager.failed(recordId, "Could not read the recording")
                 }
             } catch (e: Exception) {
                 Log.e(tag, "Error processing record $recordId", e)
                 synchronized(processedIds) { processedIds.remove(recordId) }
+                // The watch keeps its copy until we confirm, so this will come round again.
+                IncomingRecordManager.failed(recordId, e.message ?: e.toString())
             }
         }
     }
@@ -88,18 +102,23 @@ class DataClientProcessor(
      * @param item The [DataItem] containing the heart rate record asset.
      * @return The deserialized [BpmWatchRecord], or null if parsing fails.
      */
-    private suspend fun convertDataItemToRecord(item: DataItem): BpmWatchRecord? {
+    private suspend fun readRecord(item: DataItem): Pair<BpmWatchRecord, Int>? {
         return try {
             val dataMap = DataMapItem.fromDataItem(item).dataMap
             val recordAsset = dataMap.getAsset("record_asset") ?: return null
-            
+
             // Retrieve the file descriptor and read the input stream into a string
             val fd = dataClient.getFdForAsset(recordAsset).await()
-            val inputStream = fd.inputStream
-            val recordJson = inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-            
+            val bytes = fd.inputStream.use { it.readBytes() }
+            val recordJson = bytes.toString(Charsets.UTF_8)
+
             // Parse JSON into core library object
-            BpmGson.instance.fromJson(recordJson, BpmWatchRecord::class.java)
+            val record = BpmGson.instance.fromJson(recordJson, BpmWatchRecord::class.java)
+                ?: return null
+
+            // The byte count is reported to the UI: a long recording is a large payload over
+            // Bluetooth, and that explains a transfer that takes a while.
+            record to bytes.size
         } catch (e: Exception) {
             Log.e(tag, "Failed to convert DataItem to record", e)
             null

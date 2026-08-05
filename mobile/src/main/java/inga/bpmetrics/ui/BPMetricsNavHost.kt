@@ -21,6 +21,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import inga.bpmetrics.BPMetricsApp
+import inga.bpmetrics.datasync.IncomingRecordManager
+import inga.bpmetrics.datasync.isActive
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderStatus
 import inga.bpmetrics.library.LibraryRepository
@@ -40,6 +42,7 @@ import inga.bpmetrics.ui.settings.SettingsViewModel
 import inga.bpmetrics.ui.tags.TagManagementScreen
 import inga.bpmetrics.ui.tags.TagManagementViewModel
 import inga.bpmetrics.ui.export.RenderQueueScreen
+import inga.bpmetrics.ui.incoming.IncomingScreen
 import inga.bpmetrics.ui.watches.WatchesScreen
 import kotlinx.coroutines.launch
 
@@ -72,6 +75,9 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
         it.status == RenderStatus.RENDERING || it.status == RenderStatus.QUEUED
     }
 
+    val incoming by IncomingRecordManager.incoming.collectAsState()
+    val incomingCount = incoming.count { it.status.isActive }
+
     val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
 
     // What a new analysis covers. Held here rather than in the Library's own filter so the two
@@ -88,6 +94,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             AppDrawerContent(
                 currentRoute = currentRoute,
                 activeRenderCount = activeRenderCount,
+                incomingCount = incomingCount,
                 onNavigate = { destination ->
                     scope.launch { drawerState.close() }
                     navController.navigateToSection(destination)
@@ -197,6 +204,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 WatchesScreen(onOpenDrawer = openDrawer)
             }
 
+            composable(Routes.INCOMING) {
+                IncomingScreen(onOpenDrawer = openDrawer)
+            }
+
             composable(Routes.ABOUT) {
                 AboutScreen(onOpenDrawer = openDrawer)
             }
@@ -278,6 +289,7 @@ object Routes {
     const val RENDER_QUEUE = "render_queue"
     const val WATCHES = "watches"
     const val ABOUT = "about"
+    const val INCOMING = "incoming"
 
     /** A live analysis of the Library's current filter, which can be saved. */
     const val ANALYSIS_LIVE = "analysis_live"

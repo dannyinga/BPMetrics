@@ -64,7 +64,7 @@ class BpmRecordTileTest {
     }
 
     @Test
-    fun showsTheWatchWhenNoWearerIsNamed() {
+    fun fallsBackToTheModelWhenTheWatchHasNoGivenName() {
         composeTestRule.setContent {
             BpmRecordTile(record = record(deviceId = "Galaxy Watch5"), onClick = {})
         }
@@ -73,17 +73,46 @@ class BpmRecordTileTest {
     }
 
     @Test
-    fun showsTheWearerAlongsideTheWatchWhenOneWasStamped() {
-        // The wearer is frozen onto the record at ingest, so this is what was true at the time
-        // of recording rather than whatever the watch is called now.
+    fun prefersTheNameGivenToTheWatch() {
+        // The model is what the hardware reports; the given name is what the user calls it, and
+        // is resolved live so renaming a watch relabels every recording it made.
         composeTestRule.setContent {
             BpmRecordTile(
-                record = record(deviceId = "Pixel Watch 2", wearerName = "Kyle"),
+                record = record(deviceId = "Galaxy Watch5"),
+                watchName = "Watch A",
                 onClick = {}
             )
         }
 
-        composeTestRule.onNodeWithText("👤 Kyle  •  ⌚ Pixel Watch 2").assertIsDisplayed()
+        composeTestRule.onNodeWithText("⌚ Watch A").assertIsDisplayed()
+    }
+
+    @Test
+    fun aBlankGivenNameFallsBackRatherThanShowingNothing() {
+        composeTestRule.setContent {
+            BpmRecordTile(
+                record = record(deviceId = "Galaxy Watch5"),
+                watchName = "",
+                onClick = {}
+            )
+        }
+
+        composeTestRule.onNodeWithText("⌚ Galaxy Watch5").assertIsDisplayed()
+    }
+
+    @Test
+    fun showsTheWearerAlongsideTheWatchWhenOneWasStamped() {
+        // The wearer is frozen onto the record at ingest, so it is who was wearing it then --
+        // while the watch name is resolved live. Both appear together.
+        composeTestRule.setContent {
+            BpmRecordTile(
+                record = record(deviceId = "Pixel Watch 2", wearerName = "Kyle"),
+                watchName = "Watch A",
+                onClick = {}
+            )
+        }
+
+        composeTestRule.onNodeWithText("👤 Kyle  •  ⌚ Watch A").assertIsDisplayed()
     }
 
     @Test

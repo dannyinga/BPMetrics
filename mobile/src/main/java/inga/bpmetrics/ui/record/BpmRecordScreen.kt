@@ -71,6 +71,7 @@ fun BpmRecordScreen(
     onManageTags: () -> Unit
 ) {
     val record by viewModel.record.collectAsState()
+    val watchName by viewModel.watchName.collectAsState()
     var isEditing by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -170,9 +171,19 @@ fun BpmRecordScreen(
                         OutlinedTextField(
                             value = editedDeviceId,
                             onValueChange = { editedDeviceId = it },
-                            label = { Text("Device ID") },
+                            label = { Text("Watch model") },
                             modifier = Modifier.weight(1f),
-                            singleLine = true
+                            singleLine = true,
+                            // Editable, but only used when the watch has no name of its own.
+                            enabled = watchName == null
+                        )
+                    }
+                    if (watchName != null) {
+                        // Otherwise editing the model looks broken: it saves, and nothing changes.
+                        Text(
+                            "This recording is labelled \"$watchName\" from the Watches section. " +
+                                "Rename the watch there to change it everywhere.",
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
                     Spacer(Modifier.height(16.dp))
@@ -186,7 +197,7 @@ fun BpmRecordScreen(
                     ) {
                         val deviceBadge = buildString {
                             if (r.metadata.wearerName.isNotBlank()) append("👤 ${r.metadata.wearerName}  •  ")
-                            append("⌚ ${r.metadata.deviceId.ifBlank { "Watch" }}")
+                            append("⌚ ${r.watchLabel(watchName)}")
                         }
                         Text(
                             text = deviceBadge,

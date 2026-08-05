@@ -72,6 +72,8 @@ import inga.bpmetrics.ui.record.BpmRecordTile
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.theme.BpmAccent
 import inga.bpmetrics.ui.theme.BpmHigh
+import inga.bpmetrics.datasync.IncomingRecordManager
+import inga.bpmetrics.datasync.isActive
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderStatus
 import inga.bpmetrics.library.BpmRecord
@@ -98,6 +100,13 @@ fun LibraryScreen(
     val currentSort by viewModel.sortOption.collectAsStateWithLifecycle()
     val selectedRecordIds by viewModel.selectedRecordIds.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    // Watch names are resolved live rather than stored on each record: renaming a watch should
+    // relabel every recording it made. The wearer is the opposite — frozen when the record arrived.
+    val watches by viewModel.availableWatches.collectAsStateWithLifecycle()
+    val watchNames = remember(watches) {
+        watches.filter { it.isNamed }.associate { it.watchId to it.deviceName }
+    }
 
     val isSelectionMode = selectedRecordIds.isNotEmpty()
 
@@ -213,12 +222,14 @@ fun LibraryScreen(
                     title = { Text("Library", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) },
                     navigationIcon = {
                         IconButton(onClick = onOpenDrawer) {
-                            // Renders in progress are announced here too. The drawer carries the
-                            // count, but it is invisible while the drawer is closed.
+                            // Work in progress is announced here too. The drawer carries the
+                            // counts, but it is invisible while the drawer is closed — and a
+                            // recording arriving from a watch is exactly what you want to notice.
                             val queue by RenderQueueManager.queue.collectAsState(initial = emptyList())
+                            val incoming by IncomingRecordManager.incoming.collectAsState()
                             val activeCount = queue.count {
                                 it.status == RenderStatus.RENDERING || it.status == RenderStatus.QUEUED
-                            }
+                            } + incoming.count { it.status.isActive }
                             Box {
                                 Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
                                 if (activeCount > 0) {
@@ -328,6 +339,7 @@ fun LibraryScreen(
                     BpmRecordTile(
                         record = record,
                         isSelected = isSelected,
+                        watchName = record.metadata.watchId?.let { watchNames[it] },
                         onClick = {
                             if (isSelectionMode) {
                                 viewModel.toggleRecordSelection(record.metadata.recordId)
