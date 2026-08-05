@@ -57,14 +57,21 @@ fun LibraryFilterDialog(
     currentFilter: LibraryViewModel.FilterState,
     onDismiss: () -> Unit,
     onApply: (LibraryViewModel.FilterState) -> Unit,
-    repository: inga.bpmetrics.library.LibraryRepository
+    repository: inga.bpmetrics.library.LibraryRepository,
+    availableWearers: List<String> = emptyList(),
+    availableWatches: List<inga.bpmetrics.library.WatchEntity> = emptyList()
 ) {
     var dateRange by remember { mutableStateOf(currentFilter.dateRange) }
     var selectedTagIds by remember { mutableStateOf(currentFilter.selectedTagIds) }
     var minBpm by remember { mutableStateOf(currentFilter.minBpm.toString()) }
     var maxBpm by remember { mutableStateOf(currentFilter.maxBpm?.toString() ?: "") }
+    var selectedWearers by remember { mutableStateOf(currentFilter.selectedWearers) }
+    var selectedWatchIds by remember { mutableStateOf(currentFilter.selectedWatchIds) }
 
-    val categories by repository.getAllCategories().collectAsState(initial = emptyList())
+    // Room hands back a new Flow per call and collection is keyed on the instance, so building
+    // this inline restarted the query on every recomposition.
+    val categoriesFlow = remember(repository) { repository.getAllCategories() }
+    val categories by categoriesFlow.collectAsState(initial = emptyList())
 
     // Internal state for pickers
     var showDatePickerForStart by remember { mutableStateOf(false) }
@@ -203,12 +210,74 @@ fun LibraryFilterDialog(
                     }
                 }
 
+                if (availableWearers.isNotEmpty()) {
+                    item {
+                        Text("Wearer", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Who was wearing the watch, as recorded at the time.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            availableWearers.forEach { wearer ->
+                                FilterChip(
+                                    selected = wearer in selectedWearers,
+                                    onClick = {
+                                        selectedWearers = if (wearer in selectedWearers) {
+                                            selectedWearers - wearer
+                                        } else {
+                                            selectedWearers + wearer
+                                        }
+                                    },
+                                    label = { Text("👤 $wearer") }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (availableWatches.isNotEmpty()) {
+                    item {
+                        Text("Watch", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "The device itself, whoever was wearing it.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            availableWatches.forEach { watch ->
+                                FilterChip(
+                                    selected = watch.watchId in selectedWatchIds,
+                                    onClick = {
+                                        selectedWatchIds = if (watch.watchId in selectedWatchIds) {
+                                            selectedWatchIds - watch.watchId
+                                        } else {
+                                            selectedWatchIds + watch.watchId
+                                        }
+                                    },
+                                    label = { Text("⌚ ${watch.displayName}") }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 item {
                     Text("Tags", style = MaterialTheme.typography.titleMedium)
                 }
 
                 items(categories, key = { it.categoryId }) { category ->
-                    val tags by repository.getTagsByCategory(category.categoryId).collectAsState(initial = emptyList())
+                    // Same reason as above, and it matters more here: this runs per category
+                    // inside a lazy list, so an inline flow re-queried tags for every category on
+                    // every recomposition.
+                    val tagsFlow = remember(repository, category.categoryId) {
+                        repository.getTagsByCategory(category.categoryId)
+                    }
+                    val tags by tagsFlow.collectAsState(initial = emptyList())
                     val categoryTagIds = remember(tags) { tags.map { it.tagId }.toSet() }
                     val selectedInCategory = remember(categoryTagIds, selectedTagIds) {
                         categoryTagIds.intersect(selectedTagIds)
@@ -264,7 +333,9 @@ fun LibraryFilterDialog(
                         dateRange = dateRange,
                         selectedTagIds = selectedTagIds,
                         minBpm = minBpm.toDoubleOrNull() ?: 0.0,
-                        maxBpm = maxBpm.toDoubleOrNull()
+                        maxBpm = maxBpm.toDoubleOrNull(),
+                        selectedWearers = selectedWearers,
+                        selectedWatchIds = selectedWatchIds
                     ))
             }) { Text("Apply") }
         },

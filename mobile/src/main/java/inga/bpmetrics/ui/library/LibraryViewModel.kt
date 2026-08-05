@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.WatchEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -48,36 +49,27 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.records,
         _filterState
     ) { records, filter ->
-        // Build a mapping of Tag ID -> Category ID from all available records
-        val tagToCategoryMap = records.flatMap { it.tags }.associate { it.tagId to it.parentCategoryId }
-
-        records.filter { record ->
-            // 1. Date Filter
-            val dateMatch = filter.dateRange?.let { (start, end) -> 
-                record.metadata.startTime in start..end 
-            } ?: true
-            
-            // 2. Cross-Category Tag Filter (Requirement: OR within categories, AND between categories)
-            val tagMatch = if (filter.selectedTagIds.isNotEmpty()) {
-                val selectedTagsByCategory = filter.selectedTagIds
-                    .mapNotNull { tagId -> tagToCategoryMap[tagId]?.let { catId -> catId to tagId } }
-                    .groupBy({ it.first }, { it.second })
-
-                val recordTagIds = record.tags.map { it.tagId }.toSet()
-                
-                selectedTagsByCategory.all { (_, selectedTagIds) ->
-                    selectedTagIds.any { it in recordTagIds }
-                }
-            } else true
-            
-            // 3. BPM Filter
-            val avg = record.metadata.avg ?: 0.0
-            val bpmMatch = (avg >= filter.minBpm) && 
-                           (filter.maxBpm == null || avg <= filter.maxBpm)
-
-            dateMatch && tagMatch && bpmMatch
-        }
+        applyFilter(records, filter)
     }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
+
+    /**
+     * Wearer names present in the library, for the filter to offer.
+     *
+     * Taken from the records rather than the watch registry: a name that no watch carries any
+     * more is still the right way to find the recordings made under it.
+     */
+    val availableWearers: StateFlow<List<String>> = repository.records
+        .map { records ->
+            records.map { it.metadata.wearerName }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .sorted()
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Watches known to the registry, for the filter to offer. */
+    val availableWatches: StateFlow<List<WatchEntity>> = repository.getAllWatches()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
      * The combined UI state, emitting a sorted and filtered list of records for the library list.
@@ -204,8 +196,72 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         val dateRange: Pair<Long, Long>? = null,
         val selectedTagIds: Set<Long> = emptySet(),
         val minBpm: Double = 0.0,
-        val maxBpm: Double? = null
+        val maxBpm: Double? = null,
+        /**
+         * Wearer names to include, matched against the name frozen onto each record.
+         *
+         * Answers "show me Kyle's recordings" — and because the name was stamped at the time of
+         * recording, it keeps answering it correctly after that watch has been handed to someone
+         * else and renamed.
+         */
+        val selectedWearers: Set<String> = emptySet(),
+        /**
+         * Watches to include, matched on the physical device rather than the name.
+         *
+         * Answers the other question: "show me everything this watch ever recorded", whoever was
+         * wearing it and whatever it was called at the time.
+         */
+        val selectedWatchIds: Set<String> = emptySet()
     )
+
+    companion object {
+        /**
+         * Applies a filter to a set of records.
+         *
+         * Lives here rather than inside [filteredRecords] because Analysis filters independently:
+         * choosing what to analyse must not disturb what the Library is showing.
+         */
+        fun applyFilter(records: List<BpmRecord>, filter: FilterState): List<BpmRecord> {
+            // Build a mapping of Tag ID -> Category ID from all available records
+            val tagToCategoryMap = records.flatMap { it.tags }.associate { it.tagId to it.parentCategoryId }
+
+            return records.filter { record ->
+                // 1. Date Filter
+                val dateMatch = filter.dateRange?.let { (start, end) ->
+                    record.metadata.startTime in start..end
+                } ?: true
+
+                // 2. Cross-Category Tag Filter (Requirement: OR within categories, AND between categories)
+                val tagMatch = if (filter.selectedTagIds.isNotEmpty()) {
+                    val selectedTagsByCategory = filter.selectedTagIds
+                        .mapNotNull { tagId -> tagToCategoryMap[tagId]?.let { catId -> catId to tagId } }
+                        .groupBy({ it.first }, { it.second })
+
+                    val recordTagIds = record.tags.map { it.tagId }.toSet()
+
+                    selectedTagsByCategory.all { (_, selectedTagIds) ->
+                        selectedTagIds.any { it in recordTagIds }
+                    }
+                } else true
+
+                // 3. BPM Filter
+                val avg = record.metadata.avg ?: 0.0
+                val bpmMatch = (avg >= filter.minBpm) &&
+                        (filter.maxBpm == null || avg <= filter.maxBpm)
+
+                // 4. Wearer Filter — matched on the name frozen onto the record, not on whatever the
+                // watch is called now, so past recordings stay attributed to who actually made them.
+                val wearerMatch = filter.selectedWearers.isEmpty() ||
+                        record.metadata.wearerName in filter.selectedWearers
+
+                // 5. Watch Filter — the physical device, independent of naming.
+                val watchMatch = filter.selectedWatchIds.isEmpty() ||
+                        record.metadata.watchId in filter.selectedWatchIds
+
+                dateMatch && tagMatch && bpmMatch && wearerMatch && watchMatch
+            }
+        }
+    }
 
     /**
      * Factory class for creating instances of [LibraryViewModel].

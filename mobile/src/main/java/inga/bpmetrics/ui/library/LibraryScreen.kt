@@ -360,6 +360,9 @@ fun LibraryScreen(
     }
 
     if (showFilterDialog) {
+        val availableWearers by viewModel.availableWearers.collectAsStateWithLifecycle()
+        val availableWatches by viewModel.availableWatches.collectAsStateWithLifecycle()
+
         LibraryFilterDialog(
             currentFilter = filterState,
             onDismiss = { showFilterDialog = false },
@@ -370,7 +373,9 @@ fun LibraryScreen(
                     navController.navigate(Routes.ANALYSIS)
                 }
             },
-            repository = viewModel.repository
+            repository = viewModel.repository,
+            availableWearers = availableWearers,
+            availableWatches = availableWatches
         )
     }
 
