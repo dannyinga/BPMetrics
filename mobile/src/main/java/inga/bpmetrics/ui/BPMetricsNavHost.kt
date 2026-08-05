@@ -7,8 +7,10 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -72,6 +74,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
 
     val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
 
+    // What a new analysis covers. Held here rather than in the Library's own filter so the two
+    // are independent: analysing a subset should not re-filter the library underneath the user.
+    var analysisFilter by remember { mutableStateOf(LibraryViewModel.FilterState()) }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         // Swiping open is only offered on a top-level section, and never while the Library is in
@@ -126,24 +132,32 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 // rebuilding it each recomposition would restart the query and blink the empty
                 // state on the way back.
                 val savedAnalyses = remember { repository.getSavedAnalyses() }
+                val availableWearers by libraryViewModel.availableWearers.collectAsState()
+                val availableWatches by libraryViewModel.availableWatches.collectAsState()
 
                 SavedAnalysesScreen(
                     savedAnalyses = savedAnalyses,
+                    repository = repository,
+                    availableWearers = availableWearers,
+                    availableWatches = availableWatches,
                     onOpenDrawer = openDrawer,
                     onOpen = { navController.navigate("${Routes.ANALYSIS_SAVED}/$it") },
-                    onNewAnalysis = { navController.navigate(Routes.ANALYSIS_LIVE) },
+                    onNewAnalysis = { filter ->
+                        // The analysis carries its own scope, so starting one never changes what
+                        // the Library is filtered to.
+                        analysisFilter = filter
+                        navController.navigate(Routes.ANALYSIS_LIVE)
+                    },
                     onDelete = { id -> scope.launch { repository.deleteSavedAnalysis(id) } }
                 )
             }
 
             composable(Routes.ANALYSIS_LIVE) {
-                val filterState by libraryViewModel.filterState.collectAsState()
-
                 val viewModel: AnalysisViewModel = viewModel(
+                    key = analysisFilter.hashCode().toString(),
                     factory = AnalysisViewModel.liveFactory(
                         repository = repository,
-                        filteredRecords = libraryViewModel.filteredRecords,
-                        filter = filterState
+                        filter = analysisFilter
                     )
                 )
                 AnalysisScreen(

@@ -4,6 +4,7 @@ import inga.bpmetrics.library.AnalysisSnapshotRecord
 import inga.bpmetrics.library.AnalysisSnapshotTag
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.WatchEntity
 
 /**
  * A tag as it applied to a record at the moment an analysis was taken.
@@ -34,7 +35,11 @@ data class AnalysisRecord(
     val avgBpm: Double?,
     val maxBpm: Double?,
     val activeDurationMs: Long,
-    val tags: List<AnalysisTag> = emptyList()
+    val tags: List<AnalysisTag> = emptyList(),
+    /** Who was wearing the watch, as frozen onto the record when it arrived. */
+    val wearerName: String = "",
+    /** The watch it came from, by its device name. */
+    val watchName: String = ""
 ) {
     companion object {
         /**
@@ -42,7 +47,11 @@ data class AnalysisRecord(
          *
          * @param categoryNames Category id to name, so tags carry a readable category.
          */
-        fun from(record: BpmRecord, categoryNames: Map<Long, String>): AnalysisRecord =
+        fun from(
+            record: BpmRecord,
+            categoryNames: Map<Long, String>,
+            watchNames: Map<String, String> = emptyMap()
+        ): AnalysisRecord =
             AnalysisRecord(
                 recordId = record.metadata.recordId,
                 title = record.metadata.title,
@@ -59,13 +68,23 @@ data class AnalysisRecord(
                         categoryId = tag.parentCategoryId,
                         categoryName = categoryNames[tag.parentCategoryId] ?: "Uncategorized"
                     )
-                }
+                },
+                wearerName = record.metadata.wearerName,
+                // The watch's current name, falling back to the model it reported. A record whose
+                // watch is no longer registered still shows where it came from.
+                watchName = record.metadata.watchId?.let { watchNames[it] }
+                    ?: record.metadata.deviceId
             )
 
-        /** Convenience for mapping a whole list against the category table. */
-        fun from(records: List<BpmRecord>, categories: List<CategoryEntity>): List<AnalysisRecord> {
+        /** Convenience for mapping a whole list against the category and watch tables. */
+        fun from(
+            records: List<BpmRecord>,
+            categories: List<CategoryEntity>,
+            watches: List<WatchEntity> = emptyList()
+        ): List<AnalysisRecord> {
             val names = categories.associate { it.categoryId to it.name }
-            return records.map { from(it, names) }
+            val watchNames = watches.associate { it.watchId to it.displayName }
+            return records.map { from(it, names, watchNames) }
         }
 
         /** Reads back a record captured when an analysis was saved. */
@@ -79,7 +98,9 @@ data class AnalysisRecord(
             activeDurationMs = snapshot.activeDurationMs,
             tags = snapshot.tags.map {
                 AnalysisTag(tagName = it.tagName, categoryId = it.categoryId, categoryName = it.categoryName)
-            }
+            },
+            wearerName = snapshot.wearerName,
+            watchName = snapshot.watchName
         )
     }
 
@@ -94,6 +115,8 @@ data class AnalysisRecord(
         activeDurationMs = activeDurationMs,
         tags = tags.map {
             AnalysisSnapshotTag(tagName = it.tagName, categoryId = it.categoryId, categoryName = it.categoryName)
-        }
+        },
+        wearerName = wearerName,
+        watchName = watchName
     )
 }

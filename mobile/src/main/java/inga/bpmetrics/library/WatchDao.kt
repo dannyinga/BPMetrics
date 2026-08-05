@@ -28,8 +28,18 @@ interface WatchDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertWatch(watch: WatchEntity)
 
-    @Query("UPDATE watches SET customName = :name WHERE watchId = :watchId")
-    suspend fun updateName(watchId: String, name: String)
+    /** Names the hardware. Does not affect any recording, past or future. */
+    @Query("UPDATE watches SET deviceName = :deviceName WHERE watchId = :watchId")
+    suspend fun updateDeviceName(watchId: String, deviceName: String)
+
+    /**
+     * Sets who is wearing this watch now.
+     *
+     * Takes effect on records arriving from here on; recordings already made keep the name they
+     * were stamped with.
+     */
+    @Query("UPDATE watches SET currentWearerName = :wearerName WHERE watchId = :watchId")
+    suspend fun updateWearer(watchId: String, wearerName: String)
 
     @Query("UPDATE watches SET colorArgb = :colorArgb WHERE watchId = :watchId")
     suspend fun updateColor(watchId: String, colorArgb: Int?)

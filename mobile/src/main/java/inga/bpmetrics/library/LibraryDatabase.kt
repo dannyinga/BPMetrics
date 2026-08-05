@@ -156,7 +156,7 @@ interface BpmRecordDao {
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class
     ],
-    version = 7,
+    version = 9,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -308,6 +308,81 @@ abstract class LibraryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration from schema version 7 to 8.
+         *
+         * Splits the watch's single name into two: what the watch is called, and who is wearing
+         * it. One field could not serve both — naming a watch after its wearer meant renaming the
+         * hardware every time it changed hands, and made "which watch recorded this" unanswerable.
+         *
+         * The old value moves to the wearer, because that is what it meant: the field was
+         * presented as "who is wearing this watch" and was stamped onto records as the wearer.
+         * Watches are left unnamed, falling back to their model until someone names them.
+         *
+         * The table is recreated rather than altered in place. SQLite can only drop a column on
+         * newer versions, and Room compares the full column set — a leftover column would fail
+         * validation just as surely as a missing one.
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!columnExists(db, "watches", "customName")) {
+                    android.util.Log.i(TAG, "MIGRATION_7_8: watches already split, skipping")
+                    return
+                }
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS watches_new (
+                        watchId TEXT NOT NULL,
+                        deviceName TEXT NOT NULL DEFAULT '',
+                        currentWearerName TEXT NOT NULL DEFAULT '',
+                        lastKnownModel TEXT NOT NULL DEFAULT '',
+                        lastKnownNodeId TEXT NOT NULL DEFAULT '',
+                        colorArgb INTEGER,
+                        firstSeen INTEGER NOT NULL,
+                        lastSeen INTEGER NOT NULL,
+                        PRIMARY KEY(watchId)
+                    )
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    """
+                    INSERT INTO watches_new (watchId, deviceName, currentWearerName, lastKnownModel, lastKnownNodeId, colorArgb, firstSeen, lastSeen)
+                    SELECT watchId, '', customName, lastKnownModel, lastKnownNodeId, colorArgb, firstSeen, lastSeen
+                    FROM watches
+                    """.trimIndent()
+                )
+
+                db.execSQL("DROP TABLE watches")
+                db.execSQL("ALTER TABLE watches_new RENAME TO watches")
+
+                android.util.Log.i(TAG, "MIGRATION_7_8: Split watch name into device and wearer")
+            }
+        }
+
+        /**
+         * Migration from schema version 8 to 9.
+         *
+         * Captures the wearer and watch on each analysed recording, so a saved analysis can rank
+         * by them. Both are copied at save time like every other snapshot value — a stored
+         * analysis must not start reporting different people because a watch changed hands.
+         *
+         * Analyses saved before this have no such values and simply offer no wearer or watch
+         * comparison, which is correct: that information was not captured.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!columnExists(db, "saved_analysis_records", "wearerName")) {
+                    db.execSQL("ALTER TABLE saved_analysis_records ADD COLUMN wearerName TEXT NOT NULL DEFAULT ''")
+                }
+                if (!columnExists(db, "saved_analysis_records", "watchName")) {
+                    db.execSQL("ALTER TABLE saved_analysis_records ADD COLUMN watchName TEXT NOT NULL DEFAULT ''")
+                }
+                android.util.Log.i(TAG, "MIGRATION_8_9: Snapshot wearer and watch captured")
+            }
+        }
+
         /** Whether [column] is already present on [table], so a migration can re-run safely. */
         private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
             db.query("PRAGMA table_info($table)").use { cursor ->
@@ -377,7 +452,13 @@ abstract class LibraryDatabase : RoomDatabase() {
                     LibraryDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                        MIGRATION_6_7,
+                        MIGRATION_7_8,
+                        MIGRATION_8_9
+                    )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.
                     .build()

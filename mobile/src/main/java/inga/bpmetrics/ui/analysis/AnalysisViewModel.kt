@@ -97,24 +97,46 @@ class AnalysisViewModel(
         }
 
         // Categorize records for ranking analysis
-        val categoryGroups = records
+        val tagGroups = records
             .flatMap { record -> record.tags.map { it to record } }
             .groupBy({ it.first.categoryId }, { it.first to it.second })
             .mapValues { (_, tagRecordPairs) ->
                 tagRecordPairs.groupBy({ it.first.tagName }, { it.second })
             }
 
+        // Who and what recorded are comparisons in their own right, not tags, so they are offered
+        // as categories alongside them — this is how one wearer is ranked against another.
+        val wearerGroups = records
+            .filter { it.wearerName.isNotBlank() }
+            .groupBy { it.wearerName }
+        val watchGroups = records
+            .filter { it.watchName.isNotBlank() }
+            .groupBy { it.watchName }
+
+        val categoryGroups = buildMap {
+            putAll(tagGroups)
+            if (wearerGroups.size > 1) put(WEARER_CATEGORY_ID, wearerGroups)
+            if (watchGroups.size > 1) put(WATCH_CATEGORY_ID, watchGroups)
+        }
+
         // Categories come from the records themselves rather than the library, so a saved analysis
         // still shows the right tabs after a category has been renamed or removed.
-        val categoryNames = records
+        val tagCategoryNames = records
             .flatMap { it.tags }
             .associate { it.categoryId to it.categoryName }
 
-        // Only show tabs for categories that have more than one tag in the results
-        val filteredCategories = categoryNames
-            .filter { (id, _) -> (categoryGroups[id]?.size ?: 0) > 1 }
+        // Only offer a tab where there is more than one thing to compare
+        val tagCategories = tagCategoryNames
+            .filter { (id, _) -> (tagGroups[id]?.size ?: 0) > 1 }
             .map { (id, name) -> AnalysisCategory(id, name) }
             .sortedBy { it.name }
+
+        // Wearer and Watch lead, being the comparisons a multi-watch session is usually about.
+        val filteredCategories = buildList {
+            if (wearerGroups.size > 1) add(AnalysisCategory(WEARER_CATEGORY_ID, "Wearer"))
+            if (watchGroups.size > 1) add(AnalysisCategory(WATCH_CATEGORY_ID, "Watch"))
+            addAll(tagCategories)
+        }
 
         // Determine which category is actually being viewed (fallback to first available if needed)
         val effectiveCategoryId = if (options.categoryId != null && filteredCategories.any { it.categoryId == options.categoryId }) {
@@ -199,22 +221,37 @@ class AnalysisViewModel(
     enum class MetricType { LOW, AVG, HIGH }
 
     companion object {
+        /**
+         * Synthetic category ids for the comparisons that are not tags.
+         *
+         * Negative so they can never collide with a real category, whose ids are generated
+         * positive by Room.
+         */
+        const val WEARER_CATEGORY_ID = -1L
+        const val WATCH_CATEGORY_ID = -2L
 
         /**
-         * A live analysis of whatever the Library is currently filtered to.
+         * A live analysis of the records matching [filter].
+         *
+         * Filtering happens here rather than reusing the Library's filtered stream, so choosing
+         * what to analyse does not disturb what the Library is showing.
          */
         fun liveFactory(
             repository: LibraryRepository,
-            filteredRecords: Flow<List<BpmRecord>>,
             filter: LibraryViewModel.FilterState
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 val records = combine(
-                    filteredRecords,
-                    repository.getAllCategories()
-                ) { library, categories ->
-                    AnalysisRecord.from(library, categories)
+                    repository.records,
+                    repository.getAllCategories(),
+                    repository.getAllWatches()
+                ) { library, categories, watches ->
+                    AnalysisRecord.from(
+                        LibraryViewModel.applyFilter(library, filter),
+                        categories,
+                        watches
+                    )
                 }
                 return AnalysisViewModel(
                     analysisRecords = records,

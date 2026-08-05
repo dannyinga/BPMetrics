@@ -26,7 +26,11 @@ data class AnalysisSnapshotRecord(
     val avgBpm: Double?,
     val maxBpm: Double?,
     val activeDurationMs: Long,
-    val tags: List<AnalysisSnapshotTag> = emptyList()
+    val tags: List<AnalysisSnapshotTag> = emptyList(),
+    /** Who was wearing the watch, as frozen onto the record. */
+    val wearerName: String = "",
+    /** The watch it came from, by the device name it had when the analysis was taken. */
+    val watchName: String = ""
 )
 
 /**

@@ -58,7 +58,9 @@ data class SavedAnalysisRecordEntity(
     val avgBpm: Double?,
     val maxBpm: Double?,
     val activeDurationMs: Long,
-    @ColumnInfo(defaultValue = "") val tagsEncoded: String = ""
+    @ColumnInfo(defaultValue = "") val tagsEncoded: String = "",
+    @ColumnInfo(defaultValue = "") val wearerName: String = "",
+    @ColumnInfo(defaultValue = "") val watchName: String = ""
 )
 
 /**

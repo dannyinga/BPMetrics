@@ -172,12 +172,12 @@ class LibraryRepository(
         // no longer names its wearer. Imported records keep the name in the file, which is their
         // own historical attribution and not ours to overwrite.
         val stampedWearer = if (preferRegistryName) {
-            watch?.customName?.takeIf { it.isNotBlank() }
+            watch?.currentWearerName?.takeIf { it.isNotBlank() }
                 ?: record.wearerName?.takeIf { it.isNotBlank() }
                 ?: ""
         } else {
             record.wearerName?.takeIf { it.isNotBlank() }
-                ?: watch?.customName?.takeIf { it.isNotBlank() }
+                ?: watch?.currentWearerName?.takeIf { it.isNotBlank() }
                 ?: ""
         }
 
@@ -248,7 +248,9 @@ class LibraryRepository(
                     avgBpm = record.avgBpm,
                     maxBpm = record.maxBpm,
                     activeDurationMs = record.activeDurationMs,
-                    tagsEncoded = encodeTags(record.tags)
+                    tagsEncoded = encodeTags(record.tags),
+                    wearerName = record.wearerName,
+                    watchName = record.watchName
                 )
             }
         )
@@ -271,7 +273,9 @@ class LibraryRepository(
                     avgBpm = entity.avgBpm,
                     maxBpm = entity.maxBpm,
                     activeDurationMs = entity.activeDurationMs,
-                    tags = decodeTags(entity.tagsEncoded)
+                    tags = decodeTags(entity.tagsEncoded),
+                    wearerName = entity.wearerName,
+                    watchName = entity.watchName
                 )
             },
             recordsStillInLibrary = savedAnalysisDao.countRecordsStillPresent(analysisId)
@@ -314,11 +318,19 @@ class LibraryRepository(
     suspend fun getWatch(watchId: String): WatchEntity? = watchDao.getWatch(watchId)
 
     /**
-     * Gives a watch a name. Only affects records that arrive from now on.
+     * Names the watch itself. Affects no recordings — this identifies the hardware.
      */
-    suspend fun renameWatch(watchId: String, name: String) {
-        watchDao.updateName(watchId, name.trim())
-        Log.d(tag, "Renamed watch $watchId to '${name.trim()}'")
+    suspend fun renameWatch(watchId: String, deviceName: String) {
+        watchDao.updateDeviceName(watchId, deviceName.trim())
+        Log.d(tag, "Watch $watchId is now called '${deviceName.trim()}'")
+    }
+
+    /**
+     * Sets who is wearing a watch. Only affects records that arrive from now on.
+     */
+    suspend fun setWatchWearer(watchId: String, wearerName: String) {
+        watchDao.updateWearer(watchId, wearerName.trim())
+        Log.d(tag, "Watch $watchId is now worn by '${wearerName.trim()}'")
     }
 
     suspend fun setWatchColor(watchId: String, colorArgb: Int?) = watchDao.updateColor(watchId, colorArgb)
@@ -331,20 +343,27 @@ class LibraryRepository(
      * Because names are stamped at ingest, a watch handed out unnamed produces recordings labelled
      * with its model. Naming it in advance is how that is avoided.
      */
-    suspend fun registerWatch(watchId: String, name: String, model: String = "") {
+    suspend fun registerWatch(
+        watchId: String,
+        deviceName: String,
+        wearerName: String = "",
+        model: String = ""
+    ) {
         val now = System.currentTimeMillis()
         watchDao.insertWatch(
             WatchEntity(
                 watchId = watchId,
-                customName = name.trim(),
+                deviceName = deviceName.trim(),
+                currentWearerName = wearerName.trim(),
                 lastKnownModel = model,
                 firstSeen = now,
                 lastSeen = now
             )
         )
-        // insertWatch ignores conflicts so it cannot clobber an existing name; apply the new one
+        // insertWatch ignores conflicts so it cannot clobber existing values; apply them
         // explicitly for the case where the watch was already known.
-        if (name.isNotBlank()) watchDao.updateName(watchId, name.trim())
+        if (deviceName.isNotBlank()) watchDao.updateDeviceName(watchId, deviceName.trim())
+        if (wearerName.isNotBlank()) watchDao.updateWearer(watchId, wearerName.trim())
     }
 
     /**

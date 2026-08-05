@@ -115,8 +115,8 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
         WatchEditDialog(
             watch = watch,
             onDismiss = { editing = null },
-            onRename = { name ->
-                viewModel.rename(watch.watchId, name)
+            onSave = { deviceName, wearerName ->
+                viewModel.save(watch.watchId, deviceName, wearerName)
                 editing = null
             },
             onReattributeAll = { name ->
@@ -134,10 +134,10 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
     if (showAddDialog) {
         AddWatchDialog(
             onDismiss = { showAddDialog = false },
-            onAdd = { name ->
+            onAdd = { deviceName, wearerName ->
                 // A watch registered before it has ever been seen has no identifier to key on yet,
                 // so one is minted here and reconciled by merging once its records arrive.
-                viewModel.addWatch(UUID.randomUUID().toString(), name)
+                viewModel.addWatch(UUID.randomUUID().toString(), deviceName, wearerName)
                 showAddDialog = false
             }
         )
@@ -179,6 +179,16 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
             }
             Spacer(Modifier.height(4.dp))
             Text(
+                text = if (row.watch.hasWearer) "👤 Worn by ${row.watch.currentWearerName}" else "👤 No wearer set",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (row.watch.hasWearer) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                }
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
                 text = buildString {
                     if (row.watch.isNamed && row.watch.lastKnownModel.isNotBlank()) {
                         append(row.watch.lastKnownModel).append(" · ")
@@ -188,10 +198,10 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
                 },
                 style = MaterialTheme.typography.bodySmall
             )
-            if (!row.watch.isNamed) {
+            if (!row.watch.hasWearer) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Unnamed — recordings will be labelled with the model",
+                    "Recordings from this watch will arrive unattributed",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -204,11 +214,12 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
 private fun WatchEditDialog(
     watch: WatchEntity,
     onDismiss: () -> Unit,
-    onRename: (String) -> Unit,
+    onSave: (deviceName: String, wearerName: String) -> Unit,
     onReattributeAll: (String) -> Unit,
     onDelete: () -> Unit
 ) {
-    var name by remember(watch.watchId) { mutableStateOf(watch.customName) }
+    var deviceName by remember(watch.watchId) { mutableStateOf(watch.deviceName) }
+    var wearerName by remember(watch.watchId) { mutableStateOf(watch.currentWearerName) }
     var confirmingDelete by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -217,18 +228,35 @@ private fun WatchEditDialog(
         text = {
             Column {
                 OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Who is wearing this watch") },
+                    value = deviceName,
+                    onValueChange = { deviceName = it },
+                    label = { Text("Watch name") },
+                    placeholder = { Text(watch.lastKnownModel.ifBlank { "Watch A" }) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(12.dp))
                 Text(
-                    "Applies to recordings that arrive from now on. Recordings already in your " +
-                        "library keep the name they were made under.",
+                    "Names the device itself. Use something you will recognise when handing it out.",
                     style = MaterialTheme.typography.bodySmall
                 )
+
+                Spacer(Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = wearerName,
+                    onValueChange = { wearerName = it },
+                    label = { Text("Current wearer") },
+                    placeholder = { Text("Kyle") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Stamped onto recordings that arrive from now on. Recordings already in your " +
+                        "library keep the wearer they were made under, so changing this is how you " +
+                        "hand the watch to someone else.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
                 if (watch.lastKnownModel.isNotBlank()) {
                     Spacer(Modifier.height(12.dp))
                     Text("Model: ${watch.lastKnownModel}", style = MaterialTheme.typography.bodySmall)
@@ -236,13 +264,13 @@ private fun WatchEditDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onRename(name) }) { Text("Save") }
+            TextButton(onClick = { onSave(deviceName, wearerName) }) { Text("Save") }
         },
         dismissButton = {
             Row {
                 TextButton(
-                    enabled = name.isNotBlank(),
-                    onClick = { onReattributeAll(name) }
+                    enabled = wearerName.isNotBlank(),
+                    onClick = { onReattributeAll(wearerName) }
                 ) { Text("Apply to past") }
                 TextButton(onClick = { confirmingDelete = true }) {
                     Text("Remove", color = MaterialTheme.colorScheme.error)
@@ -272,8 +300,12 @@ private fun WatchEditDialog(
 }
 
 @Composable
-private fun AddWatchDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
-    var name by remember { mutableStateOf("") }
+private fun AddWatchDialog(
+    onDismiss: () -> Unit,
+    onAdd: (deviceName: String, wearerName: String) -> Unit
+) {
+    var deviceName by remember { mutableStateOf("") }
+    var wearerName by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -281,22 +313,36 @@ private fun AddWatchDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
         text = {
             Column {
                 OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
+                    value = deviceName,
+                    onValueChange = { deviceName = it },
+                    label = { Text("Watch name") },
+                    placeholder = { Text("Watch A") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = wearerName,
+                    onValueChange = { wearerName = it },
                     label = { Text("Who will be wearing it") },
+                    placeholder = { Text("Kyle") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Use this to reserve a name before an event. Once the watch sends its first " +
-                        "recording it will appear as its own entry, which you can merge into this one.",
+                    "Use this to set a wearer before an event, so the first recordings arrive " +
+                        "attributed. Once the watch sends one it will appear as its own entry, " +
+                        "which you can merge into this one.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
         },
         confirmButton = {
-            TextButton(enabled = name.isNotBlank(), onClick = { onAdd(name) }) { Text("Add") }
+            TextButton(
+                enabled = deviceName.isNotBlank() || wearerName.isNotBlank(),
+                onClick = { onAdd(deviceName, wearerName) }
+            ) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )

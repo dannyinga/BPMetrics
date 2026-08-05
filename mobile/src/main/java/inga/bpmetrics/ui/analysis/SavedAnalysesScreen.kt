@@ -38,7 +38,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.SavedAnalysisEntity
+import inga.bpmetrics.library.WatchEntity
+import inga.bpmetrics.ui.library.LibraryFilterDialog
+import inga.bpmetrics.ui.library.LibraryViewModel
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import kotlinx.coroutines.flow.Flow
@@ -53,13 +57,17 @@ import kotlinx.coroutines.flow.Flow
 @Composable
 fun SavedAnalysesScreen(
     savedAnalyses: Flow<List<SavedAnalysisEntity>>,
+    repository: LibraryRepository,
+    availableWearers: List<String>,
+    availableWatches: List<WatchEntity>,
     onOpenDrawer: () -> Unit,
     onOpen: (Long) -> Unit,
-    onNewAnalysis: () -> Unit,
+    onNewAnalysis: (LibraryViewModel.FilterState) -> Unit,
     onDelete: (Long) -> Unit
 ) {
     val analyses by savedAnalyses.collectAsStateWithLifecycle(initialValue = emptyList())
     var pendingDelete by remember { mutableStateOf<SavedAnalysisEntity?>(null) }
+    var showScopeDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -74,7 +82,7 @@ fun SavedAnalysesScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = onNewAnalysis,
+                onClick = { showScopeDialog = true },
                 icon = { Icon(Icons.Default.Add, contentDescription = null) },
                 text = { Text("New analysis") }
             )
@@ -142,6 +150,22 @@ fun SavedAnalysesScreen(
                 }
             }
         }
+    }
+
+    // Choosing what to analyse before analysing it, rather than inheriting whatever the Library
+    // happened to be filtered to.
+    if (showScopeDialog) {
+        LibraryFilterDialog(
+            currentFilter = LibraryViewModel.FilterState(),
+            onDismiss = { showScopeDialog = false },
+            onApply = { filter ->
+                showScopeDialog = false
+                onNewAnalysis(filter)
+            },
+            repository = repository,
+            availableWearers = availableWearers,
+            availableWatches = availableWatches
+        )
     }
 
     pendingDelete?.let { analysis ->

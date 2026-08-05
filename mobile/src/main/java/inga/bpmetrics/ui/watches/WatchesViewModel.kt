@@ -52,23 +52,33 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
         }
     }
 
-    fun rename(watchId: String, name: String) {
+    /**
+     * Updates both names at once, since the dialog edits them together.
+     *
+     * Only the wearer affects recordings, and only ones that arrive from here on.
+     */
+    fun save(watchId: String, deviceName: String, wearerName: String) {
         viewModelScope.launch {
-            repository.renameWatch(watchId, name)
-            _message.value = if (name.isBlank()) {
-                "Name cleared. New recordings will use the watch model."
+            repository.renameWatch(watchId, deviceName)
+            repository.setWatchWearer(watchId, wearerName)
+            _message.value = if (wearerName.isBlank()) {
+                "Wearer cleared. New recordings will arrive unattributed."
             } else {
-                "Future recordings from this watch will be attributed to $name."
+                "Future recordings from this watch will be attributed to $wearerName."
             }
         }
     }
 
     /**
-     * Registers a watch that has not sent anything yet, so its first recordings are named.
+     * Registers a watch that has not sent anything yet, so its first recordings are attributed.
      */
-    fun addWatch(watchId: String, name: String) {
+    fun addWatch(watchId: String, deviceName: String, wearerName: String) {
         viewModelScope.launch {
-            repository.registerWatch(watchId.trim(), name)
+            repository.registerWatch(
+                watchId = watchId.trim(),
+                deviceName = deviceName,
+                wearerName = wearerName
+            )
             refreshCounts()
             _message.value = "Watch registered."
         }

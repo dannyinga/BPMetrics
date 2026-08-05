@@ -115,7 +115,7 @@ class LibraryDatabaseMigrationTest {
 
             assertTrue(cursor.moveToFirst())
             assertEquals("Watch A", cursor.getString(0))
-            // Seeded entries are unnamed: a name is something the user gives, never inferred.
+            // Seeded entries carry no given name: a name is something the user sets, never inferred.
             assertEquals("", cursor.getString(1))
             assertEquals("Watch A", cursor.getString(2))
             // Seen range spans that watch's recordings.
@@ -197,7 +197,7 @@ class LibraryDatabaseMigrationTest {
      * Running the whole chain is what a user upgrading from an older install actually experiences.
      */
     @Test
-    fun migrate5To7_runsTheWholeChain() {
+    fun migrate5To9_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 5).apply {
             execSQL(
                 """
@@ -212,10 +212,12 @@ class LibraryDatabaseMigrationTest {
 
         val db = helper.runMigrationsAndValidate(
             TEST_DB,
-            7,
+            9,
             true,
             LibraryDatabase.MIGRATION_5_6,
-            LibraryDatabase.MIGRATION_6_7
+            LibraryDatabase.MIGRATION_6_7,
+            LibraryDatabase.MIGRATION_7_8,
+            LibraryDatabase.MIGRATION_8_9
         )
 
         db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
@@ -253,6 +255,143 @@ class LibraryDatabaseMigrationTest {
             assertTrue(cursor.moveToFirst())
             assertEquals("Captured records should cascade with their analysis", 0, cursor.getInt(0))
         }
+        db.close()
+    }
+
+    @Test
+    fun migrate7To8_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 7).close()
+
+        helper.runMigrationsAndValidate(TEST_DB, 8, true, LibraryDatabase.MIGRATION_7_8).close()
+    }
+
+    /**
+     * The old single name meant the wearer — the field was labelled "who is wearing this watch"
+     * and was stamped onto records — so it must land on the wearer, not on the device.
+     */
+    @Test
+    fun migrate7To8_movesTheOldNameToTheWearer() {
+        helper.createDatabase(TEST_DB, 7).apply {
+            execSQL(
+                """
+                INSERT INTO watches (watchId, customName, lastKnownModel, lastKnownNodeId, colorArgb, firstSeen, lastSeen)
+                VALUES ('uuid-a', 'Kyle', 'Pixel Watch 2', 'node1', NULL, 1000, 5000)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 8, true, LibraryDatabase.MIGRATION_7_8)
+
+        db.query("SELECT deviceName, currentWearerName, lastKnownModel, lastKnownNodeId, firstSeen, lastSeen FROM watches WHERE watchId = 'uuid-a'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            // The watch itself is left unnamed and falls back to its model until the user names it.
+            assertEquals("", cursor.getString(0))
+            assertEquals("Kyle", cursor.getString(1))
+            // Everything else must survive the table being rebuilt.
+            assertEquals("Pixel Watch 2", cursor.getString(2))
+            assertEquals("node1", cursor.getString(3))
+            assertEquals(1000L, cursor.getLong(4))
+            assertEquals(5000L, cursor.getLong(5))
+        }
+        db.close()
+    }
+
+    /**
+     * Recordings are untouched by the split: their wearer was frozen when they arrived.
+     */
+    @Test
+    fun migrate7To8_leavesRecordedWearersAlone() {
+        helper.createDatabase(TEST_DB, 7).apply {
+            execSQL(
+                """
+                INSERT INTO bpm_records
+                    (recordId, title, description, date, startTime, endTime, durationMs, maxId, avg, minId, deviceId, wearerName, watchId)
+                VALUES
+                    (1, 'Saturday', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Pixel Watch 2', 'Kyle', 'uuid-a')
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO watches (watchId, customName, lastKnownModel, lastKnownNodeId, colorArgb, firstSeen, lastSeen)
+                VALUES ('uuid-a', 'Ben', 'Pixel Watch 2', '', NULL, 1000, 5000)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 8, true, LibraryDatabase.MIGRATION_7_8)
+
+        // The watch has moved on to Ben; Saturday's recording is still Kyle's.
+        db.query("SELECT wearerName FROM bpm_records WHERE recordId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Kyle", cursor.getString(0))
+        }
+        db.query("SELECT currentWearerName FROM watches WHERE watchId = 'uuid-a'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Ben", cursor.getString(0))
+        }
+        db.close()
+    }
+
+    @Test
+    fun migrate8To9_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 8).close()
+
+        helper.runMigrationsAndValidate(TEST_DB, 9, true, LibraryDatabase.MIGRATION_8_9).close()
+    }
+
+    /**
+     * Analyses saved before the wearer and watch were captured keep their numbers, and simply
+     * offer no comparison by them — the information was never recorded.
+     */
+    @Test
+    fun migrate8To9_leavesOlderSavedAnalysesIntact() {
+        helper.createDatabase(TEST_DB, 8).apply {
+            execSQL("INSERT INTO saved_analyses (analysisId, name, createdAt, filterDescription) VALUES (1, 'Coachella 2026', 1000, '')")
+            execSQL(
+                """
+                INSERT INTO saved_analysis_records
+                    (analysisId, recordId, title, date, minBpm, avgBpm, maxBpm, activeDurationMs, tagsEncoded)
+                VALUES
+                    (1, 10, 'Set One', 1000, 60.0, 90.0, 150.0, 60000, '1:Event:Coachella')
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 9, true, LibraryDatabase.MIGRATION_8_9)
+
+        db.query("SELECT title, maxBpm, wearerName, watchName FROM saved_analysis_records WHERE analysisId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Set One", cursor.getString(0))
+            assertEquals(150.0, cursor.getDouble(1), 0.001)
+            assertEquals("", cursor.getString(2))
+            assertEquals("", cursor.getString(3))
+        }
+        db.close()
+    }
+
+    @Test
+    fun migrate8To9_isIdempotent() {
+        helper.createDatabase(TEST_DB, 8).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 9, true, LibraryDatabase.MIGRATION_8_9)
+
+        LibraryDatabase.MIGRATION_8_9.migrate(db)
+
+        assertNotNull(db)
+        db.close()
+    }
+
+    @Test
+    fun migrate7To8_isIdempotent() {
+        helper.createDatabase(TEST_DB, 7).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 8, true, LibraryDatabase.MIGRATION_7_8)
+
+        // Rebuilding a table is the least re-runnable kind of migration, so this matters most here.
+        LibraryDatabase.MIGRATION_7_8.migrate(db)
+
+        assertNotNull(db)
         db.close()
     }
 
