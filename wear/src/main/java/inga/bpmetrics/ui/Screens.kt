@@ -300,6 +300,21 @@ fun RecordingContent(
             style = MaterialTheme.typography.caption2
         )
 
+        // What is still on the wrist. After recording away from the phone this is the only way to
+        // know how many recordings to expect once the two are back together.
+        if (state.pendingRecordCount > 0) {
+            Text(
+                text = if (state.pendingRecordCount == 1) {
+                    "⇅ 1 recording to send"
+                } else {
+                    "⇅ ${state.pendingRecordCount} recordings to send"
+                },
+                style = MaterialTheme.typography.caption2,
+                color = BpmAccent,
+                textAlign = TextAlign.Center
+            )
+        }
+
         Spacer(
             modifier = Modifier.height(12.dp)
         )

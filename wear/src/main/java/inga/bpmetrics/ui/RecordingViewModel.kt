@@ -35,15 +35,17 @@ class RecordingViewModel(private val repository: RecordingRepository) : ViewMode
         repository.recordingStartTime,
         repository.recordingState,
         repository.signalState,
-        deviceIdState
-    ) { bpm, startTime, state, signal, device ->
+        deviceIdState,
+        repository.pendingRecordCount
+    ) { values ->
         RecordingUIState(
-            bpm = bpm,
-            recordingStartTime = startTime,
-            serviceState = state,
-            signalState = signal,
-            deviceId = device,
-            statusText = statusTextFor(state, signal)
+            bpm = values[0] as Double?,
+            recordingStartTime = values[1] as Long,
+            serviceState = values[2] as RecordingState,
+            signalState = values[3] as SignalState,
+            deviceId = values[4] as String,
+            pendingRecordCount = values[5] as Int,
+            statusText = statusTextFor(values[2] as RecordingState, values[3] as SignalState)
         )
     }.stateIn(
         scope = viewModelScope,
@@ -116,7 +118,9 @@ data class RecordingUIState(
     val serviceState: RecordingState = RecordingState.INACTIVE,
     val signalState: SignalState = SignalState.UNKNOWN,
     val statusText: String = "Initializing...",
-    val deviceId: String = "Watch"
+    val deviceId: String = "Watch",
+    /** Finished recordings still on this watch, waiting to reach the phone. */
+    val pendingRecordCount: Int = 0
 ) {
     /**
      * Whether the start/stop control accepts a press.

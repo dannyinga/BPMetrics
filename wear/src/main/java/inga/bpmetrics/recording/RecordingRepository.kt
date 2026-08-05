@@ -142,6 +142,16 @@ class RecordingRepository private constructor(context: Context) {
      */
     val liveBpm: StateFlow<Double?> = _liveBpm.asStateFlow()
 
+    /**
+     * How many finished recordings are waiting to reach the phone.
+     *
+     * Surfaced so the wearer knows what is still on the wrist — after an event away from the
+     * phone, this is the only way to tell how many recordings to expect once they reconnect.
+     */
+    val pendingRecordCount: StateFlow<Int> = dao.getAllPendingRecordsFlow()
+        .map { it.size }
+        .stateIn(scope, SharingStarted.Eagerly, 0)
+
     private val _hasAllPrerequisites = MutableStateFlow(false)
     /**
      * Indicates whether all system prerequisites (permissions, capabilities) are met.
