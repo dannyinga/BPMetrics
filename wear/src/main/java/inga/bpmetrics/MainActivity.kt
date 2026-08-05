@@ -40,6 +40,10 @@ class MainActivity : ComponentActivity() {
         (application as BPMetricsApp).serviceManager
     }
 
+    private val syncManager by lazy {
+        (application as BPMetricsApp).syncManager
+    }
+
     private val repository by lazy {
         RecordingRepository.getInstance(applicationContext)
     }
@@ -155,7 +159,10 @@ class MainActivity : ComponentActivity() {
                     factory = object : androidx.lifecycle.ViewModelProvider.Factory {
                         @Suppress("UNCHECKED_CAST")
                         override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-                            return RecordingViewModel(repository) as T
+                            return RecordingViewModel(
+                                repository = repository,
+                                awaitingPhoneCount = syncManager.awaitingPhoneCount
+                            ) as T
                         }
                     }
                 )

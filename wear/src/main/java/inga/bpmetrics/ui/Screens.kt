@@ -300,14 +300,15 @@ fun RecordingContent(
             style = MaterialTheme.typography.caption2
         )
 
-        // What is still on the wrist. After recording away from the phone this is the only way to
-        // know how many recordings to expect once the two are back together.
+        // What the phone has not got yet. Counts both what this watch still holds and what has
+        // been handed to Play Services but not yet collected, since a recording is only really
+        // delivered once the phone has saved it.
         if (state.pendingRecordCount > 0) {
             Text(
                 text = if (state.pendingRecordCount == 1) {
-                    "⇅ 1 recording to send"
+                    "⇅ 1 recording not on phone yet"
                 } else {
-                    "⇅ ${state.pendingRecordCount} recordings to send"
+                    "⇅ ${state.pendingRecordCount} recordings not on phone yet"
                 },
                 style = MaterialTheme.typography.caption2,
                 color = BpmAccent,

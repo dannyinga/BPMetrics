@@ -18,7 +18,17 @@ import kotlinx.coroutines.flow.stateIn
  *
  * @param repository The repository that manages the heart rate data and Health Services state.
  */
-class RecordingViewModel(private val repository: RecordingRepository) : ViewModel() {
+class RecordingViewModel(
+    private val repository: RecordingRepository,
+    /**
+     * Records already handed to Play Services but not yet taken by the phone.
+     *
+     * Kept separate from the repository's outbox because the two mean different things: the
+     * outbox holds what this watch has not handed over, and empties whether or not the phone is
+     * reachable. Only together do they answer "how many is the phone still missing".
+     */
+    awaitingPhoneCount: StateFlow<Int> = MutableStateFlow(0)
+) : ViewModel() {
 
     val deviceIdState = MutableStateFlow(repository.getDeviceId())
 
@@ -36,7 +46,9 @@ class RecordingViewModel(private val repository: RecordingRepository) : ViewMode
         repository.recordingState,
         repository.signalState,
         deviceIdState,
-        repository.pendingRecordCount
+        combine(repository.pendingRecordCount, awaitingPhoneCount) { outbox, awaiting ->
+            outbox + awaiting
+        }
     ) { values ->
         RecordingUIState(
             bpm = values[0] as Double?,
@@ -119,7 +131,7 @@ data class RecordingUIState(
     val signalState: SignalState = SignalState.UNKNOWN,
     val statusText: String = "Initializing...",
     val deviceId: String = "Watch",
-    /** Finished recordings still on this watch, waiting to reach the phone. */
+    /** Finished recordings the phone has not received yet. */
     val pendingRecordCount: Int = 0
 ) {
     /**

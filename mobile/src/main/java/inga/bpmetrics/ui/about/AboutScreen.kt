@@ -74,8 +74,25 @@ fun AboutScreen(onOpenDrawer: () -> Unit) {
 
             Text("Your data", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text(
-                "Heart rate recordings are stored only on this device and on the watches paired " +
-                    "with it. BPMetrics does not upload your data anywhere.",
+                "Your recordings are stored on this phone and on the watches paired with it. " +
+                    "BPMetrics has no servers and never sends your data to us or to anyone else.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                "Getting recordings from a watch to this phone is handled by Google Play " +
+                    "Services, not by BPMetrics. When the two are not directly connected, it may " +
+                    "relay them through your Google account rather than over Bluetooth — which " +
+                    "is why recordings sometimes arrive without the watch being nearby.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                "Anything you export — a video, a CSV, a shared file — goes wherever you send it.",
                 style = MaterialTheme.typography.bodyMedium
             )
 
