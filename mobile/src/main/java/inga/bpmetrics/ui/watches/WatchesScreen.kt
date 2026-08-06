@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -43,7 +44,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import inga.bpmetrics.BPMetricsApp
+import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
+import inga.bpmetrics.ui.components.PersonPicker
+import inga.bpmetrics.ui.components.PersonSwatch
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import java.util.UUID
 
@@ -114,14 +118,15 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
     editing?.let { watch ->
         WatchEditDialog(
             watch = watch,
+            people = uiState.people,
             onDismiss = { editing = null },
-            onSave = { deviceName, wearerName ->
-                viewModel.save(watch.watchId, deviceName, wearerName)
+            onSave = { deviceName, personId ->
+                viewModel.save(watch.watchId, deviceName, personId)
                 editing = null
             },
-            onReattributeAll = { name ->
+            onReattributeAll = { personId ->
                 // Covers the common case directly: everything this watch ever sent.
-                viewModel.reattribute(watch.watchId, name, Long.MIN_VALUE, Long.MAX_VALUE)
+                viewModel.reattribute(watch.watchId, personId, Long.MIN_VALUE, Long.MAX_VALUE)
                 editing = null
             },
             onDelete = {
@@ -133,11 +138,12 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
 
     if (showAddDialog) {
         AddWatchDialog(
+            people = uiState.people,
             onDismiss = { showAddDialog = false },
-            onAdd = { deviceName, wearerName ->
+            onAdd = { deviceName, personId ->
                 // A watch registered before it has ever been seen has no identifier to key on yet,
                 // so one is minted here and reconciled by merging once its records arrive.
-                viewModel.addWatch(UUID.randomUUID().toString(), deviceName, wearerName)
+                viewModel.addWatch(UUID.randomUUID().toString(), deviceName, personId)
                 showAddDialog = false
             }
         )
@@ -178,15 +184,21 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
                 )
             }
             Spacer(Modifier.height(4.dp))
-            Text(
-                text = if (row.watch.hasWearer) "👤 Worn by ${row.watch.currentWearerName}" else "👤 No wearer set",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (row.watch.hasWearer) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.error
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                row.wearer?.let {
+                    PersonSwatch(it.colorArgb, size = 12)
+                    Spacer(Modifier.width(6.dp))
                 }
-            )
+                Text(
+                    text = row.wearer?.let { "Worn by ${it.displayName}" } ?: "👤 No wearer set",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (row.wearer != null) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    }
+                )
+            }
             Spacer(Modifier.height(4.dp))
             Text(
                 text = buildString {
@@ -198,7 +210,7 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
                 },
                 style = MaterialTheme.typography.bodySmall
             )
-            if (!row.watch.hasWearer) {
+            if (row.wearer == null) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Recordings from this watch will arrive unattributed",
@@ -213,13 +225,14 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
 @Composable
 private fun WatchEditDialog(
     watch: WatchEntity,
+    people: List<PersonEntity>,
     onDismiss: () -> Unit,
-    onSave: (deviceName: String, wearerName: String) -> Unit,
-    onReattributeAll: (String) -> Unit,
+    onSave: (deviceName: String, personId: Long?) -> Unit,
+    onReattributeAll: (Long) -> Unit,
     onDelete: () -> Unit
 ) {
     var deviceName by remember(watch.watchId) { mutableStateOf(watch.deviceName) }
-    var wearerName by remember(watch.watchId) { mutableStateOf(watch.currentWearerName) }
+    var personId by remember(watch.watchId) { mutableStateOf(watch.currentPersonId) }
     var confirmingDelete by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -242,18 +255,16 @@ private fun WatchEditDialog(
 
                 Spacer(Modifier.height(16.dp))
 
-                OutlinedTextField(
-                    value = wearerName,
-                    onValueChange = { wearerName = it },
-                    label = { Text("Current wearer") },
-                    placeholder = { Text("Kyle") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                PersonPicker(
+                    people = people,
+                    selectedId = personId,
+                    onSelect = { personId = it },
+                    label = "Current wearer"
                 )
                 Text(
-                    "Stamped onto recordings that arrive from now on. Recordings already in your " +
-                        "library keep the wearer they were made under, so changing this is how you " +
-                        "hand the watch to someone else.",
+                    "Applies to recordings that arrive from now on. Recordings already in your " +
+                        "library stay with whoever was wearing it at the time, so changing this is " +
+                        "how you hand the watch to someone else.",
                     style = MaterialTheme.typography.bodySmall
                 )
 
@@ -264,13 +275,13 @@ private fun WatchEditDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(deviceName, wearerName) }) { Text("Save") }
+            TextButton(onClick = { onSave(deviceName, personId) }) { Text("Save") }
         },
         dismissButton = {
             Row {
                 TextButton(
-                    enabled = wearerName.isNotBlank(),
-                    onClick = { onReattributeAll(wearerName) }
+                    enabled = personId != null,
+                    onClick = { personId?.let(onReattributeAll) }
                 ) { Text("Apply to past") }
                 TextButton(onClick = { confirmingDelete = true }) {
                     Text("Remove", color = MaterialTheme.colorScheme.error)
@@ -301,11 +312,12 @@ private fun WatchEditDialog(
 
 @Composable
 private fun AddWatchDialog(
+    people: List<PersonEntity>,
     onDismiss: () -> Unit,
-    onAdd: (deviceName: String, wearerName: String) -> Unit
+    onAdd: (deviceName: String, personId: Long?) -> Unit
 ) {
     var deviceName by remember { mutableStateOf("") }
-    var wearerName by remember { mutableStateOf("") }
+    var personId by remember { mutableStateOf<Long?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -321,13 +333,11 @@ private fun AddWatchDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = wearerName,
-                    onValueChange = { wearerName = it },
-                    label = { Text("Who will be wearing it") },
-                    placeholder = { Text("Kyle") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                PersonPicker(
+                    people = people,
+                    selectedId = personId,
+                    onSelect = { personId = it },
+                    label = "Who will be wearing it"
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
@@ -340,8 +350,8 @@ private fun AddWatchDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = deviceName.isNotBlank() || wearerName.isNotBlank(),
-                onClick = { onAdd(deviceName, wearerName) }
+                enabled = deviceName.isNotBlank() || personId != null,
+                onClick = { onAdd(deviceName, personId) }
             ) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }

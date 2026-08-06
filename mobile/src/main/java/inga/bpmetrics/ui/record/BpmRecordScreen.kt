@@ -47,6 +47,7 @@ import inga.bpmetrics.ui.graph.BpmGraphPreview
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.components.FlowRow
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
+import inga.bpmetrics.ui.components.PersonPicker
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Save
@@ -72,6 +73,7 @@ fun BpmRecordScreen(
 ) {
     val record by viewModel.record.collectAsState()
     val watchName by viewModel.watchName.collectAsState()
+    val people by viewModel.people.collectAsState()
     var isEditing by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -93,7 +95,7 @@ fun BpmRecordScreen(
         var editedTitle by remember(r.metadata.title) { mutableStateOf(r.metadata.title) }
         var editedDescription by remember(r.metadata.description) { mutableStateOf(r.metadata.description) }
         var editedDeviceId by remember(r.metadata.deviceId) { mutableStateOf(r.metadata.deviceId) }
-        var editedWearerName by remember(r.metadata.wearerName) { mutableStateOf(r.metadata.wearerName) }
+        var editedPersonId by remember(r.metadata.personId) { mutableStateOf(r.metadata.personId) }
 
         Scaffold(
             topBar = {
@@ -120,7 +122,7 @@ fun BpmRecordScreen(
                             if (isEditing) {
                                 viewModel.updateTitle(editedTitle)
                                 viewModel.updateDescription(editedDescription)
-                                viewModel.updateDeviceAndWearer(editedDeviceId, editedWearerName)
+                                viewModel.updateDeviceAndWearer(editedDeviceId, editedPersonId)
                             }
                             isEditing = !isEditing
                         }) {
@@ -160,14 +162,14 @@ fun BpmRecordScreen(
 
                 // Device & Wearer Metadata Card
                 if (isEditing) {
+                    PersonPicker(
+                        people = people,
+                        selectedId = editedPersonId,
+                        onSelect = { editedPersonId = it },
+                        label = "Wearer"
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = editedWearerName,
-                            onValueChange = { editedWearerName = it },
-                            label = { Text("Wearer Name") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
                         OutlinedTextField(
                             value = editedDeviceId,
                             onValueChange = { editedDeviceId = it },
@@ -195,8 +197,11 @@ fun BpmRecordScreen(
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val wearerLabel = r.metadata.personId?.let { id ->
+                            people.firstOrNull { it.personId == id }?.displayName
+                        } ?: r.metadata.wearerName.takeIf { it.isNotBlank() }
                         val deviceBadge = buildString {
-                            if (r.metadata.wearerName.isNotBlank()) append("👤 ${r.metadata.wearerName}  •  ")
+                            if (wearerLabel != null) append("👤 $wearerLabel  •  ")
                             append("⌚ ${r.watchLabel(watchName)}")
                         }
                         Text(

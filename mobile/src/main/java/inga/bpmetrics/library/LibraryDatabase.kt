@@ -54,8 +54,11 @@ interface BpmRecordDao {
     /**
      * Updates the device ID and wearer name of a specific record.
      */
-    @Query("UPDATE bpm_records SET deviceId = :deviceId, wearerName = :wearerName WHERE recordId = :id")
-    suspend fun updateDeviceAndWearer(id: Long, deviceId: String, wearerName: String)
+    @Query(
+        "UPDATE bpm_records SET deviceId = :deviceId, wearerName = :wearerName, personId = :personId " +
+            "WHERE recordId = :id"
+    )
+    suspend fun updateDeviceAndWearer(id: Long, deviceId: String, wearerName: String, personId: Long?)
 
     /**
      * Updates a record with its calculated analysis results.
@@ -153,16 +156,18 @@ interface BpmRecordDao {
         TagEntity::class,
         RecordTagCrossRef::class,
         WatchEntity::class,
+        PersonEntity::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
     abstract fun bpmRecordDao(): BpmRecordDao
     abstract fun tagDao(): TagDao
     abstract fun watchDao(): WatchDao
+    abstract fun personDao(): PersonDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
 
     companion object {
@@ -405,6 +410,89 @@ abstract class LibraryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration from schema version 10 to 11: wearers become people.
+         *
+         * A wearer was a bare string copied onto every record. This creates a profile for each
+         * distinct name already in the library or the watch registry, then points the records and
+         * watches at those profiles — so an upgrade arrives with everyone already set up rather
+         * than an empty People tab and a library full of names it does not recognise.
+         *
+         * `wearerName` is deliberately left in place on every record. It is what a recording falls
+         * back to if its person is later deleted, which is the difference between a deleted profile
+         * leaving readable history and leaving anonymous history.
+         *
+         * Names are matched exactly, so "Kyle" and "kyle" become two profiles. Merging them
+         * automatically would be a guess, and the wrong guess silently merges two real people;
+         * leaving both is something the wearer can fix in a few taps.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `people` (
+                        `personId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `colorArgb` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+
+                if (!columnExists(db, "bpm_records", "personId")) {
+                    db.execSQL("ALTER TABLE bpm_records ADD COLUMN personId INTEGER DEFAULT NULL")
+                }
+                if (!columnExists(db, "watches", "currentPersonId")) {
+                    db.execSQL("ALTER TABLE watches ADD COLUMN currentPersonId INTEGER DEFAULT NULL")
+                }
+
+                // Only seed once. Re-running must not create a second profile for everybody.
+                val alreadySeeded = db.query("SELECT COUNT(*) FROM people").use { cursor ->
+                    cursor.moveToFirst() && cursor.getInt(0) > 0
+                }
+
+                if (!alreadySeeded) {
+                    val now = System.currentTimeMillis()
+                    db.execSQL(
+                        """
+                        INSERT INTO people (name, colorArgb, createdAt)
+                        SELECT name, 0, $now FROM (
+                            SELECT DISTINCT wearerName AS name FROM bpm_records WHERE wearerName != ''
+                            UNION
+                            SELECT DISTINCT currentWearerName AS name FROM watches WHERE currentWearerName != ''
+                        ) ORDER BY name
+                        """.trimIndent()
+                    )
+
+                    // Built from the palette rather than written out here: these are signed ARGB
+                    // ints, and hand-copying them into SQL is how they end up subtly wrong.
+                    val branches = PersonColors.PALETTE.mapIndexed { index, color ->
+                        "WHEN $index THEN $color"
+                    }.joinToString(" ")
+                    db.execSQL(
+                        "UPDATE people SET colorArgb = CASE (personId % ${PersonColors.PALETTE.size}) $branches ELSE ${PersonColors.PALETTE.first()} END"
+                    )
+                }
+
+                db.execSQL(
+                    """
+                    UPDATE bpm_records
+                    SET personId = (SELECT personId FROM people WHERE people.name = bpm_records.wearerName)
+                    WHERE wearerName != '' AND personId IS NULL
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE watches
+                    SET currentPersonId = (SELECT personId FROM people WHERE people.name = watches.currentWearerName)
+                    WHERE currentWearerName != '' AND currentPersonId IS NULL
+                    """.trimIndent()
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_10_11: Wearers are now people with their own colours")
+            }
+        }
+
         /** Whether [column] is already present on [table], so a migration can re-run safely. */
         private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
             db.query("PRAGMA table_info($table)").use { cursor ->
@@ -480,7 +568,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_6_7,
                         MIGRATION_7_8,
                         MIGRATION_8_9,
-                        MIGRATION_9_10
+                        MIGRATION_9_10,
+                        MIGRATION_10_11
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

@@ -50,6 +50,7 @@ import inga.bpmetrics.ui.tags.TagManagementViewModel
 import inga.bpmetrics.ui.export.RenderQueueScreen
 import inga.bpmetrics.ui.export.VideoExportDialog
 import inga.bpmetrics.ui.incoming.IncomingScreen
+import inga.bpmetrics.ui.people.PeopleScreen
 import inga.bpmetrics.ui.watches.WatchesScreen
 import kotlinx.coroutines.launch
 
@@ -176,13 +177,13 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 // rebuilding it each recomposition would restart the query and blink the empty
                 // state on the way back.
                 val savedAnalyses = remember { repository.getSavedAnalyses() }
-                val availableWearers by libraryViewModel.availableWearers.collectAsState()
+                val availablePeople by libraryViewModel.availablePeople.collectAsState()
                 val availableWatches by libraryViewModel.availableWatches.collectAsState()
 
                 SavedAnalysesScreen(
                     savedAnalyses = savedAnalyses,
                     repository = repository,
-                    availableWearers = availableWearers,
+                    availablePeople = availablePeople,
                     availableWatches = availableWatches,
                     onOpenDrawer = openDrawer,
                     onOpen = { navController.navigate("${Routes.ANALYSIS_SAVED}/$it") },
@@ -243,15 +244,17 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 if (metadata?.isConcurrent == true) {
                     val allRecords by repository.records.collectAsState()
                     val watches by libraryViewModel.availableWatches.collectAsState()
+                    val people by libraryViewModel.availablePeople.collectAsState()
                     val savedIds = remember(saved) { saved!!.records.map { it.recordId }.toSet() }
 
                     val stillPresent = remember(allRecords, savedIds) {
                         allRecords.filter { it.metadata.recordId in savedIds }
                     }
-                    val analysis = remember(stillPresent, watches, metadata) {
+                    val analysis = remember(stillPresent, watches, people, metadata) {
                         ConcurrentAnalysis.from(
                             records = stillPresent,
                             watches = watches,
+                            people = people,
                             window = metadata.windowStartMs?.let { start ->
                                 metadata.windowEndMs?.let { end -> start..end }
                             }
@@ -285,6 +288,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 WatchesScreen(onOpenDrawer = openDrawer)
             }
 
+            composable(Routes.PEOPLE) {
+                PeopleScreen(onOpenDrawer = openDrawer)
+            }
+
             composable(Routes.INCOMING) {
                 IncomingScreen(onOpenDrawer = openDrawer)
             }
@@ -292,13 +299,15 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             composable(Routes.ANALYSIS_CONCURRENT) {
                 val allRecords by repository.records.collectAsState()
                 val watches by libraryViewModel.availableWatches.collectAsState()
+                val people by libraryViewModel.availablePeople.collectAsState()
 
                 // Curves are heavy, so the analysis is rebuilt only when its inputs actually
                 // change rather than on every recomposition.
-                val analysis = remember(allRecords, watches, concurrentRecordIds) {
+                val analysis = remember(allRecords, watches, people, concurrentRecordIds) {
                     ConcurrentAnalysis.from(
                         records = allRecords.filter { it.metadata.recordId in concurrentRecordIds },
-                        watches = watches
+                        watches = watches,
+                        people = people
                     )
                 }
 
@@ -431,6 +440,7 @@ object Routes {
     const val GRAPH_DETAIL = "graph_detail"
     const val RENDER_QUEUE = "render_queue"
     const val WATCHES = "watches"
+    const val PEOPLE = "people"
     const val ABOUT = "about"
     const val INCOMING = "incoming"
 

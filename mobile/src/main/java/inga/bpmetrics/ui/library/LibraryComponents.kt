@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.library
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,6 +18,7 @@ import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -40,6 +42,7 @@ import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.components.FlowRow
 import inga.bpmetrics.ui.components.ExpandableSection
+import inga.bpmetrics.ui.components.PersonSwatch
 import java.util.Calendar
 import java.util.TimeZone
 
@@ -58,14 +61,14 @@ fun LibraryFilterDialog(
     onDismiss: () -> Unit,
     onApply: (LibraryViewModel.FilterState) -> Unit,
     repository: inga.bpmetrics.library.LibraryRepository,
-    availableWearers: List<String> = emptyList(),
+    availablePeople: List<inga.bpmetrics.library.PersonEntity> = emptyList(),
     availableWatches: List<inga.bpmetrics.library.WatchEntity> = emptyList()
 ) {
     var dateRange by remember { mutableStateOf(currentFilter.dateRange) }
     var selectedTagIds by remember { mutableStateOf(currentFilter.selectedTagIds) }
     var minBpm by remember { mutableStateOf(currentFilter.minBpm.toString()) }
     var maxBpm by remember { mutableStateOf(currentFilter.maxBpm?.toString() ?: "") }
-    var selectedWearers by remember { mutableStateOf(currentFilter.selectedWearers) }
+    var selectedPersonIds by remember { mutableStateOf(currentFilter.selectedPersonIds) }
     var selectedWatchIds by remember { mutableStateOf(currentFilter.selectedWatchIds) }
 
     // Room hands back a new Flow per call and collection is keyed on the instance, so building
@@ -210,28 +213,29 @@ fun LibraryFilterDialog(
                     }
                 }
 
-                if (availableWearers.isNotEmpty()) {
+                if (availablePeople.isNotEmpty()) {
                     item {
                         Text("Wearer", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Who was wearing the watch, as recorded at the time.",
+                            "Who was wearing the watch at the time.",
                             style = MaterialTheme.typography.bodySmall
                         )
                         FlowRow(
                             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            availableWearers.forEach { wearer ->
+                            availablePeople.forEach { person ->
                                 FilterChip(
-                                    selected = wearer in selectedWearers,
+                                    selected = person.personId in selectedPersonIds,
                                     onClick = {
-                                        selectedWearers = if (wearer in selectedWearers) {
-                                            selectedWearers - wearer
+                                        selectedPersonIds = if (person.personId in selectedPersonIds) {
+                                            selectedPersonIds - person.personId
                                         } else {
-                                            selectedWearers + wearer
+                                            selectedPersonIds + person.personId
                                         }
                                     },
-                                    label = { Text("👤 $wearer") }
+                                    leadingIcon = { PersonSwatch(person.colorArgb, size = 12) },
+                                    label = { Text(person.displayName) }
                                 )
                             }
                         }
@@ -334,7 +338,7 @@ fun LibraryFilterDialog(
                         selectedTagIds = selectedTagIds,
                         minBpm = minBpm.toDoubleOrNull() ?: 0.0,
                         maxBpm = maxBpm.toDoubleOrNull(),
-                        selectedWearers = selectedWearers,
+                        selectedPersonIds = selectedPersonIds,
                         selectedWatchIds = selectedWatchIds
                     ))
             }) { Text("Apply") }
@@ -436,3 +440,91 @@ private fun Long.toUtcStartOfDay(): Long {
 }
 
 private fun Modifier.width(dp: Int): Modifier = this.then(Modifier.width(dp.dp))
+
+/**
+ * Attributes a hand-picked set of recordings to one person.
+ *
+ * Picking them out of the library is the only way to describe "these ones" — a batch that arrived
+ * before its watch had anyone assigned is not a category any filter expresses. Everyone is listed
+ * rather than hidden behind a dropdown, because with a handful of friends the whole set fits and
+ * choosing becomes one tap.
+ *
+ * This overwrites whatever the chosen recordings were attributed to, so the count is stated plainly
+ * and nothing happens until a name is tapped.
+ */
+@Composable
+fun BulkWearerDialog(
+    recordCount: Int,
+    people: List<inga.bpmetrics.library.PersonEntity>,
+    onDismiss: () -> Unit,
+    onAssign: (Long?) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Set wearer") },
+        text = {
+            Column {
+                Text(
+                    text = if (recordCount == 1) {
+                        "Attribute this recording to:"
+                    } else {
+                        "Attribute these $recordCount recordings to:"
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "This replaces whoever they are attributed to now. It does not affect any " +
+                        "other recording, or who is wearing the watch.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+
+                if (people.isEmpty()) {
+                    Text(
+                        "No people yet. Add someone in the People section first.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 280.dp)) {
+                        items(people) { person ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onAssign(person.personId) }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                PersonSwatch(person.colorArgb, size = 18)
+                                Spacer(Modifier.width(12.dp))
+                                Text(person.displayName, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                        item {
+                            HorizontalDivider()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onAssign(null) }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Nobody",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        // No confirm button: tapping a name is the action, so a second press would only be a
+        // chance to change the answer after having already given it.
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}

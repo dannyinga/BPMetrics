@@ -53,6 +53,7 @@ class LibraryRepository(
     private val recordDao = database.bpmRecordDao()
     private val tagDao = database.tagDao()
     private val watchDao = database.watchDao()
+    private val personDao = database.personDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
 
     init {
@@ -101,8 +102,15 @@ class LibraryRepository(
     /**
      * Updates the device ID and wearer name of a BPM record.
      */
-    suspend fun updateRecordDeviceAndWearer(recordId: Long, deviceId: String, wearerName: String) {
-        recordDao.updateDeviceAndWearer(recordId, deviceId, wearerName)
+    /**
+     * Corrects a single recording's device and who wore it.
+     *
+     * The name is written alongside the link so the recording stays readable if that profile is
+     * removed later — the same pairing used when a record first arrives.
+     */
+    suspend fun updateRecordDeviceAndWearer(recordId: Long, deviceId: String, personId: Long?) {
+        val name = personId?.let { personDao.getPerson(it)?.name }.orEmpty()
+        recordDao.updateDeviceAndWearer(recordId, deviceId, name, personId)
     }
 
     /**
@@ -165,21 +173,28 @@ class LibraryRepository(
 
         val watch = resolveWatch(record, sourceNodeId)
 
-        // The wearer is stamped here and then frozen: renaming a watch later must not rewrite the
-        // attribution of recordings already made under the old name.
+        // Who wore it is settled here and never revisited: handing the watch to someone else
+        // tomorrow must not rewrite the attribution of recordings already made.
         //
-        // Records arriving from a watch take the registry's current name, because the watch itself
-        // no longer names its wearer. Imported records keep the name in the file, which is their
-        // own historical attribution and not ours to overwrite.
-        val stampedWearer = if (preferRegistryName) {
-            watch?.currentWearerName?.takeIf { it.isNotBlank() }
-                ?: record.wearerName?.takeIf { it.isNotBlank() }
-                ?: ""
+        // Records arriving from a watch take whoever the registry says is wearing it, because the
+        // watch itself no longer names its wearer. Imported records carry only a name, which is
+        // their own historical attribution and not ours to overwrite — so those are matched to an
+        // existing profile if one fits, and left as a bare name if not.
+        val person = if (preferRegistryName) {
+            watch?.currentPersonId?.let { personDao.getPerson(it) }
+                ?: record.wearerName?.takeIf { it.isNotBlank() }?.let { personDao.findByName(it) }
         } else {
-            record.wearerName?.takeIf { it.isNotBlank() }
-                ?: watch?.currentWearerName?.takeIf { it.isNotBlank() }
-                ?: ""
+            record.wearerName?.takeIf { it.isNotBlank() }?.let { personDao.findByName(it) }
+                ?: watch?.currentPersonId?.let { personDao.getPerson(it) }
         }
+
+        // The name is stamped alongside the link, not instead of it. The link is what displays,
+        // so a rename reaches every recording; the name is what remains readable if the profile
+        // is deleted later.
+        val stampedWearer = person?.name
+            ?: record.wearerName?.takeIf { it.isNotBlank() }
+            ?: watch?.currentWearerName?.takeIf { it.isNotBlank() }
+            ?: ""
 
         val recordEntity = BpmRecordEntity(
             title = customTitle ?: record.title?.takeIf { it.isNotBlank() } ?: "New Record",
@@ -190,7 +205,8 @@ class LibraryRepository(
             durationMs = record.durationMs,
             deviceId = record.deviceId,
             wearerName = stampedWearer,
-            watchId = watch?.watchId
+            watchId = watch?.watchId,
+            personId = person?.personId
         )
         val recordId = recordDao.insertBpmRecordGetId(recordEntity)
 
@@ -382,13 +398,17 @@ class LibraryRepository(
 
     /**
      * Sets who is wearing a watch. Only affects records that arrive from now on.
+     *
+     * Null hands the watch back to nobody, so its next recordings arrive unattributed rather than
+     * carrying whoever had it last.
      */
-    suspend fun setWatchWearer(watchId: String, wearerName: String) {
-        watchDao.updateWearer(watchId, wearerName.trim())
-        Log.d(tag, "Watch $watchId is now worn by '${wearerName.trim()}'")
+    suspend fun setWatchPerson(watchId: String, personId: Long?) {
+        watchDao.updatePerson(watchId, personId)
+        // Keep the legacy name column in step so a downgrade, or any path still reading it, does
+        // not report a wearer this watch no longer has.
+        watchDao.updateWearer(watchId, personId?.let { personDao.getPerson(it)?.name }.orEmpty())
+        Log.d(tag, "Watch $watchId is now worn by person $personId")
     }
-
-    suspend fun setWatchColor(watchId: String, colorArgb: Int?) = watchDao.updateColor(watchId, colorArgb)
 
     suspend fun countRecordsForWatch(watchId: String): Int = watchDao.countRecordsForWatch(watchId)
 
@@ -401,7 +421,7 @@ class LibraryRepository(
     suspend fun registerWatch(
         watchId: String,
         deviceName: String,
-        wearerName: String = "",
+        personId: Long? = null,
         model: String = ""
     ) {
         val now = System.currentTimeMillis()
@@ -409,29 +429,110 @@ class LibraryRepository(
             WatchEntity(
                 watchId = watchId,
                 deviceName = deviceName.trim(),
-                currentWearerName = wearerName.trim(),
                 lastKnownModel = model,
                 firstSeen = now,
-                lastSeen = now
+                lastSeen = now,
+                currentPersonId = personId
             )
         )
         // insertWatch ignores conflicts so it cannot clobber existing values; apply them
         // explicitly for the case where the watch was already known.
         if (deviceName.isNotBlank()) watchDao.updateDeviceName(watchId, deviceName.trim())
-        if (wearerName.isNotBlank()) watchDao.updateWearer(watchId, wearerName.trim())
+        if (personId != null) setWatchPerson(watchId, personId)
     }
 
     /**
-     * Re-stamps the wearer on records from one watch within a date range.
+     * Re-attributes records from one watch within a date range to a person.
      *
-     * The recovery path for recordings that arrived before their watch had been named.
+     * The recovery path for recordings that arrived before anyone had been assigned to the watch.
      *
      * @return how many records were changed.
      */
-    suspend fun reattributeRecords(watchId: String, wearerName: String, fromDate: Long, toDate: Long): Int {
-        val changed = watchDao.reattributeRecords(watchId, wearerName.trim(), fromDate, toDate)
-        Log.d(tag, "Re-attributed $changed record(s) from watch $watchId to '${wearerName.trim()}'")
+    suspend fun reattributeRecords(watchId: String, personId: Long, fromDate: Long, toDate: Long): Int {
+        val person = personDao.getPerson(personId) ?: return 0
+        val changed = personDao.reattributeRecords(watchId, personId, person.name, fromDate, toDate)
+        Log.d(tag, "Re-attributed $changed record(s) from watch $watchId to '${person.name}'")
         return changed
+    }
+
+    // --- People ---
+
+    /** Everyone who wears a watch. */
+    fun getAllPeople(): Flow<List<PersonEntity>> = personDao.getAllPeopleFlow()
+
+    suspend fun getPerson(personId: Long): PersonEntity? = personDao.getPerson(personId)
+
+    /**
+     * Creates a profile, giving it a colour that differs from the ones already in use.
+     *
+     * @return the new person's id.
+     */
+    suspend fun addPerson(name: String, colorArgb: Int? = null): Long {
+        val existing = personDao.getAllPeople()
+        val color = colorArgb ?: PersonColors.defaultFor(existing.size)
+        val id = personDao.insertPerson(
+            PersonEntity(
+                name = name.trim(),
+                colorArgb = color,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        Log.d(tag, "Added person '${name.trim()}' as $id")
+        return id
+    }
+
+    /**
+     * Renames someone, everywhere.
+     *
+     * Records hold the person rather than a copy of their name, so this reaches every recording
+     * they have ever made. That is the intent: a misspelling is worth correcting throughout. What
+     * this cannot do — and must not — is change *who* a past recording belongs to.
+     */
+    suspend fun renamePerson(personId: Long, name: String) {
+        personDao.updateName(personId, name.trim())
+        Log.d(tag, "Person $personId is now called '${name.trim()}'")
+    }
+
+    suspend fun setPersonColor(personId: Long, colorArgb: Int) =
+        personDao.updateColor(personId, colorArgb)
+
+    suspend fun countRecordsForPerson(personId: Long): Int = personDao.countRecordsForPerson(personId)
+
+    /**
+     * Attributes a chosen set of recordings to someone, or to nobody.
+     *
+     * The correction path for a batch that arrived before its watch had anyone assigned — picking
+     * them out of the library by hand is the only way to describe "these ones", since no filter
+     * expresses it.
+     *
+     * @return how many recordings changed.
+     */
+    suspend fun assignPersonToRecords(recordIds: Collection<Long>, personId: Long?): Int {
+        if (recordIds.isEmpty()) return 0
+        val name = personId?.let { personDao.getPerson(it)?.name }.orEmpty()
+
+        // Chunked because Room turns `IN (:recordIds)` into one bind variable per id, and SQLite
+        // caps those at 999 on older Android. Selecting every recording in the library is a single
+        // tap away, so this is reachable rather than theoretical.
+        val changed = recordIds.toList()
+            .chunked(SQL_VARIABLE_LIMIT)
+            .sumOf { chunk -> personDao.assignPersonToRecords(chunk, personId, name) }
+
+        Log.d(tag, "Attributed $changed record(s) to ${name.ifBlank { "nobody" }}")
+        return changed
+    }
+
+    /**
+     * Removes a profile without erasing the history attached to it.
+     *
+     * Each of their recordings keeps the name it was stamped with, so the library still says who
+     * made it — it just stops being a profile you can filter by or recolour.
+     */
+    suspend fun deletePerson(personId: Long) {
+        personDao.unlinkWatches(personId)
+        personDao.unlinkRecords(personId)
+        personDao.deletePerson(personId)
+        Log.d(tag, "Deleted person $personId; their recordings keep the name they were stamped with")
     }
 
     /**
@@ -721,4 +822,14 @@ class LibraryRepository(
      * @param recordId The ID of the record.
      */
     fun getTagsForRecord(recordId: Long): Flow<List<TagEntity>> = tagDao.getTagsForRecordFlow(recordId)
+
+    private companion object {
+        /**
+         * How many ids may go into one `IN (...)` clause.
+         *
+         * SQLite's bind-variable ceiling is 999 on older Android versions; this leaves room for the
+         * statement's other parameters.
+         */
+        const val SQL_VARIABLE_LIMIT = 500
+    }
 }

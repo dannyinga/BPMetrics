@@ -5,6 +5,7 @@ import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -30,6 +31,16 @@ class LibraryDatabaseMigrationTest {
 
     private companion object {
         const val TEST_DB = "migration-test-db"
+
+        /** The whole chain, in order, so a new migration only has to be added in one place. */
+        val ALL_MIGRATIONS = arrayOf(
+            LibraryDatabase.MIGRATION_5_6,
+            LibraryDatabase.MIGRATION_6_7,
+            LibraryDatabase.MIGRATION_7_8,
+            LibraryDatabase.MIGRATION_8_9,
+            LibraryDatabase.MIGRATION_9_10,
+            LibraryDatabase.MIGRATION_10_11
+        )
     }
 
     @get:Rule
@@ -197,7 +208,7 @@ class LibraryDatabaseMigrationTest {
      * Running the whole chain is what a user upgrading from an older install actually experiences.
      */
     @Test
-    fun migrate5To10_runsTheWholeChain() {
+    fun migrate5To11_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 5).apply {
             execSQL(
                 """
@@ -210,16 +221,7 @@ class LibraryDatabaseMigrationTest {
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(
-            TEST_DB,
-            10,
-            true,
-            LibraryDatabase.MIGRATION_5_6,
-            LibraryDatabase.MIGRATION_6_7,
-            LibraryDatabase.MIGRATION_7_8,
-            LibraryDatabase.MIGRATION_8_9,
-            LibraryDatabase.MIGRATION_9_10
-        )
+        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
 
         db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -227,6 +229,94 @@ class LibraryDatabaseMigrationTest {
             assertEquals("Watch A", cursor.getString(1))
         }
         db.close()
+    }
+
+    /**
+     * The upgrade that turns wearers into people has to arrive with everyone already set up.
+     *
+     * An empty People tab beside a library full of names it did not recognise would look like the
+     * upgrade had lost them.
+     */
+    @Test
+    fun migrate10To11_createsAProfileForEveryNameAlreadyInUse() {
+        seedVersion5With(
+            "(1, 'Saturday', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')",
+            "(2, 'Sunday', '', 2000, 2000, 3000, 1000, NULL, 90.0, NULL, 'Watch B', 'Ben')",
+            "(3, 'Also Kyle', '', 3000, 3000, 4000, 1000, NULL, 95.0, NULL, 'Watch A', 'Kyle')",
+            "(4, 'Nobody', '', 4000, 4000, 5000, 1000, NULL, 70.0, NULL, 'Watch C', '')"
+        )
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
+
+        // One profile per distinct name — the two Kyle recordings share a person, not one each.
+        db.query("SELECT COUNT(*) FROM people").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(2, cursor.getInt(0))
+        }
+
+        // Everyone gets a colour, and it is a real one rather than the zero the seed starts from.
+        db.query("SELECT COUNT(*) FROM people WHERE colorArgb = 0").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+
+        // Both of Kyle's recordings point at the same profile.
+        db.query(
+            """
+            SELECT r.recordId, p.name FROM bpm_records r
+            JOIN people p ON p.personId = r.personId
+            ORDER BY r.recordId
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getLong(0))
+            assertEquals("Kyle", cursor.getString(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals(2, cursor.getLong(0))
+            assertEquals("Ben", cursor.getString(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals(3, cursor.getLong(0))
+            assertEquals("Kyle", cursor.getString(1))
+            assertFalse("a nameless recording must not be given a profile", cursor.moveToNext())
+        }
+
+        // The frozen name stays put. It is what keeps a recording readable if its profile is
+        // deleted later, so the migration must not clear it in favour of the link.
+        db.query("SELECT wearerName FROM bpm_records WHERE recordId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Kyle", cursor.getString(0))
+        }
+        db.close()
+    }
+
+    /** A library with nobody named must still arrive at a valid schema. */
+    @Test
+    fun migrate10To11_handlesALibraryWithNoWearers() {
+        helper.createDatabase(TEST_DB, 5).close()
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT COUNT(*) FROM people").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /** Inserts records into a fresh version 5 database and closes it. */
+    private fun seedVersion5With(vararg rows: String) {
+        helper.createDatabase(TEST_DB, 5).apply {
+            rows.forEach { row ->
+                execSQL(
+                    """
+                    INSERT INTO bpm_records
+                        (recordId, title, description, date, startTime, endTime, durationMs, maxId, avg, minId, deviceId, wearerName)
+                    VALUES $row
+                    """.trimIndent()
+                )
+            }
+            close()
+        }
     }
 
     /**

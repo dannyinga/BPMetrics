@@ -95,6 +95,7 @@ import inga.bpmetrics.BPMetricsApp
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.ui.components.ExpandableSection
 import inga.bpmetrics.ui.graph.TimeUtils
 import kotlinx.coroutines.Dispatchers
@@ -304,7 +305,18 @@ fun VideoExportDialog(
     var previewFrame by remember { mutableStateOf<Bitmap?>(null) }
     var selectedTimeZoneId by remember(defaultTz) { mutableStateOf(defaultTz) }
     var showTzDialog by remember { mutableStateOf(false) }
-    var customRecordColors by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
+    // Colours come from the people themselves rather than being chosen per export. Picking them
+    // again for every video meant the same person could be one colour on screen and another in the
+    // video of the same session; now there is one answer, set in People.
+    val people by remember { (context.applicationContext as BPMetricsApp).libraryRepository.getAllPeople() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val peopleById = remember(people) { people.associateBy { it.personId } }
+
+    val recordColors = remember(records, peopleById) {
+        records.mapIndexed { index, rec ->
+            rec.metadata.recordId to PersonColors.colorFor(rec.metadata.personId, peopleById, index)
+        }.toMap()
+    }
     // Multiple records default to clock time so a single video stays in sync with all of them.
     var alignByElapsedTime by remember(records) { mutableStateOf(records.size <= 1) }
     var showMultiWatchSettings by remember { mutableStateOf(true) }
@@ -977,51 +989,50 @@ fun VideoExportDialog(
 
                                 Spacer(Modifier.height(8.dp))
                                 Text(
-                                    "Tap a color swatch to customize each wearer's graph line:",
+                                    "Each line takes its wearer's colour, set in People. There is " +
+                                        "nothing to pick here — the same person looks the same in " +
+                                        "the library, on a chart and in every video.",
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Spacer(Modifier.height(4.dp))
 
-                                val paletteOptions = listOf(
-                                    0xFF00E5FF.toInt(), // Cyan
-                                    0xFFFF5252.toInt(), // Coral Red
-                                    0xFF00E676.toInt(), // Emerald Green
-                                    0xFFE040FB.toInt(), // Purple
-                                    0xFFFFD700.toInt(), // Amber Gold
-                                    0xFF2979FF.toInt(), // Electric Blue
-                                    0xFFFF9100.toInt(), // Orange
-                                    0xFFFF4081.toInt()  // Pink
-                                )
-
                                 records.forEachIndexed { index, rec ->
-                                    val wearerLabel = rec.metadata.wearerName.ifBlank { rec.metadata.deviceId.ifBlank { rec.metadata.title } }
-                                    val defaultColor = ImageExporter.MULTI_WATCH_PALETTES[index % ImageExporter.MULTI_WATCH_PALETTES.size][0]
-                                    val currentColor = customRecordColors[rec.metadata.recordId] ?: defaultColor
-
-                                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                        Text(text = "👤 $wearerLabel", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            paletteOptions.forEach { colorInt ->
-                                                val isSelected = colorInt == currentColor
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(24.dp)
-                                                        .clip(CircleShape)
-                                                        .background(Color(colorInt))
-                                                        .border(
-                                                            width = if (isSelected) 2.dp else 0.dp,
-                                                            color = if (isSelected) Color.White else Color.Transparent,
-                                                            shape = CircleShape
+                                    val person = rec.metadata.personId?.let { peopleById[it] }
+                                    val label = person?.displayName
+                                        ?: rec.metadata.wearerName.ifBlank {
+                                            rec.metadata.deviceId.ifBlank { rec.metadata.title }
+                                        }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    Color(
+                                                        PersonColors.colorFor(
+                                                            rec.metadata.personId,
+                                                            peopleById,
+                                                            index
                                                         )
-                                                        .clickable {
-                                                            customRecordColors = customRecordColors + (rec.metadata.recordId to colorInt)
-                                                        }
+                                                    )
                                                 )
-                                            }
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (person == null) {
+                                            Text(
+                                                text = "  · no profile",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         }
                                     }
                                 }
@@ -1064,7 +1075,7 @@ fun VideoExportDialog(
                         syncOffsetMs = globalSyncOffset,
                         timeZoneId = selectedTimeZoneId,
                         records = records,
-                        customRecordColors = customRecordColors,
+                        customRecordColors = recordColors,
                         alignByElapsedTime = alignByElapsedTime,
                         graphTitle = graphTitle
                     )

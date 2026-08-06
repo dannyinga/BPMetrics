@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -54,6 +55,7 @@ enum class AppDestination(
     TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell),
     INCOMING(inga.bpmetrics.ui.Routes.INCOMING, "Incoming", Icons.Default.CloudDownload),
     RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Render Queue", Icons.Default.VideoLibrary),
+    PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People),
     WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch),
     SETTINGS(inga.bpmetrics.ui.Routes.SETTINGS, "Settings", Icons.Default.Settings),
     ABOUT(inga.bpmetrics.ui.Routes.ABOUT, "About", Icons.Default.Info);

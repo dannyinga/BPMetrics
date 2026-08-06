@@ -12,6 +12,7 @@ import android.graphics.Shader
 import androidx.core.graphics.createBitmap
 import inga.bpmetrics.library.BpmDataPointEntity
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.ui.graph.TimeUtils
 import inga.bpmetrics.ui.util.StringFormatHelpers
 import java.io.File
@@ -519,10 +520,16 @@ object ImageExporter {
         canvas.drawPath(heartPath, paint)
     }
 
-    /** The colour a record's curve, head and pill all share. */
+    /**
+     * The colour a record's curve, head and pill all share.
+     *
+     * The caller supplies it, resolved from the wearer's profile, so a person looks the same in a
+     * video as they do everywhere else in the app. The fallback is only for a recording nobody is
+     * assigned to.
+     */
     private fun colorForRecord(record: BpmRecord, index: Int, config: ImageExportConfig): Int =
         config.customRecordColors[record.metadata.recordId]
-            ?: MULTI_WATCH_PALETTES[index % MULTI_WATCH_PALETTES.size][0]
+            ?: PersonColors.defaultFor(index)
 
     /**
      * Shortens [text] with a trailing ellipsis until it fits [maxWidth] at the paint's current
@@ -774,13 +781,10 @@ object ImageExporter {
             hsvStart[1] + (hsvEnd[1] - hsvStart[1]) * fraction, hsvStart[2] + (hsvEnd[2] - hsvStart[2]) * fraction))
     }
 
-    val MULTI_WATCH_PALETTES = listOf(
-        intArrayOf(0xFF00E5FF.toInt(), 0xFF00B0FF.toInt()), // Cyan/Blue
-        intArrayOf(0xFFFF5252.toInt(), 0xFFFF1744.toInt()), // Coral/Red
-        intArrayOf(0xFF00E676.toInt(), 0xFF00C853.toInt()), // Emerald/Green
-        intArrayOf(0xFFE040FB.toInt(), 0xFFD500F9.toInt()), // Purple/Violet
-        intArrayOf(0xFFFFD700.toInt(), 0xFFFFAB00.toInt())  // Gold/Amber
-    )
+    // The multi-watch palette used to live here, as pairs of which only the first was ever read,
+    // beside a second and longer palette in the export dialog that had drifted away from it.
+    // Both are now inga.bpmetrics.library.PersonColors.PALETTE, which is also what a new profile
+    // is coloured from — so the default a person starts with is the one the exporter would pick.
 
     /**
      * The shared time axis that a set of records is drawn against.

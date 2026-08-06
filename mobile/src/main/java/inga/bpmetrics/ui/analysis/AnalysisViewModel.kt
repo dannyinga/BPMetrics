@@ -245,12 +245,14 @@ class AnalysisViewModel(
                 val records = combine(
                     repository.records,
                     repository.getAllCategories(),
-                    repository.getAllWatches()
-                ) { library, categories, watches ->
+                    repository.getAllWatches(),
+                    repository.getAllPeople()
+                ) { library, categories, watches, people ->
                     AnalysisRecord.from(
                         LibraryViewModel.applyFilter(library, filter),
                         categories,
-                        watches
+                        watches,
+                        people
                     )
                 }
                 return AnalysisViewModel(

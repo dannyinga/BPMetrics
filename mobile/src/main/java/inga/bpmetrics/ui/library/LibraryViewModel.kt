@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -53,19 +54,19 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
 
     /**
-     * Wearer names present in the library, for the filter to offer.
+     * Everyone who wears a watch, for the filter to offer and for the library to colour by.
      *
-     * Taken from the records rather than the watch registry: a name that no watch carries any
-     * more is still the right way to find the recordings made under it.
+     * From the profiles rather than gathered off the records: a person is a real thing now, so
+     * someone who has not recorded yet still appears, and someone whose name was spelled two ways
+     * before profiles existed no longer appears twice.
      */
-    val availableWearers: StateFlow<List<String>> = repository.records
-        .map { records ->
-            records.map { it.metadata.wearerName }
-                .filter { it.isNotBlank() }
-                .distinct()
-                .sorted()
-        }
+    val availablePeople: StateFlow<List<PersonEntity>> = repository.getAllPeople()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The same people keyed by id, which is how the list and its tiles look them up. */
+    val peopleById: StateFlow<Map<Long, PersonEntity>> = availablePeople
+        .map { people -> people.associateBy { it.personId } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /** Watches known to the registry, for the filter to offer. */
     val availableWatches: StateFlow<List<WatchEntity>> = repository.getAllWatches()
@@ -185,6 +186,22 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /**
+     * Attributes every selected recording to one person, or to nobody.
+     *
+     * The batch correction for recordings that arrived before their watch had a wearer assigned.
+     * Selection is cleared afterwards, as with the other bulk actions, so the result is visible
+     * rather than hidden behind the selection highlight.
+     */
+    fun assignPersonToSelectedRecords(personId: Long?) {
+        val ids = _selectedRecordIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.assignPersonToRecords(ids, personId)
+            clearSelection()
+        }
+    }
+
+    /**
      * Options for sorting the record list.
      */
     enum class SortOption { DATE, MAX_BPM, AVG_BPM, LOW_BPM, DURATION }
@@ -198,13 +215,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         val minBpm: Double = 0.0,
         val maxBpm: Double? = null,
         /**
-         * Wearer names to include, matched against the name frozen onto each record.
+         * People to include, matched against who was wearing the watch at the time.
          *
-         * Answers "show me Kyle's recordings" — and because the name was stamped at the time of
-         * recording, it keeps answering it correctly after that watch has been handed to someone
-         * else and renamed.
+         * Answers "show me Kyle's recordings" — and because each record settled on a person when it
+         * arrived, it keeps answering correctly after that watch has been handed to someone else.
+         * Renaming Kyle does not disturb it either, since the match is on the profile rather than
+         * on a copy of the name.
          */
-        val selectedWearers: Set<String> = emptySet(),
+        val selectedPersonIds: Set<Long> = emptySet(),
         /**
          * Watches to include, matched on the physical device rather than the name.
          *
@@ -249,10 +267,10 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                 val bpmMatch = (avg >= filter.minBpm) &&
                         (filter.maxBpm == null || avg <= filter.maxBpm)
 
-                // 4. Wearer Filter — matched on the name frozen onto the record, not on whatever the
-                // watch is called now, so past recordings stay attributed to who actually made them.
-                val wearerMatch = filter.selectedWearers.isEmpty() ||
-                        record.metadata.wearerName in filter.selectedWearers
+                // 4. Wearer Filter — matched on who was wearing the watch when the recording was
+                // made, so past recordings stay attributed to whoever actually made them.
+                val wearerMatch = filter.selectedPersonIds.isEmpty() ||
+                        record.metadata.personId in filter.selectedPersonIds
 
                 // 5. Watch Filter — the physical device, independent of naming.
                 val watchMatch = filter.selectedWatchIds.isEmpty() ||

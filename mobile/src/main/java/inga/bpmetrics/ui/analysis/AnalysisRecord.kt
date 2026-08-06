@@ -4,6 +4,7 @@ import inga.bpmetrics.library.AnalysisSnapshotRecord
 import inga.bpmetrics.library.AnalysisSnapshotTag
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
 
 /**
@@ -50,7 +51,8 @@ data class AnalysisRecord(
         fun from(
             record: BpmRecord,
             categoryNames: Map<Long, String>,
-            watchNames: Map<String, String> = emptyMap()
+            watchNames: Map<String, String> = emptyMap(),
+            peopleNames: Map<Long, String> = emptyMap()
         ): AnalysisRecord =
             AnalysisRecord(
                 recordId = record.metadata.recordId,
@@ -69,7 +71,10 @@ data class AnalysisRecord(
                         categoryName = categoryNames[tag.parentCategoryId] ?: "Uncategorized"
                     )
                 },
-                wearerName = record.metadata.wearerName,
+                // The profile's current name, so grouping collapses onto one person rather than
+                // one bucket per spelling their name was ever entered as.
+                wearerName = record.metadata.personId?.let { peopleNames[it] }
+                    ?: record.metadata.wearerName,
                 // The watch's current name, falling back to the model it reported. A record whose
                 // watch is no longer registered still shows where it came from.
                 watchName = record.metadata.watchId?.let { watchNames[it] }
@@ -80,11 +85,13 @@ data class AnalysisRecord(
         fun from(
             records: List<BpmRecord>,
             categories: List<CategoryEntity>,
-            watches: List<WatchEntity> = emptyList()
+            watches: List<WatchEntity> = emptyList(),
+            people: List<PersonEntity> = emptyList()
         ): List<AnalysisRecord> {
             val names = categories.associate { it.categoryId to it.name }
             val watchNames = watches.associate { it.watchId to it.displayName }
-            return records.map { from(it, names, watchNames) }
+            val peopleNames = people.associate { it.personId to it.displayName }
+            return records.map { from(it, names, watchNames, peopleNames) }
         }
 
         /** Reads back a record captured when an analysis was saved. */

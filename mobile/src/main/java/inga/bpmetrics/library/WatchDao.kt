@@ -41,8 +41,9 @@ interface WatchDao {
     @Query("UPDATE watches SET currentWearerName = :wearerName WHERE watchId = :watchId")
     suspend fun updateWearer(watchId: String, wearerName: String)
 
-    @Query("UPDATE watches SET colorArgb = :colorArgb WHERE watchId = :watchId")
-    suspend fun updateColor(watchId: String, colorArgb: Int?)
+    /** Sets who is wearing this watch. Takes effect on records arriving from here on. */
+    @Query("UPDATE watches SET currentPersonId = :personId WHERE watchId = :watchId")
+    suspend fun updatePerson(watchId: String, personId: Long?)
 
     /** Records that this watch was seen again, refreshing what is known about it. */
     @Query(

@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.SavedAnalysisEntity
 import inga.bpmetrics.library.WatchEntity
 import inga.bpmetrics.ui.library.LibraryFilterDialog
@@ -58,7 +59,7 @@ import kotlinx.coroutines.flow.Flow
 fun SavedAnalysesScreen(
     savedAnalyses: Flow<List<SavedAnalysisEntity>>,
     repository: LibraryRepository,
-    availableWearers: List<String>,
+    availablePeople: List<PersonEntity>,
     availableWatches: List<WatchEntity>,
     onOpenDrawer: () -> Unit,
     onOpen: (Long) -> Unit,
@@ -200,7 +201,7 @@ fun SavedAnalysesScreen(
                 onNewAnalysis(filter)
             },
             repository = repository,
-            availableWearers = availableWearers,
+            availablePeople = availablePeople,
             availableWatches = availableWatches
         )
     }

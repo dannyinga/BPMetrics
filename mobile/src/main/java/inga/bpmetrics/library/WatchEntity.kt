@@ -23,12 +23,13 @@ import androidx.room.PrimaryKey
  * cannot separate two watches of the same model — hence the merge tooling.
  * @property deviceName What this watch is called. Blank until someone names it, in which case the
  * hardware model stands in.
- * @property currentWearerName Who is wearing it now. Stamped onto each arriving record and then
- * frozen there, so changing this never rewrites past recordings.
+ * @property currentWearerName Legacy free-text wearer, superseded by [currentPersonId]. Kept so
+ * registrations made before profiles existed still read correctly; no longer written.
  * @property lastKnownModel The hardware model last reported, shown when the watch has no name.
  * @property lastKnownNodeId The Data Layer node last seen for this watch, for diagnostics.
- * @property colorArgb Colour used for this watch's line in multi-watch exports, so a person keeps
- * the same colour between exports. Null means fall back to the palette.
+ * @property colorArgb Legacy. Colour belongs to the person now, not the hardware — a watch that
+ * changes hands should not keep the previous wearer's colour. Nothing reads or writes this; the
+ * column stays only because dropping it would mean rebuilding the table.
  * @property firstSeen When this watch was first registered.
  * @property lastSeen When a record last arrived from it.
  */
@@ -41,7 +42,14 @@ data class WatchEntity(
     @ColumnInfo(defaultValue = "") val lastKnownNodeId: String = "",
     val colorArgb: Int? = null,
     val firstSeen: Long = 0L,
-    val lastSeen: Long = 0L
+    val lastSeen: Long = 0L,
+    /**
+     * Who is wearing this watch now, referencing [PersonEntity.personId].
+     *
+     * Supersedes [currentWearerName]: a wearer is picked from the list of people rather than typed,
+     * so the same person cannot end up spelled three ways across three watches.
+     */
+    @ColumnInfo(defaultValue = "NULL") val currentPersonId: Long? = null
 ) {
     /**
      * How to refer to this watch: its given name, else the hardware model.
@@ -57,6 +65,6 @@ data class WatchEntity(
     /** Whether the watch has been given a name of its own. */
     val isNamed: Boolean get() = deviceName.isNotBlank()
 
-    /** Whether a wearer is set, which decides what gets stamped onto arriving records. */
-    val hasWearer: Boolean get() = currentWearerName.isNotBlank()
+    /** Whether a wearer is set, which decides who arriving records are attributed to. */
+    val hasWearer: Boolean get() = currentPersonId != null || currentWearerName.isNotBlank()
 }

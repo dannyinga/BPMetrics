@@ -91,6 +91,7 @@ import inga.bpmetrics.export.JsonExporter
 import inga.bpmetrics.ui.export.VideoExportDialog
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Timeline
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -113,12 +114,14 @@ fun LibraryScreen(
     val selectedRecordIds by viewModel.selectedRecordIds.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    // Watch names are resolved live rather than stored on each record: renaming a watch should
-    // relabel every recording it made. The wearer is the opposite — frozen when the record arrived.
+    // Both names are resolved live rather than stored on each record, so renaming a watch or
+    // correcting someone's spelling relabels every recording it applies to. What stays fixed is
+    // *which* watch and *which person* a recording points at.
     val watches by viewModel.availableWatches.collectAsStateWithLifecycle()
     val watchNames = remember(watches) {
         watches.filter { it.isNamed }.associate { it.watchId to it.deviceName }
     }
+    val peopleById by viewModel.peopleById.collectAsStateWithLifecycle()
 
     val isSelectionMode = selectedRecordIds.isNotEmpty()
 
@@ -127,6 +130,7 @@ fun LibraryScreen(
     var showFilterDialog by remember { mutableStateOf(false) }
     var showBulkDeleteDialog by remember { mutableStateOf(false) }
     var showBulkTagDialog by remember { mutableStateOf(false) }
+    var showBulkWearerDialog by remember { mutableStateOf(false) }
 
     var showMultiVideoDialog by remember { mutableStateOf(false) }
     var selectedRecordsForMultiVideo by remember { mutableStateOf<List<BpmRecord>>(emptyList()) }
@@ -250,6 +254,15 @@ fun LibraryScreen(
                                 onClick = {
                                     showSelectionMenu = false
                                     showBulkTagDialog = true
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = { Text("Set wearer") },
+                                leadingIcon = { Icon(Icons.Default.People, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    showBulkWearerDialog = true
                                 }
                             )
 
@@ -446,6 +459,7 @@ fun LibraryScreen(
                         record = record,
                         isSelected = isSelected,
                         watchName = record.metadata.watchId?.let { watchNames[it] },
+                        wearer = record.metadata.personId?.let { peopleById[it] },
                         onClick = {
                             if (isSelectionMode) {
                                 viewModel.toggleRecordSelection(record.metadata.recordId)
@@ -463,7 +477,7 @@ fun LibraryScreen(
     }
 
     if (showFilterDialog) {
-        val availableWearers by viewModel.availableWearers.collectAsStateWithLifecycle()
+        val availablePeople by viewModel.availablePeople.collectAsStateWithLifecycle()
         val availableWatches by viewModel.availableWatches.collectAsStateWithLifecycle()
 
         LibraryFilterDialog(
@@ -474,7 +488,7 @@ fun LibraryScreen(
                 showFilterDialog = false
             },
             repository = viewModel.repository,
-            availableWearers = availableWearers,
+            availablePeople = availablePeople,
             availableWatches = availableWatches
         )
     }
@@ -539,6 +553,19 @@ fun LibraryScreen(
             categories = categories,
             getTagsByCategoryFlow = { viewModel.repository.getTagsByCategory(it) },
             initialSelectedTagIds = emptyList()
+        )
+    }
+
+    if (showBulkWearerDialog) {
+        val availablePeople by viewModel.availablePeople.collectAsStateWithLifecycle()
+        BulkWearerDialog(
+            recordCount = selectedRecordIds.size,
+            people = availablePeople,
+            onDismiss = { showBulkWearerDialog = false },
+            onAssign = { personId ->
+                viewModel.assignPersonToSelectedRecords(personId)
+                showBulkWearerDialog = false
+            }
         )
     }
 }

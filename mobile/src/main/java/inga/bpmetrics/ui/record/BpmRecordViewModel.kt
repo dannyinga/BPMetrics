@@ -7,6 +7,7 @@ import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TagEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,14 +38,18 @@ class BpmRecordViewModel(
      * The given name of the watch this recording came from, or null if it has none.
      *
      * Resolved live rather than stored on the record: a watch's name describes hardware that
-     * still exists, so renaming it updates every recording it made. The wearer is the opposite —
-     * frozen at ingest, because who was wearing it then cannot change now.
+     * still exists, so renaming it updates every recording it made. What is fixed at ingest is
+     * *which* watch and *which* person, not what either of them is called.
      */
     val watchName: StateFlow<String?> = _record
         .map { rec ->
             rec?.metadata?.watchId?.let { repository.getWatch(it)?.deviceName?.takeIf { n -> n.isNotBlank() } }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Everyone available to attribute this recording to. */
+    val people: StateFlow<List<PersonEntity>> = repository.getAllPeople()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
         loadRecord()
@@ -94,11 +99,13 @@ class BpmRecordViewModel(
     }
 
     /**
-     * Updates the wearer name and device ID of the record.
+     * Corrects who this recording belongs to, and the device it reports.
+     *
+     * A per-record override, for the recording that arrived before its watch had anyone assigned.
      */
-    fun updateDeviceAndWearer(deviceId: String, wearerName: String) {
+    fun updateDeviceAndWearer(deviceId: String, personId: Long?) {
         viewModelScope.launch {
-            repository.updateRecordDeviceAndWearer(recordId, deviceId, wearerName)
+            repository.updateRecordDeviceAndWearer(recordId, deviceId, personId)
             loadRecord()
         }
     }

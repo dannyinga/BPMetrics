@@ -26,7 +26,9 @@ import java.util.Locale
  * @property avg The calculated average BPM for the session.
  * @property minId The ID of the [BpmDataPointEntity] that contains the minimum heart rate.
  * @property deviceId The identifier of the watch device that generated the record.
- * @property wearerName Optional name of the person who wore the watch during the session.
+ * @property wearerName The wearer's name as it stood when the record arrived. Superseded by
+ * [personId] wherever one is set; it remains the fallback for recordings made before profiles
+ * existed, for imports, and for recordings whose person has since been deleted.
  */
 @Entity(tableName = "bpm_records")
 data class BpmRecordEntity (
@@ -45,11 +47,23 @@ data class BpmRecordEntity (
     /**
      * The watch this record came from, referencing [WatchEntity.watchId].
      *
-     * Provenance only — it says *which watch*, never *who was wearing it*. The wearer is
-     * [wearerName], stamped when the record arrived and frozen thereafter, so renaming a watch
-     * cannot rewrite the attribution of recordings already made.
+     * Provenance only — it says *which watch*, never *who was wearing it*. Who wore it is
+     * [personId], settled when the record arrived, so a watch changing hands cannot rewrite the
+     * attribution of recordings already made.
      */
-    @ColumnInfo(defaultValue = "NULL") val watchId: String? = null
+    @ColumnInfo(defaultValue = "NULL") val watchId: String? = null,
+    /**
+     * Who was wearing the watch, referencing [PersonEntity.personId].
+     *
+     * Decided once, when the record arrived, and never revisited — that is what keeps Saturday's
+     * recordings with Kyle after the watch passes to Ben on Sunday. It is a link rather than a copy
+     * of the name, so the person's name and colour stay live: correcting a spelling fixes every
+     * recording they made, which is a different thing from rewriting who made it.
+     *
+     * Null for recordings that predate profiles, and for imports that arrive with only a name.
+     * Those fall back to [wearerName].
+     */
+    @ColumnInfo(defaultValue = "NULL") val personId: Long? = null
     ) {
 
     /**

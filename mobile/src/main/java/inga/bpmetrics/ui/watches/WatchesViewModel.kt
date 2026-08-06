@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -29,12 +30,20 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
 
     val uiState: StateFlow<WatchesUiState> = combine(
         repository.getAllWatches(),
+        repository.getAllPeople(),
         _recordCounts
-    ) { watches, counts ->
+    ) { watches, people, counts ->
+        val byId = people.associateBy { it.personId }
         WatchesUiState(
             watches = watches.map { watch ->
-                WatchRow(watch = watch, recordCount = counts[watch.watchId] ?: 0)
+                WatchRow(
+                    watch = watch,
+                    recordCount = counts[watch.watchId] ?: 0,
+                    // Resolved live, so renaming someone or recolouring them shows up here at once.
+                    wearer = watch.currentPersonId?.let { byId[it] }
+                )
             },
+            people = people,
             isEmpty = watches.isEmpty()
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WatchesUiState())
@@ -57,14 +66,15 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
      *
      * Only the wearer affects recordings, and only ones that arrive from here on.
      */
-    fun save(watchId: String, deviceName: String, wearerName: String) {
+    fun save(watchId: String, deviceName: String, personId: Long?) {
         viewModelScope.launch {
             repository.renameWatch(watchId, deviceName)
-            repository.setWatchWearer(watchId, wearerName)
-            _message.value = if (wearerName.isBlank()) {
+            repository.setWatchPerson(watchId, personId)
+            val name = personId?.let { repository.getPerson(it)?.name }
+            _message.value = if (name == null) {
                 "Wearer cleared. New recordings will arrive unattributed."
             } else {
-                "Future recordings from this watch will be attributed to $wearerName."
+                "Future recordings from this watch will be attributed to $name."
             }
         }
     }
@@ -72,12 +82,12 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
     /**
      * Registers a watch that has not sent anything yet, so its first recordings are attributed.
      */
-    fun addWatch(watchId: String, deviceName: String, wearerName: String) {
+    fun addWatch(watchId: String, deviceName: String, personId: Long?) {
         viewModelScope.launch {
             repository.registerWatch(
                 watchId = watchId.trim(),
                 deviceName = deviceName,
-                wearerName = wearerName
+                personId = personId
             )
             refreshCounts()
             _message.value = "Watch registered."
@@ -85,17 +95,18 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
     }
 
     /**
-     * Applies a name to recordings that already arrived from this watch.
+     * Attributes recordings that already arrived from this watch to someone.
      *
-     * The recovery path for a watch that recorded before anyone named it.
+     * The recovery path for a watch that recorded before anyone was assigned to it.
      */
-    fun reattribute(watchId: String, wearerName: String, fromDate: Long, toDate: Long) {
+    fun reattribute(watchId: String, personId: Long, fromDate: Long, toDate: Long) {
         viewModelScope.launch {
-            val changed = repository.reattributeRecords(watchId, wearerName, fromDate, toDate)
+            val changed = repository.reattributeRecords(watchId, personId, fromDate, toDate)
+            val name = repository.getPerson(personId)?.name ?: "them"
             _message.value = when (changed) {
                 0 -> "No recordings in that range."
-                1 -> "1 recording re-attributed to $wearerName."
-                else -> "$changed recordings re-attributed to $wearerName."
+                1 -> "1 recording re-attributed to $name."
+                else -> "$changed recordings re-attributed to $name."
             }
         }
     }
@@ -129,13 +140,17 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
 /**
  * @property watch The registry entry.
  * @property recordCount How many recordings are attributed to it.
+ * @property wearer Who is wearing it now, resolved live so a rename or recolour shows up at once.
  */
 data class WatchRow(
     val watch: WatchEntity,
-    val recordCount: Int
+    val recordCount: Int,
+    val wearer: PersonEntity? = null
 )
 
 data class WatchesUiState(
     val watches: List<WatchRow> = emptyList(),
+    /** Everyone available to assign, for the pickers in this screen's dialogs. */
+    val people: List<PersonEntity> = emptyList(),
     val isEmpty: Boolean = true
 )

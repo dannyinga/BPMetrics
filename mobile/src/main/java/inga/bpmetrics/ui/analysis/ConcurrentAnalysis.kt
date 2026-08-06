@@ -2,6 +2,8 @@ package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.PersonColors
+import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
 import kotlin.math.roundToInt
 
@@ -126,9 +128,11 @@ data class ConcurrentAnalysis(
         fun from(
             records: List<BpmRecord>,
             watches: List<WatchEntity> = emptyList(),
+            people: List<PersonEntity> = emptyList(),
             window: LongRange? = null
         ): ConcurrentAnalysis {
             val watchNames = watches.associate { it.watchId to it.displayName }
+            val peopleById = people.associateBy { it.personId }
 
             val series = records.mapIndexedNotNull { index, record ->
                 val points = record.dataPoints
@@ -140,9 +144,9 @@ data class ConcurrentAnalysis(
 
                 ConcurrentSeries(
                     recordId = record.metadata.recordId,
-                    label = labelFor(record, watchNames),
-                    watchLabel = watchLabelFor(record, watchNames),
-                    colorArgb = colourFor(record, index, watches),
+                    label = labelFor(record, peopleById, watchNames),
+                    watchLabel = watchLabelFor(record, peopleById, watchNames),
+                    colorArgb = PersonColors.colorFor(record.metadata.personId, peopleById, index),
                     points = points,
                     minBpm = points.minOf { it.bpm },
                     maxBpm = points.maxOf { it.bpm }
@@ -275,8 +279,17 @@ data class ConcurrentAnalysis(
             return kept.sortedBy { it.wallClockMs }
         }
 
-        private fun labelFor(record: BpmRecord, watchNames: Map<String, String>): String =
-            record.metadata.wearerName.takeIf { it.isNotBlank() }
+        /**
+         * Who this curve belongs to: their profile name, else whatever the record was stamped with
+         * before profiles existed, else the watch.
+         */
+        private fun labelFor(
+            record: BpmRecord,
+            people: Map<Long, PersonEntity>,
+            watchNames: Map<String, String>
+        ): String =
+            record.metadata.personId?.let { people[it]?.displayName }
+                ?: record.metadata.wearerName.takeIf { it.isNotBlank() }
                 ?: record.metadata.watchId?.let { watchNames[it] }
                 ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
                 ?: record.metadata.title
@@ -285,21 +298,16 @@ data class ConcurrentAnalysis(
          * The watch, or null when it would only repeat what the wearer label already says — a
          * recording with no wearer already falls back to naming the watch.
          */
-        private fun watchLabelFor(record: BpmRecord, watchNames: Map<String, String>): String? {
-            if (record.metadata.wearerName.isBlank()) return null
+        private fun watchLabelFor(
+            record: BpmRecord,
+            people: Map<Long, PersonEntity>,
+            watchNames: Map<String, String>
+        ): String? {
+            val named = record.metadata.personId?.let { people[it] } != null ||
+                    record.metadata.wearerName.isNotBlank()
+            if (!named) return null
             return record.metadata.watchId?.let { watchNames[it] }
                 ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
-        }
-
-        /**
-         * The colour for a wearer's curve, preferring the one stored against their watch so a
-         * person keeps the same colour between this and an exported video.
-         */
-        private fun colourFor(record: BpmRecord, index: Int, watches: List<WatchEntity>): Int {
-            val stored = record.metadata.watchId
-                ?.let { id -> watches.firstOrNull { it.watchId == id }?.colorArgb }
-            return stored
-                ?: ImageExporter.MULTI_WATCH_PALETTES[index % ImageExporter.MULTI_WATCH_PALETTES.size][0]
         }
     }
 }
