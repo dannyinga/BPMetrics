@@ -79,8 +79,14 @@ jobs:
           track: alpha
           status: completed
 
-      # A separate call rather than two files in one: the phone and watch artifacts carry different
-      # versionCodes, and uploading them together has a habit of confusing which is which.
+      # A *separate track*, not merely a separate upload. Since August 2023 Play requires Wear OS
+      # releases to go to a dedicated Wear track, created under Advanced settings → Form factors,
+      # so that watch releases and watch testers are managed independently of the phone app. Putting
+      # both bundles in one release is rejected outright.
+      #
+      # If this step fails with an unknown-track error, the track has not been created in the Play
+      # Console yet, or it is named differently — list the real names with:
+      #   GET /androidpublisher/v3/applications/inga.bpmetrics/edits/{editId}/tracks
       - name: Publish watch build
         if: steps.creds.outputs.ready == 'true'
         uses: r0adkll/upload-google-play@v1
@@ -88,7 +94,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: inga.bpmetrics
           releaseFiles: wear/build/outputs/bundle/release/wear-release.aab
-          track: alpha
+          track: wear:alpha
           status: completed
 
       - name: Remove keystore
