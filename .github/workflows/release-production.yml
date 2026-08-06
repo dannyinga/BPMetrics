@@ -1,0 +1,119 @@
+name: Release to production
+
+# Publishes to Play production at a staged rollout, and cuts a GitHub Release alongside it.
+#
+# The GitHub Release is an archive, not an install route. An APK signed with your upload key and one
+# delivered by Play carry different signatures, so neither can upgrade the other — offering both as
+# ways to install invites someone to get stuck. It is here so every shipped version has a artefact
+# and a changelog attached to a tag.
+on:
+  push:
+    branches: [production]
+  workflow_dispatch:
+
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, so the release notes can be generated from the commits since the last tag.
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Parsed rather than sourced: `source` would execute the file as shell, so a version name
+      # containing a space — "1.2.0 beta" — would break the build in a thoroughly confusing way.
+      - name: Read version
+        id: version
+        run: |
+          NAME=$(grep -E '^versionName=' version.properties | cut -d= -f2- | tr -d '[:space:]')
+          if [ -z "$NAME" ]; then
+            echo "::error::versionName missing from version.properties"
+            exit 1
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NAME" >> "$GITHUB_OUTPUT"
+
+      # Refuse to publish a version that has already shipped. Play would reject the upload anyway,
+      # but it would do so after the build, and the tag would already exist here.
+      - name: Reject a version already released
+        run: |
+          if git rev-parse "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::${{ steps.version.outputs.tag }} already exists. Bump versionName and versionBase in version.properties."
+            exit 1
+          fi
+
+      - name: Build, test and lint
+        run: ./gradlew build --stacktrace
+
+      - name: Restore upload keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+
+      # The bundles go to Play; the APK is what gets attached to the GitHub Release.
+      - name: Build signed bundles and APK
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :mobile:bundleRelease :wear:bundleRelease :mobile:assembleRelease --stacktrace
+
+      # 10% first. A problem then reaches a tenth of your users rather than all of them, and the
+      # rollout can be halted from the Play Console without shipping anything new.
+      - name: Publish phone build
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: inga.bpmetrics
+          releaseFiles: mobile/build/outputs/bundle/release/mobile-release.aab
+          track: production
+          status: inProgress
+          userFraction: 0.1
+
+      - name: Publish watch build
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: inga.bpmetrics
+          releaseFiles: wear/build/outputs/bundle/release/wear-release.aab
+          track: production
+          status: inProgress
+          userFraction: 0.1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: BPMetrics ${{ steps.version.outputs.name }}
+          generate_release_notes: true
+          files: mobile/build/outputs/apk/release/mobile-release.apk
+          body: |
+            Released to Play production at a 10% staged rollout.
+
+            The attached APK is an archive of this version. It is signed with the upload key rather
+            than Play's app signing key, so **it cannot be installed over a Play install** and vice
+            versa. Install from Google Play.
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"

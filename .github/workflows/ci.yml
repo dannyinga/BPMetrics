@@ -1,0 +1,53 @@
+name: CI
+
+# Every branch that matters, and every pull request into them. The old workflow ran only on `main`,
+# which meant the branch you actually develop on had no gate at all — and its failures went
+# unnoticed for months because nothing depended on them.
+on:
+  push:
+    branches: [production, staging, dev]
+  pull_request:
+    branches: [production, staging, dev]
+
+# A new push supersedes whatever was already running for the same ref. Without this, a burst of
+# commits leaves several minutes of pointless builds queued behind each other.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # `build` covers assemble, unit tests and lint for every module. Deliberately the same command
+      # you can run locally, so a CI failure is always reproducible on your machine.
+      - name: Build, test and lint
+        run: ./gradlew build --stacktrace
+
+      # Compiled but not run — the emulator lives in instrumented.yml, which is slower and gated on
+      # fewer branches. This at least means broken instrumented sources fail here rather than
+      # surviving until someone opens a release.
+      - name: Compile instrumented tests
+        run: ./gradlew assembleDebugAndroidTest
+
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            **/build/reports/
+          retention-days: 7

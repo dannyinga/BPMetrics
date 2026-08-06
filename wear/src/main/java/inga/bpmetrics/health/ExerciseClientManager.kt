@@ -13,6 +13,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import androidx.health.services.client.data.ExerciseTrackedStatus.Companion.OWNED_EXERCISE_IN_PROGRESS
 
 /**
+ * Whether Health Services is tracking an exercise that belongs to this app.
+ *
+ * The constant this compares against is annotated `@RestrictedApi` by the Health Services library,
+ * even though reading `exerciseTrackedStatus` is the documented way to answer this question — so
+ * every use of it is a lint error. Asking once, here, means one suppression with a reason attached
+ * rather than four scattered through the recording code.
+ */
+@android.annotation.SuppressLint("RestrictedApi")
+fun ExerciseInfo.isOwnedExerciseInProgress(): Boolean =
+    exerciseTrackedStatus == OWNED_EXERCISE_IN_PROGRESS
+
+/**
  * Manages the direct interaction with Android Health Services ExerciseClient.
  * 
  * It acts as a bridge between the system sensors and the repository, emitting
@@ -89,7 +101,7 @@ class ExerciseClientManager(context: Context) {
     suspend fun startExercise() {
         try {
             val info = exerciseClient.getCurrentExerciseInfoAsync().await()
-            if (info.exerciseTrackedStatus != OWNED_EXERCISE_IN_PROGRESS) {
+            if (!info.isOwnedExerciseInProgress()) {
                 exerciseClient.startExerciseAsync(exerciseConfig).await()
             }
         } catch (e: Exception) {
@@ -102,7 +114,7 @@ class ExerciseClientManager(context: Context) {
     suspend fun endExercise() {
         try {
             val info = exerciseClient.getCurrentExerciseInfoAsync().await()
-            if (info.exerciseTrackedStatus == OWNED_EXERCISE_IN_PROGRESS) {
+            if (info.isOwnedExerciseInProgress()) {
                 exerciseClient.endExercise()
             }
         } catch (e: Exception) {

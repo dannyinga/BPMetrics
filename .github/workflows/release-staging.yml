@@ -1,0 +1,76 @@
+name: Release to closed testing
+
+# `staging` is the release candidate branch, and it publishes to Play's **closed testing** track
+# rather than internal testing. That is deliberate: only closed testing counts toward the 12-tester,
+# 14-day requirement a personal developer account must satisfy before it can apply for production
+# access. Publishing here makes ordinary QA and that countdown the same activity instead of two.
+on:
+  push:
+    branches: [staging]
+  # Available by hand, for re-running a publish without an empty commit.
+  workflow_dispatch:
+
+concurrency:
+  group: release-staging
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Never publish something that has not passed the same gate as everything else.
+      - name: Build, test and lint
+        run: ./gradlew build --stacktrace
+
+      # The keystore is stored base64-encoded because GitHub secrets hold text, not files. It is
+      # written outside the workspace so it cannot be picked up by a build artifact.
+      - name: Restore upload keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+
+      - name: Build signed bundles
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :mobile:bundleRelease :wear:bundleRelease --stacktrace
+
+      - name: Publish phone build
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: inga.bpmetrics
+          releaseFiles: mobile/build/outputs/bundle/release/mobile-release.aab
+          track: alpha
+          status: completed
+
+      # A separate call rather than two files in one: the phone and watch artifacts carry different
+      # versionCodes, and uploading them together has a habit of confusing which is which.
+      - name: Publish watch build
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: inga.bpmetrics
+          releaseFiles: wear/build/outputs/bundle/release/wear-release.aab
+          track: alpha
+          status: completed
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"

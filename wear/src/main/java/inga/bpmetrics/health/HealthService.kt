@@ -12,7 +12,6 @@ import android.os.VibrationEffect
 import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.health.services.client.data.ExerciseTrackedStatus.Companion.OWNED_EXERCISE_IN_PROGRESS
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import androidx.wear.ongoing.OngoingActivity
@@ -142,7 +141,7 @@ class HealthService : LifecycleService() {
 
     private suspend fun checkAndRecoverSession() {
         val info = repository.getCurrentExerciseInfo()
-        if (info.exerciseTrackedStatus == OWNED_EXERCISE_IN_PROGRESS) {
+        if (info.isOwnedExerciseInProgress()) {
             Log.d(tag, "Recovering active exercise...")
             val persistedStartTime = repository.getPersistedStartTime()
             if (persistedStartTime > 0) {

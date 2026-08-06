@@ -38,6 +38,9 @@ gradle-wrapper-upgrader.jar
 
 # Keystore files
 *.keystore
+*.jks
+# The Play service account credential. Committing this would let anyone publish as you.
+play-service-account*.json
 
 # Local configuration files (e.g., API keys, environment variables)
 # Consider adding specific files here if they contain sensitive data

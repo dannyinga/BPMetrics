@@ -7,7 +7,6 @@ import androidx.core.content.edit
 import androidx.health.services.client.data.DataType
 import androidx.health.services.client.data.DataTypeAvailability
 import androidx.health.services.client.data.ExerciseState
-import androidx.health.services.client.data.ExerciseTrackedStatus.Companion.OWNED_EXERCISE_IN_PROGRESS
 import androidx.health.services.client.data.SampleDataPoint
 import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.core.BpmGson
@@ -16,6 +15,7 @@ import inga.bpmetrics.db.RecordingDB
 import inga.bpmetrics.db.LocalBpmDataPoint
 import inga.bpmetrics.db.PendingRecordEntity
 import inga.bpmetrics.health.ExerciseClientManager
+import inga.bpmetrics.health.isOwnedExerciseInProgress
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -331,7 +331,7 @@ class RecordingRepository private constructor(context: Context) {
     suspend fun resumeInterruptedSessionIfNeeded() {
         if (!_sessionActive.value) return
         val info = exerciseClientManager.getCurrentExerciseInfo()
-        if (info.exerciseTrackedStatus != OWNED_EXERCISE_IN_PROGRESS) {
+        if (!info.isOwnedExerciseInProgress()) {
             Log.w(tag, "Session open but Health Services is not tracking it; restarting the exercise")
             exerciseClientManager.startExercise()
         }
