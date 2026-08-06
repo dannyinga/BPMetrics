@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -44,6 +45,15 @@ import kotlin.math.roundToInt
  */
 @OptIn(UnstableApi::class)
 object VideoExporter {
+
+    /**
+     * Roughly how much room a render needs, as a multiple of its expected size.
+     *
+     * Generous, because the staged copy in the cache and the finished copy at its destination both
+     * exist at once, and an encoder that runs out of room part way leaves a mess rather than an
+     * error.
+     */
+    private const val SPACE_SAFETY_FACTOR = 2.5
     private const val TAG = "VideoExporter"
 
     /**
@@ -113,6 +123,19 @@ object VideoExporter {
             calculatedBitrate.coerceIn(2_000_000L, 50_000_000L).toInt()
         } else {
             calculatedBitrate.coerceIn(1_000_000L, 15_000_000L).toInt()
+        }
+
+        // Refuse a render there is plainly no room for, rather than discovering it part way and
+        // leaving the phone worse off than before it started. The bitrate and duration say what
+        // the finished video will weigh, which is all this needs to know.
+        val estimatedBytes = (targetBitrate.toLong() / 8) * (totalDataDurationMs / 1000).coerceAtLeast(1)
+        val requiredBytes = (estimatedBytes * SPACE_SAFETY_FACTOR).toLong()
+        val freeBytes = context.cacheDir.usableSpace
+        if (freeBytes < requiredBytes) {
+            throw IOException(
+                "Not enough space to export: about ${requiredBytes / 1_000_000}MB needed, " +
+                    "${freeBytes / 1_000_000}MB free. Free up some space and try again."
+            )
         }
 
         if (config.overlayVideoUri != null) {
@@ -267,10 +290,22 @@ object VideoExporter {
                 }
                 if (exportException == null) onProgress(1.0f)
             } catch (e: Exception) {
+                // Cancellation arrives here too. Stop the encoder rather than leaving it writing
+                // to a file nobody is waiting for any more.
+                runCatching { transformer.cancel() }
                 exportException = e
             }
 
-            if (exportException != null) throw exportException
+            if (exportException != null) {
+                // Take the part-written video with us. A render abandoned half way is still a
+                // video-sized file, and the usual reason for abandoning one is that the phone is
+                // running out of room — so keeping it is precisely the wrong thing to do.
+                val abandoned = outputFile.length()
+                if (outputFile.delete()) {
+                    Log.d(TAG, "Discarded ${abandoned / 1024}KB of unfinished export")
+                }
+                throw exportException
+            }
             outputFile
         }
     }

@@ -174,6 +174,14 @@ abstract class LibraryDatabase : RoomDatabase() {
         private const val TAG = "LibraryDatabase"
         private const val DB_NAME = "bpmetrics_db"
 
+        /** Must match the @Database version above; used to spot a pending migration. */
+        private const val CURRENT_VERSION = 11
+
+        private const val MAX_BACKUPS = 5
+
+        /** Headroom over the database's own size before a backup is attempted. */
+        private const val SPACE_SAFETY_FACTOR = 2.0
+
         @Volatile private var INSTANCE: LibraryDatabase? = null
 
         /**
@@ -505,45 +513,105 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
-         * Creates a timestamped backup of the database in a persistent directory.
-         * Backups go to the app's files directory (NOT cache, which can be cleared).
+         * Copies the database aside before a migration rewrites it.
+         *
+         * Three things here are load-bearing, and the absence of each of them turned a full phone
+         * into an app that could not be opened at all:
+         *
+         * 1. It only runs when a migration is actually pending. It used to run on every single
+         *    launch — despite the name — so opening the app copied the whole database every time.
+         * 2. Old backups are pruned *first*, and the copy is skipped unless there is comfortably
+         *    room for it. Pruning used to happen after the copy, so a copy that failed for want of
+         *    space skipped the cleanup that would have made space.
+         * 3. A failed copy deletes what it managed to write. Each attempt used a fresh timestamped
+         *    name, so failed attempts accumulated as partial files, each launch consuming a little
+         *    more of the space that was already gone.
+         *
+         * A missing backup is survivable. A device too full to open the app is not, so when space
+         * is short this gives up rather than making the problem worse.
          */
         private fun performPreMigrationBackup(context: Context) {
             try {
                 val dbFile = context.getDatabasePath(DB_NAME) ?: return
                 if (!dbFile.exists()) return
+                if (!migrationPending(dbFile)) return
 
                 val backupDir = java.io.File(context.filesDir, "db_backups")
                 backupDir.mkdirs()
 
+                pruneBackups(backupDir, keep = MAX_BACKUPS - 1)
+
+                val needed = (dbFile.length() * SPACE_SAFETY_FACTOR).toLong()
+                if (backupDir.usableSpace < needed) {
+                    android.util.Log.w(
+                        TAG,
+                        "Skipping pre-migration backup: needs ${needed / 1024}KB, " +
+                            "${backupDir.usableSpace / 1024}KB free"
+                    )
+                    return
+                }
+
                 val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
                     .format(java.util.Date())
                 val backupFile = java.io.File(backupDir, "${DB_NAME}_backup_$timestamp.db")
-                dbFile.copyTo(backupFile, overwrite = true)
 
-                // Also copy WAL and SHM files if they exist
-                val walFile = java.io.File(dbFile.path + "-wal")
-                if (walFile.exists()) {
-                    walFile.copyTo(java.io.File(backupDir, "${DB_NAME}_backup_${timestamp}.db-wal"), overwrite = true)
-                }
-                val shmFile = java.io.File(dbFile.path + "-shm")
-                if (shmFile.exists()) {
-                    shmFile.copyTo(java.io.File(backupDir, "${DB_NAME}_backup_${timestamp}.db-shm"), overwrite = true)
-                }
+                try {
+                    dbFile.copyTo(backupFile, overwrite = true)
 
-                android.util.Log.i(TAG, "Pre-migration backup saved: ${backupFile.absolutePath}")
+                    // Also copy WAL and SHM files if they exist
+                    val walFile = java.io.File(dbFile.path + "-wal")
+                    if (walFile.exists()) {
+                        walFile.copyTo(java.io.File(backupDir, "${DB_NAME}_backup_${timestamp}.db-wal"), overwrite = true)
+                    }
+                    val shmFile = java.io.File(dbFile.path + "-shm")
+                    if (shmFile.exists()) {
+                        shmFile.copyTo(java.io.File(backupDir, "${DB_NAME}_backup_${timestamp}.db-shm"), overwrite = true)
+                    }
 
-                // Keep only the 5 most recent backups to avoid filling storage
-                val allBackups = backupDir.listFiles { f -> f.name.startsWith(DB_NAME) && f.name.endsWith(".db") }
-                    ?.sortedByDescending { it.lastModified() } ?: emptyList()
-                allBackups.drop(5).forEach { old ->
-                    old.delete()
-                    java.io.File(old.path + "-wal").delete()
-                    java.io.File(old.path + "-shm").delete()
-                    android.util.Log.d(TAG, "Cleaned old backup: ${old.name}")
+                    android.util.Log.i(TAG, "Pre-migration backup saved: ${backupFile.absolutePath}")
+                } catch (e: Exception) {
+                    // Leave nothing half-written behind, or the next attempt starts with less room
+                    // than this one had.
+                    backupFile.delete()
+                    java.io.File(backupDir, "${DB_NAME}_backup_${timestamp}.db-wal").delete()
+                    java.io.File(backupDir, "${DB_NAME}_backup_${timestamp}.db-shm").delete()
+                    throw e
                 }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "Failed to create pre-migration backup", e)
+            }
+        }
+
+        /**
+         * Whether opening the database will run a migration.
+         *
+         * Read straight off the database file rather than through Room, so this can be answered
+         * before anything is opened. If it cannot be read the answer is "yes": an unreadable file
+         * is the case where a backup is worth the most.
+         */
+        private fun migrationPending(dbFile: java.io.File): Boolean = try {
+            android.database.sqlite.SQLiteDatabase.openDatabase(
+                dbFile.path,
+                null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+            ).use { it.version < CURRENT_VERSION }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Could not read the database version; assuming a backup is wanted", e)
+            true
+        }
+
+        /** Drops all but the [keep] most recent backups, with their WAL and SHM companions. */
+        private fun pruneBackups(backupDir: java.io.File, keep: Int) {
+            val backups = backupDir
+                .listFiles { f -> f.name.startsWith(DB_NAME) && f.name.endsWith(".db") }
+                ?.sortedByDescending { it.lastModified() }
+                ?: return
+
+            backups.drop(keep.coerceAtLeast(0)).forEach { old ->
+                old.delete()
+                java.io.File(old.path + "-wal").delete()
+                java.io.File(old.path + "-shm").delete()
+                android.util.Log.d(TAG, "Cleaned old backup: ${old.name}")
             }
         }
 

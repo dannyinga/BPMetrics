@@ -14,6 +14,43 @@ import java.util.TimeZone
 object ExportUtils {
 
     /**
+     * Removes a render's staging copy once it has reached wherever it was going.
+     *
+     * Exports are written to the cache and then copied to their destination. Nothing used to
+     * remove the staging copy, so every video ever exported was still sitting on the phone at full
+     * size — invisible, because the cache is not somewhere anyone thinks to look.
+     */
+    fun discardStagedExport(file: File) {
+        if (!file.exists()) return
+        val size = file.length()
+        if (file.delete()) {
+            android.util.Log.d("ExportUtils", "Released ${size / 1024}KB of staged export")
+        } else {
+            android.util.Log.w("ExportUtils", "Could not release staged export ${file.name}")
+        }
+    }
+
+    /**
+     * Clears staged exports left behind by earlier versions, or by a crash mid-render.
+     *
+     * Runs once at startup. Anything still here is by definition finished with: a render in
+     * progress belongs to a process that is no longer running.
+     */
+    fun clearStagedExports(context: Context) {
+        val stale = context.cacheDir
+            .listFiles { f -> f.isFile && (f.extension == "mp4" || f.name == "black_bg.png") }
+            ?: return
+        if (stale.isEmpty()) return
+
+        val freed = stale.sumOf { it.length() }
+        stale.forEach { it.delete() }
+        android.util.Log.i(
+            "ExportUtils",
+            "Reclaimed ${freed / 1_000_000}MB from ${stale.size} staged export(s)"
+        )
+    }
+
+    /**
      * Generic method to share a [File] using FileProvider and an Intent.
      *
      * @param context Android context.

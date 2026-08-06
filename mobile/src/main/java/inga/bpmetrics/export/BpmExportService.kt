@@ -146,6 +146,11 @@ class BpmExportService : Service() {
                         ExportUtils.saveVideoToGallery(this@BpmExportService, file, nextJob.recordTitle)
                     }
 
+                    // The render is staged in the cache and then copied to wherever it belongs.
+                    // Nothing used to remove that staging copy, so every video ever exported was
+                    // still on the phone at full size — which is what filled it.
+                    ExportUtils.discardStagedExport(file)
+
                     RenderQueueManager.updateJobStatus(nextJob.id, RenderStatus.COMPLETED, targetUri = finalUri)
                     showCompletionNotification(nextJob.recordTitle, true, finalUri)
                 } catch (e: Exception) {
