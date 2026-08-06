@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.ButtonDefaults
 import androidx.wear.compose.material.CircularProgressIndicator
+import androidx.wear.compose.material.CompactChip
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
@@ -220,7 +221,8 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     RecordingContent(
         state = uiState,
         onStart = viewModel::onStartClicked,
-        onStop = viewModel::onStopClicked
+        onStop = viewModel::onStopClicked,
+        onSendNow = viewModel::onSendNowClicked
     )
 }
 
@@ -230,13 +232,14 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
  * @param state The current UI state containing heart rate, status, and duration info.
  * @param onStart Callback to trigger when the start button is clicked.
  * @param onStop Callback to trigger when the stop button is clicked.
- * @param onCycleWearerName Callback to cycle through wearer names on tap.
+ * @param onSendNow Callback to offer the phone whatever the watch is still holding.
  */
 @Composable
 fun RecordingContent(
     state: RecordingUIState,
     onStart: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onSendNow: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -245,15 +248,10 @@ fun RecordingContent(
     ) {
         val isRecording = state.serviceState == RecordingState.RECORDING
 
-        // Which watch this is, so a wearer can confirm they have the right one. Who is wearing it
-        // is named on the phone, which stamps records as they arrive.
-        Text(
-            text = "⌚ ${state.deviceId}",
-            fontSize = 11.sp,
-            maxLines = 1,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
+        // The watch model is deliberately not shown. It is the least useful line on a round
+        // screen with the least room — the phone names each watch and stamps records as they
+        // arrive, so the model told the wearer nothing they could act on while pushing the
+        // things they can act on towards the crop.
 
         // State-driven timer calculation
         val recordingStartTime = state.recordingStartTime
@@ -300,9 +298,8 @@ fun RecordingContent(
             style = MaterialTheme.typography.caption2
         )
 
-        // What the phone has not got yet. Counts both what this watch still holds and what has
-        // been handed to Play Services but not yet collected, since a recording is only really
-        // delivered once the phone has saved it.
+        // What the phone has not got yet. A recording stays counted here until the phone has
+        // saved it, so this is what is genuinely still only on the wrist.
         if (state.pendingRecordCount > 0) {
             Text(
                 text = if (state.pendingRecordCount == 1) {
@@ -313,6 +310,21 @@ fun RecordingContent(
                 style = MaterialTheme.typography.caption2,
                 color = BpmAccent,
                 textAlign = TextAlign.Center
+            )
+
+            // Sending is automatic; this is for when it visibly is not working. Nothing is
+            // deleted by it, so pressing it repeatedly is harmless.
+            CompactChip(
+                onClick = onSendNow,
+                enabled = !state.isSending,
+                label = {
+                    Text(
+                        text = state.sendResult ?: if (state.isSending) "Sending…" else "Send now",
+                        style = MaterialTheme.typography.caption2,
+                        maxLines = 1
+                    )
+                },
+                modifier = Modifier.padding(top = 2.dp)
             )
         }
 

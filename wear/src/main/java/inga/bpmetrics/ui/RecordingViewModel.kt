@@ -5,11 +5,15 @@ import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.recording.RecordingRepository
 import inga.bpmetrics.recording.RecordingState
 import inga.bpmetrics.recording.SignalState
+import inga.bpmetrics.sync.PhoneSyncManager
+import inga.bpmetrics.sync.SyncOutcome
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /**
  * ViewModel for the [RecordingScreen].
@@ -20,43 +24,42 @@ import kotlinx.coroutines.flow.stateIn
  */
 class RecordingViewModel(
     private val repository: RecordingRepository,
-    /**
-     * Records already handed to Play Services but not yet taken by the phone.
-     *
-     * Kept separate from the repository's outbox because the two mean different things: the
-     * outbox holds what this watch has not handed over, and empties whether or not the phone is
-     * reachable. Only together do they answer "how many is the phone still missing".
-     */
-    awaitingPhoneCount: StateFlow<Int> = MutableStateFlow(0)
+    /** Used by the manual send action; null in previews and tests. */
+    private val syncManager: PhoneSyncManager? = null
 ) : ViewModel() {
-
-    val deviceIdState = MutableStateFlow(repository.getDeviceId())
-
-    fun updateDeviceId(id: String) {
-        repository.setDeviceId(id)
-        deviceIdState.value = repository.getDeviceId()
-    }
 
     /**
      * UI state representing the current recording session.
      */
-    val uiState: StateFlow<RecordingUIState> = combine(
+    /**
+     * What the wearer is told about the last manual send. Cleared after a moment.
+     */
+    private val _sendResult = MutableStateFlow<String?>(null)
+
+    private val _sending = MutableStateFlow(false)
+
+    // Typed explicitly. Left to infer, the element type becomes whatever supertype these flows
+    // happen to share, which changes whenever one is added or removed and which Kotlin is in the
+    // process of making a hard error.
+    val uiState: StateFlow<RecordingUIState> = combine<Any?, RecordingUIState>(
         repository.liveBpm,
         repository.recordingStartTime,
         repository.recordingState,
         repository.signalState,
-        deviceIdState,
-        combine(repository.pendingRecordCount, awaitingPhoneCount) { outbox, awaiting ->
-            outbox + awaiting
-        }
+        // The outbox is now the whole answer to "what does the phone not have". A record stays
+        // in it until the phone acknowledges the save, so there is nothing to add to it.
+        repository.pendingRecordCount,
+        _sending,
+        _sendResult
     ) { values ->
         RecordingUIState(
             bpm = values[0] as Double?,
             recordingStartTime = values[1] as Long,
             serviceState = values[2] as RecordingState,
             signalState = values[3] as SignalState,
-            deviceId = values[4] as String,
-            pendingRecordCount = values[5] as Int,
+            pendingRecordCount = values[4] as Int,
+            isSending = values[5] as Boolean,
+            sendResult = values[6] as String?,
             statusText = statusTextFor(values[2] as RecordingState, values[3] as SignalState)
         )
     }.stateIn(
@@ -84,7 +87,50 @@ class RecordingViewModel(
         repository.stopRecording()
     }
 
+    /**
+     * Offers the phone everything the watch is still holding.
+     *
+     * Nothing is deleted here. A record leaves the watch only when the phone acknowledges it, so
+     * the worst this can do is hand the same recording over again — which is why it is safe to
+     * press repeatedly when a transfer looks stuck.
+     */
+    fun onSendNowClicked() {
+        val manager = syncManager ?: return
+        if (_sending.value) return
+
+        viewModelScope.launch {
+            _sending.value = true
+            _sendResult.value = null
+            try {
+                _sendResult.value = describe(manager.syncNow())
+            } finally {
+                _sending.value = false
+            }
+            delay(RESULT_VISIBLE_MS)
+            _sendResult.value = null
+        }
+    }
+
     private companion object {
+        /** How long the outcome of a manual send stays on the watch face. */
+        const val RESULT_VISIBLE_MS = 4_000L
+
+        /**
+         * Says what actually happened, rather than always claiming success.
+         *
+         * "Sent" would be a lie in the common stuck case: the records left the watch some time
+         * ago and are waiting on a phone that is out of range. Telling the wearer that
+         * distinguishes a problem they can fix — move closer, open the phone app — from one they
+         * cannot.
+         */
+        fun describe(outcome: SyncOutcome): String = when {
+            outcome.failed -> "Could not reach the phone"
+            outcome.sent > 0 -> "Sent ${outcome.sent}, waiting on phone"
+            outcome.confirmed > 0 && outcome.stillWaiting == 0 -> "Phone has everything"
+            outcome.stillWaiting > 0 -> "Already sent · waiting on phone"
+            else -> "Nothing to send"
+        }
+
         /**
          * Describes the session and the sensor together.
          *
@@ -121,8 +167,6 @@ class RecordingViewModel(
  * @property recordingStartTime The start timestamp of the current session.
  * @property serviceState The current [RecordingState] of the monitor.
  * @property statusText A human-readable description of the current state.
- * @property wearerName The configured wearer name.
- * @property deviceId The configured device ID.
  */
 data class RecordingUIState(
     val bpm: Double? = null,
@@ -130,9 +174,12 @@ data class RecordingUIState(
     val serviceState: RecordingState = RecordingState.INACTIVE,
     val signalState: SignalState = SignalState.UNKNOWN,
     val statusText: String = "Initializing...",
-    val deviceId: String = "Watch",
     /** Finished recordings the phone has not received yet. */
-    val pendingRecordCount: Int = 0
+    val pendingRecordCount: Int = 0,
+    /** Whether a manual send is in flight. */
+    val isSending: Boolean = false,
+    /** What the last manual send achieved, while it is still worth showing. */
+    val sendResult: String? = null
 ) {
     /**
      * Whether the start/stop control accepts a press.

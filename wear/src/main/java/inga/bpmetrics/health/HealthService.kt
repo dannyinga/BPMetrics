@@ -43,6 +43,9 @@ class HealthService : LifecycleService() {
         const val CHANNEL_ID = "bpm_service_channel"
         const val NOTIFICATION_ID = 1
         const val TITLE_TEXT = "BPMetrics"
+
+        /** How long finalization may take before the session is assumed stuck. */
+        const val ENDING_TIMEOUT_MS = 30_000L
     }
 
     private var endingTimeoutJob: Job? = null
@@ -66,12 +69,16 @@ class HealthService : LifecycleService() {
      * is not currently in progress, the service will shut itself down to save battery.
      */
     override fun onUnbind(intent: Intent?): Boolean {
-        val state = repository.recordingState.value
-        if (state != RecordingState.RECORDING && state != RecordingState.ENDING) {
-            Log.d(tag, "App closed and not recording. Shutting down service.")
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+        // Asks the repository directly rather than reading recordingState. That flow reports
+        // INACTIVE until its first emission, so during startup it would claim nothing is
+        // happening and this would shut down a service that is recording.
+        if (repository.sessionActive.value || repository.isFinalizing) {
+            Log.d(tag, "App closed but a recording is open. Staying up.")
+            return super.onUnbind(intent)
         }
+        Log.d(tag, "App closed and not recording. Shutting down service.")
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
         return super.onUnbind(intent)
     }
 
@@ -86,8 +93,11 @@ class HealthService : LifecycleService() {
             // 1. Recover session if system says an exercise is already tracked by us
             checkAndRecoverSession()
 
-            // 2. Fail-safe: Ensure sensors are prepared if idle
-            if (repository.recordingState.value != RecordingState.RECORDING) {
+            // 2. Fail-safe: warm the sensors up, but only when nothing is recording. Preparing
+            //    while an exercise is running ends it, and the guard used to read recordingState,
+            //    which reports INACTIVE until its first emission — so on a service restart during
+            //    a recording this would reliably kill the very session it was recovering.
+            if (!repository.sessionActive.value) {
                 repository.prepareExercise()
             }
 
@@ -115,10 +125,12 @@ class HealthService : LifecycleService() {
                 updateNotification("Saving record...")
                 startEndingTimeout()
             }
-            RecordingState.INACTIVE -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+            // INACTIVE deliberately does not shut the service down. recordingState starts at
+            // INACTIVE and only later emits what is really happening, so this collector's first
+            // value is routinely INACTIVE — including while a recording is running. Acting on it
+            // tore down the notification moments after it was posted and left the service alive
+            // only as long as the app stayed open, which is why recordings died on screen-off.
+            // Shutdown belongs to onUnbind, which knows whether anyone still needs the service.
             RecordingState.PAUSED -> {
                 updateNotification("Recording paused")
             }
@@ -137,7 +149,13 @@ class HealthService : LifecycleService() {
                 val duration = System.currentTimeMillis() - persistedStartTime
                 repository.resumeRecording(Duration.ofMillis(duration))
             }
+            return
         }
+
+        // A session can outlive the process that opened it: the markers and the readings are on
+        // disk, so as far as the wearer is concerned the recording is still going — but nothing is
+        // measuring it. Put Health Services back to work rather than waiting for someone to notice.
+        repository.resumeInterruptedSessionIfNeeded()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -193,13 +211,29 @@ class HealthService : LifecycleService() {
     }
 
     /**
-     * Updates the existing foreground notification with new status text.
+     * Updates the ongoing notification, and re-asserts foreground status along with it.
      *
-     * Only the notification is re-posted. This used to re-run the whole foreground promotion —
-     * recreating the channel and calling startForeground again — on every state change.
+     * Goes through [startForeground] rather than a plain `notify`. The two look alike while all
+     * is well — both replace the notification with the same id — but only one of them puts a
+     * demoted service back in the foreground. A service that has been demoted and merely posts a
+     * notification looks correct on screen while being an ordinary background service the system
+     * is free to kill, which is what let long recordings disappear.
+     *
+     * The channel is not recreated here; that is done once in [startForegroundWithNotification].
      */
     private fun updateNotification(contentText: String) {
-        notificationManager.notify(NOTIFICATION_ID, buildNotification(contentText))
+        try {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(contentText),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
+            )
+        } catch (e: Exception) {
+            // Android refuses foreground promotion in some states (an app in the background with
+            // no exemption). The status text still matters, so fall back to posting it.
+            Log.w(tag, "Could not re-assert foreground; posting notification only", e)
+            notificationManager.notify(NOTIFICATION_ID, buildNotification(contentText))
+        }
     }
 
     private fun vibrateOnAcquisition() {
@@ -214,8 +248,12 @@ class HealthService : LifecycleService() {
     private fun startEndingTimeout() {
         endingTimeoutJob?.cancel()
         endingTimeoutJob = lifecycleScope.launch {
-            delay(8000) // Give repository 8 seconds to finalize sync and DB
-            if (repository.recordingState.value == RecordingState.ENDING) {
+            delay(ENDING_TIMEOUT_MS)
+            // Never reset over the top of a write in progress. A two-hour recording is thousands
+            // of readings to serialize, and forcing a reset midway wipes the table the record is
+            // still being built from — turning a slow save into a lost one.
+            if (repository.recordingState.value == RecordingState.ENDING && !repository.isFinalizing) {
+                Log.w(tag, "Finalization did not complete in time; resetting")
                 repository.forceReset()
             }
         }

@@ -161,7 +161,7 @@ class MainActivity : ComponentActivity() {
                         override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
                             return RecordingViewModel(
                                 repository = repository,
-                                awaitingPhoneCount = syncManager.awaitingPhoneCount
+                                syncManager = syncManager
                             ) as T
                         }
                     }

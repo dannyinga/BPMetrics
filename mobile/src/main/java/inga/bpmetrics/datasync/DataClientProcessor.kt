@@ -30,6 +30,37 @@ class DataClientProcessor(
     private val tag = "DataClientProcessor"
 
     /**
+     * Processes everything currently sitting on the data layer.
+     *
+     * A watch that spent the evening out of range hands its backlog to Play Services, which
+     * replicates it whenever the two next reach each other — over Bluetooth, Wi-Fi, or the
+     * account. That replication is announced by a `DATA_CHANGED` broadcast, and if the broadcast
+     * is missed the records simply sit there: nothing else ever looks.
+     *
+     * Sweeping asks the data layer what is actually present rather than trusting that every
+     * announcement arrived. Records already saved are not re-saved — [processedIds] covers this
+     * process, and anything genuinely processed was deleted from the data layer on the way out.
+     */
+    suspend fun sweepExistingRecords() {
+        try {
+            val items = dataClient.dataItems.await()
+            try {
+                val records = items.filter { it.uri.path?.startsWith("/bpm_record") == true }
+                if (records.isNotEmpty()) {
+                    Log.d(tag, "Sweep found ${records.size} record(s) waiting on the data layer")
+                }
+                // Frozen before processing: the buffer is released below, and the items would be
+                // recycled out from under the coroutine.
+                records.map { it.freeze() }.forEach { processDataItem(it) }
+            } finally {
+                items.release()
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to sweep the data layer for waiting records", e)
+        }
+    }
+
+    /**
      * Processes a single [DataItem] received from the watch.
      * 
      * Validates the item's path, checks for duplicates, and triggers the conversion

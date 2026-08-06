@@ -7,6 +7,7 @@ import androidx.core.content.edit
 import androidx.health.services.client.data.DataType
 import androidx.health.services.client.data.DataTypeAvailability
 import androidx.health.services.client.data.ExerciseState
+import androidx.health.services.client.data.ExerciseTrackedStatus.Companion.OWNED_EXERCISE_IN_PROGRESS
 import androidx.health.services.client.data.SampleDataPoint
 import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.core.BpmGson
@@ -19,6 +20,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.sql.Date
@@ -72,6 +74,31 @@ class RecordingRepository private constructor(context: Context) {
      * used to be thrown away, which is what forced the wait for a signal lock before starting.
      */
     private val _sessionActive = MutableStateFlow(false)
+
+    /**
+     * Whether a recording is open, as the user understands it: true from the press of start until
+     * the record has been written.
+     *
+     * The foreground service decides whether it may shut down by reading this. It must not read
+     * [recordingState] for that: that flow is a `stateIn` whose value is [RecordingState.INACTIVE]
+     * until its first emission, so a consumer reading it during startup is told nothing is
+     * happening even mid-recording. This is a plain flag, written before anything can suspend.
+     */
+    val sessionActive: StateFlow<Boolean> = _sessionActive.asStateFlow()
+
+    /**
+     * How many times Health Services has ended the exercise out from under an open session.
+     *
+     * Reset once the exercise is running again, so the cap applies to repeated failures rather
+     * than to a long recording that was interrupted once an hour.
+     */
+    private var autoRestartAttempts = 0
+
+    @Volatile
+    private var finalizing = false
+
+    /** Whether a record is being written right now, so a watchdog does not reset over the top. */
+    val isFinalizing: Boolean get() = finalizing
 
     /**
      * What the sensor is doing right now.
@@ -177,8 +204,17 @@ class RecordingRepository private constructor(context: Context) {
             _recordingStartTimeBoot.value = prefs.getLong("start_time_boot_ms", 0L)
             _sessionActive.value = startTimeWallClock != 0L
         } else {
-            Log.w(tag, "Boot anchor predates a reboot; discarding stale session markers")
-            prefs.edit { remove("start_time_ms").remove("start_time_boot_ms").remove(KEY_BOOT_EPOCH) }
+            // The anchor is meaningless after a reboot, but the readings already in the table are
+            // not — their timestamps were worked out relative to the anchor while it was still
+            // valid. Writing them out keeps a session that was interrupted by a restart, rather
+            // than discarding someone's evening because the watch rebooted during it.
+            startTimeWallClock = prefs.getLong("start_time_ms", 0L)
+            if (startTimeWallClock != 0L) {
+                Log.w(tag, "Boot anchor predates a reboot; salvaging the interrupted session")
+                finalizeAndCleanup()
+            } else {
+                prefs.edit { remove("start_time_ms").remove("start_time_boot_ms").remove(KEY_BOOT_EPOCH) }
+            }
         }
 
         observeExerciseData()
@@ -222,20 +258,83 @@ class RecordingRepository private constructor(context: Context) {
         exerciseClientManager.exerciseUpdate
             .filterNotNull()
             .onEach { update ->
-                val hsState = update.exerciseStateInfo.state
+                val stateInfo = update.exerciseStateInfo
+                val hsState = stateInfo.state
 
                 // 1. Process samples (even in ENDING state to catch final buffer)
                 val samples = update.latestMetrics.getData(DataType.HEART_RATE_BPM)
                 processSamples(samples)
 
-                // 2. Check for session termination to finalize the record
-                // This ensures Health Services is the source of truth for the end of the session.
-                if (hsState.isEnded && startTimeWallClock != 0L) {
-                    finalizeAndCleanup()
+                if (!hsState.isEnded) {
+                    // Running again, so an earlier interruption is water under the bridge.
+                    autoRestartAttempts = 0
+                    return@onEach
                 }
 
+                // 2. An ended exercise only ends the *session* if the user asked for it.
+                //
+                // Health Services ends an exercise for reasons of its own: another app starting
+                // a workout supersedes ours, the callback registration lapses, a permission is
+                // withdrawn. Treating any of those as "the recording is over" is what let a
+                // session stop on its own — the wearer found out only when they next looked at
+                // the watch. A recording now ends when the button is pressed, and at no other
+                // time.
+                val userAskedToStop = userIntentState.value == RecordingState.ENDING
+                if (userAskedToStop || !_sessionActive.value) {
+                    if (startTimeWallClock != 0L) finalizeAndCleanup()
+                    return@onEach
+                }
+
+                restartInterruptedExercise(stateInfo)
             }
             .launchIn(scope)
+    }
+
+    /**
+     * Puts Health Services back to work after it ended an exercise the user never stopped.
+     *
+     * The session's anchors are left alone, so the readings either side of the interruption stay
+     * on one timeline and the gap reads as exactly what it was — a dropout — rather than splitting
+     * the evening into two recordings.
+     *
+     * Bounded, because some end reasons do not recover: a withdrawn body-sensors permission will
+     * refuse every restart, and retrying forever would keep the sensor thrashing and never write
+     * the readings already collected. After the cap it saves what it has, which is the outcome the
+     * old code produced immediately.
+     */
+    private suspend fun restartInterruptedExercise(
+        stateInfo: androidx.health.services.client.data.ExerciseStateInfo
+    ) {
+        if (autoRestartAttempts >= MAX_AUTO_RESTARTS) {
+            Log.e(tag, "Exercise ended $autoRestartAttempts times (${stateInfo.endReason}); saving what we have")
+            if (startTimeWallClock != 0L) finalizeAndCleanup()
+            return
+        }
+
+        autoRestartAttempts++
+        Log.w(
+            tag,
+            "Health Services ended the exercise (${stateInfo.endReason}) with a session open; " +
+                    "restarting, attempt $autoRestartAttempts"
+        )
+        delay(AUTO_RESTART_BACKOFF_MS * autoRestartAttempts)
+        exerciseClientManager.startExercise()
+    }
+
+    /**
+     * Puts Health Services back to work on a session that outlived the process that opened it.
+     *
+     * A recording survives in the preferences and the points table, so after the app is killed the
+     * session is still open as far as the wearer is concerned — but nothing is measuring. Called
+     * by the foreground service once it is up.
+     */
+    suspend fun resumeInterruptedSessionIfNeeded() {
+        if (!_sessionActive.value) return
+        val info = exerciseClientManager.getCurrentExerciseInfo()
+        if (info.exerciseTrackedStatus != OWNED_EXERCISE_IN_PROGRESS) {
+            Log.w(tag, "Session open but Health Services is not tracking it; restarting the exercise")
+            exerciseClientManager.startExercise()
+        }
     }
 
     /**
@@ -298,14 +397,23 @@ class RecordingRepository private constructor(context: Context) {
         val nowBoot = SystemClock.elapsedRealtime()
         val nowWall = System.currentTimeMillis()
         userIntentState.value = null
+        autoRestartAttempts = 0
+
+        // Mark the session open here, before anything can suspend. The foreground service and its
+        // manager both decide whether they may shut down by reading this, and while it was set on
+        // a background coroutine there was a window — right after the press — in which the watch
+        // screen turning off would tear the service down and take the recording with it.
+        _sessionActive.value = true
 
         scope.launch {
-            // Clear leftovers before capture is armed, so a sample can never land in the old data.
+            // Clear leftovers before the anchor is set, so a sample can never land in the old
+            // data. Capture stays gated on the anchor, so nothing is kept until this is done —
+            // and Health Services replays the warm-up buffer anyway, so the opening seconds of
+            // the recording survive the gap.
             dao.deleteAll()
 
             _recordingStartTimeBoot.value = nowBoot
             startTimeWallClock = nowWall
-            _sessionActive.value = true
 
             prefs.edit {
                 putLong("start_time_ms", nowWall)
@@ -389,6 +497,7 @@ class RecordingRepository private constructor(context: Context) {
 
             // Clear markers immediately to prevent duplicate finalization
             startTimeWallClock = 0L
+            finalizing = true
 
             try {
                 // Filter again on the way out: rows persisted by an earlier build predate the
@@ -427,6 +536,8 @@ class RecordingRepository private constructor(context: Context) {
                 // Never leave the watch stuck mid-session: the sensors still need re-warming
                 // even when this recording could not be saved.
                 Log.e(tag, "Failed to finalize recording started at $wallClock", e)
+            } finally {
+                finalizing = false
             }
 
             cleanupSession()
@@ -483,6 +594,10 @@ class RecordingRepository private constructor(context: Context) {
      */
     fun forceReset() {
         Log.d(tag, "forceReset requested")
+        // Declare the intent first: without it the ended exercise looks like one Health Services
+        // terminated on its own, and the recovery path would dutifully restart what we are trying
+        // to tear down.
+        userIntentState.value = RecordingState.ENDING
         scope.launch {
             exerciseClientManager.endExercise()
             cleanupSession()
@@ -534,6 +649,15 @@ class RecordingRepository private constructor(context: Context) {
      */
     suspend fun removePendingRecord(entity: PendingRecordEntity) = dao.deletePendingRecord(entity)
 
+    /** A one-off read of the outbox, for the sync manager's own passes over it. */
+    suspend fun getPendingRecords(): List<PendingRecordEntity> = dao.getAllPendingRecords()
+
+    /** Notes that a record reached Play Services, so its delivery can be followed up later. */
+    suspend fun markPendingRecordHandedOver(id: Long, path: String) = dao.markHandedOver(id, path)
+
+    /** Drops a record the phone has acknowledged. */
+    suspend fun removePendingRecord(id: Long) = dao.deletePendingRecordById(id)
+
     companion object {
         /** Persisted boot epoch, used to notice that a saved anchor predates a reboot. */
         private const val KEY_BOOT_EPOCH = "boot_epoch_ms"
@@ -557,6 +681,18 @@ class RecordingRepository private constructor(context: Context) {
          * the app opens still starts with a reading.
          */
         private const val PRE_START_GRACE_MS = 10_000L
+
+        /**
+         * How many times to put Health Services back to work before saving and giving up.
+         *
+         * Generous, because the recoverable causes — another app grabbing the sensor, a callback
+         * lapsing — recover on the first retry, and the cost of one more attempt is far lower than
+         * the cost of silently ending someone's recording.
+         */
+        private const val MAX_AUTO_RESTARTS = 5
+
+        /** Multiplied by the attempt number, so a sensor that keeps refusing is not hammered. */
+        private const val AUTO_RESTART_BACKOFF_MS = 2_000L
 
         @Volatile
         private var instance: RecordingRepository? = null
