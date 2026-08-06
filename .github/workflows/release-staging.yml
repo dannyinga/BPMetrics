@@ -35,15 +35,33 @@ jobs:
       - name: Build, test and lint
         run: ./gradlew build --stacktrace
 
+      # Publishing needs credentials that do not exist until the Play Console setup is done. Rather
+      # than fail every push until then, the publish steps stand down and say why. Adding the
+      # secrets is what switches this on — no workflow edit needed.
+      - name: Check for publishing credentials
+        id: creds
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$PLAY_JSON" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Built and tested, but not published — signing or Play credentials are not configured yet. See Documentation/Play Console Setup.md."
+          fi
+
       # The keystore is stored base64-encoded because GitHub secrets hold text, not files. It is
       # written outside the workspace so it cannot be picked up by a build artifact.
       - name: Restore upload keystore
+        if: steps.creds.outputs.ready == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
 
       - name: Build signed bundles
+        if: steps.creds.outputs.ready == 'true'
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -52,6 +70,7 @@ jobs:
         run: ./gradlew :mobile:bundleRelease :wear:bundleRelease --stacktrace
 
       - name: Publish phone build
+        if: steps.creds.outputs.ready == 'true'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -63,6 +82,7 @@ jobs:
       # A separate call rather than two files in one: the phone and watch artifacts carry different
       # versionCodes, and uploading them together has a habit of confusing which is which.
       - name: Publish watch build
+        if: steps.creds.outputs.ready == 'true'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
