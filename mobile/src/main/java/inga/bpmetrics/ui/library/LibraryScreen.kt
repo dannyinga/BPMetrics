@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import inga.bpmetrics.export.CsvExporter
+import inga.bpmetrics.ui.export.ExportKind
 import inga.bpmetrics.ui.Routes
 import androidx.compose.material3.Card
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
@@ -93,8 +94,8 @@ import inga.bpmetrics.library.BpmRecord
  * @param viewModel The [inga.bpmetrics.ui.library.LibraryViewModel] providing the state and logic for this screen.
  */
 import inga.bpmetrics.export.JsonExporter
-import inga.bpmetrics.ui.export.VideoExportDialog
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Timeline
@@ -110,7 +111,9 @@ fun LibraryScreen(
      * say what it is waiting for rather than looking like it navigated somewhere arbitrary.
      */
     awaitingConcurrentSelection: Boolean = false,
-    onAnalyseTogether: (Set<Long>) -> Unit = {}
+    onAnalyseTogether: (Set<Long>) -> Unit = {},
+    /** Opens the export utility for the current multi-selection, as a video or an image. */
+    onExportSelection: (List<BpmRecord>, ExportKind) -> Unit = { _, _ -> }
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
@@ -142,8 +145,6 @@ fun LibraryScreen(
     var showBulkTagDialog by remember { mutableStateOf(false) }
     var showBulkWearerDialog by remember { mutableStateOf(false) }
 
-    var showMultiVideoDialog by remember { mutableStateOf(false) }
-    var selectedRecordsForMultiVideo by remember { mutableStateOf<List<BpmRecord>>(emptyList()) }
 
     // --- Events and groups ---
 
@@ -371,8 +372,15 @@ fun LibraryScreen(
                                 leadingIcon = { Icon(Icons.Default.Movie, contentDescription = null) },
                                 onClick = {
                                     showSelectionMenu = false
-                                    selectedRecordsForMultiVideo = selectedRecords
-                                    showMultiVideoDialog = true
+                                    onExportSelection(selectedRecords, ExportKind.VIDEO)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export image") },
+                                leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    onExportSelection(selectedRecords, ExportKind.IMAGE)
                                 }
                             )
                             DropdownMenuItem(
@@ -713,26 +721,6 @@ fun LibraryScreen(
         )
     }
 
-    if (showMultiVideoDialog && selectedRecordsForMultiVideo.isNotEmpty()) {
-        VideoExportDialog(
-            record = selectedRecordsForMultiVideo.first(),
-            records = selectedRecordsForMultiVideo,
-            onDismiss = {
-                showMultiVideoDialog = false
-                viewModel.clearSelection()
-            },
-            onExport = { config, _ ->
-                inga.bpmetrics.export.BpmExportService.startExport(
-                    context,
-                    selectedRecordsForMultiVideo.first().metadata.recordId,
-                    "Multi-Watch Export (${selectedRecordsForMultiVideo.size} wearers)",
-                    config,
-                    null
-                )
-                Toast.makeText(context, "Multi-watch video export started in background!", Toast.LENGTH_SHORT).show()
-            }
-        )
-    }
 
     if (showBulkTagDialog) {
         val categories by viewModel.repository.getAllCategories().collectAsState(initial = emptyList())

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
@@ -85,7 +86,9 @@ fun AnalysisScreen(
     /** Set when this was pushed on top of something, which gets a back arrow instead of a drawer. */
     onBack: (() -> Unit)? = null,
     title: String? = null,
-    onSave: ((name: String, records: List<AnalysisRecord>) -> Unit)? = null
+    onSave: ((name: String, records: List<AnalysisRecord>) -> Unit)? = null,
+    /** Opens the export utility as an image, scoped to whatever this screen is analysing. */
+    onExportImage: (() -> Unit)? = null
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
     var saveName by remember { mutableStateOf("") }
@@ -138,6 +141,14 @@ fun AnalysisScreen(
                         }
                     },
                     actions = {
+                        if (onExportImage != null && !uiState.isEmpty) {
+                            IconButton(onClick = onExportImage) {
+                                Icon(
+                                    Icons.Default.Image,
+                                    contentDescription = "Export as image"
+                                )
+                            }
+                        }
                         // A stored analysis is already frozen; only a live one can be captured.
                         if (onSave != null && !uiState.isEmpty && !uiState.isFrozen) {
                             IconButton(onClick = { showSaveDialog = true }) {

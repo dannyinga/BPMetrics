@@ -111,6 +111,69 @@ object ExportUtils {
     }
 
     /**
+     * Writes a graph image into the gallery.
+     *
+     * PNG rather than JPEG, and not negotiable: a graph exported at low opacity is transparent, and
+     * JPEG has no alpha to store it in. Saving one as JPEG would silently composite it onto black
+     * and destroy the only reason the opacity setting exists.
+     */
+    fun saveImageToGallery(
+        context: Context,
+        bitmap: android.graphics.Bitmap,
+        title: String
+    ): android.net.Uri? {
+        val sanitizedTitle = title.replace("[^a-zA-Z0-9_-]".toRegex(), "_")
+        val displayName = "${sanitizedTitle}_${System.currentTimeMillis()}.png"
+
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, displayName)
+            put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/BPMetrics")
+                put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+            }
+        }
+
+        val resolver = context.contentResolver
+        val uri = resolver.insert(
+            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            contentValues
+        ) ?: return null
+
+        return try {
+            resolver.openOutputStream(uri)?.use { output ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                contentValues.clear()
+                contentValues.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+            }
+            uri
+        } catch (e: Exception) {
+            android.util.Log.e("ExportUtils", "Failed to save image to MediaStore", e)
+            // Leave nothing half-written in the gallery for the user to find and wonder about.
+            runCatching { resolver.delete(uri, null, null) }
+            null
+        }
+    }
+
+    /** Stages a bitmap as a PNG in the cache, for sharing. */
+    fun stageImageForShare(context: Context, bitmap: android.graphics.Bitmap, title: String): File? {
+        val sanitizedTitle = title.replace("[^a-zA-Z0-9_-]".toRegex(), "_")
+        val file = File(context.cacheDir, "${sanitizedTitle}_${System.currentTimeMillis()}.png")
+        return try {
+            java.io.FileOutputStream(file).use {
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }
+            file
+        } catch (e: Exception) {
+            android.util.Log.e("ExportUtils", "Could not stage image for sharing", e)
+            null
+        }
+    }
+
+    /**
      * Generic method to share multiple [File]s using FileProvider and an Intent.
      */
     fun shareMultipleFiles(context: Context, files: List<File>, mimeType: String) {

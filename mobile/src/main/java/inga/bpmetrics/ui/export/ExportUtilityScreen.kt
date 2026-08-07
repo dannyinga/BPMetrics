@@ -37,6 +37,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,6 +108,21 @@ fun ExportUtilityScreen(
     val allRecords by repository.records.collectAsStateWithLifecycle()
     val manualOverlay by viewModel.manualOverlay.collectAsStateWithLifecycle()
     val previewAt by viewModel.previewAt.collectAsStateWithLifecycle()
+    val kind by viewModel.kind.collectAsStateWithLifecycle()
+    val imageGrouping by viewModel.imageGrouping.collectAsStateWithLifecycle()
+    val imagePlan by viewModel.imagePlan.collectAsStateWithLifecycle()
+    val imageCrop by viewModel.imageCrop.collectAsStateWithLifecycle()
+    val imageTitle by viewModel.imageTitle.collectAsStateWithLifecycle()
+    val imageNaturalSpan by viewModel.imageNaturalSpan.collectAsStateWithLifecycle()
+
+    // Names and event labels have to be resolved here, where the repository is: the renderer draws
+    // them and must not hold a copy that goes stale when someone is renamed.
+    val personNames = remember(people) { people.associate { it.personId to it.displayName } }
+    val eventNames = remember(events) { events.associate { it.eventId to it.displayName } }
+
+    // Reset by the plan changing, so editing the look after saving does not still claim the new
+    // version is on disk.
+    var imagesSaved by remember(imagePlan, preset) { mutableStateOf(false) }
 
     // Which clip step 3 is framing. Held here rather than in the ViewModel because it is a
     // position on one screen, not part of what will be exported.
@@ -289,24 +305,51 @@ fun ExportUtilityScreen(
                     recordings = allRecords,
                     peopleById = peopleById,
                     selected = source,
-                    onSelect = { viewModel.setSource(it) }
+                    onSelect = { viewModel.setSource(it) },
+                    exportKind = kind,
+                    onExportKindChange = { viewModel.setKind(it) }
                 )
 
-                ExportStep.CONTENTS -> ContentsStep(
-                    clips = clips,
-                    records = records,
-                    peopleById = peopleById,
-                    loading = loadingClips,
-                    hasNoClips = hasNoClips,
-                    oldestFirst = oldestFirst,
-                    onToggleOrder = { viewModel.toggleClipOrder() },
-                    onSelectAll = { viewModel.setAllClipsSelected(it) },
-                    onToggleClip = { viewModel.toggleClip(it) },
-                    onToggleRecord = { uri, id -> viewModel.toggleRecordOnClip(uri, id) }
-                )
+                ExportStep.CONTENTS -> if (kind == ExportKind.IMAGE) {
+                    ImageContentsStep(
+                        plan = imagePlan,
+                        grouping = imageGrouping,
+                        onGroupingChange = { viewModel.setImageGrouping(it) },
+                        // Only a group can become more than one image, so only a group is asked.
+                        showGroupingChoice = source is ExportSource.Group,
+                        crop = imageCrop,
+                        onCropChange = { viewModel.setImageCrop(it) },
+                        naturalSpan = imageNaturalSpan,
+                        timeZoneId = preset.timeZoneId,
+                        title = imageTitle,
+                        onTitleChange = { viewModel.setImageTitle(it) }
+                    )
+                } else {
+                    ContentsStep(
+                        clips = clips,
+                        records = records,
+                        peopleById = peopleById,
+                        loading = loadingClips,
+                        hasNoClips = hasNoClips,
+                        oldestFirst = oldestFirst,
+                        onToggleOrder = { viewModel.toggleClipOrder() },
+                        onSelectAll = { viewModel.setAllClipsSelected(it) },
+                        onToggleClip = { viewModel.toggleClip(it) },
+                        onToggleRecord = { uri, id -> viewModel.toggleRecordOnClip(uri, id) }
+                    )
+                }
 
                 ExportStep.LOOK -> LookStep(
                     records = records,
+                    isImage = kind == ExportKind.IMAGE,
+                    // Drawn through exactly the call step 4 makes, so the preview and the saved
+                    // file cannot be different pictures. The first entry stands for the batch.
+                    renderImagePreview = {
+                        viewModel.renderImages(
+                            imagePlan.take(1), recordColours, personNames, eventNames
+                        ).firstOrNull()?.bitmap
+                    },
+                    imageRevision = listOf(imagePlan, recordColours, imageCrop, imageTitle),
                     jobCount = pendingJobs.size,
                     presets = presets,
                     selectedPresetId = selectedPresetId,
@@ -338,22 +381,75 @@ fun ExportUtilityScreen(
                     onImportPresetFile = { importPresetLauncher.launch(arrayOf("*/*")) }
                 )
 
-                ExportStep.MAKE -> MakeStep(
-                    estimate = viewModel.estimate(pendingJobs, fallbackDurationMs),
-                    onOpenQueue = onOpenQueue,
-                    onQueue = {
-                        viewModel.rememberLastUsed()
-                        queueBatch(
-                            context = context,
-                            viewModel = viewModel,
-                            jobs = pendingJobs,
-                            allRecords = records,
-                            colours = recordColours,
-                            manualOverlay = manualOverlay,
-                            label = sourceLabel
-                        )
+                ExportStep.MAKE -> if (kind == ExportKind.IMAGE) {
+                    // Rendered here rather than queued: an image takes well under a second, and a
+                    // queue would be a second place to look for something already finished.
+                    val rendered by produceState<List<RenderedImage>?>(
+                        initialValue = null,
+                        imagePlan, preset, recordColours, imageCrop
+                    ) {
+                        value = withContext(Dispatchers.Default) {
+                            viewModel.renderImages(imagePlan, recordColours, personNames, eventNames)
+                        }
                     }
-                )
+
+                    ImageMakeStep(
+                        images = rendered,
+                        saved = imagesSaved,
+                        onSaveAll = {
+                            val images = rendered.orEmpty()
+                            val written = images.count { image ->
+                                inga.bpmetrics.export.ExportUtils.saveImageToGallery(
+                                    context, image.bitmap, "${sourceLabel}_${image.label}"
+                                ) != null
+                            }
+                            imagesSaved = written == images.size && written > 0
+                            viewModel.rememberLastUsed()
+                            Toast.makeText(
+                                context,
+                                if (imagesSaved) {
+                                    "Saved to Pictures/BPMetrics"
+                                } else {
+                                    "Saved $written of ${images.size}"
+                                },
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onShareAll = {
+                            val files = rendered.orEmpty().mapNotNull { image ->
+                                inga.bpmetrics.export.ExportUtils.stageImageForShare(
+                                    context, image.bitmap, "${sourceLabel}_${image.label}"
+                                )
+                            }
+                            when {
+                                files.isEmpty() -> Toast.makeText(
+                                    context, "Could not prepare the image", Toast.LENGTH_SHORT
+                                ).show()
+                                files.size == 1 -> inga.bpmetrics.export.ExportUtils
+                                    .shareFile(context, files.first(), "image/png")
+                                else -> inga.bpmetrics.export.ExportUtils
+                                    .shareMultipleFiles(context, files, "image/png")
+                            }
+                        }
+                    )
+                } else {
+                    MakeStep(
+                        estimate = viewModel.estimate(pendingJobs, fallbackDurationMs),
+                        onOpenQueue = onOpenQueue,
+                        onQueue = {
+                            viewModel.rememberLastUsed()
+                            queueBatch(
+                                context = context,
+                                viewModel = viewModel,
+                                jobs = pendingJobs,
+                                allRecords = records,
+                                colours = recordColours,
+                                manualOverlay = manualOverlay,
+                                label = sourceLabel
+                            )
+                        }
+                    )
+                }
             }
         }
     }
@@ -510,6 +606,9 @@ private fun formatMinutes(ms: Long): String {
 @Composable
 private fun LookStep(
     records: List<inga.bpmetrics.library.BpmRecord>,
+    isImage: Boolean,
+    renderImagePreview: () -> android.graphics.Bitmap?,
+    imageRevision: Any,
     jobCount: Int,
     presets: List<inga.bpmetrics.library.ExportPresetEntity>,
     selectedPresetId: Long?,
@@ -543,7 +642,20 @@ private fun LookStep(
         // away would mean adjusting a setting and having to scroll back to see what it did. The
         // clip strip is deliberately *not* here: it is picked once and then not looked at, and
         // pinning it spent a third of the screen on a row that had already done its job.
-        if (records.isNotEmpty()) {
+        if (isImage) {
+            // The image preview is the image, at whatever the settings currently say — there is no
+            // clip to scrub through and no playhead to choose, so the scrubbing preview has nothing
+            // to offer here.
+            ImageLookPreview(
+                preset = preset,
+                render = renderImagePreview,
+                revision = imageRevision,
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp)
+            )
+            HorizontalDivider()
+        } else if (records.isNotEmpty()) {
             Column(
                 modifier = Modifier
                     .background(MaterialTheme.colorScheme.surface)
@@ -587,7 +699,7 @@ private fun LookStep(
         ) {
             // Which clip is being framed, and the way to copy that framing across — both scroll,
             // because both are decided once rather than watched.
-            if (records.isNotEmpty() && ticked.size > 1) {
+            if (!isImage && records.isNotEmpty() && ticked.size > 1) {
                 ClipSelectorStrip(
                     clips = ticked,
                     selectedUri = previewing?.clip?.uri,
@@ -608,6 +720,7 @@ private fun LookStep(
                 onPickOverlay = onPickOverlay,
                 onClearOverlay = onClearOverlay,
                 hasClips = jobCount > 0,
+                isImage = isImage,
                 syncOffsetMs = preset.syncOffsetMs,
                 onSyncOffsetChange = { onPresetChange(preset.copy(syncOffsetMs = it)) },
                 framing = framing,

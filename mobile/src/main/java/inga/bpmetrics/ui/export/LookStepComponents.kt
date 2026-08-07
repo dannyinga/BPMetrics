@@ -518,6 +518,7 @@ fun LookSections(
     onSyncOffsetChange: (Long) -> Unit,
     framing: GraphPlacement,
     onFramingChange: (GraphPlacement) -> Unit,
+    isImage: Boolean = false,
     presetBar: @Composable () -> Unit = {}
 ) {
     Column(Modifier.fillMaxWidth()) {
@@ -570,54 +571,70 @@ fun LookSections(
         }
 
         SettingsSection("Graph", "Where the chart sits, and what is drawn on it") {
-            Text(
-                "Placement",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                "Drag the outline on the preview, or start from one of these.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(6.dp))
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                GraphPlacement.PRESETS.forEach { (label, placement) ->
-                    FilterChip(
-                        selected = framing.matches(placement),
-                        onClick = { onFramingChange(placement) },
-                        label = { Text(label) }
-                    )
+            // Placement is a video question. An image *is* the graph, so insetting it would leave a
+            // border of nothing around the only thing in the frame.
+            if (!isImage) {
+                Text(
+                    "Placement",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Drag the outline on the preview, or start from one of these.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    GraphPlacement.PRESETS.forEach { (label, placement) ->
+                        FilterChip(
+                            selected = framing.matches(placement),
+                            onClick = { onFramingChange(placement) },
+                            label = { Text(label) }
+                        )
+                    }
                 }
-            }
-            Row {
-                // Centring by eye is guesswork that never quite lands, and "nearly centred" is
-                // more obviously wrong than off-centre on purpose.
-                TextButton(onClick = { onFramingChange(framing.centredHorizontally()) }) {
-                    Text("Center across", style = MaterialTheme.typography.labelSmall)
+                Row {
+                    // Centring by eye is guesswork that never quite lands, and "nearly centred" is
+                    // more obviously wrong than off-centre on purpose.
+                    TextButton(onClick = { onFramingChange(framing.centredHorizontally()) }) {
+                        Text("Center across", style = MaterialTheme.typography.labelSmall)
+                    }
+                    TextButton(onClick = { onFramingChange(framing.centredVertically()) }) {
+                        Text("Center down", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
-                TextButton(onClick = { onFramingChange(framing.centredVertically()) }) {
-                    Text("Center down", style = MaterialTheme.typography.labelSmall)
-                }
+                Spacer(Modifier.height(12.dp))
             }
 
-            Spacer(Modifier.height(12.dp))
             SwitchRow("Labels", preset.showLabels) { onChange(preset.copy(showLabels = it)) }
             SwitchRow("Grid", preset.showGrid) { onChange(preset.copy(showGrid = it)) }
             SwitchRow("Title", preset.showTitle) { onChange(preset.copy(showTitle = it)) }
-            SwitchRow("Live stats", preset.showCurrentStats) {
+            SwitchRow(
+                // The same field means different things either side of this: a running readout on
+                // a video, and everyone's summary for the whole span on a still. Both are "the
+                // numbers beside the curve", which is why one switch is right for both.
+                if (isImage) "Summary" else "Live stats",
+                preset.showCurrentStats
+            ) {
                 onChange(preset.copy(showCurrentStats = it))
             }
             Spacer(Modifier.height(8.dp))
-            SliderRow(
-                label = "Trailing opacity",
-                value = preset.futureOpacity,
-                onValue = { onChange(preset.copy(futureOpacity = it)) }
-            )
+
+            // Trailing opacity fades what has not happened yet, which needs a "yet". A still has
+            // no playhead, so every curve on it is drawn at full strength and this would do
+            // nothing but confuse.
+            if (!isImage) {
+                SliderRow(
+                    label = "Trailing opacity",
+                    value = preset.futureOpacity,
+                    onValue = { onChange(preset.copy(futureOpacity = it)) }
+                )
+            }
             // Opacity of the panel the graph sits on, which is a property of the graph rather than
             // of the video behind it — it lives here rather than in a section of its own.
             SliderRow(
@@ -625,6 +642,16 @@ fun LookSections(
                 value = preset.backgroundOpacity / 100f,
                 onValue = { onChange(preset.copy(backgroundOpacity = (it * 100).toInt())) }
             )
+            if (isImage) {
+                Text(
+                    // The reason the setting matters more here than on a video: nothing is
+                    // composited in this app, so the alpha is for whatever does the compositing.
+                    "At 0% the saved PNG is transparent behind the curve, ready to lay over " +
+                        "footage in another app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             if (!hasClips) {
                 Spacer(Modifier.height(12.dp))
@@ -643,6 +670,11 @@ fun LookSections(
                 }
             }
         }
+
+        // Every option in here describes motion against footage — a visible window, a frame rate, a
+        // sync offset. An image has none of those: it shows the whole timeline in one frame, at
+        // once, over nothing.
+        if (isImage) return@Column
 
         SettingsSection("Time", "How the graph is placed against the footage") {
             NumberField(

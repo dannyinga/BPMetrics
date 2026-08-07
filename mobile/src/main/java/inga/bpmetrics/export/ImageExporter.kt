@@ -79,6 +79,7 @@ object ImageExporter {
         return bitmap
     }
 
+
     /**
      * Shares a [Bitmap] as a PNG file using an Intent.
      *

@@ -37,7 +37,6 @@ import inga.bpmetrics.ui.analysis.ConcurrentAnalysisScreen
 import inga.bpmetrics.ui.analysis.EventAnalysisScreen
 import inga.bpmetrics.ui.analysis.EventDetailViewModel
 import inga.bpmetrics.ui.analysis.SavedAnalysesScreen
-import inga.bpmetrics.ui.graph.BpmGraphDetailScreen
 import inga.bpmetrics.ui.record.BpmRecordScreen
 import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.library.LibraryScreen
@@ -49,11 +48,11 @@ import inga.bpmetrics.ui.settings.SettingsScreen
 import inga.bpmetrics.ui.settings.SettingsViewModel
 import inga.bpmetrics.ui.tags.TagManagementScreen
 import inga.bpmetrics.ui.tags.TagManagementViewModel
+import inga.bpmetrics.ui.export.ExportKind
 import inga.bpmetrics.ui.export.ExportSource
 import inga.bpmetrics.ui.export.ExportStep
 import inga.bpmetrics.ui.export.ExportUtilityScreen
 import inga.bpmetrics.ui.export.ExportUtilityViewModel
-import inga.bpmetrics.ui.export.VideoExportDialog
 import inga.bpmetrics.ui.incoming.IncomingScreen
 import inga.bpmetrics.ui.people.PeopleScreen
 import inga.bpmetrics.ui.watches.WatchesScreen
@@ -118,15 +117,21 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
      * The label is passed through because a saved analysis exported from its own screen arrives as
      * a bare set of recordings, and would otherwise lose the name that was the point of saving it.
      */
-    val openExport: (List<inga.bpmetrics.library.BpmRecord>, String?) -> Unit = { recs, label ->
-        if (recs.isNotEmpty()) {
-            exportViewModel.startAt(
-                source = ExportSource.Recordings(recs.map { it.metadata.recordId }.toSet()),
-                step = ExportStep.LOOK,
-                label = label
-            )
-            navController.navigateToSection(AppDestination.EXPORT)
+    val openExportAs: (List<inga.bpmetrics.library.BpmRecord>, String?, ExportKind) -> Unit =
+        { recs, label, kind ->
+            if (recs.isNotEmpty()) {
+                exportViewModel.startAt(
+                    source = ExportSource.Recordings(recs.map { it.metadata.recordId }.toSet()),
+                    step = ExportStep.LOOK,
+                    label = label,
+                    kind = kind
+                )
+                navController.navigateToSection(AppDestination.EXPORT)
+            }
         }
+
+    val openExport: (List<inga.bpmetrics.library.BpmRecord>, String?) -> Unit = { recs, label ->
+        openExportAs(recs, label, ExportKind.VIDEO)
     }
 
     ModalNavigationDrawer(
@@ -180,6 +185,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                         awaitingConcurrentSelection = false
                         libraryViewModel.clearSelection()
                         navController.navigate(Routes.ANALYSIS_CONCURRENT)
+                    },
+                    onExportSelection = { recs, exportKind ->
+                        libraryViewModel.clearSelection()
+                        openExportAs(recs, null, exportKind)
                     }
                 )
             }
@@ -374,7 +383,8 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     onBack = { navController.popBackStack() },
                     onOpenRecord = { navController.navigate("${Routes.DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") },
-                    onExportVideo = { recs, graphTitle -> openExport(recs, graphTitle) }
+                    onExportVideo = { recs, graphTitle -> openExport(recs, graphTitle) },
+                    onExportImage = { recs, graphTitle -> openExportAs(recs, graphTitle, ExportKind.IMAGE) }
                 )
             }
 
@@ -401,6 +411,17 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                             )
                             navController.navigateToSection(AppDestination.ANALYSIS)
                         }
+                    },
+                    onExportImage = {
+                        // Scoped as the *group* rather than as its recordings, so the utility can
+                        // still offer one image per event. Flattening it to a bare set of records
+                        // here would throw away the structure that choice depends on.
+                        exportViewModel.startAt(
+                            source = ExportSource.Group(groupId),
+                            step = ExportStep.CONTENTS,
+                            kind = ExportKind.IMAGE
+                        )
+                        navController.navigateToSection(AppDestination.EXPORT)
                     }
                 )
             }
@@ -428,28 +449,20 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 val viewModel: BpmRecordViewModel = viewModel(
                     factory = BpmRecordViewModel.Factory(repository, recordId)
                 )
+                val thisRecord by viewModel.record.collectAsState()
                 BpmRecordScreen(
                     viewModel = viewModel,
                     onBack = { navController.popBackStack() },
                     onDeleted = { navController.popBackStack() },
-                    onShowDetailedGraph = { navController.navigate("${Routes.GRAPH_DETAIL}/$recordId") },
+                    onExportImage = {
+                        openExportAs(listOfNotNull(thisRecord), null, ExportKind.IMAGE)
+                    },
+                    onExportVideo = {
+                        openExportAs(listOfNotNull(thisRecord), null, ExportKind.VIDEO)
+                    },
                     onManageTags = { navController.navigate(Routes.TAG_MANAGEMENT) },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
-                )
-            }
-
-            composable(
-                route = "${Routes.GRAPH_DETAIL}/{recordId}",
-                arguments = listOf(navArgument("recordId") { type = NavType.LongType })
-            ) { backStackEntry ->
-                val recordId = backStackEntry.arguments?.getLong("recordId") ?: return@composable
-                val viewModel: BpmRecordViewModel = viewModel(
-                    factory = BpmRecordViewModel.Factory(repository, recordId)
-                )
-                BpmGraphDetailScreen(
-                    viewModel = viewModel,
-                    onBack = { navController.popBackStack() }
                 )
             }
 
@@ -492,7 +505,6 @@ object Routes {
     const val LIBRARY = "library"
     const val DETAIL = "detail"
     const val SETTINGS = "settings"
-    const val GRAPH_DETAIL = "graph_detail"
 
     /** The staged export flow: source, contents, look, make. */
     const val EXPORT = "export"

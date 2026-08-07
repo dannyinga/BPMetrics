@@ -5,10 +5,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.export.ExportPreset
+import inga.bpmetrics.export.TimelineImageExporter
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.ui.analysis.EventAnalysis
 import inga.bpmetrics.library.ExportPresetEntity
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.displayName
 import inga.bpmetrics.ui.settings.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -37,6 +39,104 @@ enum class ExportStep(val title: String, val question: String) {
     MAKE("Make", "Queue it");
 
     val number: Int get() = ordinal + 1
+}
+
+/**
+ * Whether this export is a video or an image.
+ *
+ * Asked in step 1, because it changes what step 2 is *for*. A video export picks which clips to
+ * draw on; an image has no clips and asks a different question — which of the recordings in scope
+ * share a timeline. The four-step shape cannot express that without being told up front.
+ */
+enum class ExportKind(val label: String, val description: String) {
+    VIDEO("Video", "Curves drawn over footage, rendered in the background"),
+    IMAGE("Image", "The whole timeline in one frame, saved straight away")
+}
+
+/**
+ * How a group becomes images.
+ *
+ * The only source with a real choice in it, and both answers are wanted: separate images are what
+ * gets posted per set, and one long timeline is what shows a whole festival day. So it is asked
+ * rather than decided.
+ */
+enum class ImageGrouping(val label: String) {
+    PER_EVENT("One image per event"),
+    ONE_TIMELINE("Everything on one timeline")
+}
+
+/**
+ * A clock window to export, or nothing for everything.
+ *
+ * Null means "wherever the recordings begin and end". Storing the absence rather than pre-filling
+ * the real span keeps "I have not narrowed this" distinguishable from "I typed exactly the full
+ * span", which matters when the recordings underneath change.
+ */
+data class ImageCrop(
+    val startWallClockMs: Long? = null,
+    val endWallClockMs: Long? = null
+) {
+    val isNarrowed: Boolean get() = startWallClockMs != null || endWallClockMs != null
+}
+
+/** One image, and what goes on it. */
+data class ImagePlanEntry(
+    val label: String,
+    val records: List<inga.bpmetrics.library.BpmRecord>,
+    val eventId: Long? = null
+) {
+    val peopleCount: Int get() = records.mapNotNull { it.metadata.personId }.distinct().size
+        .takeIf { it > 0 } ?: records.size
+
+    companion object {
+        /**
+         * Works out which images to draw, and what goes on each.
+         *
+         * Pure, and separate from the flow that feeds it, because the only interesting part is the
+         * splitting: everything except a group split per event is one image, and getting *that* one
+         * case wrong means either an image nobody asked for or a person silently missing from one.
+         */
+        fun plan(
+            records: List<inga.bpmetrics.library.BpmRecord>,
+            events: List<inga.bpmetrics.library.EventEntity>,
+            splitByEvent: Boolean,
+            /** What the scope is called: the recording, the event, or the group. */
+            scopeTitle: String
+        ): List<ImagePlanEntry> {
+            if (records.isEmpty()) return emptyList()
+            // Named after what it is of. "Whole timeline" was a placeholder that described the
+            // shape of the picture rather than its subject, which is no use as a caption.
+            val whole = listOf(
+                ImagePlanEntry(
+                    label = scopeTitle.takeIf { it.isNotBlank() } ?: "Timeline",
+                    records = records
+                )
+            )
+            if (!splitByEvent) return whole
+
+            val byEvent = records.groupBy { it.metadata.eventId }
+            val named = events
+                .filter { it.eventId in byEvent.keys }
+                .map { event ->
+                    ImagePlanEntry(
+                        label = event.displayName,
+                        records = byEvent[event.eventId].orEmpty(),
+                        eventId = event.eventId
+                    )
+                }
+                // By when each event actually happened. An event has no start time of its own — it
+                // is derived from what it holds — so the recordings are what order the evening.
+                .sortedBy { entry ->
+                    entry.records.minOfOrNull { it.metadata.startTime } ?: Long.MAX_VALUE
+                }
+
+            // Recordings belonging to no event are gathered rather than dropped: an image that
+            // silently omits someone is worse than one more image.
+            val unfiled = byEvent[null].orEmpty()
+            val all = if (unfiled.isEmpty()) named else named + ImagePlanEntry("Unfiled", unfiled)
+            return all.ifEmpty { whole }
+        }
+    }
 }
 
 /**
@@ -260,7 +360,7 @@ data class ExportEstimate(
  * Drives the export utility.
  *
  * Holds the step and the source rather than the export settings themselves — those still live in
- * [VideoExportViewModel] for now, and moving them here is EXP-4.1's job, once step 3 is
+ * the settings repository for now, and moving them here is EXP-4.1's job, once step 3 is
  * reorganised into sections and the settings have somewhere to go.
  */
 class ExportUtilityViewModel(
@@ -343,6 +443,45 @@ class ExportUtilityViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
     private val savedAnalysisName = MutableStateFlow("")
+
+    /**
+     * What to *call* the thing being exported, as opposed to how much of it there is.
+     *
+     * Distinct from [sourceLabel], which answers "how many recordings" and is right for a step
+     * header. A picture needs the name: the recording's, the event's, or the group's. Falling back
+     * to a count — or worse to a placeholder like "Whole timeline" — puts a caption on the image
+     * that describes nothing anyone would recognise.
+     */
+    val scopeTitle: StateFlow<String> = combine(
+        _source,
+        records,
+        repository.getAllEvents(),
+        repository.getAllEventGroups(),
+        combine(repository.getAllPeople(), labelOverride) { people, override -> people to override }
+    ) { source, records, events, groups, (people, override) ->
+        override?.takeIf { it.isNotBlank() } ?: when (source) {
+            is ExportSource.None -> ""
+            is ExportSource.Event ->
+                events.firstOrNull { it.eventId == source.eventId }?.displayName.orEmpty()
+            is ExportSource.Group ->
+                groups.firstOrNull { it.groupId == source.groupId }?.displayName.orEmpty()
+            is ExportSource.SavedAnalysis -> savedAnalysisName.value
+            is ExportSource.Recordings -> {
+                val single = records.singleOrNull()
+                if (single != null) {
+                    // The name shown everywhere else for this recording, generated one included,
+                    // so the picture is captioned the way the library labels it.
+                    single.displayName(
+                        people.firstOrNull { it.personId == single.metadata.personId }?.displayName
+                    )
+                } else {
+                    // Several loose recordings genuinely have no shared name. A count is the
+                    // honest answer, and the title field is there for anyone who disagrees.
+                    "${records.size} recording${if (records.size == 1) "" else "s"}"
+                }
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
 
     // --- Step 3: presets ---
@@ -554,6 +693,172 @@ class ExportUtilityViewModel(
             )
         }
     }
+
+    /**
+     * Draws every image the plan calls for.
+     *
+     * The preset supplies the look, exactly as it does for a video — one definition of what a graph
+     * looks like rather than a second one only images understand. The video-only fields it also
+     * carries (frame rate, bit rates, the visible window, the sync offset) simply have nothing to
+     * act on here.
+     *
+     * Graph framing is deliberately *not* applied. A video's graph is a caption in a corner of
+     * someone else's footage; an image is the graph, so insetting it would leave a border of
+     * nothing around the only thing in the frame.
+     */
+    fun renderImages(
+        plan: List<ImagePlanEntry>,
+        colours: Map<Long, Int>,
+        names: Map<Long, String>,
+        eventNames: Map<Long, String> = emptyMap()
+    ): List<RenderedImage> {
+        val preset = _preset.value
+        val crop = _imageCrop.value
+        // A typed title names *the* picture. With a set of them, each already carries the name of
+        // the event it is of, and one title across all of them would be worse than none — so the
+        // override only applies where there is a single thing to name.
+        val override = _imageTitle.value.takeIf { plan.size == 1 }
+
+        return plan.mapNotNull { entry ->
+            val spec = buildTimelineSpec(entry, preset, colours, names, eventNames, crop, override)
+                ?: return@mapNotNull null
+            val bitmap = runCatching { TimelineImageExporter.render(spec) }.getOrNull()
+                ?: return@mapNotNull null
+            // Named by what the picture is titled, not by what the plan called it, so a typed
+            // title reaches the caption in step 4 and the filename on disk as well as the graph.
+            RenderedImage(label = spec.title ?: entry.label, bitmap = bitmap)
+        }
+    }
+
+    /**
+     * Turns the recordings for one image into something the timeline renderer can draw.
+     *
+     * The awkward part is coordinates. Records carry timestamps relative to their own start, the
+     * renderer wants them relative to the window, and the crop the user typed is a wall clock. All
+     * three are reconciled here, once, rather than at three call sites that would drift.
+     */
+    private fun buildTimelineSpec(
+        entry: ImagePlanEntry,
+        preset: ExportPreset,
+        colours: Map<Long, Int>,
+        names: Map<Long, String>,
+        eventNames: Map<Long, String>,
+        crop: ImageCrop,
+        titleOverride: String?
+    ): TimelineImageExporter.Spec? {
+        val records = entry.records.filter { it.dataPoints.isNotEmpty() }
+        if (records.isEmpty()) return null
+
+        val naturalStart = records.minOf { it.metadata.startTime }
+        val naturalEnd = records.maxOf { rec ->
+            rec.metadata.startTime + (rec.dataPoints.lastOrNull()?.timestamp ?: rec.metadata.durationMs)
+        }
+        val windowStart = (crop.startWallClockMs ?: naturalStart).coerceAtMost(naturalEnd - 1_000L)
+        val windowEnd = (crop.endWallClockMs ?: naturalEnd).coerceAtLeast(windowStart + 1_000L)
+
+        // One curve per person, not per recording: someone whose watch dropped out mid-evening has
+        // two recordings and is still one line on the graph and one row in the summary.
+        val byPerson = records.groupBy { it.metadata.personId ?: -it.metadata.recordId }
+        val series = byPerson.mapNotNull { (_, group) ->
+            val first = group.first()
+            val points = group
+                .flatMap { rec ->
+                    rec.dataPoints.map { point ->
+                        (rec.metadata.startTime + point.timestamp) to point.bpm
+                    }
+                }
+                .filter { (at, _) -> at in windowStart..windowEnd }
+                .sortedBy { it.first }
+                .map { (at, bpm) ->
+                    TimelineImageExporter.Series.Point(at - windowStart, bpm)
+                }
+            if (points.isEmpty()) return@mapNotNull null
+
+            TimelineImageExporter.Series(
+                label = names[first.metadata.personId]
+                    ?: first.metadata.wearerName.takeIf { it.isNotBlank() }
+                    ?: first.metadata.title,
+                colorArgb = colours[first.metadata.recordId] ?: preset.lowBpmColor,
+                points = points
+            )
+        }
+        if (series.isEmpty()) return null
+
+        // Sections only when one image covers several events — a single event marked out as one
+        // band spanning the whole width says nothing the title has not already said.
+        val sections = records
+            .groupBy { it.metadata.eventId }
+            .mapNotNull { (eventId, group) ->
+                if (eventId == null) return@mapNotNull null
+                val from = group.minOf { it.metadata.startTime }.coerceAtLeast(windowStart)
+                val to = group
+                    .maxOf { it.metadata.startTime + it.metadata.durationMs }
+                    .coerceAtMost(windowEnd)
+                if (to <= from) return@mapNotNull null
+                TimelineImageExporter.Section(
+                    label = eventNames[eventId] ?: "Event",
+                    startMs = from - windowStart,
+                    endMs = to - windowStart
+                )
+            }
+            .sortedBy { it.startMs }
+
+        return TimelineImageExporter.Spec(
+            width = preset.width,
+            height = preset.height,
+            title = titleOverride ?: entry.label,
+            windowStartWallClockMs = windowStart,
+            windowEndWallClockMs = windowEnd,
+            series = series,
+            sections = sections,
+            showTitle = preset.showTitle,
+            showGrid = preset.showGrid,
+            showLabels = preset.showLabels,
+            showStats = preset.showCurrentStats,
+            lowBpmColor = preset.lowBpmColor,
+            highBpmColor = preset.highBpmColor,
+            labelsColor = preset.labelsColor,
+            gridColor = preset.gridColor,
+            backgroundOpacity = preset.backgroundOpacity,
+            timeZoneId = preset.timeZoneId
+        )
+    }
+
+    /**
+     * The clock window an image covers.
+     *
+     * Absolute instants rather than offsets, because that is how the question is asked: "from when
+     * the set started to when it finished", not "from 14 minutes in".
+     */
+    private val _imageCrop = MutableStateFlow(ImageCrop())
+    val imageCrop: StateFlow<ImageCrop> = _imageCrop.asStateFlow()
+
+    fun setImageCrop(crop: ImageCrop) {
+        _imageCrop.value = crop
+    }
+
+    /**
+     * A title typed in place of the one the scope supplies.
+     *
+     * Null rather than pre-filled with the default, so "I have not renamed this" stays distinct
+     * from "I typed the same thing". A group renamed later should still title its own image, and
+     * pre-filling would quietly freeze the old name into every export after it.
+     */
+    private val _imageTitle = MutableStateFlow<String?>(null)
+    val imageTitle: StateFlow<String?> = _imageTitle.asStateFlow()
+
+    fun setImageTitle(title: String?) {
+        _imageTitle.value = title?.takeIf { it.isNotBlank() }
+    }
+
+    /** The natural full span of what is in scope, for seeding the crop fields. */
+    val imageNaturalSpan: StateFlow<Pair<Long, Long>?> = records.map { records ->
+        val withData = records.filter { it.dataPoints.isNotEmpty() }
+        if (withData.isEmpty()) return@map null
+        withData.minOf { it.metadata.startTime } to withData.maxOf {
+            it.metadata.startTime + it.metadata.durationMs
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** Moves or resizes the graph on one clip. */
     fun setClipGraph(uri: android.net.Uri, placement: GraphPlacement) {
@@ -817,10 +1122,68 @@ class ExportUtilityViewModel(
         ExportStep.entries.getOrNull(_step.value.ordinal - 1)?.let { _step.value = it }
     }
 
+    /**
+     * Points the utility at something else, and forgets everything that described the last thing.
+     *
+     * This ViewModel is hoisted above the nav host so an entry point can prime it before
+     * navigating, which means it outlives any one export. Anything content-specific left behind
+     * therefore lands on the *next* export: a title typed for one event captioned every image after
+     * it, a clock window narrowed for one set silently cropped the next, and a video picked as a
+     * backdrop reattached itself to an unrelated recording.
+     *
+     * The look — the preset, the framing, the canvas — is deliberately *not* reset. That is the
+     * part worth keeping between exports, and keeping it is the point of the whole feature.
+     */
     fun setSource(source: ExportSource) {
+        if (source != _source.value) {
+            labelOverride.value = null
+            _imageTitle.value = null
+            _imageCrop.value = ImageCrop()
+            _manualOverlay.value = null
+            _clips.value = emptyList()
+            _previewAt.value = 0f
+            savedAnalysisRecordIds.value = emptySet()
+            savedAnalysisName.value = ""
+        }
         _source.value = source
         if (source is ExportSource.SavedAnalysis) loadSavedAnalysis(source.analysisId)
     }
+
+    private val _kind = MutableStateFlow(ExportKind.VIDEO)
+    val kind: StateFlow<ExportKind> = _kind.asStateFlow()
+
+    fun setKind(kind: ExportKind) {
+        _kind.value = kind
+    }
+
+    private val _imageGrouping = MutableStateFlow(ImageGrouping.PER_EVENT)
+    val imageGrouping: StateFlow<ImageGrouping> = _imageGrouping.asStateFlow()
+
+    fun setImageGrouping(grouping: ImageGrouping) {
+        _imageGrouping.value = grouping
+    }
+
+    /**
+     * Which recordings each image will draw.
+     *
+     * One list per image. A group split per event gives one entry per event; everything else gives
+     * a single entry, because one timeline is one image however many people are on it.
+     */
+    val imagePlan: StateFlow<List<ImagePlanEntry>> = combine(
+        records,
+        _source,
+        _imageGrouping,
+        repository.getAllEvents(),
+        scopeTitle
+    ) { records, source, grouping, events, title ->
+        ImagePlanEntry.plan(
+            records = records,
+            events = events,
+            // Only a group can become more than one image; everything else is one timeline.
+            splitByEvent = source is ExportSource.Group && grouping == ImageGrouping.PER_EVENT,
+            scopeTitle = title
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
      * Opens the utility part-answered.
@@ -839,10 +1202,13 @@ class ExportUtilityViewModel(
          * would otherwise be labelled "4 recordings" and lose the name that was the point of
          * saving it.
          */
-        label: String? = null
+        label: String? = null,
+        /** Video or image. A caller that knows which button was pressed knows this too. */
+        kind: ExportKind = ExportKind.VIDEO
     ) {
         setSource(source)
         labelOverride.value = label
+        _kind.value = kind
         _step.value = step
         if (step.ordinal > _furthestStep.value.ordinal) _furthestStep.value = step
     }

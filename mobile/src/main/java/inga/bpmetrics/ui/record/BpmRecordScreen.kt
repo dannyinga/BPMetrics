@@ -28,6 +28,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SuggestionChip
@@ -71,7 +72,8 @@ import androidx.compose.material.icons.filled.Share
  * @param viewModel The [inga.bpmetrics.ui.record.BpmRecordViewModel] for the specific record.
  * @param onBack Callback for navigating back.
  * @param onDeleted Callback when the record is successfully deleted.
- * @param onShowDetailedGraph Callback to navigate to the detailed graph view.
+ * @param onExportImage Opens the export utility, scoped to this recording, making an image.
+ * @param onExportVideo Opens the export utility, scoped to this recording, making a video.
  * @param onManageTags Callback to navigate to the tag management screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,7 +82,8 @@ fun BpmRecordScreen(
     viewModel: BpmRecordViewModel,
     onBack: () -> Unit,
     onDeleted: () -> Unit,
-    onShowDetailedGraph: () -> Unit,
+    onExportImage: () -> Unit,
+    onExportVideo: () -> Unit,
     onManageTags: () -> Unit,
     onOpenEvent: (Long) -> Unit = {},
     onOpenGroup: (Long) -> Unit = {}
@@ -96,6 +99,7 @@ fun BpmRecordScreen(
     var isEditing by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showSplitDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     val saveCsvLauncher = rememberLauncherForActivityResult(
@@ -310,7 +314,9 @@ fun BpmRecordScreen(
                         analysis = analysis,
                         scrubbedMs = scrubbedMs,
                         onScrub = { scrubbedMs = it },
-                        onOpenDetail = onShowDetailedGraph
+                        onExportImage = onExportImage,
+                        onExportVideo = onExportVideo,
+                        onSplit = { showSplitDialog = true }
                     )
 
                     Spacer(Modifier.height(20.dp))
@@ -356,6 +362,35 @@ fun BpmRecordScreen(
                     showDeleteConfirm = false
                     viewModel.deleteRecord()
                     onDeleted()
+                }
+            )
+        }
+
+        if (showSplitDialog) {
+            SplitRecordDialog(
+                record = r,
+                onDismiss = { showSplitDialog = false },
+                onSplit = { startMs, endMs ->
+                    val points = r.dataPoints
+                        .filter { it.timestamp in startMs..endMs }
+                        .map { it.copy(timestamp = it.timestamp - startMs) }
+                    if (points.isEmpty()) {
+                        Toast.makeText(context, "Nothing recorded in that range", Toast.LENGTH_SHORT).show()
+                    } else {
+                        viewModel.splitRecord(
+                            inga.bpmetrics.core.BpmWatchRecord(
+                                date = java.sql.Date(r.metadata.startTime + startMs),
+                                dataPoints = points.map {
+                                    inga.bpmetrics.core.BpmDataPoint(it.timestamp, it.bpm)
+                                },
+                                startTime = r.metadata.startTime + startMs,
+                                endTime = r.metadata.startTime + endMs
+                            ),
+                            "${r.metadata.title} (Split)"
+                        )
+                        Toast.makeText(context, "New record created from split", Toast.LENGTH_SHORT).show()
+                    }
+                    showSplitDialog = false
                 }
             )
         }
@@ -413,7 +448,9 @@ private fun RecordChartSection(
     analysis: ConcurrentAnalysis,
     scrubbedMs: Long?,
     onScrub: (Long?) -> Unit,
-    onOpenDetail: () -> Unit
+    onExportImage: () -> Unit,
+    onExportVideo: () -> Unit,
+    onSplit: () -> Unit
 ) {
     val window = rememberConcurrentViewWindow(analysis)
     val series = analysis.series.firstOrNull()
@@ -458,10 +495,25 @@ private fun RecordChartSection(
             )
         }
 
-        TextButton(
-            onClick = onOpenDetail,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        ) { Text("Graph details & export") }
+        // What the separate graph screen used to be for, on the screen that already has the graph.
+        // A recording is one page: the chart here is the same interactive one, so a second screen
+        // only ever offered these three buttons and a longer way back.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(onClick = onExportImage, modifier = Modifier.weight(1f)) {
+                Text("Image")
+            }
+            OutlinedButton(onClick = onExportVideo, modifier = Modifier.weight(1f)) {
+                Text("Video")
+            }
+            OutlinedButton(onClick = onSplit, modifier = Modifier.weight(1f)) {
+                Text("Split")
+            }
+        }
     }
 }
 
@@ -615,3 +667,66 @@ private fun ordinal(n: Int): String {
     return "$n$suffix"
 }
 
+
+/**
+ * Cutting a shorter recording out of a longer one.
+ *
+ * A dialog rather than the screen this used to live on. The screen existed to hold an interactive
+ * graph, and the recording page already has one — so all that was left was this, and a longer way
+ * back to where you started.
+ *
+ * The range is typed rather than dragged. Dragging a selection is how you find roughly the right
+ * span; typing is how you say the one you meant, and the reason to split a recording is almost
+ * always that you know where the set began.
+ */
+@Composable
+private fun SplitRecordDialog(
+    record: inga.bpmetrics.library.BpmRecord,
+    onDismiss: () -> Unit,
+    onSplit: (startMs: Long, endMs: Long) -> Unit
+) {
+    val durationMs = record.metadata.durationMs
+    var startMs by remember { mutableStateOf(0L) }
+    var endMs by remember { mutableStateOf(durationMs) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Split this recording") },
+        text = {
+            Column {
+                Text(
+                    "The new recording keeps this one's tags. The original is left alone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                inga.bpmetrics.ui.graph.GraphManualControls(
+                    initialStart = inga.bpmetrics.ui.graph.TimeUtils.formatMs(startMs),
+                    initialEnd = inga.bpmetrics.ui.graph.TimeUtils.formatMs(endMs),
+                    labelPrefix = "Split",
+                    baseEpochMs = record.metadata.startTime,
+                    onApply = { s, e ->
+                        // Ordered and clamped here rather than trusted: the fields accept anything
+                        // typeable, and a range that runs backwards would silently select nothing.
+                        startMs = minOf(s, e).coerceIn(0L, durationMs)
+                        endMs = maxOf(s, e).coerceIn(0L, durationMs)
+                    }
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Selected: ${inga.bpmetrics.ui.graph.TimeUtils.formatMs(startMs)} – " +
+                        inga.bpmetrics.ui.graph.TimeUtils.formatMs(endMs),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSplit(startMs, endMs) },
+                enabled = endMs > startMs
+            ) { Text("Create record") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}

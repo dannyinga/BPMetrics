@@ -1,7 +1,7 @@
 # Export Utility and Settings Hardening
 
 **Status:** design, not yet started
-**Sprints:** 6
+**Sprints:** 7
 **Depends on:** Library and Analysis Hardening (events and groups must exist)
 
 ---
@@ -345,22 +345,114 @@ over patching the copy that drifted.
 
 ---
 
-### Sprint 6 — App settings
+### Sprint 6 — Image export
+
+Video and image exports have been separate machinery since the beginning: the video path has the
+staged flow, presets, a live preview and a queue, while the image path is a dialog on a screen most
+people never open. Same renderer underneath, two ways to reach it, and only one of them any good.
+
+This folds images into the utility, and takes the graph detail screen out.
+
+#### What an image is, here
+
+A graph's whole timeline in one frame. Not a still from a video, and — this was the correction that
+mattered — **not the video renderer with the window turned off** either.
+
+The first attempt reused `ImageExporter`, on the reasoning that passing no `windowSizeMs` makes the
+viewport the whole snippet. It compiled and it drew something, but nearly everything that renderer
+does is organised around a playhead: a header reading the heart rate *right now*, a fade over what
+has not happened yet, a scrolling viewport. In a still, "current BPM" is not a simplification of the
+truth — it is a number picked at random from a two-hour set, presented as if it meant something.
+
+So `TimelineImageExporter` is its own renderer, and draws the other thing:
+
+- Every curve **end to end at full strength**. No fade: the fade marks what has not happened yet,
+  and in a still nothing has. Half a faded curve just looks like missing data.
+- **No running header.** In its place, everyone's min, average and max for the window, in a band
+  *below* the plot. Over the curve it would cover the one thing the picture is of.
+- **Event sections** marked along the top when one image spans several. This is what turns a
+  festival day into a readable day rather than one long squiggle — without it, a group on a single
+  timeline gives no way to tell which part was which set.
+- **Dates**, in the header and on the time axis whenever the picture crosses midnight. A group over
+  a weekend is exactly the case where "14:20 – 01:35" is unreadable.
+- A **clock start and end**, typed in step 2, since the interesting window is rarely the whole
+  recording. Blank means the natural span — deliberately distinct from typing the natural span, so
+  "I did not narrow this" keeps following the data underneath.
+
+One curve is coloured by value, blue through red; several take a colour each. Same rule as the
+video path, and for the same reason: colour says *how hard* when there is nobody to tell apart, and
+says *who* when there is.
+
+**No overlay.** An image is not composited onto a photo. But it carries an **opacity** so it can be
+taken into something that does compositing — Premiere, Photoshop, a phone editor — and laid over
+footage there. At 0% the panel is fully transparent and the PNG carries real alpha, which is the
+whole point: an opaque black rectangle behind the curve is useless to anyone doing that.
+
+#### Output kind is a step-1 question
+
+```
+  ┌──────────────────┐   ┌────────────┐   ┌────────┐   ┌────────┐
+  │ 1 Source + kind  │──▶│ 2 Contents │──▶│ 3 Look │──▶│ 4 Make │
+  └──────────────────┘   └────────────┘   └────────┘   └────────┘
+   What, and is it        Which clips,     Shared,      Queue it,
+   a video or an          or which          minus the   or render
+   image?                 timelines?        video-only  it here
+                                            sections
+```
+
+It belongs in step 1 because it changes what step 2 is *for*. A video export picks clips; an image
+export has no clips to pick, and asks a different question — which is the one thing the existing
+four-step shape cannot express without being told up front.
+
+#### What each source produces
+
+| Source | Image |
+|---|---|
+| **A recording** | One image: that recording's timeline |
+| **An event** | One image: the event's whole timeline, with every selected person's curve on it |
+| **A group** | Either one image per event, or — optionally — the entire group on a single timeline |
+| **A filter / saved analysis** | One image of everything in scope, on one timeline |
+
+The group case is the only one with a real choice in it, and both answers are wanted: separate
+images are what you post per set, and one long timeline is what shows a whole festival day. So it is
+a toggle in step 2 rather than a decision made for the user.
+
+#### Tickets
+
+| Ticket | Work |
+|---|---|
+| **EXP-6.1** | `ExportKind` (VIDEO / IMAGE) on the utility's ViewModel, chosen in step 1. Step 2, 3 and 4 branch on it. `canAdvance` must account for an image source needing no clips. |
+| **EXP-6.2** | `ImageExporter.renderTimeline(records, config, …)` — one entry point for a whole-timeline image of any number of records, delegating to the existing single- and multi-record paths. A single recording keeps the blue-to-red gradient; several get a colour each, matching the rule the video path already follows. |
+| **EXP-6.3** | Step 2 for images: which recordings are on the timeline, and for a group, per-event or one-timeline. |
+| **EXP-6.4** | Step 3 for images: hide the video-only sections (Time, and the clip strip) and surface canvas size, panel opacity, and the graph visuals. Presets are shared — a second preset type would be a second definition of what a graph looks like, and the two would drift. |
+| **EXP-6.5** | Step 4 for images: render inline, show the result, and offer save and share. No queue — an image takes well under a second, and a queue is a second place to look for something already finished. Several images (the per-event group case) render as a set with one save-all. |
+| **EXP-6.6** | Delete `BpmGraphDetailScreen`. Move the interactive graph and the split-from-selection action into `BpmRecordScreen`, so a recording is one screen. Remove `Routes.GRAPH_DETAIL` and `onShowDetailedGraph`. |
+| **EXP-6.7** | Export buttons on the recording screen, on an event and on a group, entering the utility with steps 1 and 2 answered — image or video, and already scoped. |
+| **EXP-6.8** | Retire `ImageExportDialog` and `VideoExportDialog` from `ui/export/ExportComponents.kt` once nothing opens them. This is the 900-line dialog the utility was built to replace. |
+
+**Verify:** export an image of a single recording at 0% opacity and confirm the PNG has a
+transparent background when opened in something that shows alpha. Export an event and confirm every
+selected person is on one timeline. Export a group both ways. Confirm a recording is now one screen
+with no route to a separate graph.
+
+---
+
+### Sprint 7 — App settings
 
 Last, because the export sections cannot be removed until presets replace them.
 
 | Ticket | Work |
 |---|---|
-| **EXP-6.1** | Apply changes immediately. Delete the staged-edit state and the "Unsaved Changes" dialog from `ui/settings/SettingsScreen.kt` — no other Android settings screen behaves this way, and it is the reason that screen carries a back-handler at all. |
-| **EXP-6.2** | Restructure into the groups in §2.5, each an expandable section. Reuse `ExpandableSection` from `ui/components/SharedComponents.kt`. |
-| **EXP-6.3** | Remove **Image Export Defaults** and **Video Export Defaults**, superseded by presets. Migrate any existing values into a "Previous defaults" preset on first run so nobody's configuration is silently dropped. |
-| **EXP-6.4** | **Appearance**: theme (system / light / dark) and a Material You toggle, wired through `ui/theme/Theme.kt`, which currently calls `dynamicDarkColorScheme` unconditionally. Plus 12/24-hour and date format, applied through `StringFormatHelpers` so one change reaches every screen. |
-| **EXP-6.5** | **Library**: default view mode and sort order, read by `LibraryViewModel` on first composition. |
-| **EXP-6.6** | **Heart rate**: default resting and maximum, and zone boundaries. Add a per-person override on `PersonEntity` (migration), falling back to these. Consumed by LAH-6.5's time-in-zone. |
-| **EXP-6.7** | **Storage**: a breakdown — recordings, staged exports, database, backups — with sizes. "Clear staged exports" calls the existing `ExportUtils.clearStagedExports`. |
-| **EXP-6.8** | **Storage**: list the database backups in `files/db_backups` with dates and sizes, and allow restoring one. Restoring must confirm loudly, close the database, swap the file, and relaunch. Currently these are unreachable without `adb`. |
-| **EXP-6.9** | **Sync**: what the phone is still missing, a manual "check now" triggering `DataClientProcessor.sweepExistingRecords`, and the retry interval. |
-| **EXP-6.10** | **About**: version and build from `BuildConfig`, privacy policy link, licences, and "share diagnostics" bundling recent logs — which would have shortened the disk-full investigation considerably. |
+| **EXP-7.1** | Apply changes immediately. Delete the staged-edit state and the "Unsaved Changes" dialog from `ui/settings/SettingsScreen.kt` — no other Android settings screen behaves this way, and it is the reason that screen carries a back-handler at all. |
+| **EXP-7.2** | Restructure into the groups in §2.5, each an expandable section. Reuse `ExpandableSection` from `ui/components/SharedComponents.kt`. |
+| **EXP-7.3** | Remove **Image Export Defaults** and **Video Export Defaults**, superseded by presets. Migrate any existing values into a "Previous defaults" preset on first run so nobody's configuration is silently dropped. |
+| **EXP-7.4** | **Appearance**: theme (system / light / dark) and a Material You toggle, wired through `ui/theme/Theme.kt`, which currently calls `dynamicDarkColorScheme` unconditionally. Plus 12/24-hour and date format, applied through `StringFormatHelpers` so one change reaches every screen. |
+| **EXP-7.5** | **Library**: default view mode and sort order, read by `LibraryViewModel` on first composition. |
+| **EXP-7.6** | **Heart rate**: default resting and maximum, and zone boundaries. Add a per-person override on `PersonEntity` (migration), falling back to these. Consumed by LAH-6.5's time-in-zone. |
+| **EXP-7.7** | **Storage**: a breakdown — recordings, staged exports, database, backups — with sizes. "Clear staged exports" calls the existing `ExportUtils.clearStagedExports`. |
+| **EXP-7.8** | **Storage**: list the database backups in `files/db_backups` with dates and sizes, and allow restoring one. Restoring must confirm loudly, close the database, swap the file, and relaunch. Currently these are unreachable without `adb`. |
+| **EXP-7.9** | **Sync**: what the phone is still missing, a manual "check now" triggering `DataClientProcessor.sweepExistingRecords`, and the retry interval. |
+| **EXP-7.10** | **About**: version and build from `BuildConfig`, privacy policy link, licences, and "share diagnostics" bundling recent logs — which would have shortened the disk-full investigation considerably. |
 
 **Verify:** every setting takes effect without a save button; changing the theme is immediate;
 restore a backup and confirm the library returns to that state.
