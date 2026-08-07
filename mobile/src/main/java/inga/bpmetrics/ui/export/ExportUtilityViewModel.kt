@@ -400,6 +400,17 @@ class ExportUtilityViewModel(
         }
     }
 
+    /**
+     * What to call the look a job was queued with.
+     *
+     * The applied preset's name, or the canvas shape when the settings have drifted off one — a
+     * queue row saying "1080×1920" is still more use than one saying nothing.
+     */
+    fun presetLabel(): String {
+        val named = _preset.value.name.takeIf { it.isNotBlank() && _selectedPresetId.value != null }
+        return named ?: "${_preset.value.width}×${_preset.value.height}"
+    }
+
     /** Records that the settings have moved away from whichever preset was applied. */
     fun setPreset(preset: ExportPreset) {
         _preset.value = preset

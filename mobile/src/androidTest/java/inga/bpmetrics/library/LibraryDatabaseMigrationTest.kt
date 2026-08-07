@@ -43,7 +43,8 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_11_12,
             LibraryDatabase.MIGRATION_12_13,
             LibraryDatabase.MIGRATION_13_14,
-            LibraryDatabase.MIGRATION_14_15
+            LibraryDatabase.MIGRATION_14_15,
+            LibraryDatabase.MIGRATION_15_16
         )
     }
 
@@ -498,6 +499,68 @@ class LibraryDatabaseMigrationTest {
             assertTrue(cursor.moveToFirst())
             assertEquals("presets are seeded in Kotlin, not by the migration", 0, cursor.getInt(0))
         }
+        db.close()
+    }
+
+    /**
+     * The schema check for the render queue.
+     *
+     * Every column here is declared without a SQL `DEFAULT`, matching an entity that declares none.
+     * That is the pairing this project has got wrong three times: a Kotlin constructor default is
+     * not a SQL default, and a `DEFAULT` on one side only installs cleanly and then refuses to open
+     * for everyone upgrading. This is the test that catches it before they do.
+     */
+    @Test
+    fun migrate15To16_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 16, true, *ALL_MIGRATIONS).close()
+    }
+
+    /** The queue starts empty, and an upgrade does not invent jobs nobody asked for. */
+    @Test
+    fun migrate15To16_addsAnEmptyRenderQueue() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 16, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT COUNT(*) FROM render_jobs").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * A row written by hand survives the round trip Room will make of it.
+     *
+     * Guards the column order and nullability as much as the types: the queue is written by one
+     * process and read by the next, so a column that silently refuses a null is a crash on the
+     * launch after a batch, which is the worst possible time to find out.
+     */
+    @Test
+    fun migrate15To16_acceptsAJobWithEverythingOptionalLeftOut() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 16, true, *ALL_MIGRATIONS)
+
+        db.execSQL(
+            """
+            INSERT INTO render_jobs
+                (jobId, recordId, title, recordIdsCsv, presetJson, colorsCsv, graphTitle,
+                 startTimeMs, endTimeMs, overlayUri, overlayStartedAtMs, targetUri, status,
+                 error, presetName, sourceLabel, recordCount, queuedAt)
+            VALUES
+                ('job-1', 7, 'Subtronics', '7,8', '{"version":1}', '', NULL,
+                 0, 1000, NULL, NULL, NULL, 'QUEUED',
+                 NULL, NULL, NULL, 2, 1700000000000)
+            """.trimIndent()
+        )
+
+        db.query("SELECT recordIdsCsv, status, recordCount FROM render_jobs WHERE jobId = 'job-1'")
+            .use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("7,8", cursor.getString(0))
+                assertEquals("QUEUED", cursor.getString(1))
+                assertEquals(2, cursor.getInt(2))
+            }
         db.close()
     }
 

@@ -329,6 +329,20 @@ over patching the copy that drifted.
 
 **Verify:** start a batch, force-stop the app, reopen, and confirm the queue reports honestly what happened.
 
+> **Two decisions worth keeping.**
+>
+> **Jobs store record ids, not record data.** A `VideoExportConfig` carries whole `BpmRecord`s, data
+> points and all. Writing those into the queue table would copy the library into a second table that
+> starts drifting from it immediately. The ids are rehydrated when the job runs, which also means a
+> job whose recordings were deleted fails honestly rather than rendering whatever is left — a video
+> of the wrong people, with nothing about it looking wrong.
+>
+> **Restoring and resuming are separate, and happen in different places.** `BPMetricsApp` restores
+> the queue; `MainActivity` starts the service. A foreground service cannot be started from the
+> background on Android 12 and later, and the application object runs whenever the process starts —
+> including when a watch delivers a recording and nobody has opened the app at all. Resuming from
+> there would throw, silently, exactly when a batch most needed picking up.
+
 ---
 
 ### Sprint 6 — App settings

@@ -41,14 +41,35 @@ class BpmExportService : Service() {
         val exportProgress = MutableStateFlow(0f)
         val finishedFile = MutableStateFlow<File?>(null)
 
-        fun startExport(context: Context, recordId: Long, recordTitle: String, config: VideoExporter.VideoExportConfig, targetUri: Uri?) {
+        fun startExport(
+            context: Context,
+            recordId: Long,
+            recordTitle: String,
+            config: VideoExporter.VideoExportConfig,
+            targetUri: Uri?,
+            /** How it looks and where it came from, so a queue of six reads as six different jobs. */
+            presetName: String? = null,
+            sourceLabel: String? = null
+        ) {
             finishedFile.value = null
-            
-            // Add job to render queue manager
-            RenderQueueManager.addJob(recordId, recordTitle, config, targetUri)
+
+            RenderQueueManager.addJob(
+                recordId = recordId,
+                recordTitle = recordTitle,
+                config = config,
+                targetUri = targetUri,
+                presetName = presetName,
+                sourceLabel = sourceLabel
+            )
 
             val intent = Intent(context, BpmExportService::class.java)
             context.startForegroundService(intent)
+        }
+
+        /** Starts the service so it picks up whatever is already queued, without adding anything. */
+        fun resumeQueue(context: Context) {
+            if (RenderQueueManager.getNextJob() == null) return
+            context.startForegroundService(Intent(context, BpmExportService::class.java))
         }
 
         fun stopExport(context: Context) {
@@ -107,7 +128,15 @@ class BpmExportService : Service() {
             // Create a child coroutine for this specific export job
             val job = serviceScope.launch {
                 try {
-                    val record = repository.getRecordWithId(nextJob.recordId)
+                    // A job restored from disk carries record ids, not record data — the library is
+                    // the authority on what someone's heart rate did, and the queue should not hold
+                    // a second copy that drifts from it. Recordings deleted since it was queued
+                    // fail the job rather than rendering whatever is left.
+                    val hydrated = RenderJobStore.rehydrate(nextJob, repository.records.value)
+                        ?: throw IOException(
+                            "The recordings this export was queued for are no longer in the library"
+                        )
+                    val record = repository.getRecordWithId(hydrated.recordId)
 
                     // Update notification with title
                     notificationManager.notify(
@@ -116,7 +145,7 @@ class BpmExportService : Service() {
                     )
 
                     var lastNotificationTime = System.currentTimeMillis()
-                    val file = VideoExporter.exportVideo(this@BpmExportService, record, nextJob.config) { progress ->
+                    val file = VideoExporter.exportVideo(this@BpmExportService, record, hydrated.config) { progress ->
                         RenderQueueManager.updateJobProgress(nextJob.id, progress)
                         exportProgress.value = progress
                         

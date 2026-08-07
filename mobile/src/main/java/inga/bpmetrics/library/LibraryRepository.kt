@@ -81,6 +81,9 @@ class LibraryRepository(
     private val savedAnalysisDao = database.savedAnalysisDao()
     private val presetDao = database.exportPresetDao()
 
+    /** Backs the render queue, so a batch outlives the process that queued it. */
+    val renderJobStore = inga.bpmetrics.export.RenderJobStore(database.renderJobDao())
+
     init {
         startRecordFlowFromDB()
     }

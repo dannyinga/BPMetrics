@@ -382,13 +382,19 @@ private fun queueBatch(
     if (allRecords.isEmpty()) return
     val name = label.ifBlank { "Export" }
 
+    // Carried onto every job so the queue describes itself. A restored queue has no way to work
+    // these out again — the recordings may be gone by then — so they are stored with the job.
+    val presetName = viewModel.presetLabel()
+
     if (jobs.isEmpty()) {
         BpmExportService.startExport(
             context,
             allRecords.first().metadata.recordId,
             name,
             viewModel.buildConfig(allRecords, manualOverlay, colours, name),
-            null
+            null,
+            presetName = presetName,
+            sourceLabel = name
         )
         return
     }
@@ -410,7 +416,9 @@ private fun queueBatch(
                 clip = job.clip,
                 placement = job.graph
             ),
-            null
+            null,
+            presetName = presetName,
+            sourceLabel = name
         )
     }
 }

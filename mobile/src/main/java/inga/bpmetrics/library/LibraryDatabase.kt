@@ -163,9 +163,10 @@ interface BpmRecordDao {
         EventGroupTagCrossRef::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class,
-        ExportPresetEntity::class
+        ExportPresetEntity::class,
+        RenderJobEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -177,13 +178,14 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun eventGroupDao(): EventGroupDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
     abstract fun exportPresetDao(): ExportPresetDao
+    abstract fun renderJobDao(): RenderJobDao
 
     companion object {
         private const val TAG = "LibraryDatabase"
         private const val DB_NAME = "bpmetrics_db"
 
         /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 15
+        private const val CURRENT_VERSION = 16
 
         private const val MAX_BACKUPS = 5
 
@@ -740,6 +742,43 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * The render queue, so a batch survives the process that queued it.
+         *
+         * SQL copied verbatim from the generated `16.json`. No column carries a `DEFAULT`, which is
+         * deliberate: a Kotlin constructor default is not a SQL default, and a mismatched one
+         * installs cleanly and then refuses to open on the next upgrade. This project has been
+         * bitten by that three times.
+         */
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `render_jobs` (" +
+                        "`jobId` TEXT NOT NULL, " +
+                        "`recordId` INTEGER NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`recordIdsCsv` TEXT NOT NULL, " +
+                        "`presetJson` TEXT NOT NULL, " +
+                        "`colorsCsv` TEXT NOT NULL, " +
+                        "`graphTitle` TEXT, " +
+                        "`startTimeMs` INTEGER NOT NULL, " +
+                        "`endTimeMs` INTEGER NOT NULL, " +
+                        "`overlayUri` TEXT, " +
+                        "`overlayStartedAtMs` INTEGER, " +
+                        "`targetUri` TEXT, " +
+                        "`status` TEXT NOT NULL, " +
+                        "`error` TEXT, " +
+                        "`presetName` TEXT, " +
+                        "`sourceLabel` TEXT, " +
+                        "`recordCount` INTEGER NOT NULL, " +
+                        "`queuedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`jobId`))"
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_15_16: Render queue")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -798,7 +837,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_11_12,
                         MIGRATION_12_13,
                         MIGRATION_13_14,
-                        MIGRATION_14_15
+                        MIGRATION_14_15,
+                        MIGRATION_15_16
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

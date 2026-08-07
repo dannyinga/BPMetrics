@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import inga.bpmetrics.export.BpmExportService
 import inga.bpmetrics.ui.BPMetricsNavHost
 import inga.bpmetrics.ui.theme.BPMetricsTheme
 
@@ -44,6 +45,14 @@ class MainActivity : ComponentActivity() {
         
         // Register the data client listener to the activity's lifecycle
         lifecycle.addObserver(dataClientListener)
+
+        // Pick up renders left queued by a process the phone killed. Here rather than in the
+        // application object because a foreground service cannot be started from the background on
+        // Android 12 and later, and an activity being created is the one moment we are certainly
+        // not in it. Restoring the queue is separate and has already happened by now; this only
+        // starts the service, and does nothing if there is nothing waiting.
+        runCatching { BpmExportService.resumeQueue(this) }
+            .onFailure { android.util.Log.e("MainActivity", "Could not resume the render queue", it) }
         
         // Set up the modern Android edge-to-edge UI
         enableEdgeToEdge()
