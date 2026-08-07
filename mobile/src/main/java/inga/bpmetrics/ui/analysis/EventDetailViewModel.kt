@@ -101,16 +101,23 @@ class EventDetailViewModel(
     val tags: StateFlow<List<EffectiveTag>> = combine(
         repository.getTagsForEvent(eventId),
         eventFlow,
-        // Observed rather than read once, so tagging the group refreshes this page rather than
-        // waiting for something else to reload it.
-        repository.allGroupTags
-    ) { own, event, groupTags ->
+        // Observed rather than read once, so tagging the collection refreshes this page rather
+        // than waiting for something else to reload it.
+        repository.allGroupTags,
+        repository.getAllEventGroups()
+    ) { own, event, groupTags, groups ->
         EffectiveTagsResolver.resolve(
             // The event's own tags are direct *here*: this is the level they were applied at. The
             // same resolver, asked from one rung down the hierarchy.
             directTags = own,
             eventId = null,
-            groupId = event?.groupId,
+            // Every collection above this event, nearest first — its own, then the one that holds
+            // that, and so on. A tag set on a festival reaches the sets inside its days.
+            groupChain = event?.groupId
+                ?.let { inga.bpmetrics.library.CollectionTree.ancestryOf(groups, it) }
+                ?.map { it.groupId }
+                ?.reversed()
+                .orEmpty(),
             eventTags = emptyMap(),
             groupTags = groupTags
         )

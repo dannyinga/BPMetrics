@@ -371,12 +371,12 @@ private fun GroupTags(tagging: ScopeTagging) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Tags", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             IconButton(onClick = { showDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Tag this group")
+                Icon(Icons.Default.Add, contentDescription = "Tag this collection")
             }
         }
         if (tags.isEmpty()) {
             Text(
-                "A tag here applies to every event in this group, and every recording in them.",
+                "A tag here applies to everything inside this collection, however deeply it is nested.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1028,7 +1028,7 @@ private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifie
         ) {
             Text(
                 when (uiState.scope) {
-                    is AnalysisScope.Group -> "Nothing in this group yet"
+                    is AnalysisScope.Group -> "Nothing in this collection yet"
                     is AnalysisScope.Saved -> "This analysis has no recordings"
                     else -> "Nothing matches this filter"
                 },
@@ -1039,7 +1039,7 @@ private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifie
             Text(
                 when (uiState.scope) {
                     is AnalysisScope.Group ->
-                        "Add events to this group, and file recordings into them, and their " +
+                        "Add events to this collection, and file recordings into them, and their " +
                             "numbers will appear here."
                     is AnalysisScope.Saved ->
                         "It was saved without any, or its recordings have since been deleted."

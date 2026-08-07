@@ -32,11 +32,17 @@ data class EventEntity(
 }
 
 /**
- * A collection of events — a festival, a weekend, a tour.
+ * A collection of events, and optionally of other collections — a festival, a day of one, a tour.
  *
- * One level of nesting only. Anything that cuts across structure ("all the dubstep sets", "every
- * event it rained at") is a tag, applied at whichever level it is true, and inherited downwards.
- * That is what removes the need for a tree here.
+ * Collections nest; events do not, and a recording still belongs to exactly one event. That split
+ * is the whole design. "Subtronics inside Coachella Day 1 inside Coachella" is strict containment,
+ * and the alternative — letting a recording belong to several events — would express it by putting
+ * the same recording in all three. That leaves "which event is this recording's?" unanswerable on
+ * the record screen, breaks nearest-wins tag inheritance (with three parents there is no nearest),
+ * and makes every total count it three times.
+ *
+ * Nesting the *container* costs one nullable column and a walk up the parents. Nesting the leaf
+ * would cost the meaning of the leaf.
  *
  * Its date range, like an event's, is derived from what it contains.
  */
@@ -45,9 +51,17 @@ data class EventGroupEntity(
     @PrimaryKey(autoGenerate = true) val groupId: Long = 0,
     val name: String,
     @ColumnInfo(defaultValue = "") val notes: String = "",
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+    /**
+     * The collection this one sits inside, or null at the top.
+     *
+     * Not a foreign key: deleting a parent must orphan its children to the top level rather than
+     * cascade, because deleting "Coachella" should not silently take both of its days and every
+     * event in them with it.
+     */
+    @ColumnInfo(defaultValue = "NULL") val parentGroupId: Long? = null
 ) {
-    val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled group"
+    val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled collection"
 }
 
 /**

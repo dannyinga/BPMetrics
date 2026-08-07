@@ -187,7 +187,7 @@ fun EffectiveTagChip(
     if (effective.isInherited) {
         val from = when (effective.source) {
             TagSource.EVENT -> "this event"
-            TagSource.GROUP -> "this event's group"
+            TagSource.GROUP -> "a collection above it"
             TagSource.DIRECT -> ""
         }
         AssistChip(

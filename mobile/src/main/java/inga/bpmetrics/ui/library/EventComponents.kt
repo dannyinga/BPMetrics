@@ -204,10 +204,18 @@ fun GroupCard(
     onToggleExpand: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    /** Files this collection inside another. Null at the depth cap, where it cannot go deeper. */
+    onMoveToCollection: (() -> Unit)? = null,
+    /** How deep this sits, so the tree reads as a tree rather than a flat list. */
+    depth: Int = 1,
     content: @Composable () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        // Indented by depth, which is the whole point of nesting being visible: a day inside a
+        // festival should look like it is inside it.
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = ((depth - 1) * 14).dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )
@@ -234,8 +242,20 @@ fun GroupCard(
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "${countLabel(summary.eventCount, "event")} · " +
-                                countLabel(summary.recordCount, "recording"),
+                            buildString {
+                                // Named first when there are any, because it is what explains the
+                                // shape of everything after it: "2 collections · 6 events" reads
+                                // as a festival of two days, and "6 events" alone does not.
+                                if (summary.nestedCollectionCount > 0) {
+                                    append(
+                                        countLabel(summary.nestedCollectionCount, "collection")
+                                    )
+                                    append(" · ")
+                                }
+                                append(countLabel(summary.eventCount, "event"))
+                                append(" · ")
+                                append(countLabel(summary.recordCount, "recording"))
+                            },
                             style = MaterialTheme.typography.labelMedium
                         )
                         Spacer(Modifier.width(10.dp))
@@ -251,9 +271,9 @@ fun GroupCard(
                 }
                 EventOverflow(
                     onRename = onRename,
-                    onMoveToGroup = null,
+                    onMoveToGroup = onMoveToCollection,
                     onDelete = onDelete,
-                    deleteLabel = "Delete group"
+                    deleteLabel = "Delete collection"
                 )
             }
 
@@ -265,7 +285,16 @@ fun GroupCard(
                 ) {
                     if (summary.events.isEmpty()) {
                         Text(
-                            "No events in this group yet.",
+                            // A collection holding only other collections is not empty, and
+                            // saying so would contradict the count on the row above it. Its
+                            // children are cards of their own, listed beneath this one.
+                            if (summary.nestedCollectionCount > 0) {
+                                "No events directly in this collection — they are in the " +
+                                    "${countLabel(summary.nestedCollectionCount, "collection")} " +
+                                    "below."
+                            } else {
+                                "Nothing in this collection yet."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -297,7 +326,7 @@ private fun EventOverflow(
             )
             onMoveToGroup?.let { move ->
                 DropdownMenuItem(
-                    text = { Text("Move to group") },
+                    text = { Text("Move…") },
                     onClick = { open = false; move() }
                 )
             }
@@ -373,7 +402,9 @@ fun GroupPickerDialog(
     currentGroupId: Long?,
     onDismiss: () -> Unit,
     onPick: (Long?) -> Unit,
-    onCreateGroup: () -> Unit
+    onCreateGroup: () -> Unit,
+    /** What "nowhere" is called here: no collection for an event, top level for a collection. */
+    topLevelLabel: String = "No collection"
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -383,7 +414,7 @@ fun GroupPickerDialog(
                 DropdownMenuItem(
                     text = {
                         Text(
-                            "No group",
+                            topLevelLabel,
                             fontWeight = if (currentGroupId == null) FontWeight.Bold else null
                         )
                     },
@@ -404,7 +435,7 @@ fun GroupPickerDialog(
                 }
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("New group…") },
+                    text = { Text("New collection…") },
                     leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
                     onClick = onCreateGroup
                 )

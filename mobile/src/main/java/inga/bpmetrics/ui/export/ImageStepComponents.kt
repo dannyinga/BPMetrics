@@ -70,7 +70,7 @@ fun ImageContentsStep(
             item {
                 Column {
                     Text(
-                        "How should this group become images?",
+                        "How should this collection become images?",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )

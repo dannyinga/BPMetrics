@@ -402,14 +402,19 @@ class ExportUtilityViewModel(
     val records: StateFlow<List<BpmRecord>> = combine(
         repository.records,
         _source,
-        repository.getAllEvents()
-    ) { library, source, events ->
+        repository.getAllEvents(),
+        repository.getAllEventGroups()
+    ) { library, source, events, groups ->
         when (source) {
             is ExportSource.None -> emptyList()
             is ExportSource.Recordings -> library.filter { it.metadata.recordId in source.recordIds }
             is ExportSource.Event -> library.filter { it.metadata.eventId == source.eventId }
             is ExportSource.Group -> {
-                val eventIds = events.filter { it.groupId == source.groupId }
+                // The whole subtree. Exporting "Coachella" means the festival, its days and every
+                // set inside them, or a collection holding only collections would export nothing.
+                val inScope = inga.bpmetrics.library.CollectionTree
+                    .descendantsOf(groups, source.groupId)
+                val eventIds = events.filter { it.groupId in inScope }
                     .map { it.eventId }
                     .toSet()
                 library.filter { it.metadata.eventId in eventIds }

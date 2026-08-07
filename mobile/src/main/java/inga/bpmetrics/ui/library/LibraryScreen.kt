@@ -166,6 +166,7 @@ fun LibraryScreen(
     var deletingEvent by remember { mutableStateOf<EventSummary?>(null) }
     var deletingGroup by remember { mutableStateOf<GroupSummary?>(null) }
     var movingEvent by remember { mutableStateOf<EventSummary?>(null) }
+    var movingCollection by remember { mutableStateOf<GroupSummary?>(null) }
     var showAddToEventDialog by remember { mutableStateOf(false) }
     var suggestionToName by remember { mutableStateOf<EventSuggestion?>(null) }
     // Set when "New event…" is chosen from the bulk menu, so the name dialog knows to file the
@@ -521,7 +522,7 @@ fun LibraryScreen(
                             when (mode) {
                                 LibraryViewMode.RECORDINGS -> "Recordings"
                                 LibraryViewMode.EVENTS -> "Events"
-                                LibraryViewMode.GROUPS -> "Groups"
+                                LibraryViewMode.GROUPS -> "Collections"
                             }
                         )
                     }
@@ -671,6 +672,7 @@ fun LibraryScreen(
                     onCreateGroup = { showCreateGroupDialog = true },
                     onRenameGroup = { renamingGroup = it },
                     onDeleteGroup = { deletingGroup = it },
+                    onMoveCollection = { movingCollection = it },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
                 )
@@ -815,10 +817,10 @@ fun LibraryScreen(
 
     if (showCreateGroupDialog) {
         NameDialog(
-            title = "New group",
-            label = "Group name",
+            title = "New collection",
+            label = "Collection name",
             confirmLabel = "Create",
-            supporting = "A group collects events that belong together — a tour, a season, a study.",
+            supporting = "A collection gathers events that belong together — a festival, a day of one, a tour. Collections can hold other collections.",
             onDismiss = { showCreateGroupDialog = false },
             onConfirm = { name ->
                 viewModel.createEventGroup(name)
@@ -842,8 +844,8 @@ fun LibraryScreen(
 
     renamingGroup?.let { summary ->
         NameDialog(
-            title = "Rename group",
-            label = "Group name",
+            title = "Rename collection",
+            label = "Collection name",
             initial = summary.group.name,
             onDismiss = { renamingGroup = null },
             onConfirm = { name ->
@@ -865,6 +867,34 @@ fun LibraryScreen(
             },
             onCreateGroup = {
                 movingEvent = null
+                showCreateGroupDialog = true
+            }
+        )
+    }
+
+    movingCollection?.let { summary ->
+        val moving = summary.group.groupId
+        GroupPickerDialog(
+            eventName = summary.group.displayName,
+            // Only somewhere it could legally go. Offering a collection its own descendants would
+            // put a cycle one tap away, and a cycle does not throw — it hangs every walk of the
+            // tree. Refused in the repository too; this is so the option is never presented.
+            groups = eventGroups.filter { candidate ->
+                inga.bpmetrics.library.CollectionTree.canReparent(
+                    eventGroups.map { it.group },
+                    groupId = moving,
+                    parentGroupId = candidate.group.groupId
+                )
+            },
+            currentGroupId = summary.group.parentGroupId,
+            topLevelLabel = "Not inside anything",
+            onDismiss = { movingCollection = null },
+            onPick = { parentId ->
+                viewModel.setCollectionParent(moving, parentId)
+                movingCollection = null
+            },
+            onCreateGroup = {
+                movingCollection = null
                 showCreateGroupDialog = true
             }
         )
@@ -893,9 +923,9 @@ fun LibraryScreen(
             title = "Delete ${summary.group.displayName}?",
             message = if (summary.eventCount > 0) {
                 "Its ${summary.eventCount} event${if (summary.eventCount == 1) "" else "s"} will " +
-                    "be kept and stop belonging to any group. No recordings are deleted."
+                    "be kept and stop belonging to any collection. No recordings are deleted."
             } else {
-                "This group has no events in it."
+                "This collection has nothing in it."
             },
             onDismiss = { deletingGroup = null },
             onConfirm = {
@@ -1015,9 +1045,18 @@ private fun GroupsList(
     onCreateGroup: () -> Unit,
     onRenameGroup: (GroupSummary) -> Unit,
     onDeleteGroup: (GroupSummary) -> Unit,
+    onMoveCollection: (GroupSummary) -> Unit,
     onOpenEvent: (Long) -> Unit,
     onOpenGroup: (Long) -> Unit
 ) {
+    // Flattened into reading order with each card's depth, so the list renders the tree without
+    // every row having to work the shape out again.
+    val tree = remember(groups) {
+        val byId = groups.associateBy { it.group.groupId }
+        inga.bpmetrics.library.CollectionTree.flatten(groups.map { it.group })
+            .mapNotNull { node -> byId[node.group.groupId]?.let { it to node.depth } }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -1027,18 +1066,20 @@ private fun GroupsList(
             OutlinedButton(onClick = onCreateGroup, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Add, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("New group")
+                Text("New collection")
             }
         }
 
-        items(groups, key = { "group-${it.group.groupId}" }) { summary ->
+        items(tree, key = { "group-${it.first.group.groupId}" }) { (summary, depth) ->
             GroupCard(
                 summary = summary,
                 expanded = summary.group.groupId in expandedIds,
                 onOpen = { onOpenGroup(summary.group.groupId) },
                 onToggleExpand = { onToggleExpand(summary.group.groupId) },
                 onRename = { onRenameGroup(summary) },
-                onDelete = { onDeleteGroup(summary) }
+                onDelete = { onDeleteGroup(summary) },
+                onMoveToCollection = { onMoveCollection(summary) },
+                depth = depth
             ) {
                 summary.events.forEach { event ->
                     NestedEventRow(event) { onOpenEvent(event.event.eventId) }
@@ -1047,7 +1088,7 @@ private fun GroupsList(
         }
 
         if (ungrouped.isNotEmpty()) {
-            item { SectionHeader("Not in a group", "${ungrouped.size}") }
+            item { SectionHeader("Not in a collection", "${ungrouped.size}") }
             items(ungrouped, key = { "ungrouped-${it.event.eventId}" }) { event ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Box(Modifier.padding(horizontal = 12.dp)) {
@@ -1060,16 +1101,17 @@ private fun GroupsList(
         if (groups.isEmpty() && ungrouped.isEmpty()) {
             item {
                 EmptySection(
-                    "No groups yet",
-                    "A group collects events that belong together — a tour, a season, a festival. " +
-                        "Create some events first, then group them."
+                    "No collections yet",
+                    "A collection gathers events that belong together — a festival, a day of " +
+                        "one, a tour. Create some events first, then gather them."
                 )
             }
         } else if (groups.isEmpty()) {
             item {
                 EmptySection(
-                    "No groups yet",
-                    "Tag a group once and every recording under it inherits it. Use the overflow " +
+                    "No collections yet",
+                    "Tag a collection once and every recording under it inherits it, however " +
+                        "deeply nested. Use the overflow " +
                         "on an event to move it into one."
                 )
             }

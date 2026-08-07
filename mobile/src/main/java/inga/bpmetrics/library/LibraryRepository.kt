@@ -493,12 +493,39 @@ class LibraryRepository(
     suspend fun setEventGroupNotes(groupId: Long, notes: String) =
         eventGroupDao.updateNotes(groupId, notes)
 
-    /** Removes a group and releases its events. The events, and their recordings, survive. */
+    /** Removes a collection and releases what it held. Its events and children survive. */
     suspend fun deleteEventGroup(groupId: Long) {
         eventGroupDao.ungroupEvents(groupId)
+        eventGroupDao.orphanChildren(groupId)
         eventGroupDao.deleteGroup(groupId)
-        Log.d(tag, "Deleted group $groupId; its events are ungrouped, not removed")
+        Log.d(tag, "Deleted collection $groupId; its events and children are released, not removed")
     }
+
+    /**
+     * Files one collection inside another.
+     *
+     * @return false when the move would make a collection its own ancestor, or nest deeper than
+     *   [CollectionTree.MAX_DEPTH]. Both are refused here rather than in the UI: a cycle makes
+     *   every walk of the tree non-terminating, and no screen should be the only thing standing
+     *   between the database and an infinite loop.
+     */
+    suspend fun setEventGroupParent(groupId: Long, parentGroupId: Long?): Boolean {
+        val all = eventGroupDao.getAllGroups()
+        if (!CollectionTree.canReparent(all, groupId, parentGroupId)) {
+            Log.w(tag, "Refused to file collection $groupId under $parentGroupId")
+            return false
+        }
+        eventGroupDao.setParent(groupId, parentGroupId)
+        return true
+    }
+
+    /**
+     * A collection and everything nested inside it, itself included.
+     *
+     * What "analyse Coachella" resolves to: the festival, its days, and every event in any of them.
+     */
+    suspend fun descendantGroupIds(groupId: Long): Set<Long> =
+        CollectionTree.descendantsOf(eventGroupDao.getAllGroups(), groupId)
 
     /** Every saved analysis with its frozen rows, for a backup to carry. */
     suspend fun getSavedAnalysesForBackup(): List<inga.bpmetrics.export.SavedAnalysisDto> =
@@ -1175,13 +1202,17 @@ class LibraryRepository(
         records,
         tagDao.getAllEventTagsFlow(),
         tagDao.getAllGroupTagsFlow(),
-        eventDao.getAllEventsFlow()
-    ) { library, eventTags, groupTags, events ->
+        eventDao.getAllEventsFlow(),
+        eventGroupDao.getAllGroupsFlow()
+    ) { library, eventTags, groupTags, events, groups ->
         EffectiveTagsResolver.resolveAll(
             records = library,
             eventTags = EffectiveTagsResolver.index(eventTags),
             groupTags = EffectiveTagsResolver.index(groupTags),
-            groupIdByEvent = events.associate { it.eventId to it.groupId }
+            groupIdByEvent = events.associate { it.eventId to it.groupId },
+            // Collections nest, so inheritance climbs the whole chain: a tag on a festival reaches
+            // the recordings inside its days without being applied to each of them.
+            parentByGroup = groups.associate { it.groupId to it.parentGroupId }
         )
     }
 

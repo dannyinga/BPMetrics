@@ -44,7 +44,8 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_12_13,
             LibraryDatabase.MIGRATION_13_14,
             LibraryDatabase.MIGRATION_14_15,
-            LibraryDatabase.MIGRATION_15_16
+            LibraryDatabase.MIGRATION_15_16,
+            LibraryDatabase.MIGRATION_16_17
         )
     }
 
@@ -561,6 +562,65 @@ class LibraryDatabaseMigrationTest {
                 assertEquals("QUEUED", cursor.getString(1))
                 assertEquals(2, cursor.getInt(2))
             }
+        db.close()
+    }
+
+    /**
+     * The schema check for nestable collections.
+     *
+     * `DEFAULT NULL` on both sides. The entity declares `@ColumnInfo(defaultValue = "NULL")`, so
+     * the migration must say the same — a `DEFAULT` present on one side only installs cleanly and
+     * then refuses to open for everyone upgrading, which is the failure this whole file exists for.
+     */
+    @Test
+    fun migrate16To17_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 17, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Existing collections survive, sitting at the top level.
+     *
+     * Nothing was nested before this version, so every collection that already exists must come
+     * out with no parent — not with a parent of 0, which would point at a collection that does not
+     * exist and quietly hide it from the list.
+     */
+    @Test
+    fun migrate16To17_leavesExistingCollectionsAtTheTop() {
+        helper.createDatabase(TEST_DB, 5).close()
+        var db = helper.runMigrationsAndValidate(TEST_DB, 16, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "INSERT INTO event_groups (groupId, name, notes, createdAt) " +
+                "VALUES (1, 'Coachella', '', 1700000000000)"
+        )
+        db.close()
+
+        db = helper.runMigrationsAndValidate(TEST_DB, 17, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT name, parentGroupId FROM event_groups WHERE groupId = 1").use { cursor ->
+            assertTrue("the collection should have survived", cursor.moveToFirst())
+            assertEquals("Coachella", cursor.getString(0))
+            assertTrue("must be top level, not parented to id 0", cursor.isNull(1))
+        }
+        db.close()
+    }
+
+    /** A collection can be filed inside another once the column exists. */
+    @Test
+    fun migrate16To17_acceptsANestedCollection() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 17, true, *ALL_MIGRATIONS)
+
+        db.execSQL(
+            "INSERT INTO event_groups (groupId, name, notes, createdAt, parentGroupId) VALUES " +
+                "(1, 'Coachella', '', 1700000000000, NULL), " +
+                "(2, 'Day 1', '', 1700000000000, 1)"
+        )
+
+        db.query("SELECT parentGroupId FROM event_groups WHERE groupId = 2").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1L, cursor.getLong(0))
+        }
         db.close()
     }
 

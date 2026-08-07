@@ -66,7 +66,7 @@ import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 /** The kinds of thing an export can be taken from, as a tab row. */
 private enum class SourceKind(val label: String) {
     EVENTS("Events"),
-    GROUPS("Groups"),
+    GROUPS("Collections"),
     RECORDINGS("Recordings")
 }
 
@@ -201,7 +201,7 @@ fun SourceStep(
                         when (kind) {
                             SourceKind.EVENTS -> "No events yet. File some recordings into one in " +
                                 "the Library, or pick them directly under Recordings."
-                            SourceKind.GROUPS -> "No groups yet. Group some events in the Library."
+                            SourceKind.GROUPS -> "No collections yet. Gather some events in the Library."
                             SourceKind.RECORDINGS -> "No recordings yet."
                         },
                         style = MaterialTheme.typography.bodySmall,

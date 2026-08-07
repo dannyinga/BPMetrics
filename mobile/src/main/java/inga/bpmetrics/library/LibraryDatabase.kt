@@ -166,7 +166,7 @@ interface BpmRecordDao {
         ExportPresetEntity::class,
         RenderJobEntity::class
     ],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -185,7 +185,7 @@ abstract class LibraryDatabase : RoomDatabase() {
         private const val DB_NAME = "bpmetrics_db"
 
         /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 16
+        private const val CURRENT_VERSION = 17
 
         private const val MAX_BACKUPS = 5
 
@@ -779,6 +779,28 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Collections nest, so a festival can hold its days and a day can hold its sets.
+         *
+         * `DEFAULT NULL` rather than no default, matching the entity's `@ColumnInfo` exactly. The
+         * pairing has to agree in both directions: a `DEFAULT` on one side only installs cleanly
+         * and then refuses to open for everyone upgrading, which this project has been bitten by
+         * three times. The generated `17.json` is what this was copied from.
+         *
+         * Deliberately not a foreign key. Deleting a parent orphans its children to the top level
+         * rather than cascading — removing "Coachella" should not silently take both of its days
+         * and every event inside them.
+         */
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `event_groups` ADD COLUMN `parentGroupId` INTEGER DEFAULT NULL"
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_16_17: Collections nest")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -838,7 +860,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_12_13,
                         MIGRATION_13_14,
                         MIGRATION_14_15,
-                        MIGRATION_15_16
+                        MIGRATION_15_16,
+                        MIGRATION_16_17
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

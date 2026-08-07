@@ -304,9 +304,9 @@ fun LibraryFilterDialog(
 
                 if (availableGroups.isNotEmpty()) {
                     item {
-                        Text("Group", style = MaterialTheme.typography.titleMedium)
+                        Text("Collection", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Matches everything in every event in the group.",
+                            "Matches everything inside it, however deeply nested.",
                             style = MaterialTheme.typography.bodySmall
                         )
                         FlowRow(
@@ -333,7 +333,7 @@ fun LibraryFilterDialog(
                 item {
                     Text("Tags", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Includes tags a recording inherits from its event or group.",
+                        "Includes tags a recording inherits from its event or any collection above it.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
