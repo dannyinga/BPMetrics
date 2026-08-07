@@ -16,7 +16,7 @@
 - **Statistics:** View minimum, average, and maximum heart rate for individual sessions or aggregated by category/tag.
 - **Flexible Export:** Export raw data (CSV) or visualizations (Images/Video) for sharing or further analysis.
 - **Automatic Video Sync:** Overlapping heart rate and video data is automatically synced when exporting a video.
-- **Local First:** All personal data remains on your device. No cloud storage, no privacy compromises.
+- **Local First:** Your recordings live on your phone and watches. BPMetrics has no servers and never sends your data anywhere. Watch-to-phone syncing is handled by Google Play Services, which may relay recordings through your Google account when the devices are not directly connected.
 
 ## 🏗 Project Structure
 

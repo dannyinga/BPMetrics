@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.FilterAltOff
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sort
@@ -41,7 +42,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.collectAsState
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -66,11 +69,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import inga.bpmetrics.export.CsvExporter
 import inga.bpmetrics.ui.Routes
-import inga.bpmetrics.ui.analysis.AnalysisFilterDialog
+import androidx.compose.material3.Card
+import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
 import inga.bpmetrics.ui.record.BpmRecordTile
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.theme.BpmAccent
 import inga.bpmetrics.ui.theme.BpmHigh
+import inga.bpmetrics.datasync.IncomingRecordManager
+import inga.bpmetrics.datasync.isActive
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderStatus
 import inga.bpmetrics.library.BpmRecord
@@ -81,23 +87,53 @@ import inga.bpmetrics.library.BpmRecord
  * @param navController The navigation controller used to navigate between screens.
  * @param viewModel The [inga.bpmetrics.ui.library.LibraryViewModel] providing the state and logic for this screen.
  */
+import inga.bpmetrics.export.JsonExporter
+import inga.bpmetrics.ui.export.VideoExportDialog
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Timeline
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
+fun LibraryScreen(
+    navController: NavController,
+    viewModel: LibraryViewModel,
+    onOpenDrawer: () -> Unit,
+    /**
+     * True when the user came here from Analysis to pick recordings to compare, so the screen can
+     * say what it is waiting for rather than looking like it navigated somewhere arbitrary.
+     */
+    awaitingConcurrentSelection: Boolean = false,
+    onAnalyseTogether: (Set<Long>) -> Unit = {},
+    onAnalyseCurrentFilter: (LibraryViewModel.FilterState) -> Unit = {}
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
     val currentSort by viewModel.sortOption.collectAsStateWithLifecycle()
     val selectedRecordIds by viewModel.selectedRecordIds.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    // Both names are resolved live rather than stored on each record, so renaming a watch or
+    // correcting someone's spelling relabels every recording it applies to. What stays fixed is
+    // *which* watch and *which person* a recording points at.
+    val watches by viewModel.availableWatches.collectAsStateWithLifecycle()
+    val watchNames = remember(watches) {
+        watches.filter { it.isNamed }.associate { it.watchId to it.deviceName }
+    }
+    val peopleById by viewModel.peopleById.collectAsStateWithLifecycle()
+
     val isSelectionMode = selectedRecordIds.isNotEmpty()
 
     var showSortMenu by remember { mutableStateOf(false) }
-    var showAnalyzeMenu by remember { mutableStateOf(false) }
+    var showSelectionMenu by remember { mutableStateOf(false) }
     var showFilterDialog by remember { mutableStateOf(false) }
-    var navigateToAnalysisOnFilterApply by remember { mutableStateOf(false) }
     var showBulkDeleteDialog by remember { mutableStateOf(false) }
     var showBulkTagDialog by remember { mutableStateOf(false) }
+    var showBulkWearerDialog by remember { mutableStateOf(false) }
+
+    var showMultiVideoDialog by remember { mutableStateOf(false) }
+    var selectedRecordsForMultiVideo by remember { mutableStateOf<List<BpmRecord>>(emptyList()) }
 
     if (isSelectionMode) {
         BackHandler {
@@ -105,23 +141,33 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
         }
     }
 
-    // Launcher for importing CSV file(s)
+    // Launcher for importing CSV and JSON (.bpmjson) file(s)
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             var successCount = 0
             uris.forEach { uri ->
-                val watchRecord = CsvExporter.importFromCsv(context, uri)
-                if (watchRecord != null) {
-                    viewModel.importRecord(watchRecord)
-                    successCount++
+                val mimeType = context.contentResolver.getType(uri)
+                val isJson = mimeType?.contains("json") == true || uri.path?.lowercase()?.let { it.endsWith(".json") || it.endsWith(".bpmjson") } == true
+                if (isJson) {
+                    val jsonRecords = JsonExporter.importFromJson(context, uri)
+                    jsonRecords.forEach { watchRecord ->
+                        viewModel.importRecord(watchRecord)
+                        successCount++
+                    }
+                } else {
+                    val watchRecord = CsvExporter.importFromCsv(context, uri)
+                    if (watchRecord != null) {
+                        viewModel.importRecord(watchRecord)
+                        successCount++
+                    }
                 }
             }
             if (successCount > 0) {
                 Toast.makeText(context, "Successfully imported $successCount record(s)!", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "Failed to import CSV record(s).", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Failed to import record(s).", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -155,47 +201,138 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                         }
                     },
                     actions = {
+                        val selectedRecords = uiState.records.filter {
+                            it.metadata.recordId in selectedRecordIds
+                        }
+
+                        // Only Select All stays on the bar. Six icons left no room for a label,
+                        // so every one of them was a guess from an unfamiliar glyph.
                         IconButton(onClick = { viewModel.selectAll(uiState.records) }) {
                             Icon(Icons.Default.SelectAll, contentDescription = "Select All")
                         }
-                        IconButton(onClick = { showBulkTagDialog = true }) {
-                            Icon(Icons.Default.Sell, contentDescription = "Add Tags in Bulk")
+
+                        IconButton(onClick = { showSelectionMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More actions")
                         }
-                        IconButton(onClick = {
-                            recordsToExport = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
-                            chooseFolderLauncher.launch(null)
-                            viewModel.clearSelection()
-                        }) {
-                            Icon(Icons.Default.Save, contentDescription = "Export CSV in Bulk")
-                        }
-                        IconButton(onClick = { showBulkDeleteDialog = true }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete Selected", tint = MaterialTheme.colorScheme.error)
+
+                        DropdownMenu(
+                            expanded = showSelectionMenu,
+                            onDismissRequest = { showSelectionMenu = false }
+                        ) {
+                            // Same-time analysis needs recordings that actually ran together, so
+                            // the action says why it is unavailable rather than simply refusing.
+                            val overlaps = remember(selectedRecords) {
+                                ConcurrentAnalysis.anyOverlap(selectedRecords)
+                            }
+                            DropdownMenuItem(
+                                enabled = overlaps,
+                                text = {
+                                    Column {
+                                        Text("Analyse together")
+                                        if (!overlaps) {
+                                            Text(
+                                                if (selectedRecords.size < 2) {
+                                                    "Select two or more recordings"
+                                                } else {
+                                                    "These were not recorded at the same time"
+                                                },
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.Timeline, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    onAnalyseTogether(selectedRecordIds)
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = { Text("Add tags") },
+                                leadingIcon = { Icon(Icons.Default.Sell, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    showBulkTagDialog = true
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = { Text("Set wearer") },
+                                leadingIcon = { Icon(Icons.Default.People, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    showBulkWearerDialog = true
+                                }
+                            )
+
+                            HorizontalDivider()
+
+                            DropdownMenuItem(
+                                text = { Text("Export video") },
+                                leadingIcon = { Icon(Icons.Default.Movie, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    selectedRecordsForMultiVideo = selectedRecords
+                                    showMultiVideoDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export CSV") },
+                                leadingIcon = { Icon(Icons.Default.Save, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    recordsToExport = selectedRecords
+                                    chooseFolderLauncher.launch(null)
+                                    viewModel.clearSelection()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Share as .bpmjson") },
+                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    JsonExporter.shareJson(context, selectedRecords)
+                                    viewModel.clearSelection()
+                                }
+                            )
+
+                            HorizontalDivider()
+
+                            DropdownMenuItem(
+                                text = {
+                                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    showBulkDeleteDialog = true
+                                }
+                            )
                         }
                     }
                 )
             } else {
                 TopAppBar(
                     title = { Text("Library", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) },
-                    actions = {
-                        // Import CSV button
-                        IconButton(onClick = { importLauncher.launch(arrayOf("text/comma-separated-values", "text/csv")) }) {
-                            Icon(Icons.Default.FileDownload, contentDescription = "Import CSV(s)")
-                        }
-                        // Show Clear Filters button only when a filter is active
-                        if (filterState != LibraryViewModel.FilterState()) {
-                            IconButton(onClick = { viewModel.clearFilters() }) {
-                                Icon(Icons.Default.FilterAltOff, contentDescription = "Clear All Filters")
-                            }
-                        }
-                        IconButton(onClick = { navController.navigate(Routes.TAG_MANAGEMENT) }) {
-                            Icon(Icons.Default.Sell, contentDescription = "Manage Tags")
-                        }
-                        
-                        val queue by RenderQueueManager.queue.collectAsState(initial = emptyList())
-                        val activeCount = queue.count { it.status == RenderStatus.RENDERING || it.status == RenderStatus.QUEUED }
-                        IconButton(onClick = { navController.navigate(Routes.RENDER_QUEUE) }) {
+                    navigationIcon = {
+                        IconButton(onClick = onOpenDrawer) {
+                            // Work in progress is announced here too. The drawer carries the
+                            // counts, but it is invisible while the drawer is closed — and a
+                            // recording arriving from a watch is exactly what you want to notice.
+                            val queue by RenderQueueManager.queue.collectAsState(initial = emptyList())
+                            val incoming by IncomingRecordManager.incoming.collectAsState()
+                            val activeCount = queue.count {
+                                it.status == RenderStatus.RENDERING || it.status == RenderStatus.QUEUED
+                            } + incoming.count { it.status.isActive }
                             Box {
-                                Icon(Icons.Default.VideoLibrary, contentDescription = "Render Queue")
+                                Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
                                 if (activeCount > 0) {
                                     Box(
                                         modifier = Modifier
@@ -207,9 +344,17 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                                 }
                             }
                         }
-
-                        IconButton(onClick = { navController.navigate(Routes.SETTINGS) }) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    },
+                    actions = {
+                        // Import CSV / JSON button
+                        IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                            Icon(Icons.Default.FileDownload, contentDescription = "Import Record(s)")
+                        }
+                        // Show Clear Filters button only when a filter is active
+                        if (filterState != LibraryViewModel.FilterState()) {
+                            IconButton(onClick = { viewModel.clearFilters() }) {
+                                Icon(Icons.Default.FilterAltOff, contentDescription = "Clear All Filters")
+                            }
                         }
                     }
                 )
@@ -225,7 +370,10 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                     contentAlignment = Alignment.Center
                 ) {
                     Button(
-                        onClick = { showAnalyzeMenu = true },
+                        // Analyses exactly what the Library is showing. Choosing a different
+                        // scope means filtering here first, where the effect is visible, rather
+                        // than through a dialog that silently re-filtered the list behind it.
+                        onClick = { onAnalyseCurrentFilter(filterState) },
                         modifier = Modifier.fillMaxWidth(0.7f),
                         colors = ButtonDefaults.buttonColors(containerColor = BpmAccent)
                     ) {
@@ -236,6 +384,22 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
         }
     ) { paddingValues ->
         Column(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
+            if (awaitingConcurrentSelection && !isSelectionMode) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Text(
+                        "Press and hold recordings that were made at the same time, then choose " +
+                            "Analyse together.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), 
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -277,7 +441,6 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
 
                 OutlinedButton(
                     onClick = {
-                        navigateToAnalysisOnFilterApply = false
                         showFilterDialog = true
                     },
                     shape = MaterialTheme.shapes.extraLarge,
@@ -295,6 +458,8 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
                     BpmRecordTile(
                         record = record,
                         isSelected = isSelected,
+                        watchName = record.metadata.watchId?.let { watchNames[it] },
+                        wearer = record.metadata.personId?.let { peopleById[it] },
                         onClick = {
                             if (isSelectionMode) {
                                 viewModel.toggleRecordSelection(record.metadata.recordId)
@@ -311,33 +476,20 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
         }
     }
 
-    if (showAnalyzeMenu) {
-        AnalysisFilterDialog(
-            onDismiss = { showAnalyzeMenu = false },
-            onAnalyzeCurrent = {
-                showAnalyzeMenu = false
-                navController.navigate(Routes.ANALYSIS)
-            },
-            onSelectNewFilter = {
-                showAnalyzeMenu = false
-                navigateToAnalysisOnFilterApply = true
-                showFilterDialog = true
-            }
-        )
-    }
-
     if (showFilterDialog) {
+        val availablePeople by viewModel.availablePeople.collectAsStateWithLifecycle()
+        val availableWatches by viewModel.availableWatches.collectAsStateWithLifecycle()
+
         LibraryFilterDialog(
             currentFilter = filterState,
             onDismiss = { showFilterDialog = false },
             onApply = { newFilter ->
                 viewModel.updateFilter { newFilter }
                 showFilterDialog = false
-                if (navigateToAnalysisOnFilterApply) {
-                    navController.navigate(Routes.ANALYSIS)
-                }
             },
-            repository = viewModel.repository
+            repository = viewModel.repository,
+            availablePeople = availablePeople,
+            availableWatches = availableWatches
         )
     }
 
@@ -365,6 +517,27 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
         )
     }
 
+    if (showMultiVideoDialog && selectedRecordsForMultiVideo.isNotEmpty()) {
+        VideoExportDialog(
+            record = selectedRecordsForMultiVideo.first(),
+            records = selectedRecordsForMultiVideo,
+            onDismiss = {
+                showMultiVideoDialog = false
+                viewModel.clearSelection()
+            },
+            onExport = { config, _ ->
+                inga.bpmetrics.export.BpmExportService.startExport(
+                    context,
+                    selectedRecordsForMultiVideo.first().metadata.recordId,
+                    "Multi-Watch Export (${selectedRecordsForMultiVideo.size} wearers)",
+                    config,
+                    null
+                )
+                Toast.makeText(context, "Multi-watch video export started in background!", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
     if (showBulkTagDialog) {
         val categories by viewModel.repository.getAllCategories().collectAsState(initial = emptyList())
         TagSelectionDialog(
@@ -380,6 +553,19 @@ fun LibraryScreen(navController: NavController, viewModel: LibraryViewModel) {
             categories = categories,
             getTagsByCategoryFlow = { viewModel.repository.getTagsByCategory(it) },
             initialSelectedTagIds = emptyList()
+        )
+    }
+
+    if (showBulkWearerDialog) {
+        val availablePeople by viewModel.availablePeople.collectAsStateWithLifecycle()
+        BulkWearerDialog(
+            recordCount = selectedRecordIds.size,
+            people = availablePeople,
+            onDismiss = { showBulkWearerDialog = false },
+            onAssign = { personId ->
+                viewModel.assignPersonToSelectedRecords(personId)
+                showBulkWearerDialog = false
+            }
         )
     }
 }

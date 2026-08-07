@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,18 +8,42 @@ plugins {
     jacoco
 }
 
+val appVersion = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+
+/**
+ * Present only when a keystore has been supplied — by CI, or by a local build that wants to produce
+ * something installable. Its absence must not break an ordinary debug build, which is the common
+ * case and needs no key of its own.
+ */
+val keystorePath: String? = System.getenv("KEYSTORE_PATH")
+
 android {
     namespace = "inga.bpmetrics"
     compileSdk = 36
 
     defaultConfig {
         applicationId = "inga.bpmetrics"
-        minSdk = 34
+        // Android 12. Nothing in the phone app needs anything newer — verified by building against
+        // each level in turn — and every release above this is a phone that cannot install it.
+        minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersion.getProperty("versionBase").toInt() * 10
+        versionName = appVersion.getProperty("versionName")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -26,11 +52,22 @@ android {
             enableAndroidTestCoverage = true
         }
         release {
+            // Unsigned when no keystore is present. That build still compiles, which is what lets
+            // CI check a release build on pull requests without ever seeing a secret.
+            if (keystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Ships symbols for the native libraries the bundle carries — Media3's codecs, mostly.
+            // Without them a crash inside native code arrives in the Play Console as raw addresses,
+            // which is not something anyone can act on.
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
         }
     }
     compileOptions {
@@ -42,6 +79,20 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+
+    // Room writes the schema of every version here. Checked in, these are what make a migration
+    // verifiable: without them there is nothing to test a migration against, and a mismatch
+    // between a migration's SQL and the entities is only discovered when it crashes on a user's
+    // device during upgrade.
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
+    }
+
+    // MigrationTestHelper reads the exported schemas from the test APK's assets, so they have to
+    // be packaged with it.
+    sourceSets {
+        getByName("androidTest").assets.srcDirs("$projectDir/schemas")
     }
 
     packaging {
@@ -87,12 +138,15 @@ dependencies {
     implementation(libs.guava)
 
     testImplementation(libs.junit)
+    testImplementation(libs.mockk.android)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.mockk.android)
     androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.room.testing)
     
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)

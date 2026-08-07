@@ -1,60 +1,50 @@
 package inga.bpmetrics.ui
 
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.ui.library.LibraryViewModel
+import io.mockk.every
+import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Before
 import org.junit.Test
+
+import kotlinx.coroutines.flow.first
 
 /**
  * Unit test for [inga.bpmetrics.ui.library.LibraryViewModel].
  */
 class LibraryViewModelTest {
 
-    @Test
-    fun `initial state is loading`() = runBlocking {
-        val fakeRepository = FakeLibraryRepository()
-        val viewModel = LibraryViewModel(fakeRepository as LibraryRepository)
-        
-        // The first emission might be the initial value
-        val state = viewModel.uiState.first()
-        // Note: Depending on coroutine execution, it might already be loaded
-        // if the flow collection is immediate.
+    private val repository = mockk<LibraryRepository>(relaxed = true)
+    private val recordsFlow = MutableStateFlow<List<BpmRecord>>(emptyList())
+
+    @Before
+    fun setup() {
+        every { repository.records } returns recordsFlow
     }
 
     @Test
-    fun `uiState updates when repository emits records`() = runBlocking {
-        val fakeRepository = FakeLibraryRepository()
-        val viewModel = LibraryViewModel(fakeRepository as LibraryRepository)
+    fun `uiState updates when repository emits records`() = runTest {
+        val viewModel = LibraryViewModel(repository)
         
         val testRecords = listOf(
-            BpmRecord(metadata = inga.bpmetrics.library.BpmRecordEntity(id = 1, title = "Test", date = 0, startTime = 0, endTime = 0, durationMs = 0), dataPoints = emptyList(), minPoint = null, maxPoint = null)
+            BpmRecord(
+                metadata = BpmRecordEntity(recordId = 1, title = "Test", date = 0, startTime = 0, endTime = 0, durationMs = 0),
+                dataPoints = emptyList(),
+                minDataPoint = null,
+                maxDataPoint = null
+            )
         )
         
-        fakeRepository.emitRecords(testRecords)
+        recordsFlow.value = testRecords
         
-        val state = viewModel.uiState.value
+        val state = viewModel.uiState.first { !it.isLoading }
         assertEquals(testRecords, state.records)
         assertFalse(state.isLoading)
-    }
-}
-
-/**
- * Fake implementation of LibraryRepository for testing.
- * We cast this to LibraryRepository in the test using a trick or by making 
- * LibraryRepository an interface (recommended). 
- * For now, we'll assume the ViewModel can take a mock or fake.
- */
-class FakeLibraryRepository {
-    private val _records = MutableStateFlow<List<BpmRecord>>(emptyList())
-    val records: StateFlow<List<BpmRecord>> = _records
-
-    fun emitRecords(records: List<BpmRecord>) {
-        _records.value = records
     }
 }

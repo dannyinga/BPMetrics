@@ -40,6 +40,10 @@ class MainActivity : ComponentActivity() {
         (application as BPMetricsApp).serviceManager
     }
 
+    private val syncManager by lazy {
+        (application as BPMetricsApp).syncManager
+    }
+
     private val repository by lazy {
         RecordingRepository.getInstance(applicationContext)
     }
@@ -85,10 +89,11 @@ class MainActivity : ComponentActivity() {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 repository.recordingState
                     .map { state ->
-                        // Only "Warm Up" states trigger the screen-on flag
-                        state == RecordingState.PREPARING
-                                || state == RecordingState.ACQUIRING
-                                || state == RecordingState.INACTIVE
+                        // Only the warm-up states hold the screen on, and only because the user is
+                        // waiting on them. INACTIVE is not one of them: it is the resting state and
+                        // the fallback for "nothing reported yet", so including it kept the display
+                        // lit the entire time the app sat idle.
+                        state == RecordingState.PREPARING || state == RecordingState.ACQUIRING
                     }
                     .distinctUntilChanged() // Prevents redundant calls when switching between PREPARING and ACQUIRING
                     .collect { isWarmingUp ->
@@ -154,7 +159,10 @@ class MainActivity : ComponentActivity() {
                     factory = object : androidx.lifecycle.ViewModelProvider.Factory {
                         @Suppress("UNCHECKED_CAST")
                         override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-                            return RecordingViewModel(repository) as T
+                            return RecordingViewModel(
+                                repository = repository,
+                                syncManager = syncManager
+                            ) as T
                         }
                     }
                 )

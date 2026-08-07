@@ -19,7 +19,7 @@ data class BpmDataPoint(
         if (timestamp < 0)
             throw IllegalArgumentException("BPM Data Point can't be created with negative timestamp")
 
-        if (bpm < 0 || bpm > 250)
+        if (!isValidBpm(bpm))
             throw IllegalArgumentException("BPM Data Point can't be created with bpm: $bpm\n" +
                                         "BPM must be between 0 and 250 inclusive")
     }
@@ -40,5 +40,24 @@ data class BpmDataPoint(
         val minutes = timestamp / (1000 * 60) % 60
         val formattedTimeStamp = "${minutes}m ${seconds}s ${milliseconds}ms"
         return "Timestamp: $formattedTimeStamp, BPM: $bpm"
+    }
+
+    companion object {
+        /** Lowest heart rate this class accepts. */
+        const val MIN_BPM = 0.0
+
+        /**
+         * Highest heart rate this class accepts. Optical sensors occasionally report values
+         * far above this during motion artifacts; those readings are not real heart rates.
+         */
+        const val MAX_BPM = 250.0
+
+        /**
+         * Returns whether [bpm] is in the range the constructor accepts.
+         *
+         * Lets producers drop sensor artifacts before constructing a point, rather than
+         * relying on the constructor throwing part-way through a batch.
+         */
+        fun isValidBpm(bpm: Double): Boolean = bpm in MIN_BPM..MAX_BPM
     }
 }

@@ -18,7 +18,18 @@ data class BpmWatchRecord(
     val endTime: Long,
     val title: String? = null,
     val description: String? = null,
-    val tagNames: List<String> = emptyList()
+    val tagNames: List<String> = emptyList(),
+    val deviceId: String = "Watch",
+    val wearerName: String? = null,
+    /**
+     * Stable identifier for the watch that produced this record.
+     *
+     * Generated once on the watch and kept for the life of the install, so it survives re-pairing
+     * and distinguishes two watches of the same model — neither of which [deviceId] can do, since
+     * it defaults to the hardware model name. Null for records that predate this field, and for
+     * records imported from CSV or JSON.
+     */
+    val watchId: String? = null
 ) : Comparable<BpmWatchRecord> {
     val durationMs: Long = endTime - startTime
 
@@ -57,6 +68,8 @@ data class BpmWatchRecord(
         val durationMillis = durationMs % 1000
         outputBuilder.appendLine("Duration: ${durationMin}m ${durationSec}s ${durationMillis}ms")
         
+        outputBuilder.appendLine("Device ID: $deviceId")
+        wearerName?.let { outputBuilder.appendLine("Wearer Name: $it") }
         title?.let { outputBuilder.appendLine("Title: $it") }
         description?.let { outputBuilder.appendLine("Description: $it") }
         if (tagNames.isNotEmpty()) {

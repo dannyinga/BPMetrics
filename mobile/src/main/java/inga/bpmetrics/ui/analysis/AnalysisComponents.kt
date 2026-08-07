@@ -27,39 +27,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /**
- * A dialog allowing the user to choose between analyzing the currently filtered list or setting a new filter.
- *
- * @param onDismiss Callback to dismiss the dialog.
- * @param onAnalyzeCurrent Callback when "Analyze Current List" is selected.
- * @param onSelectNewFilter Callback when "Select New Filter" is selected.
- */
-@Composable
-fun AnalysisFilterDialog(
-    onDismiss: () -> Unit,
-    onAnalyzeCurrent: () -> Unit,
-    onSelectNewFilter: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Choose Data to Analyze") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Select a preset or custom filter to start your analysis.", style = MaterialTheme.typography.bodyMedium)
-                HorizontalDivider()
-                TextButton(onClick = onAnalyzeCurrent, modifier = Modifier.fillMaxWidth()) {
-                    Text("Analyze Current List", style = MaterialTheme.typography.bodyLarge)
-                }
-                TextButton(onClick = onSelectNewFilter, modifier = Modifier.fillMaxWidth()) {
-                    Text("Select New Filter", style = MaterialTheme.typography.bodyLarge)
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-/**
  * A selector item for the analysis trio (Min/Avg/Max).
  */
 @Composable

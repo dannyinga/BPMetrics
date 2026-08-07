@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -44,6 +45,15 @@ import kotlin.math.roundToInt
  */
 @OptIn(UnstableApi::class)
 object VideoExporter {
+
+    /**
+     * Roughly how much room a render needs, as a multiple of its expected size.
+     *
+     * Generous, because the staged copy in the cache and the finished copy at its destination both
+     * exist at once, and an encoder that runs out of room part way leaves a mess rather than an
+     * error.
+     */
+    private const val SPACE_SAFETY_FACTOR = 2.5
     private const val TAG = "VideoExporter"
 
     /**
@@ -58,7 +68,8 @@ object VideoExporter {
         val overlayVideoUri: Uri? = null,
         val graphRect: RectF = RectF(0f, 0f, 1f, 1f),
         val lockAspectRatio: Boolean = true,
-        val syncOffsetMs: Long = 0L
+        val syncOffsetMs: Long = 0L,
+        val records: List<BpmRecord> = emptyList()
     )
 
     /**
@@ -81,6 +92,17 @@ object VideoExporter {
         val endTimeMs = config.imageConfig.endTimeMs
         val totalDataDurationMs = (endTimeMs - startTimeMs).coerceAtLeast(1000L)
 
+        // Place every record on one timeline up front. Doing it here rather than per frame keeps
+        // the overlay cheap, and — more importantly — means the video is clipped against exactly
+        // the same origin the graph is drawn against, so all records stay in sync with it.
+        val exportRecords = config.records.ifEmpty { listOf(record) }
+        val alignedRecords = if (exportRecords.size > 1) {
+            ImageExporter.alignRecords(exportRecords, config.imageConfig.alignByElapsedTime)
+        } else {
+            null
+        }
+        val timelineOriginMs = alignedRecords?.timeline?.originWallClockMs ?: record.metadata.startTime
+
         var isInputImage = false
         val mediaUri: Uri
         val inputMimeType: String?
@@ -101,6 +123,19 @@ object VideoExporter {
             calculatedBitrate.coerceIn(2_000_000L, 50_000_000L).toInt()
         } else {
             calculatedBitrate.coerceIn(1_000_000L, 15_000_000L).toInt()
+        }
+
+        // Refuse a render there is plainly no room for, rather than discovering it part way and
+        // leaving the phone worse off than before it started. The bitrate and duration say what
+        // the finished video will weigh, which is all this needs to know.
+        val estimatedBytes = (targetBitrate.toLong() / 8) * (totalDataDurationMs / 1000).coerceAtLeast(1)
+        val requiredBytes = (estimatedBytes * SPACE_SAFETY_FACTOR).toLong()
+        val freeBytes = context.cacheDir.usableSpace
+        if (freeBytes < requiredBytes) {
+            throw IOException(
+                "Not enough space to export: about ${requiredBytes / 1_000_000}MB needed, " +
+                    "${freeBytes / 1_000_000}MB free. Free up some space and try again."
+            )
         }
 
         if (config.overlayVideoUri != null) {
@@ -131,8 +166,8 @@ object VideoExporter {
                 } else {
                     val alignment = calculateVideoAlignment(
                         context,
-                        record,
                         mediaUri,
+                        timelineOriginMs,
                         config.syncOffsetMs
                     )
                     val videoStartRelativeMs = alignment.first
@@ -164,14 +199,25 @@ object VideoExporter {
             override fun getBitmap(presentationTimeUs: Long): Bitmap {
                 reusableCanvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
                 val currentRecordAbsoluteTimeMs = startTimeMs + ((presentationTimeUs / 1000.0))
-                ImageExporter.renderOnCanvas(
-                    canvas = reusableCanvas,
-                    record = record,
-                    config = config.imageConfig,
-                    currentTimeMs = currentRecordAbsoluteTimeMs,
-                    windowSizeMs = config.windowSizeMs,
-                    graphRect = config.graphRect
-                )
+                if (alignedRecords != null) {
+                    ImageExporter.renderAlignedRecordsOnCanvas(
+                        canvas = reusableCanvas,
+                        aligned = alignedRecords,
+                        config = config.imageConfig,
+                        currentTimeMs = currentRecordAbsoluteTimeMs,
+                        windowSizeMs = config.windowSizeMs,
+                        graphRect = config.graphRect
+                    )
+                } else {
+                    ImageExporter.renderOnCanvas(
+                        canvas = reusableCanvas,
+                        record = record,
+                        config = config.imageConfig,
+                        currentTimeMs = currentRecordAbsoluteTimeMs,
+                        windowSizeMs = config.windowSizeMs,
+                        graphRect = config.graphRect
+                    )
+                }
                 return reusableBitmap
             }
         }
@@ -244,10 +290,22 @@ object VideoExporter {
                 }
                 if (exportException == null) onProgress(1.0f)
             } catch (e: Exception) {
+                // Cancellation arrives here too. Stop the encoder rather than leaving it writing
+                // to a file nobody is waiting for any more.
+                runCatching { transformer.cancel() }
                 exportException = e
             }
 
-            if (exportException != null) throw exportException
+            if (exportException != null) {
+                // Take the part-written video with us. A render abandoned half way is still a
+                // video-sized file, and the usual reason for abandoning one is that the phone is
+                // running out of room — so keeping it is precisely the wrong thing to do.
+                val abandoned = outputFile.length()
+                if (outputFile.delete()) {
+                    Log.d(TAG, "Discarded ${abandoned / 1024}KB of unfinished export")
+                }
+                throw exportException
+            }
             outputFile
         }
     }
@@ -344,15 +402,35 @@ object VideoExporter {
     }
 
     /**
-     * Calculates the start and end offsets for a BPM record to align with a video file.
+     * Calculates where a video sits on a single record's timeline.
      */
     fun calculateVideoAlignment(
         context: Context,
         record: BpmRecord,
         videoUri: Uri,
         globalSyncOffsetMs: Long
+    ): Pair<Long, Long> = calculateVideoAlignment(
+        context = context,
+        videoUri = videoUri,
+        timelineOriginMs = record.metadata.startTime,
+        globalSyncOffsetMs = globalSyncOffsetMs
+    )
+
+    /**
+     * Calculates where a video sits on a timeline whose position 0 is [timelineOriginMs].
+     *
+     * For a multi-record export the origin is [ImageExporter.Timeline.originWallClockMs] rather
+     * than any one record's start, so a single video lines up with every record on the graph.
+     *
+     * @return the video's start and end, as offsets from the timeline origin.
+     */
+    fun calculateVideoAlignment(
+        context: Context,
+        videoUri: Uri,
+        timelineOriginMs: Long,
+        globalSyncOffsetMs: Long
     ): Pair<Long, Long> {
-        val sessionStartTs = record.metadata.startTime
+        val sessionStartTs = timelineOriginMs
         val retriever = MediaMetadataRetriever()
         var videoDurationMs = 0L
         var videoStartTs: Long? = null
@@ -373,10 +451,21 @@ object VideoExporter {
     /**
      * Queries the MediaStore for videos that overlap with the heart rate record.
      */
-    fun getOverlappingVideos(context: Context, record: BpmRecord): List<Uri> {
+    fun getOverlappingVideos(context: Context, record: BpmRecord): List<Uri> =
+        getOverlappingVideos(context, listOf(record))
+
+    /**
+     * Queries the MediaStore for videos overlapping any of [records].
+     *
+     * A multi-record export spans from the earliest session to the latest, so a video worth
+     * suggesting may overlap only one of them — searching a single record's window would miss it.
+     */
+    fun getOverlappingVideos(context: Context, records: List<BpmRecord>): List<Uri> {
+        if (records.isEmpty()) return emptyList()
+
         val uris = mutableListOf<Uri>()
-        val recStart = record.metadata.startTime
-        val recEnd = recStart + record.metadata.durationMs
+        val recStart = records.minOf { it.metadata.startTime }
+        val recEnd = records.maxOf { it.metadata.startTime + it.metadata.durationMs }
         val projection = arrayOf(
             android.provider.MediaStore.Video.Media._ID,
             android.provider.MediaStore.Video.Media.DATE_TAKEN,

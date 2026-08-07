@@ -1,6 +1,5 @@
 package inga.bpmetrics.datasync
 
-import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.google.android.gms.wearable.DataClient
@@ -11,7 +10,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 
 /**
  * Listener that monitors the Wearable Data Client for changes.
@@ -30,9 +28,6 @@ class DataClientListener(
 
     /** Coroutine scope for handling background synchronization tasks. */
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
-    /** Tag used for identifying log entries from this listener. */
-    private val tag = "DataClientListener"
 
     /**
      * Called when the associated lifecycle starts.
@@ -43,7 +38,7 @@ class DataClientListener(
     override fun onStart(owner: LifecycleOwner) {
         super.onStart(owner)
         dataClient.addListener(this)
-        scope.launch { sweepForExistingRecords() }
+        scope.launch { processor.sweepExistingRecords() }
     }
 
     /**
@@ -88,24 +83,4 @@ class DataClientListener(
         }
     }
 
-    /**
-     * Queries the Wearable network for all current data items.
-     *
-     * This is used during initialization to ensure that records sent by the watch
-     * while the mobile app was closed are still processed.
-     */
-    private suspend fun sweepForExistingRecords() {
-        try {
-            val dataItems = dataClient.dataItems.await()
-            try {
-                for (item in dataItems) {
-                    processor.processDataItem(item)
-                }
-            } finally {
-                dataItems.release()
-            }
-        } catch (e: Exception) {
-            Log.e(tag, "Failed to sweep for existing records", e)
-        }
-    }
 }

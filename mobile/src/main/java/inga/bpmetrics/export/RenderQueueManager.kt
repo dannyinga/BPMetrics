@@ -75,11 +75,15 @@ object RenderQueueManager {
         }
     }
 
-    fun updateJobStatus(jobId: String, status: RenderStatus, error: String? = null) {
+    fun updateJobStatus(jobId: String, status: RenderStatus, error: String? = null, targetUri: Uri? = null) {
         synchronized(this) {
             _queue.value = _queue.value.map {
                 if (it.id == jobId) {
-                    it.copy(status = status, error = error)
+                    it.copy(
+                        status = status,
+                        error = error,
+                        targetUri = targetUri ?: it.targetUri
+                    )
                 } else {
                     it
                 }

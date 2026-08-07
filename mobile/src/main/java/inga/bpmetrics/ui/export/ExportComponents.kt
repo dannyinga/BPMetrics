@@ -12,7 +12,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -93,6 +95,7 @@ import inga.bpmetrics.BPMetricsApp
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.ui.components.ExpandableSection
 import inga.bpmetrics.ui.graph.TimeUtils
 import kotlinx.coroutines.Dispatchers
@@ -236,7 +239,31 @@ fun ImageExportDialog(
 
 @Composable
 fun VideoExportDialog(
+    record: BpmRecord,
+    records: List<BpmRecord> = listOf(record),
+    graphTitle: String? = null,
+    onDismiss: () -> Unit,
+    onExport: (VideoExporter.VideoExportConfig, Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    val settingsRepository = remember { inga.bpmetrics.ui.settings.SettingsRepository(context) }
+    val viewModel = remember(record) { VideoExportViewModel(record, settingsRepository) }
+
+    VideoExportDialog(
+        viewModel = viewModel,
+        records = records,
+        graphTitle = graphTitle,
+        onDismiss = onDismiss,
+        onExport = onExport
+    )
+}
+
+@Composable
+fun VideoExportDialog(
     viewModel: VideoExportViewModel,
+    records: List<BpmRecord> = listOf(viewModel.record),
+    /** Heading for the exported graph. A named analysis passes its name; null keeps the default. */
+    graphTitle: String? = null,
     onDismiss: () -> Unit,
     onExport: (VideoExporter.VideoExportConfig, Boolean) -> Unit
 ) {
@@ -259,9 +286,9 @@ fun VideoExportDialog(
     val lastGraphRect by viewModel.savedGraphRect.collectAsStateWithLifecycle()
     val defaultTz by viewModel.defaultTimeZone.collectAsStateWithLifecycle()
 
-    val suggestedVideos by produceState(initialValue = emptyList()) {
+    val suggestedVideos by produceState(initialValue = emptyList(), records) {
         value = withContext(Dispatchers.IO) {
-            VideoExporter.getOverlappingVideos(context, record)
+            VideoExporter.getOverlappingVideos(context, records)
         }.reversed()
     }
 
@@ -278,6 +305,21 @@ fun VideoExportDialog(
     var previewFrame by remember { mutableStateOf<Bitmap?>(null) }
     var selectedTimeZoneId by remember(defaultTz) { mutableStateOf(defaultTz) }
     var showTzDialog by remember { mutableStateOf(false) }
+    // Colours come from the people themselves rather than being chosen per export. Picking them
+    // again for every video meant the same person could be one colour on screen and another in the
+    // video of the same session; now there is one answer, set in People.
+    val people by remember { (context.applicationContext as BPMetricsApp).libraryRepository.getAllPeople() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val peopleById = remember(people) { people.associateBy { it.personId } }
+
+    val recordColors = remember(records, peopleById) {
+        records.mapIndexed { index, rec ->
+            rec.metadata.recordId to PersonColors.colorFor(rec.metadata.personId, peopleById, index)
+        }.toMap()
+    }
+    // Multiple records default to clock time so a single video stays in sync with all of them.
+    var alignByElapsedTime by remember(records) { mutableStateOf(records.size <= 1) }
+    var showMultiWatchSettings by remember { mutableStateOf(true) }
     var graphRect by remember {
         mutableStateOf(RectF(0f, 0f, 1f, 1f))
     }
@@ -294,11 +336,18 @@ fun VideoExportDialog(
         mutableFloatStateOf(w / h.coerceAtLeast(1f))
     }
 
+    // The axis every time field in this dialog is expressed against. With one record it is that
+    // record's own elapsed time; with several it spans from the earliest session start to the
+    // last sample of whichever session ended last.
+    val timeline by remember(records, alignByElapsedTime) {
+        mutableStateOf(ImageExporter.timelineFor(records, alignByElapsedTime))
+    }
+
     var syncTrigger by remember { mutableIntStateOf(0) }
     var videoAlignStartMs by remember { mutableStateOf(0L) }
-    var videoAlignEndMs by remember { mutableStateOf(record.metadata.durationMs) }
+    var videoAlignEndMs by remember(timeline) { mutableStateOf(timeline.durationMs) }
     var cropStartMs by remember { mutableStateOf(0L) }
-    var cropEndMs by remember { mutableStateOf(record.metadata.durationMs) }
+    var cropEndMs by remember(timeline) { mutableStateOf(timeline.durationMs) }
 
     var inputMode by remember {
         mutableStateOf(
@@ -443,8 +492,8 @@ fun VideoExportDialog(
             val (startOffset, endOffset) = withContext(Dispatchers.IO) {
                 VideoExporter.calculateVideoAlignment(
                     context,
-                    record,
                     overlayVideoUri!!,
+                    timeline.originWallClockMs,
                     globalSyncOffset
                 )
             }
@@ -464,12 +513,12 @@ fun VideoExportDialog(
         } else {
             // Reset to default (0 to duration) if no video is present
             videoAlignStartMs = 0L
-            videoAlignEndMs = record.metadata.durationMs
+            videoAlignEndMs = timeline.durationMs
             cropStartMs = 0L
-            cropEndMs = record.metadata.durationMs
+            cropEndMs = timeline.durationMs
             inputMode = TimeInputMode.RECORD_TIME
             startInput = formatTimeForMode(0L, TimeInputMode.RECORD_TIME)
-            endInput = formatTimeForMode(record.metadata.durationMs, TimeInputMode.RECORD_TIME)
+            endInput = formatTimeForMode(timeline.durationMs, TimeInputMode.RECORD_TIME)
         }
     }
 
@@ -916,6 +965,80 @@ fun VideoExportDialog(
                             )
                         }
 
+                        if (records.size > 1) {
+                            ExpandableSection(
+                                "Multi-Watch Colors & Alignment (${records.size} wearers)",
+                                showMultiWatchSettings,
+                                { showMultiWatchSettings = !showMultiWatchSettings }
+                            ) {
+                                ExportToggle(
+                                    label = "Stack all timelines from 0:00",
+                                    checked = alignByElapsedTime,
+                                    onCheckedChange = { alignByElapsedTime = it }
+                                )
+                                Text(
+                                    if (alignByElapsedTime) {
+                                        "Every wearer starts at 0:00, for comparing shapes. " +
+                                            "A video can only stay in sync with one of them."
+                                    } else {
+                                        "Wearers sit at the time they were actually recorded, so " +
+                                            "one video stays in sync with all of them."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Each line takes its wearer's colour, set in People. There is " +
+                                        "nothing to pick here — the same person looks the same in " +
+                                        "the library, on a chart and in every video.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(Modifier.height(4.dp))
+
+                                records.forEachIndexed { index, rec ->
+                                    val person = rec.metadata.personId?.let { peopleById[it] }
+                                    val label = person?.displayName
+                                        ?: rec.metadata.wearerName.ifBlank {
+                                            rec.metadata.deviceId.ifBlank { rec.metadata.title }
+                                        }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    Color(
+                                                        PersonColors.colorFor(
+                                                            rec.metadata.personId,
+                                                            peopleById,
+                                                            index
+                                                        )
+                                                    )
+                                                )
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (person == null) {
+                                            Text(
+                                                text = "  · no profile",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth().clickable { saveAsDefault = !saveAsDefault },
@@ -950,7 +1073,11 @@ fun VideoExportDialog(
                         record = record,
                         graphRect = graphRect,
                         syncOffsetMs = globalSyncOffset,
-                        timeZoneId = selectedTimeZoneId
+                        timeZoneId = selectedTimeZoneId,
+                        records = records,
+                        customRecordColors = recordColors,
+                        alignByElapsedTime = alignByElapsedTime,
+                        graphTitle = graphTitle
                     )
 
                     if (saveAsDefault) {
@@ -1207,7 +1334,11 @@ private fun prepareVideoConfig(
     record: BpmRecord,
     graphRect: RectF,
     syncOffsetMs: Long,
-    timeZoneId: String
+    timeZoneId: String,
+    records: List<BpmRecord> = emptyList(),
+    customRecordColors: Map<Long, Int> = emptyMap(),
+    alignByElapsedTime: Boolean = true,
+    graphTitle: String? = null
 ): VideoExporter.VideoExportConfig {
     val windowMs = (windowSizeSec.toLongOrNull() ?: 30L) * 1000L
     val fps = frameRate.toIntOrNull() ?: 30
@@ -1223,7 +1354,10 @@ private fun prepareVideoConfig(
         showGrid = showGrid,
         showTitle = showTitle,
         showCurrentStats = showCurrentStats,
-        timeZoneId = timeZoneId
+        timeZoneId = timeZoneId,
+        customRecordColors = customRecordColors,
+        alignByElapsedTime = alignByElapsedTime,
+        graphTitle = graphTitle
     )
     
     return VideoExporter.VideoExportConfig(
@@ -1232,7 +1366,8 @@ private fun prepareVideoConfig(
         frameRate = fps,
         overlayVideoUri = overlayVideoUri,
         graphRect = graphRect,
-        syncOffsetMs = syncOffsetMs
+        syncOffsetMs = syncOffsetMs,
+        records = records
     )
 }
 

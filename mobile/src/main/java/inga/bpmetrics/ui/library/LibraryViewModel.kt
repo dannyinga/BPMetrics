@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.library.WatchEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -48,36 +50,27 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.records,
         _filterState
     ) { records, filter ->
-        // Build a mapping of Tag ID -> Category ID from all available records
-        val tagToCategoryMap = records.flatMap { it.tags }.associate { it.tagId to it.parentCategoryId }
-
-        records.filter { record ->
-            // 1. Date Filter
-            val dateMatch = filter.dateRange?.let { (start, end) -> 
-                record.metadata.startTime in start..end 
-            } ?: true
-            
-            // 2. Cross-Category Tag Filter (Requirement: OR within categories, AND between categories)
-            val tagMatch = if (filter.selectedTagIds.isNotEmpty()) {
-                val selectedTagsByCategory = filter.selectedTagIds
-                    .mapNotNull { tagId -> tagToCategoryMap[tagId]?.let { catId -> catId to tagId } }
-                    .groupBy({ it.first }, { it.second })
-
-                val recordTagIds = record.tags.map { it.tagId }.toSet()
-                
-                selectedTagsByCategory.all { (_, selectedTagIds) ->
-                    selectedTagIds.any { it in recordTagIds }
-                }
-            } else true
-            
-            // 3. BPM Filter
-            val avg = record.metadata.avg ?: 0.0
-            val bpmMatch = (avg >= filter.minBpm) && 
-                           (filter.maxBpm == null || avg <= filter.maxBpm)
-
-            dateMatch && tagMatch && bpmMatch
-        }
+        applyFilter(records, filter)
     }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
+
+    /**
+     * Everyone who wears a watch, for the filter to offer and for the library to colour by.
+     *
+     * From the profiles rather than gathered off the records: a person is a real thing now, so
+     * someone who has not recorded yet still appears, and someone whose name was spelled two ways
+     * before profiles existed no longer appears twice.
+     */
+    val availablePeople: StateFlow<List<PersonEntity>> = repository.getAllPeople()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The same people keyed by id, which is how the list and its tiles look them up. */
+    val peopleById: StateFlow<Map<Long, PersonEntity>> = availablePeople
+        .map { people -> people.associateBy { it.personId } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Watches known to the registry, for the filter to offer. */
+    val availableWatches: StateFlow<List<WatchEntity>> = repository.getAllWatches()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
      * The combined UI state, emitting a sorted and filtered list of records for the library list.
@@ -193,6 +186,22 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /**
+     * Attributes every selected recording to one person, or to nobody.
+     *
+     * The batch correction for recordings that arrived before their watch had a wearer assigned.
+     * Selection is cleared afterwards, as with the other bulk actions, so the result is visible
+     * rather than hidden behind the selection highlight.
+     */
+    fun assignPersonToSelectedRecords(personId: Long?) {
+        val ids = _selectedRecordIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.assignPersonToRecords(ids, personId)
+            clearSelection()
+        }
+    }
+
+    /**
      * Options for sorting the record list.
      */
     enum class SortOption { DATE, MAX_BPM, AVG_BPM, LOW_BPM, DURATION }
@@ -204,8 +213,73 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         val dateRange: Pair<Long, Long>? = null,
         val selectedTagIds: Set<Long> = emptySet(),
         val minBpm: Double = 0.0,
-        val maxBpm: Double? = null
+        val maxBpm: Double? = null,
+        /**
+         * People to include, matched against who was wearing the watch at the time.
+         *
+         * Answers "show me Kyle's recordings" — and because each record settled on a person when it
+         * arrived, it keeps answering correctly after that watch has been handed to someone else.
+         * Renaming Kyle does not disturb it either, since the match is on the profile rather than
+         * on a copy of the name.
+         */
+        val selectedPersonIds: Set<Long> = emptySet(),
+        /**
+         * Watches to include, matched on the physical device rather than the name.
+         *
+         * Answers the other question: "show me everything this watch ever recorded", whoever was
+         * wearing it and whatever it was called at the time.
+         */
+        val selectedWatchIds: Set<String> = emptySet()
     )
+
+    companion object {
+        /**
+         * Applies a filter to a set of records.
+         *
+         * Lives here rather than inside [filteredRecords] because Analysis filters independently:
+         * choosing what to analyse must not disturb what the Library is showing.
+         */
+        fun applyFilter(records: List<BpmRecord>, filter: FilterState): List<BpmRecord> {
+            // Build a mapping of Tag ID -> Category ID from all available records
+            val tagToCategoryMap = records.flatMap { it.tags }.associate { it.tagId to it.parentCategoryId }
+
+            return records.filter { record ->
+                // 1. Date Filter
+                val dateMatch = filter.dateRange?.let { (start, end) ->
+                    record.metadata.startTime in start..end
+                } ?: true
+
+                // 2. Cross-Category Tag Filter (Requirement: OR within categories, AND between categories)
+                val tagMatch = if (filter.selectedTagIds.isNotEmpty()) {
+                    val selectedTagsByCategory = filter.selectedTagIds
+                        .mapNotNull { tagId -> tagToCategoryMap[tagId]?.let { catId -> catId to tagId } }
+                        .groupBy({ it.first }, { it.second })
+
+                    val recordTagIds = record.tags.map { it.tagId }.toSet()
+
+                    selectedTagsByCategory.all { (_, selectedTagIds) ->
+                        selectedTagIds.any { it in recordTagIds }
+                    }
+                } else true
+
+                // 3. BPM Filter
+                val avg = record.metadata.avg ?: 0.0
+                val bpmMatch = (avg >= filter.minBpm) &&
+                        (filter.maxBpm == null || avg <= filter.maxBpm)
+
+                // 4. Wearer Filter — matched on who was wearing the watch when the recording was
+                // made, so past recordings stay attributed to whoever actually made them.
+                val wearerMatch = filter.selectedPersonIds.isEmpty() ||
+                        record.metadata.personId in filter.selectedPersonIds
+
+                // 5. Watch Filter — the physical device, independent of naming.
+                val watchMatch = filter.selectedWatchIds.isEmpty() ||
+                        record.metadata.watchId in filter.selectedWatchIds
+
+                dateMatch && tagMatch && bpmMatch && wearerMatch && watchMatch
+            }
+        }
+    }
 
     /**
      * Factory class for creating instances of [LibraryViewModel].

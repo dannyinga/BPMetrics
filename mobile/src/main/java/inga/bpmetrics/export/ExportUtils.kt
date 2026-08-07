@@ -14,6 +14,43 @@ import java.util.TimeZone
 object ExportUtils {
 
     /**
+     * Removes a render's staging copy once it has reached wherever it was going.
+     *
+     * Exports are written to the cache and then copied to their destination. Nothing used to
+     * remove the staging copy, so every video ever exported was still sitting on the phone at full
+     * size — invisible, because the cache is not somewhere anyone thinks to look.
+     */
+    fun discardStagedExport(file: File) {
+        if (!file.exists()) return
+        val size = file.length()
+        if (file.delete()) {
+            android.util.Log.d("ExportUtils", "Released ${size / 1024}KB of staged export")
+        } else {
+            android.util.Log.w("ExportUtils", "Could not release staged export ${file.name}")
+        }
+    }
+
+    /**
+     * Clears staged exports left behind by earlier versions, or by a crash mid-render.
+     *
+     * Runs once at startup. Anything still here is by definition finished with: a render in
+     * progress belongs to a process that is no longer running.
+     */
+    fun clearStagedExports(context: Context) {
+        val stale = context.cacheDir
+            .listFiles { f -> f.isFile && (f.extension == "mp4" || f.name == "black_bg.png") }
+            ?: return
+        if (stale.isEmpty()) return
+
+        val freed = stale.sumOf { it.length() }
+        stale.forEach { it.delete() }
+        android.util.Log.i(
+            "ExportUtils",
+            "Reclaimed ${freed / 1_000_000}MB from ${stale.size} staged export(s)"
+        )
+    }
+
+    /**
      * Generic method to share a [File] using FileProvider and an Intent.
      *
      * @param context Android context.
@@ -31,6 +68,46 @@ object ExportUtils {
         context.startActivity(Intent.createChooser(intent, "Export BPM Data").apply {
             if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         })
+    }
+
+    /**
+     * Saves a video file into the public MediaStore (Movies/BPMetrics) so it appears in the device Gallery.
+     */
+    fun saveVideoToGallery(context: Context, videoFile: File, title: String): android.net.Uri? {
+        val sanitizedTitle = title.replace("[^a-zA-Z0-9_-]".toRegex(), "_")
+        val displayName = "${sanitizedTitle}_${System.currentTimeMillis()}.mp4"
+
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, displayName)
+            put(android.provider.MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "Movies/BPMetrics")
+                put(android.provider.MediaStore.Video.Media.IS_PENDING, 1)
+            }
+        }
+
+        val resolver = context.contentResolver
+        val uri = resolver.insert(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
+
+        if (uri != null) {
+            try {
+                resolver.openOutputStream(uri)?.use { output ->
+                    videoFile.inputStream().use { input ->
+                        input.copyTo(output)
+                    }
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    contentValues.clear()
+                    contentValues.put(android.provider.MediaStore.Video.Media.IS_PENDING, 0)
+                    resolver.update(uri, contentValues, null, null)
+                }
+                android.util.Log.d("ExportUtils", "Successfully saved video to MediaStore Movies/BPMetrics: $uri")
+                return uri
+            } catch (e: Exception) {
+                android.util.Log.e("ExportUtils", "Failed to copy video to MediaStore: ${e.message}", e)
+            }
+        }
+        return null
     }
 
     /**

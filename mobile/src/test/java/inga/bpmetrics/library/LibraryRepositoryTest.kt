@@ -15,6 +15,8 @@ import org.junit.Before
 import org.junit.Test
 import java.sql.Date
 
+import io.mockk.mockkStatic
+
 /**
  * Unit tests for [LibraryRepository], focusing on the heart rate analysis logic.
  */
@@ -30,11 +32,19 @@ class LibraryRepositoryTest {
 
     @Before
     fun setup() {
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.d(any<String>(), any<String>()) } returns 0
+        every { android.util.Log.e(any<String>(), any<String>()) } returns 0
+        every { android.util.Log.w(any<String>(), any<String>()) } returns 0
+        every { android.util.Log.i(any<String>(), any<String>()) } returns 0
+
         // Mock database singleton and DAO access
         io.mockk.mockkObject(LibraryDatabase.Companion)
         every { LibraryDatabase.getInstance(any()) } returns database
         every { database.bpmRecordDao() } returns recordDao
         every { database.tagDao() } returns tagDao
+        coEvery { recordDao.countRecordsWithTitlePrefix(any()) } returns 0
+        coEvery { recordDao.updateTitleOnly(any(), any()) } returns Unit
         
         repository = LibraryRepository(context, settingsRepository)
     }
@@ -53,8 +63,7 @@ class LibraryRepositoryTest {
             date = Date(0L),
             dataPoints = dataPoints,
             startTime = 0L,
-            endTime = 3000L,
-            durationMs = 3000L
+            endTime = 3000L
         )
 
         coEvery { recordDao.insertBpmRecordGetId(any()) } returns 123L
@@ -86,8 +95,7 @@ class LibraryRepositoryTest {
             date = Date(0L),
             dataPoints = dataPoints,
             startTime = 0L,
-            endTime = 1000L,
-            durationMs = 1000L
+            endTime = 1000L
         )
 
         coEvery { recordDao.insertBpmRecordGetId(any()) } returns 1L
@@ -115,8 +123,7 @@ class LibraryRepositoryTest {
             date = Date(0L),
             dataPoints = dataPoints,
             startTime = 0L,
-            endTime = 21000L,
-            durationMs = 21000L
+            endTime = 21000L
         )
 
         coEvery { recordDao.insertBpmRecordGetId(any()) } returns 123L

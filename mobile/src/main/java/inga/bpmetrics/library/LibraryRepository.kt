@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -51,6 +52,9 @@ class LibraryRepository(
     private val database = LibraryDatabase.getInstance(context)
     private val recordDao = database.bpmRecordDao()
     private val tagDao = database.tagDao()
+    private val watchDao = database.watchDao()
+    private val personDao = database.personDao()
+    private val savedAnalysisDao = database.savedAnalysisDao()
 
     init {
         startRecordFlowFromDB()
@@ -93,6 +97,20 @@ class LibraryRepository(
             Log.d(tag, "Updating description for record $recordId to: $newDescription")
             recordDao.updateDescriptionOnly(recordId, newDescription)
         }
+    }
+
+    /**
+     * Updates the device ID and wearer name of a BPM record.
+     */
+    /**
+     * Corrects a single recording's device and who wore it.
+     *
+     * The name is written alongside the link so the recording stays readable if that profile is
+     * removed later — the same pairing used when a record first arrives.
+     */
+    suspend fun updateRecordDeviceAndWearer(recordId: Long, deviceId: String, personId: Long?) {
+        val name = personId?.let { personDao.getPerson(it)?.name }.orEmpty()
+        recordDao.updateDeviceAndWearer(recordId, deviceId, name, personId)
     }
 
     /**
@@ -144,9 +162,39 @@ class LibraryRepository(
      * @param record The BpmWatchRecord to save.
      * @return The ID of the newly created record.
      */
-    suspend fun saveWatchRecordToLibrary(record: BpmWatchRecord, customTitle: String? = null): Long {
+    suspend fun saveWatchRecordToLibrary(
+        record: BpmWatchRecord,
+        customTitle: String? = null,
+        sourceNodeId: String? = null,
+        preferRegistryName: Boolean = false
+    ): Long {
         Log.d(tag, "Starting saveWatchRecordToLibrary")
         _savingRecord.value = true
+
+        val watch = resolveWatch(record, sourceNodeId)
+
+        // Who wore it is settled here and never revisited: handing the watch to someone else
+        // tomorrow must not rewrite the attribution of recordings already made.
+        //
+        // Records arriving from a watch take whoever the registry says is wearing it, because the
+        // watch itself no longer names its wearer. Imported records carry only a name, which is
+        // their own historical attribution and not ours to overwrite — so those are matched to an
+        // existing profile if one fits, and left as a bare name if not.
+        val person = if (preferRegistryName) {
+            watch?.currentPersonId?.let { personDao.getPerson(it) }
+                ?: record.wearerName?.takeIf { it.isNotBlank() }?.let { personDao.findByName(it) }
+        } else {
+            record.wearerName?.takeIf { it.isNotBlank() }?.let { personDao.findByName(it) }
+                ?: watch?.currentPersonId?.let { personDao.getPerson(it) }
+        }
+
+        // The name is stamped alongside the link, not instead of it. The link is what displays,
+        // so a rename reaches every recording; the name is what remains readable if the profile
+        // is deleted later.
+        val stampedWearer = person?.name
+            ?: record.wearerName?.takeIf { it.isNotBlank() }
+            ?: watch?.currentWearerName?.takeIf { it.isNotBlank() }
+            ?: ""
 
         val recordEntity = BpmRecordEntity(
             title = customTitle ?: record.title?.takeIf { it.isNotBlank() } ?: "New Record",
@@ -154,26 +202,19 @@ class LibraryRepository(
             date = record.date.time,
             startTime = record.startTime,
             endTime = record.endTime,
-            durationMs = record.durationMs
+            durationMs = record.durationMs,
+            deviceId = record.deviceId,
+            wearerName = stampedWearer,
+            watchId = watch?.watchId,
+            personId = person?.personId
         )
         val recordId = recordDao.insertBpmRecordGetId(recordEntity)
 
         performAnalysisAndSaveDataPoints(record, recordId)
 
-        // Handle Tags from Import
-        if (record.tagNames != null && record.tagNames.isNotEmpty()) {
-            val allCategories = tagDao.getAllCategoriesFlow().first()
-            val importCategoryId = allCategories.find { it.name == "Imported" }?.categoryId 
-                ?: tagDao.insertCategory(CategoryEntity(name = "Imported"))
-
-            val existingTags = tagDao.getTagsByCategoryFlow(importCategoryId).first()
-            
-            record.tagNames.forEach { tagName ->
-                val tagId = existingTags.find { it.name == tagName }?.tagId
-                    ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = importCategoryId))
-                
-                tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
-            }
+        // Handle Tags from Import cleanly without category duplication
+        if (record.tagNames.isNotEmpty()) {
+            attachTagsToRecord(recordId, record.tagNames)
         }
 
         // Only auto-name if it's a fresh recording without a title (and not from CSV with a title)
@@ -184,6 +225,414 @@ class LibraryRepository(
         _savingRecord.value = false
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")
         return recordId
+    }
+
+    // --- Saved Analyses ---
+
+    /** Saved analyses, newest first. */
+    fun getSavedAnalyses(): Flow<List<SavedAnalysisEntity>> = savedAnalysisDao.getAllFlow()
+
+    /**
+     * Stores an analysis, copying the values it was computed from.
+     *
+     * Copying rather than referencing is the point: the analysis is a statement about a moment,
+     * and must not change when the library does.
+     *
+     * @return the id of the stored analysis.
+     */
+    suspend fun saveAnalysis(
+        name: String,
+        filterDescription: String,
+        records: List<AnalysisSnapshotRecord>
+    ): Long {
+        val analysisId = savedAnalysisDao.insertAnalysis(
+            SavedAnalysisEntity(
+                name = name.trim(),
+                createdAt = System.currentTimeMillis(),
+                filterDescription = filterDescription
+            )
+        )
+
+        savedAnalysisDao.insertRecords(
+            records.map { record ->
+                SavedAnalysisRecordEntity(
+                    analysisId = analysisId,
+                    recordId = record.recordId,
+                    title = record.title,
+                    date = record.date,
+                    minBpm = record.minBpm,
+                    avgBpm = record.avgBpm,
+                    maxBpm = record.maxBpm,
+                    activeDurationMs = record.activeDurationMs,
+                    tagsEncoded = encodeTags(record.tags),
+                    wearerName = record.wearerName,
+                    watchName = record.watchName
+                )
+            }
+        )
+
+        Log.d(tag, "Saved analysis '$name' with ${records.size} record(s)")
+        return analysisId
+    }
+
+    /**
+     * Stores a same-time analysis: which recordings, over what stretch of clock, called what.
+     *
+     * Unlike a group analysis this does **not** freeze its numbers. A group analysis stores every
+     * value it computed, so it stands alone forever. A same-time analysis is a set of curves —
+     * hundreds of kilobytes — and storing those would be a different order of cost, so what is
+     * kept is the analysis's identity and the curves are re-read from the library on opening.
+     *
+     * The consequence is deliberate and visible: delete a recording and it drops out of a saved
+     * same-time analysis, which the screen reports rather than quietly redrawing without it.
+     *
+     * @return the id of the stored analysis.
+     */
+    suspend fun saveConcurrentAnalysis(
+        name: String,
+        recordIds: Set<Long>,
+        windowStartMs: Long,
+        windowEndMs: Long,
+        records: List<AnalysisSnapshotRecord>
+    ): Long {
+        val analysisId = savedAnalysisDao.insertAnalysis(
+            SavedAnalysisEntity(
+                name = name.trim(),
+                createdAt = System.currentTimeMillis(),
+                filterDescription = "${recordIds.size} recordings, same time",
+                kind = SavedAnalysisKind.CONCURRENT,
+                windowStartMs = windowStartMs,
+                windowEndMs = windowEndMs
+            )
+        )
+
+        // The per-record rows still carry each wearer's summary, so the shelf can describe the
+        // analysis without re-reading the library.
+        savedAnalysisDao.insertRecords(
+            records.map { record ->
+                SavedAnalysisRecordEntity(
+                    analysisId = analysisId,
+                    recordId = record.recordId,
+                    title = record.title,
+                    date = record.date,
+                    minBpm = record.minBpm,
+                    avgBpm = record.avgBpm,
+                    maxBpm = record.maxBpm,
+                    activeDurationMs = record.activeDurationMs,
+                    tagsEncoded = "",
+                    wearerName = record.wearerName,
+                    watchName = record.watchName
+                )
+            }
+        )
+
+        Log.d(tag, "Saved same-time analysis '$name' over ${recordIds.size} recording(s)")
+        return analysisId
+    }
+
+    /** Reads a stored analysis back into the shape the analysis screen works from. */
+    suspend fun loadSavedAnalysis(analysisId: Long): LoadedAnalysis? {
+        val stored = savedAnalysisDao.getAnalysis(analysisId) ?: return null
+        return LoadedAnalysis(
+            metadata = stored.metadata,
+            records = stored.records.map { entity ->
+                AnalysisSnapshotRecord(
+                    recordId = entity.recordId,
+                    title = entity.title,
+                    date = entity.date,
+                    minBpm = entity.minBpm,
+                    avgBpm = entity.avgBpm,
+                    maxBpm = entity.maxBpm,
+                    activeDurationMs = entity.activeDurationMs,
+                    tags = decodeTags(entity.tagsEncoded),
+                    wearerName = entity.wearerName,
+                    watchName = entity.watchName
+                )
+            },
+            recordsStillInLibrary = savedAnalysisDao.countRecordsStillPresent(analysisId)
+        )
+    }
+
+    suspend fun renameSavedAnalysis(analysisId: Long, name: String) =
+        savedAnalysisDao.rename(analysisId, name.trim())
+
+    suspend fun deleteSavedAnalysis(analysisId: Long) = savedAnalysisDao.deleteAnalysis(analysisId)
+
+    /**
+     * Flattens tags to `categoryId:categoryName:tagName`, one per line.
+     *
+     * Colons and newlines are stripped from the parts rather than escaped — these are display
+     * labels, and a tag containing a separator is not worth a parser for.
+     */
+    private fun encodeTags(tags: List<AnalysisSnapshotTag>): String =
+        tags.joinToString("\n") { tag ->
+            "${tag.categoryId}:${tag.categoryName.sanitizeForEncoding()}:${tag.tagName.sanitizeForEncoding()}"
+        }
+
+    private fun decodeTags(encoded: String): List<AnalysisSnapshotTag> {
+        if (encoded.isBlank()) return emptyList()
+        return encoded.lineSequence().mapNotNull { line ->
+            val parts = line.split(":", limit = 3)
+            if (parts.size != 3) return@mapNotNull null
+            val categoryId = parts[0].toLongOrNull() ?: return@mapNotNull null
+            AnalysisSnapshotTag(tagName = parts[2], categoryId = categoryId, categoryName = parts[1])
+        }.toList()
+    }
+
+    private fun String.sanitizeForEncoding(): String = replace(":", " ").replace("\n", " ")
+
+    // --- Watch Registry ---
+
+    /** Every known watch, most recently used first. */
+    fun getAllWatches(): Flow<List<WatchEntity>> = watchDao.getAllWatchesFlow()
+
+    suspend fun getWatch(watchId: String): WatchEntity? = watchDao.getWatch(watchId)
+
+    /**
+     * Names the watch itself. Affects no recordings — this identifies the hardware.
+     */
+    suspend fun renameWatch(watchId: String, deviceName: String) {
+        watchDao.updateDeviceName(watchId, deviceName.trim())
+        Log.d(tag, "Watch $watchId is now called '${deviceName.trim()}'")
+    }
+
+    /**
+     * Sets who is wearing a watch. Only affects records that arrive from now on.
+     *
+     * Null hands the watch back to nobody, so its next recordings arrive unattributed rather than
+     * carrying whoever had it last.
+     */
+    suspend fun setWatchPerson(watchId: String, personId: Long?) {
+        watchDao.updatePerson(watchId, personId)
+        // Keep the legacy name column in step so a downgrade, or any path still reading it, does
+        // not report a wearer this watch no longer has.
+        watchDao.updateWearer(watchId, personId?.let { personDao.getPerson(it)?.name }.orEmpty())
+        Log.d(tag, "Watch $watchId is now worn by person $personId")
+    }
+
+    suspend fun countRecordsForWatch(watchId: String): Int = watchDao.countRecordsForWatch(watchId)
+
+    /**
+     * Registers a watch before it has ever sent a record.
+     *
+     * Because names are stamped at ingest, a watch handed out unnamed produces recordings labelled
+     * with its model. Naming it in advance is how that is avoided.
+     */
+    suspend fun registerWatch(
+        watchId: String,
+        deviceName: String,
+        personId: Long? = null,
+        model: String = ""
+    ) {
+        val now = System.currentTimeMillis()
+        watchDao.insertWatch(
+            WatchEntity(
+                watchId = watchId,
+                deviceName = deviceName.trim(),
+                lastKnownModel = model,
+                firstSeen = now,
+                lastSeen = now,
+                currentPersonId = personId
+            )
+        )
+        // insertWatch ignores conflicts so it cannot clobber existing values; apply them
+        // explicitly for the case where the watch was already known.
+        if (deviceName.isNotBlank()) watchDao.updateDeviceName(watchId, deviceName.trim())
+        if (personId != null) setWatchPerson(watchId, personId)
+    }
+
+    /**
+     * Re-attributes records from one watch within a date range to a person.
+     *
+     * The recovery path for recordings that arrived before anyone had been assigned to the watch.
+     *
+     * @return how many records were changed.
+     */
+    suspend fun reattributeRecords(watchId: String, personId: Long, fromDate: Long, toDate: Long): Int {
+        val person = personDao.getPerson(personId) ?: return 0
+        val changed = personDao.reattributeRecords(watchId, personId, person.name, fromDate, toDate)
+        Log.d(tag, "Re-attributed $changed record(s) from watch $watchId to '${person.name}'")
+        return changed
+    }
+
+    // --- People ---
+
+    /** Everyone who wears a watch. */
+    fun getAllPeople(): Flow<List<PersonEntity>> = personDao.getAllPeopleFlow()
+
+    suspend fun getPerson(personId: Long): PersonEntity? = personDao.getPerson(personId)
+
+    /**
+     * Creates a profile, giving it a colour that differs from the ones already in use.
+     *
+     * @return the new person's id.
+     */
+    suspend fun addPerson(name: String, colorArgb: Int? = null): Long {
+        val existing = personDao.getAllPeople()
+        val color = colorArgb ?: PersonColors.defaultFor(existing.size)
+        val id = personDao.insertPerson(
+            PersonEntity(
+                name = name.trim(),
+                colorArgb = color,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        Log.d(tag, "Added person '${name.trim()}' as $id")
+        return id
+    }
+
+    /**
+     * Renames someone, everywhere.
+     *
+     * Records hold the person rather than a copy of their name, so this reaches every recording
+     * they have ever made. That is the intent: a misspelling is worth correcting throughout. What
+     * this cannot do — and must not — is change *who* a past recording belongs to.
+     */
+    suspend fun renamePerson(personId: Long, name: String) {
+        personDao.updateName(personId, name.trim())
+        Log.d(tag, "Person $personId is now called '${name.trim()}'")
+    }
+
+    suspend fun setPersonColor(personId: Long, colorArgb: Int) =
+        personDao.updateColor(personId, colorArgb)
+
+    suspend fun countRecordsForPerson(personId: Long): Int = personDao.countRecordsForPerson(personId)
+
+    /**
+     * Attributes a chosen set of recordings to someone, or to nobody.
+     *
+     * The correction path for a batch that arrived before its watch had anyone assigned — picking
+     * them out of the library by hand is the only way to describe "these ones", since no filter
+     * expresses it.
+     *
+     * @return how many recordings changed.
+     */
+    suspend fun assignPersonToRecords(recordIds: Collection<Long>, personId: Long?): Int {
+        if (recordIds.isEmpty()) return 0
+        val name = personId?.let { personDao.getPerson(it)?.name }.orEmpty()
+
+        // Chunked because Room turns `IN (:recordIds)` into one bind variable per id, and SQLite
+        // caps those at 999 on older Android. Selecting every recording in the library is a single
+        // tap away, so this is reachable rather than theoretical.
+        val changed = recordIds.toList()
+            .chunked(SQL_VARIABLE_LIMIT)
+            .sumOf { chunk -> personDao.assignPersonToRecords(chunk, personId, name) }
+
+        Log.d(tag, "Attributed $changed record(s) to ${name.ifBlank { "nobody" }}")
+        return changed
+    }
+
+    /**
+     * Removes a profile without erasing the history attached to it.
+     *
+     * Each of their recordings keeps the name it was stamped with, so the library still says who
+     * made it — it just stops being a profile you can filter by or recolour.
+     */
+    suspend fun deletePerson(personId: Long) {
+        personDao.unlinkWatches(personId)
+        personDao.unlinkRecords(personId)
+        personDao.deletePerson(personId)
+        Log.d(tag, "Deleted person $personId; their recordings keep the name they were stamped with")
+    }
+
+    /**
+     * Folds one watch entry into another, moving its records across.
+     *
+     * Needed because a watch that recorded before it could report a stable id is registered under
+     * its model name, and the same watch on a current build registers under its generated id.
+     */
+    suspend fun mergeWatches(fromWatchId: String, intoWatchId: String) {
+        if (fromWatchId == intoWatchId) return
+        watchDao.reassignRecords(fromWatchId, intoWatchId)
+        watchDao.deleteWatch(fromWatchId)
+        Log.d(tag, "Merged watch $fromWatchId into $intoWatchId")
+    }
+
+    /** Removes a watch entry. Records keep their frozen wearer names and lose only the link. */
+    suspend fun deleteWatch(watchId: String) = watchDao.deleteWatch(watchId)
+
+    /**
+     * Finds or creates the registry entry for an incoming record, and notes that it was seen.
+     *
+     * Prefers the stable id the watch generates. Older records only carry a device id, which is
+     * the hardware model unless someone set one, so two identical watches collapse into a single
+     * entry until they are separated by hand.
+     */
+    private suspend fun resolveWatch(record: BpmWatchRecord, sourceNodeId: String?): WatchEntity? {
+        val key = record.watchId?.takeIf { it.isNotBlank() }
+            ?: record.deviceId.takeIf { it.isNotBlank() }
+            ?: return null
+
+        val now = System.currentTimeMillis()
+        watchDao.insertWatch(
+            WatchEntity(
+                watchId = key,
+                lastKnownModel = record.deviceId,
+                lastKnownNodeId = sourceNodeId.orEmpty(),
+                firstSeen = now,
+                lastSeen = now
+            )
+        )
+        watchDao.touchWatch(key, now, record.deviceId, sourceNodeId.orEmpty())
+        return watchDao.getWatch(key)
+    }
+
+    /**
+     * Attaches tags to a record, resolving category:tag pairs and reusing existing categories/tags case-insensitively.
+     *
+     * Supports two formats:
+     * - "CategoryName:TagName" (new format from v1.1 CSV/JSON exports)
+     * - "TagName" (old format from pre-v1.1 CSV exports — searches all existing tags first)
+     */
+    suspend fun attachTagsToRecord(recordId: Long, tagNames: List<String>) {
+        if (tagNames.isEmpty()) return
+        val allCategories = tagDao.getAllCategoriesFlow().firstOrNull() ?: emptyList()
+
+        tagNames.forEach { rawTag ->
+            val parts = rawTag.split(":", limit = 2)
+            val hasCategory = parts.size == 2 && parts[0].isNotBlank()
+            val categoryName = if (hasCategory) parts[0].trim() else null
+            val tagName = if (hasCategory) parts[1].trim() else rawTag.trim()
+
+            if (tagName.isBlank()) return@forEach
+
+            if (categoryName != null) {
+                // Explicit Category:Tag format — find or create the category, then find or create the tag
+                val existingCategory = allCategories.find { it.name.equals(categoryName, ignoreCase = true) }
+                val categoryId = existingCategory?.categoryId
+                    ?: tagDao.insertCategory(CategoryEntity(name = categoryName))
+
+                val existingTags = tagDao.getTagsByCategoryFlow(categoryId).firstOrNull() ?: emptyList()
+                val tagId = existingTags.find { it.name.equals(tagName, ignoreCase = true) }?.tagId
+                    ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = categoryId))
+
+                tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
+            } else {
+                // Bare tag name (old CSV format) — search ALL existing tags across ALL categories
+                var matchedTagId: Long? = null
+                for (cat in allCategories) {
+                    val tagsInCat = tagDao.getTagsByCategoryFlow(cat.categoryId).firstOrNull() ?: emptyList()
+                    val match = tagsInCat.find { it.name.equals(tagName, ignoreCase = true) }
+                    if (match != null) {
+                        matchedTagId = match.tagId
+                        break
+                    }
+                }
+
+                if (matchedTagId != null) {
+                    // Found existing tag — reuse it in its original category
+                    tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, matchedTagId))
+                } else {
+                    // No existing tag found — create under "Uncategorized"
+                    val uncatCategory = allCategories.find { it.name.equals("Uncategorized", ignoreCase = true) }
+                    val uncatId = uncatCategory?.categoryId
+                        ?: tagDao.insertCategory(CategoryEntity(name = "Uncategorized"))
+
+                    val newTagId = tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = uncatId))
+                    tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, newTagId))
+                }
+            }
+        }
     }
 
     /**
@@ -373,4 +822,14 @@ class LibraryRepository(
      * @param recordId The ID of the record.
      */
     fun getTagsForRecord(recordId: Long): Flow<List<TagEntity>> = tagDao.getTagsForRecordFlow(recordId)
+
+    private companion object {
+        /**
+         * How many ids may go into one `IN (...)` clause.
+         *
+         * SQLite's bind-variable ceiling is 999 on older Android versions; this leaves room for the
+         * statement's other parameters.
+         */
+        const val SQL_VARIABLE_LIMIT = 500
+    }
 }

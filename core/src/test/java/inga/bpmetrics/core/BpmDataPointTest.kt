@@ -55,4 +55,30 @@ class BpmDataPointTest {
 
         assertEquals("Timestamp: 0m 0s 5ms, BPM: 70.0", dp.toString())
     }
+
+    @Test
+    fun `isValidBpm accepts the inclusive bounds and rejects outside them`() {
+        assertTrue(BpmDataPoint.isValidBpm(BpmDataPoint.MIN_BPM))
+        assertTrue(BpmDataPoint.isValidBpm(BpmDataPoint.MAX_BPM))
+        assertTrue(BpmDataPoint.isValidBpm(75.0))
+
+        assertFalse(BpmDataPoint.isValidBpm(-0.1))
+        assertFalse(BpmDataPoint.isValidBpm(250.1))
+        assertFalse(BpmDataPoint.isValidBpm(1000.0))
+    }
+
+    @Test
+    fun `isValidBpm agrees with what the constructor accepts`() {
+        // Producers filter with isValidBpm to avoid constructing a point that throws.
+        // If these ever disagree, a sensor artifact would slip through and fail later.
+        listOf(-60.0, 0.0, 75.0, 250.0, 260.0).forEach { bpm ->
+            val constructorAccepts = try {
+                BpmDataPoint(1000L, bpm)
+                true
+            } catch (e: IllegalArgumentException) {
+                false
+            }
+            assertEquals("Mismatch for bpm=$bpm", constructorAccepts, BpmDataPoint.isValidBpm(bpm))
+        }
+    }
 }

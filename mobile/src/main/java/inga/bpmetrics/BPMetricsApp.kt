@@ -1,9 +1,11 @@
 package inga.bpmetrics
 
 import android.app.Application
+import android.util.Log
 import com.google.android.gms.wearable.Wearable
 import inga.bpmetrics.datasync.DataClientListener
 import inga.bpmetrics.datasync.DataClientProcessor
+import inga.bpmetrics.export.ExportUtils
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.ui.settings.SettingsRepository
 
@@ -46,5 +48,17 @@ class BPMetricsApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Reclaim staged exports before anything opens the database.
+        //
+        // A render is written to the cache and copied to its destination; until recently the
+        // staging copy was never removed, so every video ever exported was still on the phone at
+        // full size. Doing this first matters on a device that has already filled up: opening the
+        // database on a full disk is what fails, and this is what makes room for it to succeed.
+        //
+        // Anything found here is finished with by definition — a render in progress belongs to a
+        // process that is no longer running.
+        runCatching { ExportUtils.clearStagedExports(this) }
+            .onFailure { Log.e("BPMetricsApp", "Could not reclaim staged exports", it) }
     }
 }

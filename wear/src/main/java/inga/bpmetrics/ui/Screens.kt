@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -33,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.ButtonDefaults
 import androidx.wear.compose.material.CircularProgressIndicator
+import androidx.wear.compose.material.CompactChip
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
@@ -219,7 +221,8 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     RecordingContent(
         state = uiState,
         onStart = viewModel::onStartClicked,
-        onStop = viewModel::onStopClicked
+        onStop = viewModel::onStopClicked,
+        onSendNow = viewModel::onSendNowClicked
     )
 }
 
@@ -229,18 +232,27 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
  * @param state The current UI state containing heart rate, status, and duration info.
  * @param onStart Callback to trigger when the start button is clicked.
  * @param onStop Callback to trigger when the stop button is clicked.
+ * @param onSendNow Callback to offer the phone whatever the watch is still holding.
  */
 @Composable
 fun RecordingContent(
     state: RecordingUIState,
     onStart: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onSendNow: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        val isRecording = state.serviceState == RecordingState.RECORDING
+
+        // The watch model is deliberately not shown. It is the least useful line on a round
+        // screen with the least room — the phone names each watch and stamps records as they
+        // arrive, so the model told the wearer nothing they could act on while pushing the
+        // things they can act on towards the crop.
+
         // State-driven timer calculation
         val recordingStartTime = state.recordingStartTime
         val recordingDuration by produceState(0L, recordingStartTime) {
@@ -286,15 +298,42 @@ fun RecordingContent(
             style = MaterialTheme.typography.caption2
         )
 
+        // What the phone has not got yet. A recording stays counted here until the phone has
+        // saved it, so this is what is genuinely still only on the wrist.
+        if (state.pendingRecordCount > 0) {
+            Text(
+                text = if (state.pendingRecordCount == 1) {
+                    "⇅ 1 recording not on phone yet"
+                } else {
+                    "⇅ ${state.pendingRecordCount} recordings not on phone yet"
+                },
+                style = MaterialTheme.typography.caption2,
+                color = BpmAccent,
+                textAlign = TextAlign.Center
+            )
+
+            // Sending is automatic; this is for when it visibly is not working. Nothing is
+            // deleted by it, so pressing it repeatedly is harmless.
+            CompactChip(
+                onClick = onSendNow,
+                enabled = !state.isSending,
+                label = {
+                    Text(
+                        text = state.sendResult ?: if (state.isSending) "Sending…" else "Send now",
+                        style = MaterialTheme.typography.caption2,
+                        maxLines = 1
+                    )
+                },
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+
         Spacer(
             modifier = Modifier.height(12.dp)
         )
 
-        val isRecording = state.serviceState == RecordingState.RECORDING
-
-        // Button is only enabled when we have a signal lock or are currently recording
-        val buttonEnabled = state.serviceState == RecordingState.READY ||
-                           state.serviceState == RecordingState.RECORDING
+        // Recording can begin from any state — waiting on a signal lock is no longer required.
+        val buttonEnabled = state.isControlEnabled
 
         Row(
             horizontalArrangement = Arrangement.Center,

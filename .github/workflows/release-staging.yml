@@ -1,0 +1,102 @@
+name: Release to closed testing
+
+# `staging` is the release candidate branch, and it publishes to Play's **closed testing** track
+# rather than internal testing. That is deliberate: only closed testing counts toward the 12-tester,
+# 14-day requirement a personal developer account must satisfy before it can apply for production
+# access. Publishing here makes ordinary QA and that countdown the same activity instead of two.
+on:
+  push:
+    branches: [staging]
+  # Available by hand, for re-running a publish without an empty commit.
+  workflow_dispatch:
+
+concurrency:
+  group: release-staging
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Never publish something that has not passed the same gate as everything else.
+      - name: Build, test and lint
+        run: ./gradlew build --stacktrace
+
+      # Publishing needs credentials that do not exist until the Play Console setup is done. Rather
+      # than fail every push until then, the publish steps stand down and say why. Adding the
+      # secrets is what switches this on — no workflow edit needed.
+      - name: Check for publishing credentials
+        id: creds
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$PLAY_JSON" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Built and tested, but not published — signing or Play credentials are not configured yet. See Documentation/Play Console Setup.md."
+          fi
+
+      # The keystore is stored base64-encoded because GitHub secrets hold text, not files. It is
+      # written outside the workspace so it cannot be picked up by a build artifact.
+      - name: Restore upload keystore
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+
+      - name: Build signed bundles
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :mobile:bundleRelease :wear:bundleRelease --stacktrace
+
+      - name: Publish phone build
+        if: steps.creds.outputs.ready == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: inga.bpmetrics
+          releaseFiles: mobile/build/outputs/bundle/release/mobile-release.aab
+          track: alpha
+          status: completed
+
+      # A *separate track*, not merely a separate upload. Since August 2023 Play requires Wear OS
+      # releases to go to a dedicated Wear track, created under Advanced settings → Form factors,
+      # so that watch releases and watch testers are managed independently of the phone app. Putting
+      # both bundles in one release is rejected outright.
+      #
+      # If this step fails with an unknown-track error, the track has not been created in the Play
+      # Console yet, or it is named differently — list the real names with:
+      #   GET /androidpublisher/v3/applications/inga.bpmetrics/edits/{editId}/tracks
+      - name: Publish watch build
+        if: steps.creds.outputs.ready == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: inga.bpmetrics
+          releaseFiles: wear/build/outputs/bundle/release/wear-release.aab
+          track: wear:alpha
+          status: completed
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"

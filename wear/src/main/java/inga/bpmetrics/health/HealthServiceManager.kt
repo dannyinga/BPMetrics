@@ -11,7 +11,6 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import inga.bpmetrics.recording.RecordingRepository
-import inga.bpmetrics.recording.RecordingState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -65,9 +64,17 @@ class HealthServiceManager (private val context: Context) : DefaultLifecycleObse
 
     override fun onStop(owner: LifecycleOwner) {
         super.onStop(owner)
-        // Clean up the service if we're not actively recording
-        if (repository.recordingState.value != RecordingState.RECORDING) {
+        // Clean up only when there is genuinely nothing to keep alive.
+        //
+        // This used to check `recordingState != RECORDING`, which let go of the service in two
+        // situations where it was still needed: while a record was being written (ENDING), and in
+        // the moments after the button was pressed but before that flow had caught up. On a watch
+        // the screen turns off seconds after a press, so that second case was not a rare race —
+        // it was the normal way to start a recording.
+        if (!repository.sessionActive.value && !repository.isFinalizing) {
             unbindAndStop()
+        } else {
+            Log.d(tag, "Recording in progress; leaving the service running")
         }
     }
 
@@ -91,10 +98,22 @@ class HealthServiceManager (private val context: Context) : DefaultLifecycleObse
         }
     }
 
+    /**
+     * Releases the service, unless it is holding a recording.
+     *
+     * [Context.stopService] goes around [HealthService.onUnbind] entirely — the service is
+     * destroyed whatever its own guard would have decided. So the guard has to be repeated here,
+     * or unbinding at the wrong moment ends a recording the user never stopped.
+     */
     fun unbindAndStop() {
         if (bound) {
             context.unbindService(connection)
             bound = false
+        }
+
+        if (repository.sessionActive.value || repository.isFinalizing) {
+            Log.d(tag, "Unbound, but a recording is open; leaving the service running")
+            return
         }
 
         context.stopService(Intent(context, HealthService::class.java))
