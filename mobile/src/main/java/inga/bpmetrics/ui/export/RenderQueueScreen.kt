@@ -75,9 +75,17 @@ import inga.bpmetrics.ui.theme.BpmAccent
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
 
-@OptIn(ExperimentalMaterial3Api::class)
+
+/**
+ * The queue itself, without a screen around it.
+ *
+ * Split out so step 4 of the export utility can show the same thing rather than a second
+ * implementation of it — an export ends up in the queue, so the last step of making one and the
+ * place it lands are the same view. The standalone screen it used to live on is gone: it was
+ * reachable only from a drawer entry that step 4 replaces.
+ */
 @Composable
-fun RenderQueueScreen(navController: NavController, onOpenDrawer: () -> Unit) {
+fun RenderQueueContent(modifier: Modifier = Modifier) {
     val queue by RenderQueueManager.queue.collectAsState()
 
     val totalJobs = queue.size
@@ -86,58 +94,32 @@ fun RenderQueueScreen(navController: NavController, onOpenDrawer: () -> Unit) {
     val completedJobs = queue.count { it.status == RenderStatus.COMPLETED }
     val failedOrCancelled = queue.count { it.status == RenderStatus.FAILED || it.status == RenderStatus.CANCELLED }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Video Render Queue", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
-                    }
-                },
-                actions = {
-                    if (queue.any { it.status == RenderStatus.COMPLETED || it.status == RenderStatus.FAILED || it.status == RenderStatus.CANCELLED }) {
-                        IconButton(
-                            onClick = { RenderQueueManager.clearCompleted() }
-                        ) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = "Clear Completed/Inactive")
-                        }
-                    }
-                }
+    Column(modifier = modifier.fillMaxSize()) {
+        // Stats Panel
+        if (totalJobs > 0) {
+            RenderStatsPanel(
+                total = totalJobs,
+                active = activeJobs,
+                queued = queuedJobs,
+                completed = completedJobs,
+                failed = failedOrCancelled
             )
         }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            // Stats Panel
-            if (totalJobs > 0) {
-                RenderStatsPanel(
-                    total = totalJobs,
-                    active = activeJobs,
-                    queued = queuedJobs,
-                    completed = completedJobs,
-                    failed = failedOrCancelled
-                )
-            }
 
-            if (queue.isEmpty()) {
-                EmptyQueueState()
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(queue, key = { it.id }) { job ->
-                        RenderJobCard(
-                            job = job,
-                            onCancel = { RenderQueueManager.cancelJob(job.id) },
-                            onRemove = { RenderQueueManager.removeJob(job.id) }
-                        )
-                    }
+        if (queue.isEmpty()) {
+            EmptyQueueState()
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(queue, key = { it.id }) { job ->
+                    RenderJobCard(
+                        job = job,
+                        onCancel = { RenderQueueManager.cancelJob(job.id) },
+                        onRemove = { RenderQueueManager.removeJob(job.id) }
+                    )
                 }
             }
         }

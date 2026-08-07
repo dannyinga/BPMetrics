@@ -49,7 +49,8 @@ import inga.bpmetrics.ui.settings.SettingsScreen
 import inga.bpmetrics.ui.settings.SettingsViewModel
 import inga.bpmetrics.ui.tags.TagManagementScreen
 import inga.bpmetrics.ui.tags.TagManagementViewModel
-import inga.bpmetrics.ui.export.RenderQueueScreen
+import inga.bpmetrics.ui.export.ExportUtilityScreen
+import inga.bpmetrics.ui.export.ExportUtilityViewModel
 import inga.bpmetrics.ui.export.VideoExportDialog
 import inga.bpmetrics.ui.incoming.IncomingScreen
 import inga.bpmetrics.ui.people.PeopleScreen
@@ -430,8 +431,14 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 )
             }
 
-            composable(Routes.RENDER_QUEUE) {
-                RenderQueueScreen(navController, onOpenDrawer = openDrawer)
+            composable(Routes.EXPORT) {
+                val exportViewModel: ExportUtilityViewModel = viewModel(
+                    factory = ExportUtilityViewModel.Factory(repository)
+                )
+                ExportUtilityScreen(
+                    viewModel = exportViewModel,
+                    onOpenDrawer = openDrawer
+                )
             }
         }
 
@@ -481,7 +488,11 @@ object Routes {
     const val DETAIL = "detail"
     const val SETTINGS = "settings"
     const val GRAPH_DETAIL = "graph_detail"
-    const val RENDER_QUEUE = "render_queue"
+    // The render queue is no longer a section of its own — it is step 4 of the export flow, which
+    // is where an export ends up and the only place worth looking for it.
+
+    /** The staged export flow: source, contents, look, make. */
+    const val EXPORT = "export"
     const val WATCHES = "watches"
     const val PEOPLE = "people"
     const val ABOUT = "about"

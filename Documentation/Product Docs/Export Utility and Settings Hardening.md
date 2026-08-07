@@ -221,6 +221,18 @@ a queue of six exports is distinguishable.
 
 **Verify:** every existing export path still produces the same file it did before.
 
+> **EXP-1.4 is deferred to Sprint 4, deliberately.** `VideoExportDialog` is a single 900-line
+> composable: ~40 pieces of local state, a 530-line content lambda, and a confirm button that
+> builds `VideoExportConfig` by closing over all of it. Lifting that into step 3 means either
+> threading forty parameters or hoisting every one of them into a holder — which is the opposite of
+> "purely relocation, so the diff stays reviewable", and exactly where a silent behaviour change
+> would hide.
+>
+> EXP-4.1 already has to touch all forty when it reorganises step 3 into Canvas / Graph /
+> Background / Overlay sections. The hoist belongs there, done once, with the sections as the
+> destination. Until then step 3 says what it will hold, and the existing dialogs keep working
+> untouched from their current entry points.
+
 ---
 
 ### Sprint 2 — Source and contents

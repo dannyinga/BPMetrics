@@ -14,7 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Settings
@@ -50,11 +50,11 @@ enum class AppDestination(
     val label: String,
     val icon: ImageVector
 ) {
-    LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.Default.LibraryBooks),
+    LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks),
     ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.AutoMirrored.Filled.Sort),
     TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell),
     INCOMING(inga.bpmetrics.ui.Routes.INCOMING, "Incoming", Icons.Default.CloudDownload),
-    RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Render Queue", Icons.Default.VideoLibrary),
+    EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary),
     PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People),
     WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch),
     SETTINGS(inga.bpmetrics.ui.Routes.SETTINGS, "Settings", Icons.Default.Settings),
@@ -102,7 +102,9 @@ fun AppDrawerContent(
                     icon = { Icon(destination.icon, contentDescription = null) },
                     badge = {
                         val count = when (destination) {
-                            AppDestination.RENDER_QUEUE -> activeRenderCount
+                            // The badge follows the queue into the Export section, which is where
+                            // step 4 now shows it.
+                            AppDestination.EXPORT -> activeRenderCount
                             AppDestination.INCOMING -> incomingCount
                             else -> 0
                         }
