@@ -77,6 +77,7 @@ fun ExportUtilityScreen(
     val loadingClips by viewModel.loadingClips.collectAsStateWithLifecycle()
     val hasNoClips by viewModel.hasNoClips.collectAsStateWithLifecycle()
     val pendingJobs by viewModel.pendingJobs.collectAsStateWithLifecycle()
+    val oldestFirst by viewModel.clipsOldestFirst.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
@@ -177,6 +178,8 @@ fun ExportUtilityScreen(
                     peopleById = peopleById,
                     loading = loadingClips,
                     hasNoClips = hasNoClips,
+                    oldestFirst = oldestFirst,
+                    onToggleOrder = { viewModel.toggleClipOrder() },
                     onToggleClip = { viewModel.toggleClip(it) },
                     onToggleRecord = { uri, id -> viewModel.toggleRecordOnClip(uri, id) }
                 )

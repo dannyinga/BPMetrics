@@ -50,13 +50,16 @@ enum class AppDestination(
     val label: String,
     val icon: ImageVector
 ) {
+    // Ordered by what a session actually does: look at recordings, analyse them, export the
+    // result. The management screens follow, and Settings and About sit at the bottom where every
+    // other Android app puts them.
     LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks),
     ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.AutoMirrored.Filled.Sort),
-    TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell),
-    INCOMING(inga.bpmetrics.ui.Routes.INCOMING, "Incoming", Icons.Default.CloudDownload),
     EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary),
+    INCOMING(inga.bpmetrics.ui.Routes.INCOMING, "Incoming", Icons.Default.CloudDownload),
     PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People),
     WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch),
+    TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell),
     SETTINGS(inga.bpmetrics.ui.Routes.SETTINGS, "Settings", Icons.Default.Settings),
     ABOUT(inga.bpmetrics.ui.Routes.ABOUT, "About", Icons.Default.Info);
 

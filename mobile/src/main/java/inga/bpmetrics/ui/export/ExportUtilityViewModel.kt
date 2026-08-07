@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.export.VideoExporter
+import inga.bpmetrics.ui.analysis.EventAnalysis
 import inga.bpmetrics.library.LibraryRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -13,7 +14,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The four questions an export has to answer, in order.
@@ -58,7 +62,32 @@ sealed interface ExportSource {
 data class ClipSelection(
     val clip: VideoExporter.VideoClip,
     val recordIds: Set<Long>,
-    val selected: Boolean
+    val selected: Boolean,
+    /**
+     * What everyone's heart rate did during this clip, for deciding whether it is worth overlaying.
+     *
+     * A filename and a timestamp say nothing about whether the moment was any good. A glance at the
+     * shape does: a clip where three curves all climb is the one to export, and a flat one is not.
+     */
+    val sparks: List<ClipSpark> = emptyList()
+) {
+    /** The highest anyone reached during the clip. Null when nobody was recording. */
+    val peakBpm: Int? get() = sparks.maxOfOrNull { it.peakBpm }
+}
+
+/**
+ * One person's curve across a clip, small enough to draw in a list row.
+ *
+ * Normalised against the *clip's* own range rather than each person's, so the lines keep their
+ * relative heights — the point is seeing that everyone went up together, which per-person
+ * normalisation would flatten into three identical shapes.
+ */
+data class ClipSpark(
+    val label: String,
+    val colorArgb: Int,
+    /** Evenly sampled across the clip, 0..1. Null where that person was not recording. */
+    val points: List<Float?>,
+    val peakBpm: Int
 )
 
 /**
@@ -152,7 +181,28 @@ class ExportUtilityViewModel(
     // --- Step 2: which clips, and whose curves go on each ---
 
     private val _clips = MutableStateFlow<List<ClipSelection>>(emptyList())
-    val clips: StateFlow<List<ClipSelection>> = _clips.asStateFlow()
+
+    /**
+     * Oldest first by default.
+     *
+     * The MediaStore query returns newest first, which is right for a gallery and wrong here: the
+     * clips are moments in one evening, and reading them out of order makes the run of them hard
+     * to follow. Reversible for the case where the end of the night is what you are after.
+     */
+    private val _clipsOldestFirst = MutableStateFlow(true)
+    val clipsOldestFirst: StateFlow<Boolean> = _clipsOldestFirst.asStateFlow()
+
+    fun toggleClipOrder() {
+        _clipsOldestFirst.value = !_clipsOldestFirst.value
+    }
+
+    val clips: StateFlow<List<ClipSelection>> = combine(
+        _clips,
+        _clipsOldestFirst
+    ) { list, oldestFirst ->
+        if (oldestFirst) list.sortedBy { it.clip.startedAtMs }
+        else list.sortedByDescending { it.clip.startedAtMs }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _loadingClips = MutableStateFlow(false)
     val loadingClips: StateFlow<Boolean> = _loadingClips.asStateFlow()
@@ -165,6 +215,10 @@ class ExportUtilityViewModel(
      */
     fun loadClips(found: List<VideoExporter.VideoClip>) {
         val sourceRecords = records.value
+
+        // The rows appear immediately with everything except the curves, which need every data
+        // point in range walked. Waiting for that before showing anything would leave the step
+        // blank for a second on a group with forty clips.
         _clips.value = found.map { clip ->
             ClipSelection(
                 clip = clip,
@@ -179,6 +233,72 @@ class ExportUtilityViewModel(
             )
         }
         _loadingClips.value = false
+
+        viewModelScope.launch {
+            val people = repository.getAllPeople().first()
+            val watches = repository.getAllWatches().first()
+            val withSparks = withContext(Dispatchers.Default) {
+                _clips.value.map { selection ->
+                    selection.copy(
+                        sparks = sparkFor(selection, sourceRecords, watches, people)
+                    )
+                }
+            }
+            // Re-read rather than overwrite blindly: the user may have unticked something while
+            // this was running, and their taps outrank a background computation.
+            _clips.value = _clips.value.map { current ->
+                withSparks.firstOrNull { it.clip.uri == current.clip.uri }
+                    ?.let { current.copy(sparks = it.sparks) }
+                    ?: current
+            }
+        }
+    }
+
+    /**
+     * Samples each person's curve across one clip.
+     *
+     * Built on [EventAnalysis] with the clip as its window, so the lanes, the colours and the gap
+     * handling are the same ones the chart and the export use — a sparkline that disagreed with
+     * the video it is previewing would be worse than none.
+     */
+    private fun sparkFor(
+        selection: ClipSelection,
+        allRecords: List<BpmRecord>,
+        watches: List<inga.bpmetrics.library.WatchEntity>,
+        people: List<inga.bpmetrics.library.PersonEntity>
+    ): List<ClipSpark> {
+        val theirs = allRecords.filter { it.metadata.recordId in selection.recordIds }
+        if (theirs.isEmpty()) return emptyList()
+
+        val analysis = EventAnalysis.from(
+            records = theirs,
+            watches = watches,
+            people = people,
+            window = selection.clip.startedAtMs..selection.clip.endedAtMs
+        )
+        if (analysis.isEmpty) return emptyList()
+
+        // One range for everyone, so the lines keep their relative heights.
+        val low = analysis.series.minOf { it.minBpm }
+        val high = analysis.series.maxOf { it.maxBpm }
+        val span = (high - low).coerceAtLeast(1.0)
+
+        val start = selection.clip.startedAtMs
+        val step = (selection.clip.durationMs.toDouble() / (SPARK_SAMPLES - 1)).coerceAtLeast(1.0)
+
+        return analysis.series.map { series ->
+            ClipSpark(
+                label = series.label,
+                colorArgb = series.colorArgb,
+                points = (0 until SPARK_SAMPLES).map { i ->
+                    // Null inside a dropout rather than a floor value, so a break in the line
+                    // reads as "not measured" instead of "heart rate fell off a cliff".
+                    series.bpmAt(start + (i * step).toLong())
+                        ?.let { (((it - low) / span).toFloat()).coerceIn(0f, 1f) }
+                },
+                peakBpm = series.maxBpm.toInt()
+            )
+        }
     }
 
     fun setLoadingClips() {
@@ -212,7 +332,10 @@ class ExportUtilityViewModel(
      * video, not the event. A clip with nobody on it is dropped: it would render the background
      * back out with an empty graph over it.
      */
-    val pendingJobs: StateFlow<List<ClipSelection>> = _clips
+    val pendingJobs: StateFlow<List<ClipSelection>> = clips
+        // Derived from the sorted list rather than the raw one, so jobs enter the queue in the
+        // order they were shown in — a queue that disagrees with the list above it is confusing
+        // for no benefit.
         .map { list -> list.filter { it.selected && it.recordIds.isNotEmpty() } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -289,6 +412,11 @@ class ExportUtilityViewModel(
             savedAnalysisRecordIds.value = loaded?.records?.map { it.recordId }?.toSet().orEmpty()
             savedAnalysisName.value = loaded?.metadata?.name.orEmpty()
         }
+    }
+
+    private companion object {
+        /** Enough to read the shape of a clip in a list row, cheap enough for forty of them. */
+        const val SPARK_SAMPLES = 48
     }
 
     class Factory(private val repository: LibraryRepository) : ViewModelProvider.Factory {

@@ -1,6 +1,8 @@
 package inga.bpmetrics.ui.export
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,7 +20,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,6 +32,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SecondaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +43,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.Icons
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.BpmRecord
@@ -225,6 +240,8 @@ fun ContentsStep(
     peopleById: Map<Long, PersonEntity>,
     loading: Boolean,
     hasNoClips: Boolean,
+    oldestFirst: Boolean,
+    onToggleOrder: () -> Unit,
     onToggleClip: (android.net.Uri) -> Unit,
     onToggleRecord: (android.net.Uri, Long) -> Unit
 ) {
@@ -267,13 +284,28 @@ fun ContentsStep(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            val ticked = clips.count { it.selected }
-            Text(
-                "$ticked of ${clips.size} clip${if (clips.size == 1) "" else "s"} · " +
-                    "one export each",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val ticked = clips.count { it.selected }
+                Text(
+                    "$ticked of ${clips.size} clip${if (clips.size == 1) "" else "s"} · " +
+                        "one export each",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = onToggleOrder) {
+                    Icon(
+                        Icons.Default.SwapVert,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (oldestFirst) "Oldest first" else "Newest first")
+                }
+            }
         }
 
         items(clips, key = { it.clip.uri.toString() }) { selection ->
@@ -314,6 +346,11 @@ private fun ClipCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = selection.selected, onCheckedChange = { onToggleClip() })
                 Spacer(Modifier.width(4.dp))
+
+                // A name and a time do not say what the clip is. A frame does, at a glance.
+                ClipThumbnail(selection.clip.uri)
+                Spacer(Modifier.width(10.dp))
+
                 Column(Modifier.weight(1f)) {
                     Text(
                         getTimeString(selection.clip.startedAtMs),
@@ -327,7 +364,28 @@ private fun ClipCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1
                     )
+                    selection.peakBpm?.let { peak ->
+                        Text(
+                            "peaked at $peak bpm",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
+            }
+
+            // What the heart rates did during this clip, which is the thing that decides whether
+            // it is worth overlaying at all. Everyone climbing together is the clip to export.
+            if (selection.sparks.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                ClipSparkline(
+                    sparks = selection.sparks,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .padding(start = 12.dp)
+                )
             }
 
             if (candidates.isEmpty()) {
@@ -364,6 +422,82 @@ private fun ClipCard(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * A frame from the clip.
+ *
+ * Loaded per row rather than for the whole list, so a group with forty clips decodes only what is
+ * on screen. `loadThumbnail` returns MediaStore's own cached thumbnail where one exists, which is
+ * far cheaper than decoding a frame out of the video.
+ */
+@Composable
+private fun ClipThumbnail(uri: android.net.Uri) {
+    val context = LocalContext.current
+    val thumbnail by produceState<android.graphics.Bitmap?>(initialValue = null, uri) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.loadThumbnail(uri, android.util.Size(160, 160), null)
+            }.getOrNull()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .size(width = 72.dp, height = 54.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        thumbnail?.let { bitmap ->
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                // Cropped rather than letterboxed: the tile is a glance at the subject, and bars
+                // down the sides of a portrait clip leave less of it than the crop does.
+                contentScale = ContentScale.Crop
+            )
+        } ?: Icon(
+            Icons.Default.Movie,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * Everyone's curve across the clip, in their own colours.
+ *
+ * Deliberately unlabelled and without axes — this answers "did anything happen", not "what
+ * exactly". The full chart is one step away, and putting numbers here would make a row that has to
+ * be read rather than glanced at.
+ */
+@Composable
+private fun ClipSparkline(sparks: List<ClipSpark>, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        sparks.forEach { spark ->
+            val colour = Color(spark.colorArgb)
+            val path = Path()
+            var started = false
+
+            spark.points.forEachIndexed { i, value ->
+                if (value == null) {
+                    // A dropout breaks the line rather than dipping it to the floor, the same way
+                    // the real chart does. A gap is missing data, not a heart rate of zero.
+                    started = false
+                    return@forEachIndexed
+                }
+                val x = size.width * (i.toFloat() / (spark.points.size - 1).coerceAtLeast(1))
+                // Inset top and bottom so a curve touching its own extreme is still visible.
+                val y = size.height - (value * size.height * 0.9f) - (size.height * 0.05f)
+                if (started) path.lineTo(x, y) else path.moveTo(x, y).also { started = true }
+            }
+
+            drawPath(path, colour, style = Stroke(width = 3f))
         }
     }
 }
