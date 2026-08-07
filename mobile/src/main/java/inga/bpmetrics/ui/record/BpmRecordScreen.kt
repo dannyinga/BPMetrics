@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import inga.bpmetrics.export.CsvExporter
+import inga.bpmetrics.library.displayName
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.graph.BpmGraphPreview
@@ -115,7 +116,18 @@ fun BpmRecordScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             } else {
-                                Text(r.metadata.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text(
+                                    // The generated name when there is no real title, so this
+                                    // page never opens on "Untitled 4" either.
+                                    r.displayName(
+                                        people.firstOrNull { p ->
+                                            p.personId == r.metadata.personId
+                                        }?.displayName,
+                                        watchName
+                                    ),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                             Text("${getDateString(r.metadata.date)} ${getTimeString(r.metadata.startTime)}", style = MaterialTheme.typography.bodySmall)
                         }

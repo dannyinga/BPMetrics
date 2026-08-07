@@ -7,6 +7,7 @@ import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.library.RecordNameFormatter
 import inga.bpmetrics.library.WatchEntity
 
 /**
@@ -80,7 +81,11 @@ data class AnalysisRecord(
         ): AnalysisRecord =
             AnalysisRecord(
                 recordId = record.metadata.recordId,
-                title = record.metadata.title,
+                title = RecordNameFormatter.displayName(
+                    record.metadata,
+                    wearerName = record.metadata.personId?.let { peopleNames[it] },
+                    watchName = record.metadata.watchId?.let { watchNames[it] }
+                ),
                 date = record.metadata.date,
                 minBpm = record.minDataPoint?.bpm,
                 avgBpm = record.metadata.avg,

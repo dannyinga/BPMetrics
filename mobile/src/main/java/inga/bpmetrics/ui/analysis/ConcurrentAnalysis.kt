@@ -2,6 +2,8 @@ package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmZones
+import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
@@ -95,6 +97,18 @@ data class ConcurrentSeries(
             .map { (a, b) -> TimeGap(a.wallClockMs, b.wallClockMs) }
 
     val avgBpm: Double get() = if (points.isEmpty()) 0.0 else points.map { it.bpm }.average()
+
+    /**
+     * How this lane's measured time splits across heart rate bands.
+     *
+     * The "so what" under min/avg/max: touching 186 once and sitting above 160 for half an hour
+     * are very different evenings, and three numbers cannot tell them apart.
+     */
+    val zoneTimes: List<ZoneTime>
+        get() = BpmZones.split(
+            points.map { it.wallClockMs to it.bpm },
+            gapThresholdMs = GAP_THRESHOLD_MS
+        )
 
     companion object {
         const val GAP_THRESHOLD_MS = 10_000L

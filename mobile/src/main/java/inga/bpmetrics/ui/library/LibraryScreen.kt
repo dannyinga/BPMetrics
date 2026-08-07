@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -598,12 +599,34 @@ fun LibraryScreen(
 
             when (viewMode) {
                 LibraryViewMode.RECORDINGS -> {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(uiState.records) { record -> tile(record) }
+                    if (uiState.records.isEmpty()) {
+                        // Two different situations that used to look identical: an empty library,
+                        // and a full one behind a filter that matches nothing. Only one of them
+                        // has an action worth offering.
+                        val filtered = filterState != LibraryViewModel.FilterState()
+                        EmptyLibrary(
+                            title = if (filtered) {
+                                "Nothing matches this filter"
+                            } else {
+                                "No recordings yet"
+                            },
+                            message = if (filtered) {
+                                "Try widening it, or clear it to see everything again."
+                            } else {
+                                "Start one on a watch. Recordings arrive here when the watch and " +
+                                    "phone are next connected."
+                            },
+                            action = if (filtered) "Clear filters" else null,
+                            onAction = { viewModel.clearFilters() }
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(uiState.records) { record -> tile(record) }
+                        }
                     }
                 }
 
@@ -659,7 +682,9 @@ fun LibraryScreen(
             },
             repository = viewModel.repository,
             availablePeople = availablePeople,
-            availableWatches = availableWatches
+            availableWatches = availableWatches,
+            availableEvents = events.map { it.event },
+            availableGroups = eventGroups.map { it.group }
         )
     }
 
@@ -971,10 +996,18 @@ private fun EventsList(
 
         if (events.isEmpty() && unfiled.isEmpty()) {
             item {
-                Text(
-                    "No recordings yet. Once some arrive from a watch, group them into events here.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                EmptySection(
+                    "No events yet",
+                    "An event is one occasion — a set, a session, an evening. Recordings filed " +
+                        "under one are analysed together, one lane per person."
+                )
+            }
+        } else if (events.isEmpty()) {
+            item {
+                EmptySection(
+                    "No events yet",
+                    "Press and hold recordings below, then choose Add to event — or take one of " +
+                        "the suggestions above."
                 )
             }
         }
@@ -1035,12 +1068,61 @@ private fun GroupsList(
 
         if (groups.isEmpty() && ungrouped.isEmpty()) {
             item {
-                Text(
-                    "Groups collect events that belong together — a tour, a season, a study. " +
-                        "Create some events first.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                EmptySection(
+                    "No groups yet",
+                    "A group collects events that belong together — a tour, a season, a festival. " +
+                        "Create some events first, then group them."
                 )
+            }
+        } else if (groups.isEmpty()) {
+            item {
+                EmptySection(
+                    "No groups yet",
+                    "Tag a group once and every recording under it inherits it. Use the overflow " +
+                        "on an event to move it into one."
+                )
+            }
+        }
+    }
+}
+
+/** A section with nothing in it, saying what would put something there. */
+@Composable
+private fun EmptySection(title: String, message: String) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** The whole-screen version, for a Recordings list with nothing in it. */
+@Composable
+private fun EmptyLibrary(
+    title: String,
+    message: String,
+    action: String?,
+    onAction: () -> Unit
+) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            action?.let {
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = onAction) { Text(it) }
             }
         }
     }

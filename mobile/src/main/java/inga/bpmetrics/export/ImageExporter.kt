@@ -12,6 +12,7 @@ import android.graphics.Shader
 import androidx.core.graphics.createBitmap
 import inga.bpmetrics.library.BpmDataPointEntity
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.RecordNameFormatter
 import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.ui.graph.TimeUtils
 import inga.bpmetrics.ui.util.StringFormatHelpers
@@ -544,11 +545,17 @@ object ImageExporter {
         return if (end <= 0) "" else text.take(end) + "…"
     }
 
-    /** The name to show for whoever wore the watch, falling back to the device then the title. */
+    /**
+     * The name to show for whoever wore the watch, falling back to the device then the title.
+     *
+     * The title is only used when it says something. A pill reading "Untitled 4" over someone's
+     * heart rate is worse than one reading "Unknown", and it goes out in a video.
+     */
     private fun wearerLabelOf(record: BpmRecord): String =
         record.metadata.wearerName.takeIf { it.isNotBlank() }
             ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
-            ?: record.metadata.title
+            ?: record.metadata.title.takeIf { !RecordNameFormatter.isPlaceholder(it) }
+            ?: "Unknown"
 
     private fun drawGlowingHead(
         canvas: Canvas,

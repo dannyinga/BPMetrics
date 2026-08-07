@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -65,6 +66,10 @@ import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.ui.library.NameDialog
 import inga.bpmetrics.ui.library.formatSpan
 import inga.bpmetrics.library.TimeSpan
+import inga.bpmetrics.library.ZoneTime
+import inga.bpmetrics.ui.theme.BpmAvg
+import inga.bpmetrics.ui.theme.BpmHigh
+import inga.bpmetrics.ui.theme.BpmLow
 import inga.bpmetrics.ui.record.BpmRecordTile
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import kotlin.math.roundToInt
@@ -610,6 +615,14 @@ private fun PersonSummaryRow(
                 Stat("Max", "${series.maxBpm.roundToInt()}", Modifier.weight(1f))
                 Stat("Active", shortDuration(series.activeDurationMs), Modifier.weight(1.2f))
             }
+            // Where the time actually went. Touching 186 once and sitting above 160 for half an
+            // hour are very different evenings, and min/avg/max cannot tell them apart.
+            val zones = series.zoneTimes.filter { it.durationMs > 0L }
+            if (zones.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                ZoneBar(zones)
+            }
+
             if (series.gaps.isNotEmpty()) {
                 val missing = series.gaps.sumOf { it.durationMs }
                 Spacer(Modifier.height(6.dp))
@@ -622,6 +635,64 @@ private fun PersonSummaryRow(
             }
         }
     }
+}
+
+/**
+ * One stacked bar showing how measured time split across heart rate bands.
+ *
+ * A bar rather than four numbers: the shape of an evening reads at a glance, and the exact minutes
+ * in each band are rarely what anyone wants. Bands with no time in them are not drawn — a legend
+ * entry for zero minutes is noise.
+ */
+@Composable
+private fun ZoneBar(zones: List<ZoneTime>) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .clip(MaterialTheme.shapes.extraSmall)
+    ) {
+        zones.forEach { zone ->
+            Box(
+                Modifier
+                    .weight(zone.share.coerceAtLeast(0.001f))
+                    .fillMaxHeight()
+                    .background(zoneColour(zone.zone.name))
+            )
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        zones.forEach { zone ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(zoneColour(zone.zone.name))
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "${zone.zone.name} ${(zone.share * 100).roundToInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/** Bands borrowed from the app's existing low/avg/high palette, so the colours already mean this. */
+@Composable
+private fun zoneColour(name: String): Color = when (name) {
+    "Resting" -> BpmLow
+    "Light" -> BpmAvg
+    "Elevated" -> BpmHigh.copy(alpha = 0.7f)
+    else -> BpmHigh
 }
 
 @Composable

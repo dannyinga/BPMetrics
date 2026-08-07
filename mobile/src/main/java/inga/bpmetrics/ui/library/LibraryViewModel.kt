@@ -60,9 +60,10 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     val filteredRecords: Flow<List<BpmRecord>> = combine(
         repository.records,
         _filterState,
-        repository.effectiveTags
-    ) { records, filter, tags ->
-        applyFilter(records, filter, tags)
+        repository.effectiveTags,
+        repository.getAllEvents()
+    ) { records, filter, tags, events ->
+        applyFilter(records, filter, tags, events.associate { it.eventId to it.groupId })
     }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
 
     /**
@@ -431,7 +432,16 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
          * Answers the other question: "show me everything this watch ever recorded", whoever was
          * wearing it and whatever it was called at the time.
          */
-        val selectedWatchIds: Set<String> = emptySet()
+        val selectedWatchIds: Set<String> = emptySet(),
+        /**
+         * Events to include, matched on the event a recording is filed under.
+         *
+         * Distinct from filtering by a tag the event carries: this asks "what was at this
+         * occasion", which is true regardless of how anything was tagged.
+         */
+        val selectedEventIds: Set<Long> = emptySet(),
+        /** Groups to include, matched through the event each recording is filed under. */
+        val selectedGroupIds: Set<Long> = emptySet()
     )
 
     companion object {
@@ -446,10 +456,15 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
          *   and group, keyed by record id. Empty means fall back to the recording's own tags,
          *   which is correct for callers that have not resolved inheritance.
          */
+        /**
+         * @param groupIdByEvent Which group each event belongs to, so a recording can be matched
+         *   against a group through its event rather than storing a second link.
+         */
         fun applyFilter(
             records: List<BpmRecord>,
             filter: FilterState,
-            effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap()
+            effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap(),
+            groupIdByEvent: Map<Long, Long?> = emptyMap()
         ): List<BpmRecord> {
             // Tag ids resolved through the hierarchy, so filtering by a group's tag returns every
             // recording underneath it — the point of §2.5. Falls back to the recording's own tags
@@ -505,7 +520,17 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                 val watchMatch = filter.selectedWatchIds.isEmpty() ||
                         record.metadata.watchId in filter.selectedWatchIds
 
-                dateMatch && tagMatch && bpmMatch && wearerMatch && watchMatch
+                // 6. Event and group — the occasion rather than the hardware or the person.
+                val eventMatch = filter.selectedEventIds.isEmpty() ||
+                        record.metadata.eventId in filter.selectedEventIds
+
+                // Reached through the event, not stored on the recording, so moving an event
+                // between groups reclassifies everything in it with nothing to rewrite.
+                val groupMatch = filter.selectedGroupIds.isEmpty() ||
+                        record.metadata.eventId?.let { groupIdByEvent[it] } in filter.selectedGroupIds
+
+                dateMatch && tagMatch && bpmMatch && wearerMatch && watchMatch &&
+                        eventMatch && groupMatch
             }
         }
     }
