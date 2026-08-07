@@ -84,14 +84,17 @@ class LibraryRepository(
     /**
      * Updates the title of a BPM record.
      *
+     * Suspends until the write has happened, rather than launching it into the repository's own
+     * scope and returning. Both callers already reload the record immediately afterwards, so
+     * fire-and-forget meant they reliably reloaded the value from *before* the edit — a rename
+     * that appeared not to take until something else refreshed the screen.
+     *
      * @param recordId The ID of the record to update.
      * @param newTitle The new title for the record.
      */
-    fun updateRecordTitle(recordId: Long, newTitle: String) {
-        scope.launch {
-            Log.d(tag, "Updating title for record $recordId to: $newTitle")
-            recordDao.updateTitleOnly(recordId, newTitle)
-        }
+    suspend fun updateRecordTitle(recordId: Long, newTitle: String) {
+        Log.d(tag, "Updating title for record $recordId to: $newTitle")
+        recordDao.updateTitleOnly(recordId, newTitle)
     }
 
     /**
@@ -100,11 +103,9 @@ class LibraryRepository(
      * @param recordId The ID of the record to update.
      * @param newDescription The new description for the record.
      */
-    fun updateRecordDescription(recordId: Long, newDescription: String) {
-        scope.launch {
-            Log.d(tag, "Updating description for record $recordId to: $newDescription")
-            recordDao.updateDescriptionOnly(recordId, newDescription)
-        }
+    suspend fun updateRecordDescription(recordId: Long, newDescription: String) {
+        Log.d(tag, "Updating description for record $recordId to: $newDescription")
+        recordDao.updateDescriptionOnly(recordId, newDescription)
     }
 
     /**
