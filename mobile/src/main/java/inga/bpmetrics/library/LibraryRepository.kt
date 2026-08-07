@@ -379,6 +379,77 @@ class LibraryRepository(
 
     suspend fun deleteSavedAnalysis(analysisId: Long) = savedAnalysisDao.deleteAnalysis(analysisId)
 
+    /** Every saved analysis with its frozen rows, for a backup to carry. */
+    suspend fun getSavedAnalysesForBackup(): List<inga.bpmetrics.export.SavedAnalysisDto> =
+        savedAnalysisDao.getAllFlow().first().mapNotNull { meta ->
+            val full = savedAnalysisDao.getAnalysis(meta.analysisId) ?: return@mapNotNull null
+            inga.bpmetrics.export.SavedAnalysisDto(
+                name = full.metadata.name,
+                createdAt = full.metadata.createdAt,
+                filterDescription = full.metadata.filterDescription,
+                kind = full.metadata.kind,
+                windowStartMs = full.metadata.windowStartMs,
+                windowEndMs = full.metadata.windowEndMs,
+                records = full.records.map { row ->
+                    inga.bpmetrics.export.SavedAnalysisRecordDto(
+                        recordId = row.recordId,
+                        title = row.title,
+                        date = row.date,
+                        minBpm = row.minBpm,
+                        avgBpm = row.avgBpm,
+                        maxBpm = row.maxBpm,
+                        activeDurationMs = row.activeDurationMs,
+                        tagsEncoded = row.tagsEncoded,
+                        wearerName = row.wearerName,
+                        watchName = row.watchName
+                    )
+                }
+            )
+        }
+
+    /**
+     * Writes a saved analysis back from a backup.
+     *
+     * Its rows arrive already re-pointed at the recordings' new ids — the caller does the remapping,
+     * because only the restore knows where each recording landed.
+     */
+    suspend fun restoreSavedAnalysis(dto: inga.bpmetrics.export.SavedAnalysisDto) {
+        val analysisId = savedAnalysisDao.insertAnalysis(
+            SavedAnalysisEntity(
+                name = dto.name,
+                createdAt = dto.createdAt,
+                filterDescription = dto.filterDescription,
+                kind = dto.kind,
+                windowStartMs = dto.windowStartMs,
+                windowEndMs = dto.windowEndMs
+            )
+        )
+        savedAnalysisDao.insertRecords(
+            dto.records.map { row ->
+                SavedAnalysisRecordEntity(
+                    analysisId = analysisId,
+                    recordId = row.recordId,
+                    title = row.title,
+                    date = row.date,
+                    minBpm = row.minBpm,
+                    avgBpm = row.avgBpm,
+                    maxBpm = row.maxBpm,
+                    activeDurationMs = row.activeDurationMs,
+                    tagsEncoded = row.tagsEncoded,
+                    wearerName = row.wearerName,
+                    watchName = row.watchName
+                )
+            }
+        )
+    }
+
+    /** Every app preference, for a backup to carry. */
+    suspend fun getSettingsForBackup() = settingsRepository.exportPreferences()
+
+    /** Applies preferences from a backup. Returns how many were understood. */
+    suspend fun restoreSettings(snapshots: List<inga.bpmetrics.ui.settings.PreferenceSnapshot>): Int =
+        settingsRepository.importPreferences(snapshots)
+
     /**
      * Flattens tags to `categoryId:categoryName:tagName`, one per line.
      *

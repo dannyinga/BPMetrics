@@ -4,7 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.core.BpmWatchRecord
+import inga.bpmetrics.export.JsonExporter
+import inga.bpmetrics.export.LibraryBackup
+import inga.bpmetrics.export.RestoreResult
+import inga.bpmetrics.export.restoreBackup
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
@@ -129,6 +134,47 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun importRecord(watchRecord: BpmWatchRecord) {
         viewModelScope.launch {
             repository.saveWatchRecordToLibrary(watchRecord)
+        }
+    }
+
+    /**
+     * Restores a whole backup: people and watches first, then the recordings that point at them.
+     *
+     * Distinct from [importRecord], which takes one recording at a time and cannot recreate a
+     * person. Importing a backup record by record would return the recordings and leave every one
+     * of them attributed to nobody, because the ingest path can only *find* a person, not make one.
+     */
+    fun restoreFromBackup(backup: LibraryBackup, onDone: (RestoreResult) -> Unit) {
+        viewModelScope.launch {
+            onDone(restoreBackup(backup, repository))
+        }
+    }
+
+    /**
+     * Builds the backup JSON off the main thread and hands it back to be written.
+     *
+     * Saved analyses and settings are read here rather than collected into screen state: they are
+     * needed once, at the moment of export, and holding them live for a button nobody has pressed
+     * would keep two more queries running for the life of the screen.
+     */
+    fun buildBackupJson(
+        records: List<BpmRecord>,
+        people: List<PersonEntity>,
+        watches: List<WatchEntity>,
+        categories: List<CategoryEntity>,
+        onReady: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            onReady(
+                JsonExporter.toBackupJson(
+                    records = records,
+                    people = people,
+                    watches = watches,
+                    categories = categories,
+                    savedAnalyses = repository.getSavedAnalysesForBackup(),
+                    settings = repository.getSettingsForBackup()
+                )
+            )
         }
     }
 

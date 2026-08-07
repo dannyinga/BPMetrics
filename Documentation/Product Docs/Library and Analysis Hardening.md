@@ -78,7 +78,38 @@ Danny            ●━━━━━━━━━━━━━━━━━━━━
 The window runs from the earliest start of any recording in the event to the latest end. Lanes
 begin and end where that person's data does. Gaps are drawn as breaks, never interpolated across.
 
-### 2.4 Tags inherit down; they are never copied
+### 2.4 The three analyses are one system, not three screens
+
+Individual, event and group analysis answer three questions about the same data — *what did I do*,
+*what did we do together*, *what did the weekend look like* — and each is only useful if you can get
+to the others from it. Today they are separate destinations that happen to exist.
+
+**They must link both ways.** From a group, reach its events; from an event, reach the recordings
+in it and the group it belongs to; from a recording, reach the event it was part of. No screen is a
+dead end, and no answer requires going back to the library to find the next one.
+
+**Each must earn its screen.** A chart and a min/avg/max is not analysis. Every level owes the
+reader something they could not have worked out by looking: which moment the group reacted to,
+whose curve moved most, how this set compared to the last one, how this recording compares to that
+person's usual.
+
+**Reading a crowded chart is a feature.** Six curves on one graph is unreadable without a way to
+isolate one. **Tapping a person dims the others and brings theirs forward** — the same gesture on
+the legend, the lane, or the curve itself. Tapping again restores all of them. This is the single
+most valuable interaction on the event screen and should be built with the chart, not bolted on
+afterwards.
+
+Concrete requirements, applied at whichever level each makes sense:
+
+| | Individual | Event | Group |
+|---|---|---|---|
+| Isolate one person | — | tap to highlight | tap to highlight |
+| Cross-links | to its event and group | to its recordings and group | to its events |
+| Comparison | vs this person's other recordings | vs the other people present | vs the other events |
+| Moments | peaks within the recording | peaks the group shared | which event peaked highest |
+| Coverage | gaps stated, not hidden | who was recording when | which events have whom |
+
+### 2.5 Tags inherit down; they are never copied
 
 A tag applied to a group or an event applies to everything underneath it. Tag the "Coachella 2026"
 group with `Festivals › Coachella 2026`, and every recording of every set inside it carries that
@@ -150,11 +181,20 @@ Follow the shape of `MIGRATION_10_11` in `LibraryDatabase.kt`.
 2. `ALTER TABLE bpm_records ADD COLUMN eventId INTEGER DEFAULT NULL`
 3. No backfill — existing recordings start unfiled, which is correct.
 
-> ⚠️ **This project has shipped two migrations whose SQL disagreed with the entities.** Before
-> committing, cross-check the migration against `TableInfo` in the generated
+> ⚠️ **This project has shipped two migrations whose SQL disagreed with the entities, and a third
+> attempt at this very ticket made the same mistake.** Before committing, cross-check the migration
+> against `TableInfo` in the generated
 > `mobile/build/generated/ksp/debug/kotlin/inga/bpmetrics/library/LibraryDatabase_Impl.kt`,
 > and extend `LibraryDatabaseMigrationTest` to cover 11 → 12. A fresh install proves nothing —
 > only an upgrade fails.
+>
+> **The specific trap, all three times:** a Kotlin default (`val createdAt: Long = 0L`) is a
+> *constructor* default, not a SQL one. Room expects `createdAt INTEGER NOT NULL` with no
+> `DEFAULT`. Writing `DEFAULT 0` in the migration produces a column Room rejects. Only add
+> `DEFAULT` to the SQL where the entity carries a matching `@ColumnInfo(defaultValue = …)`.
+>
+> Compare the generated `createSql` against the migration character by character. It is the one
+> check that would have caught every occurrence.
 
 ### 3.4 DAOs
 
@@ -270,6 +310,8 @@ The centrepiece. Ends with an event page that is better than today's concurrent 
 | **LAH-3.4** | Event screen shell — header, chart, legend, moments, summary, recordings list with remove. Route `Routes.EVENT_DETAIL`. |
 | **LAH-3.5** | Migrate existing saved **concurrent** analyses into events, one event per analysis, carrying name and recordings. Retire the "save concurrent analysis" entry point; keep saved analyses for group snapshots. |
 | **LAH-3.6** | Video export from the event page, passing the event name as `graphTitle` — the plumbing already exists in `ImageExporter.ImageExportConfig`. |
+| **LAH-3.7** | **Tap to isolate.** Tapping a person — on the legend, their lane, or their curve — dims every other curve and brings theirs forward; tapping again restores all. Selection is chart state, so the readout legend and summary rows follow it. Per §2.4, this is the interaction that makes a six-curve chart readable at all, so build it with the chart rather than after. |
+| **LAH-3.8** | Cross-links out: to each recording in the event, and up to the group it belongs to. |
 
 **Verify:** an event with a deliberately split recording renders as one lane with one gap, in one
 colour. Export a video and confirm the title and colours match the on-screen chart.
@@ -285,6 +327,8 @@ colour. Export a video and confirm the title and colours match the on-screen cha
 | **LAH-4.3** | Event ranking by peak group intensity, reusing `ConcurrentAnalysis.findPeaks`. |
 | **LAH-4.4** | Navigation: group → event → recording, with back behaving sensibly at each level. |
 | **LAH-4.5** | Snapshot a group to a saved analysis, preserving the existing frozen semantics. |
+| **LAH-4.6** | Cross-links: group → event → recording, and back up again from each. Per §2.4 no analysis screen is a dead end. |
+| **LAH-4.7** | Per-person totals across the group, so "who went hardest all weekend" is answerable, with tap-to-isolate carried over from LAH-3.7. |
 
 **Verify:** a group with three events ranks them, and the totals equal the sum of the parts.
 

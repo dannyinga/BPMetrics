@@ -123,6 +123,12 @@ fun LibraryScreen(
     }
     val peopleById by viewModel.peopleById.collectAsStateWithLifecycle()
 
+    // Collected here rather than at the share call so a backup carries the profiles and category
+    // names its records point at. Without them the file restores recordings attributed to nobody.
+    val availablePeopleForBackup by viewModel.availablePeople.collectAsStateWithLifecycle()
+    val categoriesForBackup by remember { viewModel.repository.getAllCategories() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+
     val isSelectionMode = selectedRecordIds.isNotEmpty()
 
     var showSortMenu by remember { mutableStateOf(false) }
@@ -151,10 +157,25 @@ fun LibraryScreen(
                 val mimeType = context.contentResolver.getType(uri)
                 val isJson = mimeType?.contains("json") == true || uri.path?.lowercase()?.let { it.endsWith(".json") || it.endsWith(".bpmjson") } == true
                 if (isJson) {
-                    val jsonRecords = JsonExporter.importFromJson(context, uri)
-                    jsonRecords.forEach { watchRecord ->
-                        viewModel.importRecord(watchRecord)
-                        successCount++
+                    // Restored as a whole backup rather than record by record, so the people and
+                    // watches come back before the recordings that refer to them. Importing one
+                    // record at a time cannot recreate a person, and every recording would land
+                    // attributed to nobody.
+                    val backup = JsonExporter.readBackup(context, uri)
+                    if (backup != null) {
+                        successCount += backup.records.size
+                        viewModel.restoreFromBackup(backup) { result ->
+                            Toast.makeText(
+                                context,
+                                if (result.succeeded) {
+                                    "Restored ${result.recordsImported} recordings, " +
+                                        "${result.peopleCreated} people, ${result.watchesCreated} watches"
+                                } else {
+                                    "Restore failed: ${result.failure}"
+                                },
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                 } else {
                     val watchRecord = CsvExporter.importFromCsv(context, uri)
@@ -187,6 +208,44 @@ fun LibraryScreen(
                 }
                 recordsToExport = emptyList()
             }
+        }
+    }
+
+    // Saves the backup to a file the user picks, rather than handing it to the share sheet.
+    //
+    // A backup wants to land somewhere you can find it again — Downloads, Drive, an SD card —
+    // and the share sheet's list of chat apps is the wrong set of destinations for that.
+    var recordsToBackUp by remember { mutableStateOf<List<BpmRecord>>(emptyList()) }
+
+    val saveBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        val toWrite = recordsToBackUp
+        recordsToBackUp = emptyList()
+        if (uri == null || toWrite.isEmpty()) return@rememberLauncherForActivityResult
+
+        viewModel.buildBackupJson(
+            records = toWrite,
+            people = availablePeopleForBackup,
+            watches = watches,
+            categories = categoriesForBackup
+        ) { json ->
+            val ok = try {
+                context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) } != null
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+            Toast.makeText(
+                context,
+                if (ok) {
+                    "Backed up ${toWrite.size} recording${if (toWrite.size == 1) "" else "s"}, " +
+                        "plus saved analyses and settings"
+                } else {
+                    "Could not write the backup"
+                },
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -288,11 +347,33 @@ fun LibraryScreen(
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text("Save backup (.bpmjson)") },
+                                leadingIcon = { Icon(Icons.Default.Save, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    recordsToBackUp = selectedRecords
+                                    val stamp = java.text.SimpleDateFormat(
+                                        "yyyyMMdd_HHmm",
+                                        java.util.Locale.US
+                                    ).format(java.util.Date())
+                                    saveBackupLauncher.launch("BPMetrics_Backup_$stamp.bpmjson")
+                                    viewModel.clearSelection()
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Share as .bpmjson") },
                                 leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
                                 onClick = {
                                     showSelectionMenu = false
-                                    JsonExporter.shareJson(context, selectedRecords)
+                                    // People, watches and categories go with the records, or the
+                                    // file restores recordings that belong to nobody.
+                                    JsonExporter.shareJson(
+                                        context = context,
+                                        records = selectedRecords,
+                                        people = availablePeopleForBackup,
+                                        watches = watches,
+                                        categories = categoriesForBackup
+                                    )
                                     viewModel.clearSelection()
                                 }
                             )

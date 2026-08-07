@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -13,6 +15,7 @@ import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.ui.settings.SettingsRepository.PreferencesKeys.DEFAULT_NAMING_CATEGORY_ID
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -56,6 +59,61 @@ class SettingsRepository(context: Context) {
     /**
      * The ID of the category currently used for auto-naming new records.
      */
+    /**
+     * Every stored preference, as key/type/value triples.
+     *
+     * Walks the DataStore rather than listing the keys by hand, so a setting added later is carried
+     * by a backup without anyone remembering to add it here — the failure mode of an explicit list
+     * is that it silently stops being complete.
+     *
+     * The type travels with the value because DataStore keys are typed and JSON is not: a float
+     * `100f` and a long `100` are indistinguishable once serialized, and restoring one as the other
+     * throws at read time.
+     */
+    suspend fun exportPreferences(): List<PreferenceSnapshot> =
+        dataStore.data.first().asMap().mapNotNull { (key, value) ->
+            val type = when (value) {
+                is String -> "string"
+                is Boolean -> "boolean"
+                is Float -> "float"
+                is Long -> "long"
+                is Int -> "int"
+                is Double -> "double"
+                // Sets and anything else are skipped rather than guessed at.
+                else -> return@mapNotNull null
+            }
+            PreferenceSnapshot(key.name, type, value.toString())
+        }
+
+    /**
+     * Restores preferences captured by [exportPreferences].
+     *
+     * An unrecognised type or unparseable value is skipped, not fatal — a backup written by a newer
+     * build should restore everything it can rather than nothing.
+     *
+     * @return how many were applied.
+     */
+    suspend fun importPreferences(snapshots: List<PreferenceSnapshot>): Int {
+        var applied = 0
+        dataStore.edit { prefs ->
+            snapshots.forEach { snapshot ->
+                val ok = runCatching {
+                    when (snapshot.type) {
+                        "string" -> prefs[stringPreferencesKey(snapshot.key)] = snapshot.value
+                        "boolean" -> prefs[booleanPreferencesKey(snapshot.key)] = snapshot.value.toBooleanStrict()
+                        "float" -> prefs[floatPreferencesKey(snapshot.key)] = snapshot.value.toFloat()
+                        "long" -> prefs[longPreferencesKey(snapshot.key)] = snapshot.value.toLong()
+                        "int" -> prefs[intPreferencesKey(snapshot.key)] = snapshot.value.toInt()
+                        "double" -> prefs[doublePreferencesKey(snapshot.key)] = snapshot.value.toDouble()
+                        else -> throw IllegalArgumentException("unknown type ${snapshot.type}")
+                    }
+                }.isSuccess
+                if (ok) applied++
+            }
+        }
+        return applied
+    }
+
     val defaultNamingCategoryId: Flow<Long?> = dataStore.data
         .map { preferences -> preferences[DEFAULT_NAMING_CATEGORY_ID] }
 
@@ -162,3 +220,15 @@ class SettingsRepository(context: Context) {
     }
 
 }
+
+/**
+ * One stored preference, with enough type information to be restored as what it was.
+ *
+ * Lives outside [SettingsRepository] so the backup format can name it without importing the whole
+ * settings layer.
+ */
+data class PreferenceSnapshot(
+    val key: String,
+    val type: String,
+    val value: String
+)
