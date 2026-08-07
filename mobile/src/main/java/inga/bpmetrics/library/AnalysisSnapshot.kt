@@ -30,8 +30,21 @@ data class AnalysisSnapshotRecord(
     /** Who was wearing the watch, as frozen onto the record. */
     val wearerName: String = "",
     /** The watch it came from, by the device name it had when the analysis was taken. */
-    val watchName: String = ""
+    val watchName: String = "",
+    /** Who and where, by id, so a frozen analysis can colour people and rank events. */
+    val personId: Long? = null,
+    val personColorArgb: Int? = null,
+    val eventId: Long? = null,
+    val eventName: String = "",
+    /**
+     * Time in each heart rate band, captured because it cannot be recomputed later — a saved
+     * analysis keeps no data points.
+     */
+    val zones: List<SnapshotZone> = emptyList()
 )
+
+/** One band's share of a recording's measured time, frozen at save. */
+data class SnapshotZone(val name: String, val durationMs: Long)
 
 /**
  * A stored analysis read back from the database.

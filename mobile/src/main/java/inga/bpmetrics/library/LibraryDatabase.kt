@@ -164,7 +164,7 @@ interface BpmRecordDao {
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -181,7 +181,7 @@ abstract class LibraryDatabase : RoomDatabase() {
         private const val DB_NAME = "bpmetrics_db"
 
         /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 13
+        private const val CURRENT_VERSION = 14
 
         private const val MAX_BACKUPS = 5
 
@@ -677,6 +677,41 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from 13 to 14: a saved analysis remembers who and where, not just what.
+         *
+         * Snapshots captured names only, so a frozen analysis could group by wearer but could not
+         * colour anyone, could not offer the Event tab, and lost the time-in-band breakdown — the
+         * ids and the bands were simply never written down, and the data points they would have
+         * been recomputed from are gone by then.
+         *
+         * Existing rows get NULL and empty string, which is exactly the state they were already
+         * in. Nothing is backfilled: the values were not recorded, and inventing them from the
+         * current library would make a frozen analysis reflect a present it is meant to predate.
+         *
+         * `ALTER TABLE ADD COLUMN` only, so no table rebuild and no foreign keys to re-declare.
+         * The defaults here match the entity's `@ColumnInfo(defaultValue = ...)` exactly — a
+         * mismatch produces a database that installs fine and refuses to open on upgrade.
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val additions = listOf(
+                    "personId" to "INTEGER DEFAULT NULL",
+                    "personColorArgb" to "INTEGER DEFAULT NULL",
+                    "eventId" to "INTEGER DEFAULT NULL",
+                    "eventName" to "TEXT NOT NULL DEFAULT ''",
+                    "zonesEncoded" to "TEXT NOT NULL DEFAULT ''"
+                )
+                additions.forEach { (column, type) ->
+                    if (!columnExists(db, "saved_analysis_records", column)) {
+                        db.execSQL("ALTER TABLE saved_analysis_records ADD COLUMN $column $type")
+                    }
+                }
+
+                android.util.Log.i(TAG, "MIGRATION_13_14: Saved analyses remember who and where")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -733,7 +768,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_9_10,
                         MIGRATION_10_11,
                         MIGRATION_11_12,
-                        MIGRATION_12_13
+                        MIGRATION_12_13,
+                        MIGRATION_13_14
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

@@ -620,7 +620,7 @@ private fun PersonSummaryRow(
             val zones = series.zoneTimes.filter { it.durationMs > 0L }
             if (zones.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
-                ZoneBar(zones)
+                ZoneBreakdown(zones, showDurations = false)
             }
 
             if (series.gaps.isNotEmpty()) {
@@ -635,64 +635,6 @@ private fun PersonSummaryRow(
             }
         }
     }
-}
-
-/**
- * One stacked bar showing how measured time split across heart rate bands.
- *
- * A bar rather than four numbers: the shape of an evening reads at a glance, and the exact minutes
- * in each band are rarely what anyone wants. Bands with no time in them are not drawn — a legend
- * entry for zero minutes is noise.
- */
-@Composable
-private fun ZoneBar(zones: List<ZoneTime>) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(10.dp)
-            .clip(MaterialTheme.shapes.extraSmall)
-    ) {
-        zones.forEach { zone ->
-            Box(
-                Modifier
-                    .weight(zone.share.coerceAtLeast(0.001f))
-                    .fillMaxHeight()
-                    .background(zoneColour(zone.zone.name))
-            )
-        }
-    }
-    Spacer(Modifier.height(6.dp))
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        zones.forEach { zone ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(zoneColour(zone.zone.name))
-                )
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    "${zone.zone.name} ${(zone.share * 100).roundToInt()}%",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-/** Bands borrowed from the app's existing low/avg/high palette, so the colours already mean this. */
-@Composable
-private fun zoneColour(name: String): Color = when (name) {
-    "Resting" -> BpmLow
-    "Light" -> BpmAvg
-    "Elevated" -> BpmHigh.copy(alpha = 0.7f)
-    else -> BpmHigh
 }
 
 @Composable

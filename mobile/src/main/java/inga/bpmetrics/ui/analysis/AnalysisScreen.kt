@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -53,11 +54,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.ui.Routes
 import inga.bpmetrics.ui.components.FlowRow
 import inga.bpmetrics.ui.tags.EffectiveTagChip
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import inga.bpmetrics.ui.theme.BpmAvg
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
@@ -323,6 +326,17 @@ private fun SummarySection(uiState: AnalysisUiState, tagging: ScopeTagging?) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { ScopeHeader(uiState) }
+        // Where the whole scope's time went. The same split every person row and every ranking bar
+        // shows, summed — one definition of "time in the peak band" for the entire screen.
+        if (uiState.zoneTimes.any { it.durationMs > 0L }) {
+            item {
+                Column {
+                    SectionTitle("Time in range", "Across everything in scope")
+                    Spacer(Modifier.height(8.dp))
+                    ZoneBreakdown(uiState.zoneTimes, showDurations = true)
+                }
+            }
+        }
         // Only a group can carry tags. A filter describes a selection rather than an occasion, and
         // a saved analysis is frozen — offering the action there would have nowhere to write.
         tagging?.let { item { GroupTags(it) } }
@@ -750,6 +764,9 @@ private fun RankingsCard(
                         // matches every other place they appear.
                         color = person?.colorArgb?.let { Color(it) } ?: themeColor,
                         dimmed = dimmed,
+                        // Which artist kept people up there, rather than only who touched the
+                        // highest number once — the question a peak alone cannot answer.
+                        zoneTimes = ranking.zoneTimes,
                         onClick = { onOpenRanking(ranking) }
                     )
                 }
@@ -766,6 +783,7 @@ private fun RankingBar(
     value: Int,
     color: Color,
     dimmed: Boolean,
+    zoneTimes: List<ZoneTime> = emptyList(),
     onClick: () -> Unit
 ) {
     val alpha = if (dimmed) 0.3f else 1f
@@ -815,8 +833,13 @@ private fun RankingBar(
                 color = color.copy(alpha = alpha)
             )
         }
+        if (zoneTimes.any { it.durationMs > 0L }) {
+            Spacer(Modifier.height(4.dp))
+            ZoneBreakdown(zoneTimes, showDurations = false, alpha = alpha)
+        }
     }
 }
+
 
 @Composable
 private fun PersonTotalsRow(
@@ -871,6 +894,11 @@ private fun PersonTotalsRow(
                     alpha,
                     Modifier.weight(1.2f)
                 )
+            }
+            // Who spent their evening up there, which a peak on its own cannot say.
+            if (person.zoneTimes.any { it.durationMs > 0L }) {
+                Spacer(Modifier.height(10.dp))
+                ZoneBreakdown(person.zoneTimes, showDurations = true, alpha = alpha)
             }
         }
     }

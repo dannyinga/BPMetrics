@@ -649,6 +649,7 @@ fun LibraryScreen(
                     onDelete = { deletingEvent = it },
                     onAcceptSuggestion = { suggestionToName = it },
                     onDismissSuggestion = { viewModel.dismissSuggestion(it) },
+                    onDismissSuggestionForever = { viewModel.dismissSuggestionForever(it) },
                     tile = tile
                 )
 
@@ -940,6 +941,7 @@ private fun EventsList(
     onDelete: (EventSummary) -> Unit,
     onAcceptSuggestion: (EventSuggestion) -> Unit,
     onDismissSuggestion: (EventSuggestion) -> Unit,
+    onDismissSuggestionForever: (EventSuggestion) -> Unit,
     tile: @Composable (BpmRecord) -> Unit
 ) {
     LazyColumn(
@@ -965,7 +967,8 @@ private fun EventsList(
                     .mapNotNull { r -> r.metadata.personId?.let { peopleById[it] } }
                     .distinct(),
                 onAccept = { onAcceptSuggestion(suggestion) },
-                onDismiss = { onDismissSuggestion(suggestion) }
+                onDismiss = { onDismissSuggestion(suggestion) },
+                onDismissForever = { onDismissSuggestionForever(suggestion) }
             )
         }
 

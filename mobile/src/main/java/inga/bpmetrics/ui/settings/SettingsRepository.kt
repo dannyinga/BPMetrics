@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.export.VideoExporter
@@ -60,6 +61,9 @@ class SettingsRepository(context: Context) {
 
         /** Whether saved same-time analyses have already been turned into events. */
         val CONCURRENT_ANALYSES_CONVERTED = booleanPreferencesKey("concurrent_analyses_converted")
+
+        /** Recordings the user has said, permanently, not to suggest an event for. */
+        val DISMISSED_SUGGESTION_RECORDS = stringSetPreferencesKey("dismissed_suggestion_records")
     }
 
     /**
@@ -87,6 +91,30 @@ class SettingsRepository(context: Context) {
 
     suspend fun setConvertedConcurrentAnalyses() {
         dataStore.edit { it[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] = true }
+    }
+
+    /**
+     * Recordings that should never be suggested as an event again.
+     *
+     * Stored by record id rather than by cluster, because a cluster has no identity — one more
+     * recording arriving from a watch changes its membership and it would come back as a new
+     * suggestion the user has to dismiss all over again. The recordings are the thing the user
+     * actually said no about.
+     */
+    val dismissedSuggestionRecords: Flow<Set<Long>> = dataStore.data
+        .map { prefs ->
+            prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS]
+                .orEmpty()
+                .mapNotNull { it.toLongOrNull() }
+                .toSet()
+        }
+
+    suspend fun dismissSuggestionRecords(recordIds: Set<Long>) {
+        dataStore.edit { prefs ->
+            val existing = prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS].orEmpty()
+            prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS] =
+                existing + recordIds.map { it.toString() }
+        }
     }
 
     /**

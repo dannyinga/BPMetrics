@@ -313,7 +313,12 @@ class LibraryRepository(
                     activeDurationMs = record.activeDurationMs,
                     tagsEncoded = encodeTags(record.tags),
                     wearerName = record.wearerName,
-                    watchName = record.watchName
+                    watchName = record.watchName,
+                    personId = record.personId,
+                    personColorArgb = record.personColorArgb,
+                    eventId = record.eventId,
+                    eventName = record.eventName,
+                    zonesEncoded = encodeZones(record.zones)
                 )
             }
         )
@@ -348,7 +353,12 @@ class LibraryRepository(
                     activeDurationMs = entity.activeDurationMs,
                     tags = decodeTags(entity.tagsEncoded),
                     wearerName = entity.wearerName,
-                    watchName = entity.watchName
+                    watchName = entity.watchName,
+                    personId = entity.personId,
+                    personColorArgb = entity.personColorArgb,
+                    eventId = entity.eventId,
+                    eventName = entity.eventName,
+                    zones = decodeZones(entity.zonesEncoded)
                 )
             },
             recordsStillInLibrary = savedAnalysisDao.countRecordsStillPresent(analysisId)
@@ -547,6 +557,12 @@ class LibraryRepository(
 
     suspend fun setLibraryViewMode(mode: String) = settingsRepository.setLibraryViewMode(mode)
 
+    /** Recordings the user has permanently waved off as an event suggestion. */
+    val dismissedSuggestionRecords: Flow<Set<Long>> = settingsRepository.dismissedSuggestionRecords
+
+    suspend fun dismissSuggestionRecords(recordIds: Set<Long>) =
+        settingsRepository.dismissSuggestionRecords(recordIds)
+
     /**
      * Flattens tags to `categoryId:categoryName:tagName`, one per line.
      *
@@ -569,6 +585,25 @@ class LibraryRepository(
     }
 
     private fun String.sanitizeForEncoding(): String = replace(":", " ").replace("\n", " ")
+
+    /**
+     * Flattens time-in-band to `name:ms`, one per line — same shape and same reasoning as tags.
+     *
+     * Frozen at save because it cannot be recomputed: a saved analysis keeps no data points, so
+     * the split has to be captured or it is gone.
+     */
+    private fun encodeZones(zones: List<SnapshotZone>): String =
+        zones.joinToString("\n") { "${it.name.sanitizeForEncoding()}:${it.durationMs}" }
+
+    private fun decodeZones(encoded: String): List<SnapshotZone> {
+        if (encoded.isBlank()) return emptyList()
+        return encoded.lineSequence().mapNotNull { line ->
+            val parts = line.split(":", limit = 2)
+            if (parts.size != 2) return@mapNotNull null
+            val ms = parts[1].toLongOrNull() ?: return@mapNotNull null
+            SnapshotZone(name = parts[0], durationMs = ms)
+        }.toList()
+    }
 
     // --- Watch Registry ---
 

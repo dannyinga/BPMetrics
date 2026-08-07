@@ -38,6 +38,10 @@ import kotlin.math.roundToInt
  * @param isolatedId [ConcurrentSeries.id] to bring forward, dimming the rest. Null shows all.
  * @param onIsolate Reports a tap that landed on a curve. Null means the same curve was tapped
  *   again, which restores everything.
+ * @param colourByValue Draws the curve in the blue-to-red gradient instead of its lane colour.
+ *   Only meaningful with one lane: with several, colour has to say *whose* curve it is and cannot
+ *   also encode height. A single recording has no such competition, and the gradient is what makes
+ *   its shape readable without reading the axis.
  */
 @Composable
 fun ConcurrentChart(
@@ -47,7 +51,8 @@ fun ConcurrentChart(
     scrubbedMs: Long? = null,
     onScrub: (Long?) -> Unit = {},
     isolatedId: String? = null,
-    onIsolate: (String?) -> Unit = {}
+    onIsolate: (String?) -> Unit = {},
+    colourByValue: Boolean = false
 ) {
     if (analysis.isEmpty) return
 
@@ -129,11 +134,18 @@ fun ConcurrentChart(
                 analysis.series.partition { it.id != isolatedId }
             }
 
+            // Only honoured for a lone lane. Two curves in the same gradient would be
+            // indistinguishable from each other, which is the one thing the colour must not be.
+            val gradient = if (colourByValue && analysis.series.size == 1) {
+                BpmGradient.verticalBrush(topY = 0f, bottomY = plotHeight)
+            } else null
+
             dimmed.forEach { series ->
                 drawSeries(
                     series, window, minBpm, maxBpm, plotWidth, plotHeight,
                     alpha = if (isolatedId == null) 1f else DIMMED_ALPHA,
-                    strokeWidth = 3f
+                    strokeWidth = if (gradient != null) 4f else 3f,
+                    brush = gradient
                 )
             }
             front.forEach { series ->
@@ -277,7 +289,9 @@ private fun DrawScope.drawSeries(
     plotWidth: Float,
     plotHeight: Float,
     alpha: Float = 1f,
-    strokeWidth: Float = 3f
+    strokeWidth: Float = 3f,
+    /** Overrides the lane's flat colour, for the single-recording gradient. */
+    brush: androidx.compose.ui.graphics.Brush? = null
 ) {
     if (series.points.isEmpty()) return
 
@@ -315,7 +329,11 @@ private fun DrawScope.drawSeries(
     }
 
     clipRect(left = AXIS_GUTTER_PX, top = 0f, right = size.width, bottom = plotHeight) {
-        drawPath(path, colour, style = Stroke(width = strokeWidth))
+        if (brush != null) {
+            drawPath(path, brush, alpha = alpha, style = Stroke(width = strokeWidth))
+        } else {
+            drawPath(path, colour, style = Stroke(width = strokeWidth))
+        }
     }
 }
 

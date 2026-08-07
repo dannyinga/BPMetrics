@@ -59,6 +59,26 @@ object BpmZones {
     )
 
     /**
+     * Adds several already-split sets together.
+     *
+     * How a person's, a tag's or a whole scope's bands are worked out: every one of them is the
+     * sum of the recordings underneath it, so there is one definition of "time in the peak band"
+     * rather than one per level.
+     */
+    fun merge(splits: List<List<ZoneTime>>, zones: List<BpmZone> = DEFAULT): List<ZoneTime> {
+        val totals = zones.associateWith { zone ->
+            splits.sumOf { split ->
+                split.filter { it.zone.name == zone.name }.sumOf { it.durationMs }
+            }
+        }
+        val measured = totals.values.sum()
+        return zones.map { zone ->
+            val ms = totals[zone] ?: 0L
+            ZoneTime(zone, ms, if (measured > 0L) ms.toFloat() / measured else 0f)
+        }
+    }
+
+    /**
      * @param points Readings on a shared clock, in time order.
      * @param gapThresholdMs Anything longer is a dropout and contributes no time to any band.
      */

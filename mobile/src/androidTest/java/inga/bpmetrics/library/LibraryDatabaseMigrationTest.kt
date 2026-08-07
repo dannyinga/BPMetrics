@@ -41,7 +41,8 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_9_10,
             LibraryDatabase.MIGRATION_10_11,
             LibraryDatabase.MIGRATION_11_12,
-            LibraryDatabase.MIGRATION_12_13
+            LibraryDatabase.MIGRATION_12_13,
+            LibraryDatabase.MIGRATION_13_14
         )
     }
 
@@ -210,7 +211,7 @@ class LibraryDatabaseMigrationTest {
      * Running the whole chain is what a user upgrading from an older install actually experiences.
      */
     @Test
-    fun migrate5To13_runsTheWholeChain() {
+    fun migrate5To14_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 5).apply {
             execSQL(
                 """
@@ -223,7 +224,7 @@ class LibraryDatabaseMigrationTest {
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 13, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -248,7 +249,7 @@ class LibraryDatabaseMigrationTest {
             "(4, 'Nobody', '', 4000, 4000, 5000, 1000, NULL, 70.0, NULL, 'Watch C', '')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 13, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         // One profile per distinct name — the two Kyle recordings share a person, not one each.
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
@@ -296,7 +297,7 @@ class LibraryDatabaseMigrationTest {
     fun migrate10To11_handlesALibraryWithNoWearers() {
         helper.createDatabase(TEST_DB, 5).close()
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 13, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -316,7 +317,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate11To12_producesTheSchemaRoomExpects() {
         helper.createDatabase(TEST_DB, 5).close()
-        helper.runMigrationsAndValidate(TEST_DB, 13, true, *ALL_MIGRATIONS).close()
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
     }
 
     /**
@@ -329,7 +330,7 @@ class LibraryDatabaseMigrationTest {
             "(1, 'Before events existed', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 13, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         db.query("SELECT eventId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -355,7 +356,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate12To13_producesTheSchemaRoomExpects() {
         helper.createDatabase(TEST_DB, 5).close()
-        helper.runMigrationsAndValidate(TEST_DB, 13, true, *ALL_MIGRATIONS).close()
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
     }
 
     /**
@@ -371,7 +372,7 @@ class LibraryDatabaseMigrationTest {
             "(1, 'Before tags cascaded', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 13, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         listOf("event_tag_cross_ref", "event_group_tag_cross_ref").forEach { table ->
             db.query("SELECT COUNT(*) FROM $table").use { cursor ->
@@ -395,7 +396,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun deletingAnEvent_removesItsTagLinksButKeepsTheTag() {
         helper.createDatabase(TEST_DB, 5).close()
-        val db = helper.runMigrationsAndValidate(TEST_DB, 13, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         db.execSQL("PRAGMA foreign_keys = ON")
         db.execSQL("INSERT INTO categories (categoryId, name) VALUES (1, 'Festivals')")
@@ -412,6 +413,57 @@ class LibraryDatabaseMigrationTest {
         db.query("SELECT COUNT(*) FROM tags WHERE tagId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals("the tag itself survives", 1, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * The schema check for the columns a saved analysis gained.
+     *
+     * Five `ALTER TABLE ADD COLUMN` statements whose defaults have to match the entity exactly. A
+     * `DEFAULT NULL` written where the entity declares none — or the other way round — produces a
+     * database that installs fine and refuses to open on upgrade.
+     */
+    @Test
+    fun migrate13To14_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * An analysis saved before the upgrade keeps its numbers and gains empty new ones.
+     *
+     * Nothing is backfilled on purpose: the ids and the band split were never recorded, and
+     * inventing them from the current library would make a frozen analysis reflect a present it is
+     * meant to predate.
+     */
+    @Test
+    fun migrate13To14_keepsOldSnapshotsAndLeavesTheNewColumnsEmpty() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+
+        db.execSQL(
+            "INSERT INTO saved_analyses (analysisId, name, createdAt) VALUES (1, 'Coachella', 100)"
+        )
+        db.execSQL(
+            """
+            INSERT INTO saved_analysis_records
+                (analysisId, recordId, title, date, minBpm, avgBpm, maxBpm, activeDurationMs, wearerName)
+            VALUES (1, 7, 'Saturday', 100, 60.0, 120.0, 180.0, 60000, 'Kyle')
+            """.trimIndent()
+        )
+
+        db.query(
+            "SELECT wearerName, maxBpm, personId, eventId, eventName, zonesEncoded " +
+                "FROM saved_analysis_records WHERE recordId = 7"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Kyle", cursor.getString(0))
+            assertEquals(180.0, cursor.getDouble(1), 0.001)
+            assertTrue("no person id was ever recorded", cursor.isNull(2))
+            assertTrue("no event id was ever recorded", cursor.isNull(3))
+            assertEquals("", cursor.getString(4))
+            assertEquals("", cursor.getString(5))
         }
         db.close()
     }

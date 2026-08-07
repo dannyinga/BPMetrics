@@ -423,7 +423,12 @@ private fun RecordChartSection(
             analysis = analysis,
             window = window,
             scrubbedMs = scrubbedMs,
-            onScrub = onScrub
+            onScrub = onScrub,
+            // The blue-to-red gradient rather than the wearer's colour. With one lane there is
+            // nobody to tell apart, so the colour is free to say how high the rate is instead —
+            // which is what the graph detail screen has always done. The wearer keeps their colour
+            // as the stripe, the swatch and the breadcrumb accent everywhere else.
+            colourByValue = true
         )
 
         Row(

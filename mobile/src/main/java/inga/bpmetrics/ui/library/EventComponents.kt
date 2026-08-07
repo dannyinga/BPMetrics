@@ -477,8 +477,11 @@ fun SuggestionCard(
     suggestion: EventSuggestion,
     people: List<PersonEntity>,
     onAccept: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onDismissForever: () -> Unit
 ) {
+    var showConfirmDismiss by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -499,11 +502,49 @@ fun SuggestionCard(
             Spacer(Modifier.height(6.dp))
             PersonDots(people)
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 TextButton(onClick = onAccept) { Text("Create event") }
+                // "Not now" hides it until relaunch; "Dismiss" means never again. Both exist
+                // because they answer different questions — "not yet" and "no".
                 TextButton(onClick = onDismiss) { Text("Not now") }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { showConfirmDismiss = true }) {
+                    Text(
+                        "Dismiss",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
+    }
+
+    // Confirmed because there is no undo. The recordings stay exactly where they are; only the
+    // offer to group them goes away, which the wording has to make clear or "dismiss" reads as
+    // something that might delete them.
+    if (showConfirmDismiss) {
+        AlertDialog(
+            onDismissRequest = { showConfirmDismiss = false },
+            title = { Text("Stop suggesting these?") },
+            text = {
+                Text(
+                    "These ${suggestion.size} recordings will not be suggested as an event again. " +
+                        "They stay in your library and can still be filed by hand at any time."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConfirmDismiss = false
+                    onDismissForever()
+                }) { Text("Stop suggesting") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmDismiss = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 

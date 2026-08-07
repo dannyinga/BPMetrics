@@ -84,7 +84,26 @@ data class SavedAnalysisRecordEntity(
     val activeDurationMs: Long,
     @ColumnInfo(defaultValue = "") val tagsEncoded: String = "",
     @ColumnInfo(defaultValue = "") val wearerName: String = "",
-    @ColumnInfo(defaultValue = "") val watchName: String = ""
+    @ColumnInfo(defaultValue = "") val watchName: String = "",
+    /**
+     * Who and which event, by id.
+     *
+     * Names alone were captured before, which meant a frozen analysis could group by wearer but
+     * could not colour anyone or offer the Event tab — the ids were simply never written down.
+     * Null on rows saved before this existed, and the screen falls back exactly as it did then.
+     */
+    @ColumnInfo(defaultValue = "NULL") val personId: Long? = null,
+    @ColumnInfo(defaultValue = "NULL") val personColorArgb: Int? = null,
+    @ColumnInfo(defaultValue = "NULL") val eventId: Long? = null,
+    @ColumnInfo(defaultValue = "") val eventName: String = "",
+    /**
+     * Time in each heart rate band, as `name:ms`, one per entry, separated by newlines.
+     *
+     * Encoded rather than given a table for the same reason as [tagsEncoded]: it is only ever read
+     * back whole. Without it a frozen analysis loses the "where did the time go" breakdown that
+     * makes a live one worth reading, and it cannot be recomputed — the data points are gone.
+     */
+    @ColumnInfo(defaultValue = "") val zonesEncoded: String = ""
 )
 
 /**

@@ -2,6 +2,9 @@ package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.library.AnalysisSnapshotRecord
 import inga.bpmetrics.library.AnalysisSnapshotTag
+import inga.bpmetrics.library.BpmZones
+import inga.bpmetrics.library.SnapshotZone
+import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EffectiveTag
@@ -45,17 +48,24 @@ data class AnalysisRecord(
     /** The watch it came from, by its device name. */
     val watchName: String = "",
     /**
-     * Who and what event, by id — live only.
+     * Who and what event, by id.
      *
-     * `saved_analysis_records` stores names, not ids, so these are null for a frozen analysis. That
-     * is why grouping by wearer works on a saved analysis (it groups by name) while the Event tab
-     * and a person's own colour do not appear there: the information was never captured. Persisting
-     * them is a schema change, deliberately left for the sprint that already has a migration.
+     * Captured into the snapshot as well as resolved live, so a frozen analysis colours its people
+     * and offers the Event tab. Rows saved before schema 14 have neither and fall back to grouping
+     * by name, which is what every saved analysis did until then.
      */
     val personId: Long? = null,
     val personColorArgb: Int? = null,
     val eventId: Long? = null,
-    val eventName: String = ""
+    val eventName: String = "",
+    /**
+     * Measured time in each heart rate band.
+     *
+     * Carried per record so any grouping — a person, a tag, an event, the whole scope — is the sum
+     * of its records rather than a separate calculation. Captured into the snapshot too, because a
+     * saved analysis has no data points left to recompute it from.
+     */
+    val zoneTimes: List<ZoneTime> = emptyList()
 ) {
     companion object {
         /**
@@ -111,7 +121,14 @@ data class AnalysisRecord(
                 personId = record.metadata.personId,
                 personColorArgb = record.metadata.personId?.let { personColors[it] },
                 eventId = record.metadata.eventId,
-                eventName = record.metadata.eventId?.let { eventNames[it] }.orEmpty()
+                eventName = record.metadata.eventId?.let { eventNames[it] }.orEmpty(),
+                // Same walk over the data points that produced the active duration, and the same
+                // gap rule, so the bands and the measured total always agree.
+                zoneTimes = BpmZones.split(
+                    record.dataPoints.map {
+                        (record.metadata.startTime + it.timestamp) to it.bpm
+                    }
+                )
             )
 
         /** Convenience for mapping a whole list against the category, watch and event tables. */
@@ -149,7 +166,23 @@ data class AnalysisRecord(
                 AnalysisTag(tagName = it.tagName, categoryId = it.categoryId, categoryName = it.categoryName)
             },
             wearerName = snapshot.wearerName,
-            watchName = snapshot.watchName
+            watchName = snapshot.watchName,
+            personId = snapshot.personId,
+            personColorArgb = snapshot.personColorArgb,
+            eventId = snapshot.eventId,
+            eventName = snapshot.eventName,
+            // Matched back to the current band definitions by name. A band that has since been
+            // renamed drops out rather than being attributed to the wrong one — the snapshot is a
+            // statement about the past, and guessing which band it meant would be inventing one.
+            zoneTimes = snapshot.zones.mapNotNull { stored ->
+                BpmZones.DEFAULT.firstOrNull { it.name == stored.name }
+                    ?.let { ZoneTime(it, stored.durationMs, 0f) }
+            }.let { restored ->
+                val total = restored.sumOf { it.durationMs }
+                restored.map {
+                    it.copy(share = if (total > 0L) it.durationMs.toFloat() / total else 0f)
+                }
+            }
         )
     }
 
@@ -166,6 +199,11 @@ data class AnalysisRecord(
             AnalysisSnapshotTag(tagName = it.tagName, categoryId = it.categoryId, categoryName = it.categoryName)
         },
         wearerName = wearerName,
-        watchName = watchName
+        watchName = watchName,
+        personId = personId,
+        personColorArgb = personColorArgb,
+        eventId = eventId,
+        eventName = eventName,
+        zones = zoneTimes.map { SnapshotZone(it.zone.name, it.durationMs) }
     )
 }

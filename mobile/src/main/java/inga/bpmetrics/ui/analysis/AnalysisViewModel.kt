@@ -9,6 +9,8 @@ import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.TagEntity
 import inga.bpmetrics.library.TagSource
+import inga.bpmetrics.library.BpmZones
+import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.ui.library.LibraryViewModel
 import kotlinx.coroutines.flow.*
 
@@ -219,7 +221,12 @@ class AnalysisViewModel(
                     eventId = if (effectiveCategoryId == EVENT_CATEGORY_ID) {
                         eventIdsByName[tagName]
                     } else null,
-                    recordCount = groupRecords.size
+                    recordCount = groupRecords.size,
+                    // Which artist kept people in the peak band, rather than only who touched the
+                    // highest number once. Summed from the same per-record split every other level
+                    // uses, so a row and the whole scope can never disagree.
+                    zoneTimes = BpmZones.merge(groupRecords.map { it.zoneTimes }),
+                    activeDurationMs = groupRecords.sumOf { it.activeDurationMs }
                 )
             } ?: emptyList()
         } else emptyList()
@@ -243,6 +250,7 @@ class AnalysisViewModel(
             availableCategories = filteredCategories,
             currentCategoryId = effectiveCategoryId,
             people = perPersonTotals(records),
+            zoneTimes = BpmZones.merge(records.map { it.zoneTimes }),
             totalActiveDurationMs = totalActiveDuration,
             eventCount = eventGroups.size,
             dateRangeText = dateRangeText(records),
@@ -313,7 +321,8 @@ class AnalysisViewModel(
                         minBpm = theirs.mapNotNull { it.minBpm }.minOrNull() ?: 0.0,
                         avgBpm = if (activeMs > 0L) weighted / activeMs else 0.0,
                         maxBpm = theirs.mapNotNull { it.maxBpm }.maxOrNull() ?: 0.0,
-                        activeDurationMs = activeMs
+                        activeDurationMs = activeMs,
+                        zoneTimes = BpmZones.merge(theirs.map { it.zoneTimes })
                     )
                 }
                 .sortedByDescending { it.maxBpm }
@@ -337,7 +346,7 @@ class AnalysisViewModel(
                         LibraryViewModel.applyFilter(library, filter, tags)
                     },
                     savedAnalysisId = null,
-                    scope = flowOf(AnalysisScope.Filter(filter))
+                    scope = repository.describeFilter(filter)
                 ) as T
         }
 
@@ -452,6 +461,45 @@ private fun LibraryRepository.analysisRecords(
     )
 }
 
+/**
+ * Turns a filter's ids into the names a header can read out.
+ *
+ * Live, because the point is that renaming a person or a tag updates every screen that mentions
+ * them — the filter stores ids precisely so that renaming does not break it.
+ */
+private fun LibraryRepository.describeFilter(
+    filter: LibraryViewModel.FilterState
+): Flow<AnalysisScope> = combine(
+    getAllCategories(),
+    getAllPeople(),
+    getAllWatches(),
+    getAllEvents(),
+    getAllEventGroups()
+) { categories, people, watches, events, groups ->
+    // Tags are not held in one flow, so they are gathered from the categories in play. Only the
+    // selected ones are looked up, which is a handful at most.
+    val categoryNames = categories.associate { it.categoryId to it.name }
+    val tagLabels = categories
+        .flatMap { category -> getTagsByCategory(category.categoryId).first() }
+        .filter { it.tagId in filter.selectedTagIds }
+        .map { (categoryNames[it.parentCategoryId] ?: "Uncategorized") to it.name }
+
+    AnalysisScope.Filter(
+        filter = filter,
+        labels = AnalysisScope.FilterLabels(
+            tags = tagLabels,
+            people = people.filter { it.personId in filter.selectedPersonIds }
+                .map { it.displayName },
+            watches = watches.filter { it.watchId in filter.selectedWatchIds }
+                .map { it.displayName },
+            events = events.filter { it.eventId in filter.selectedEventIds }
+                .map { it.displayName },
+            groups = groups.filter { it.groupId in filter.selectedGroupIds }
+                .map { it.displayName }
+        )
+    )
+}
+
 /** The five tables an analysis reads, bundled so they can be combined with the resolved tags. */
 private data class Library(
     val records: List<inga.bpmetrics.library.BpmRecord>,
@@ -505,6 +553,8 @@ data class AnalysisUiState(
     val currentCategoryId: Long? = null,
     /** One row per person across the whole scope. */
     val people: List<PersonTotals> = emptyList(),
+    /** Measured time across heart rate bands for the whole scope. */
+    val zoneTimes: List<ZoneTime> = emptyList(),
     val totalActiveDurationMs: Long = 0L,
     val eventCount: Int = 0,
     val dateRangeText: String = "",
@@ -529,7 +579,9 @@ data class PersonTotals(
     val minBpm: Double,
     val avgBpm: Double,
     val maxBpm: Double,
-    val activeDurationMs: Long
+    val activeDurationMs: Long,
+    /** Where their time went, summed across their recordings in this scope. */
+    val zoneTimes: List<ZoneTime> = emptyList()
 )
 
 /**
@@ -546,5 +598,8 @@ data class TagRankingWithRecord(
     /** Set only on the Event tab, where the bar should open the event rather than a recording. */
     val eventId: Long? = null,
     /** How many recordings went into this bar, so a one-recording bar is not read as a trend. */
-    val recordCount: Int = 0
+    val recordCount: Int = 0,
+    /** Where this row's time went, so a ranking answers "who stayed up there", not only "who spiked". */
+    val zoneTimes: List<ZoneTime> = emptyList(),
+    val activeDurationMs: Long = 0L
 )

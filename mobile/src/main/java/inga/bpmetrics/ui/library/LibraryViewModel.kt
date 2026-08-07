@@ -180,14 +180,34 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     val suggestions: StateFlow<List<EventSuggestion>> = combine(
         unfiledRecords,
-        _dismissedSuggestions
-    ) { records, dismissed ->
-        suggestEvents(records).filter { it.records.map { r -> r.metadata.recordId }.toSet() !in dismissed }
+        _dismissedSuggestions,
+        repository.dismissedSuggestionRecords
+    ) { records, dismissedThisSession, dismissedForGood ->
+        // Permanently dismissed recordings are taken out before clustering, not after. Filtering
+        // whole clusters afterwards would let one dismissed recording drag its neighbours out of a
+        // suggestion they were never dismissed from.
+        val remaining = records.filter { it.metadata.recordId !in dismissedForGood }
+        suggestEvents(remaining).filter {
+            it.records.map { r -> r.metadata.recordId }.toSet() !in dismissedThisSession
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Hides a suggestion until the app is next launched. */
     fun dismissSuggestion(suggestion: EventSuggestion) {
         val ids = suggestion.records.map { it.metadata.recordId }.toSet()
         _dismissedSuggestions.value = _dismissedSuggestions.value + setOf(ids)
+    }
+
+    /**
+     * Never suggests an event for these recordings again.
+     *
+     * Recorded against the recordings rather than the cluster, because a cluster has no identity —
+     * one more recording arriving would change its membership and bring the whole thing back as a
+     * "new" suggestion to dismiss all over again.
+     */
+    fun dismissSuggestionForever(suggestion: EventSuggestion) {
+        val ids = suggestion.records.map { it.metadata.recordId }.toSet()
+        viewModelScope.launch { repository.dismissSuggestionRecords(ids) }
     }
 
     fun createEvent(name: String, recordIds: Set<Long> = emptySet()) {
