@@ -42,6 +42,12 @@ data class SavedAnalysisEntity(
  */
 object SavedAnalysisKind {
     const val GROUP = "GROUP"
+
+    /**
+     * Read-only. Nothing writes this any more — a set of recordings that happened together is an
+     * event now. It survives so rows written before the change can still be read, and converted
+     * by [convertConcurrentAnalysesToEvents].
+     */
     const val CONCURRENT = "CONCURRENT"
 }
 

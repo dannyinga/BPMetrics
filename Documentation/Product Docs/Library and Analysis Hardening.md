@@ -244,15 +244,34 @@ The current `ConcurrentAnalysisScreen`, extended. Sections top to bottom:
 
 Actions: export video, snapshot to a saved analysis, edit, delete.
 
-### 4.3 Group detail
+### 4.3 Group detail — the aggregate analysis, upgraded
 
-1. **Header** — name, date range, totals
-2. **Event ranking** — events by peak group intensity, so "which set went hardest" is answerable
-3. **Aggregate stats** — across every recording in the group, per person
-4. **Event list** — tapping one opens its event page
+**A group analysis is not a new screen.** It is the existing aggregate analysis with a group as its
+scope instead of a filter. Both answer the same question — "across this set of recordings, what
+happened and who did what" — and a user who learns one has learned the other.
 
-This is what satisfies "grouped analysis should have a way to view all the events associated with
-that set of records."
+So `AnalysisScreen` serves both, and gains everything either needs:
+
+1. **Scope header** — what is being analysed, in words. "Coachella 2026 · 3 events · 12 recordings ·
+   14–16 Mar" for a group; the filter stated plainly for a filter. Same shape either way.
+2. **Headline stats** — lowest, time-weighted average, highest, and the totals that give them
+   meaning: recordings, people, total active time.
+3. **Rankings by category** — tabs for Wearer, Watch, **Event**, then each tag category. Every
+   comparison the records support, offered the same way.
+4. **Rankings by record** — each recording by the selected metric, in its wearer's colour.
+5. **Per person** — totals across the whole scope, so "who went hardest all weekend" is answerable.
+   Tapping a person dims the others everywhere on the screen, as on the event page.
+
+The Event tab is what satisfies "grouped analysis should have a way to view all the events
+associated with that set of records" — and because it is a ranking tab rather than a bespoke
+section, a filtered analysis that happens to span events gets it for free.
+
+`AnalysisViewModel` already works from a bare `Flow<List<AnalysisRecord>>` and does not know where
+the records came from. A group is one more factory alongside `liveFactory` and `savedFactory`.
+
+> A saved analysis carries no event or person id — `saved_analysis_records` stores names only. So a
+> frozen analysis offers the Wearer, Watch and tag tabs but not Event, and falls back to palette
+> colours. Persisting them would mean a migration, and Sprint 5 already has one; revisit there.
 
 ---
 
@@ -322,17 +341,22 @@ colour. Export a video and confirm the title and colours match the on-screen cha
 
 ### Sprint 4 — Group analysis
 
+Per §4.3 this sprint *upgrades* the aggregate analysis rather than building a second screen beside
+it. A group is a scope; a filter is a scope; the screen is the same.
+
 | Ticket | Work |
 |---|---|
-| **LAH-4.1** | `GroupAnalysis` model: aggregate per person across every recording in the group, plus per-event peak intensity. |
-| **LAH-4.2** | Group detail screen per §4.3, route `Routes.GROUP_DETAIL`. |
-| **LAH-4.3** | Event ranking by peak group intensity, reusing `ConcurrentAnalysis.findPeaks`. |
+| **LAH-4.1** | `AnalysisScope` replaces `FilterDescription`: what is being analysed, its title, counts and date range, for a filter or a group alike. `AnalysisRecord` gains `personId`, `personColorArgb`, `eventId` and `eventName` — live only, not persisted. |
+| **LAH-4.2** | `AnalysisViewModel.groupFactory`, and route `Routes.GROUP_DETAIL` rendering `AnalysisScreen`. Group cards in the Library open it. |
+| **LAH-4.3** | **Event** as a ranking category alongside Wearer and Watch, so events rank against each other by the selected metric. Available to any scope spanning more than one event, not just a group. |
 | **LAH-4.4** | Navigation: group → event → recording, with back behaving sensibly at each level. |
-| **LAH-4.5** | Snapshot a group to a saved analysis, preserving the existing frozen semantics. |
-| **LAH-4.6** | Cross-links: group → event → recording, and back up again from each. Per §2.4 no analysis screen is a dead end. |
-| **LAH-4.7** | Per-person totals across the group, so "who went hardest all weekend" is answerable, with tap-to-isolate carried over from LAH-3.7. |
+| **LAH-4.5** | Snapshot to a saved analysis from the group scope, preserving the existing frozen semantics. |
+| **LAH-4.6** | Cross-links: a ranking bar opens what it ranks — an event bar opens the event page, a record row opens the recording. Per §2.4 no analysis screen is a dead end. |
+| **LAH-4.7** | Per-person totals across the scope, with tap-to-isolate carried over from LAH-3.7 dimming the other rows and bars. |
+| **LAH-4.8** | Tidy the screen itself: a real scope header instead of three "All" lines, headline totals, consistent card treatment, and empty states that say what would fill them. |
 
-**Verify:** a group with three events ranks them, and the totals equal the sum of the parts.
+**Verify:** a group with three events ranks them, the totals equal the sum of the parts, and the
+same analysis reached by filtering looks the same as the one reached from the group.
 
 ---
 

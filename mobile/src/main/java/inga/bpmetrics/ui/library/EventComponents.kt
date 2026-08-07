@@ -100,15 +100,16 @@ private fun countLabel(count: Int, noun: String) =
 /**
  * An event in the events list.
  *
- * Tapping expands it in place rather than navigating: filing recordings means checking what is
- * already in an event, and a round trip to a detail screen for every check is what makes filing
- * tedious enough to skip.
+ * Tapping the card opens the event's page; the chevron expands it in place. Both exist because they
+ * answer different questions — "what happened here" wants the analysis, and "is this recording
+ * already filed" wants a peek without losing your place in the list.
  */
 @Composable
 fun EventCard(
     summary: EventSummary,
     groupName: String?,
     expanded: Boolean,
+    onOpen: () -> Unit,
     onToggleExpand: () -> Unit,
     onRename: () -> Unit,
     onMoveToGroup: () -> Unit,
@@ -120,7 +121,7 @@ fun EventCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onToggleExpand)
+                    .clickable(onClick = onOpen)
                     .padding(start = 16.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -153,10 +154,12 @@ fun EventCard(
                     }
                 }
 
-                Icon(
-                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "Collapse" else "Expand"
-                )
+                IconButton(onClick = onToggleExpand) {
+                    Icon(
+                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Collapse" else "Show recordings"
+                    )
+                }
                 EventOverflow(
                     onRename = onRename,
                     onMoveToGroup = onMoveToGroup,
@@ -187,11 +190,17 @@ fun EventCard(
     }
 }
 
-/** A group in the groups list, expanding to the events inside it. */
+/**
+ * A group in the groups list.
+ *
+ * Tapping the card opens the group's aggregate analysis; the chevron expands to its events. Same
+ * split as [EventCard], for the same reason.
+ */
 @Composable
 fun GroupCard(
     summary: GroupSummary,
     expanded: Boolean,
+    onOpen: () -> Unit,
     onToggleExpand: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -207,7 +216,7 @@ fun GroupCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onToggleExpand)
+                    .clickable(onClick = onOpen)
                     .padding(start = 16.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -234,10 +243,12 @@ fun GroupCard(
                     }
                 }
 
-                Icon(
-                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "Collapse" else "Expand"
-                )
+                IconButton(onClick = onToggleExpand) {
+                    Icon(
+                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Collapse" else "Show events"
+                    )
+                }
                 EventOverflow(
                     onRename = onRename,
                     onMoveToGroup = null,

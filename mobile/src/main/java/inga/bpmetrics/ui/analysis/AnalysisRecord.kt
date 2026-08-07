@@ -4,6 +4,7 @@ import inga.bpmetrics.library.AnalysisSnapshotRecord
 import inga.bpmetrics.library.AnalysisSnapshotTag
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
 
@@ -40,7 +41,19 @@ data class AnalysisRecord(
     /** Who was wearing the watch, as frozen onto the record when it arrived. */
     val wearerName: String = "",
     /** The watch it came from, by its device name. */
-    val watchName: String = ""
+    val watchName: String = "",
+    /**
+     * Who and what event, by id — live only.
+     *
+     * `saved_analysis_records` stores names, not ids, so these are null for a frozen analysis. That
+     * is why grouping by wearer works on a saved analysis (it groups by name) while the Event tab
+     * and a person's own colour do not appear there: the information was never captured. Persisting
+     * them is a schema change, deliberately left for the sprint that already has a migration.
+     */
+    val personId: Long? = null,
+    val personColorArgb: Int? = null,
+    val eventId: Long? = null,
+    val eventName: String = ""
 ) {
     companion object {
         /**
@@ -52,7 +65,9 @@ data class AnalysisRecord(
             record: BpmRecord,
             categoryNames: Map<Long, String>,
             watchNames: Map<String, String> = emptyMap(),
-            peopleNames: Map<Long, String> = emptyMap()
+            peopleNames: Map<Long, String> = emptyMap(),
+            personColors: Map<Long, Int> = emptyMap(),
+            eventNames: Map<Long, String> = emptyMap()
         ): AnalysisRecord =
             AnalysisRecord(
                 recordId = record.metadata.recordId,
@@ -78,20 +93,29 @@ data class AnalysisRecord(
                 // The watch's current name, falling back to the model it reported. A record whose
                 // watch is no longer registered still shows where it came from.
                 watchName = record.metadata.watchId?.let { watchNames[it] }
-                    ?: record.metadata.deviceId
+                    ?: record.metadata.deviceId,
+                personId = record.metadata.personId,
+                personColorArgb = record.metadata.personId?.let { personColors[it] },
+                eventId = record.metadata.eventId,
+                eventName = record.metadata.eventId?.let { eventNames[it] }.orEmpty()
             )
 
-        /** Convenience for mapping a whole list against the category and watch tables. */
+        /** Convenience for mapping a whole list against the category, watch and event tables. */
         fun from(
             records: List<BpmRecord>,
             categories: List<CategoryEntity>,
             watches: List<WatchEntity> = emptyList(),
-            people: List<PersonEntity> = emptyList()
+            people: List<PersonEntity> = emptyList(),
+            events: List<EventEntity> = emptyList()
         ): List<AnalysisRecord> {
             val names = categories.associate { it.categoryId to it.name }
             val watchNames = watches.associate { it.watchId to it.displayName }
             val peopleNames = people.associate { it.personId to it.displayName }
-            return records.map { from(it, names, watchNames, peopleNames) }
+            val personColors = people.associate { it.personId to it.colorArgb }
+            val eventNames = events.associate { it.eventId to it.displayName }
+            return records.map {
+                from(it, names, watchNames, peopleNames, personColors, eventNames)
+            }
         }
 
         /** Reads back a record captured when an analysis was saved. */

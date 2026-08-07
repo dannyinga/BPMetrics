@@ -57,6 +57,9 @@ class SettingsRepository(context: Context) {
 
         /** Which of the library's three views was last open. */
         val LIBRARY_VIEW_MODE = stringPreferencesKey("library_view_mode")
+
+        /** Whether saved same-time analyses have already been turned into events. */
+        val CONCURRENT_ANALYSES_CONVERTED = booleanPreferencesKey("concurrent_analyses_converted")
     }
 
     /**
@@ -70,6 +73,20 @@ class SettingsRepository(context: Context) {
 
     suspend fun setLibraryViewMode(mode: String) {
         dataStore.edit { it[PreferencesKeys.LIBRARY_VIEW_MODE] = mode }
+    }
+
+    /**
+     * Whether the one-time conversion of saved same-time analyses into events has run.
+     *
+     * A preference rather than a schema version because the conversion is not a schema change and
+     * must be allowed to fail and retry. A Room migration gets one attempt, and failing it means an
+     * app that will not open.
+     */
+    suspend fun hasConvertedConcurrentAnalyses(): Boolean =
+        dataStore.data.first()[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] ?: false
+
+    suspend fun setConvertedConcurrentAnalyses() {
+        dataStore.edit { it[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] = true }
     }
 
     /**

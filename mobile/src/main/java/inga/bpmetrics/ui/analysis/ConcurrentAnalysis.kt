@@ -22,7 +22,17 @@ data class TimedBpm(val wallClockMs: Long, val bpm: Double)
  * @property normalisedAt Position of a reading within *this wearer's own* range, 0..1.
  */
 data class ConcurrentSeries(
-    val recordId: Long,
+    /**
+     * What this curve is, stable across recompositions.
+     *
+     * A curve is one record in a concurrent analysis and one *person* in an event analysis, where
+     * several records merge into a single lane. An opaque id rather than a record id lets both
+     * describe themselves, and gives tap-to-isolate something to hold onto that survives the list
+     * being rebuilt.
+     */
+    val id: String,
+    /** Every record feeding this curve — one for a plain analysis, several for a merged lane. */
+    val recordIds: List<Long>,
     /** Who was wearing it, as frozen onto the record. */
     val label: String,
     /**
@@ -64,9 +74,36 @@ data class ConcurrentSeries(
         return before.bpm + ratio * (next.bpm - before.bpm)
     }
 
-    private companion object {
+    /**
+     * Time this curve was actually measuring, with dropouts taken out.
+     *
+     * A lane merged from two recordings an hour apart spans an hour but only measured a few
+     * minutes of it, and quoting the span as a duration would be a lie about how much data there
+     * is. Same threshold the chart breaks the line at, so the number matches what is drawn.
+     */
+    val activeDurationMs: Long
+        get() = points.zipWithNext()
+            .sumOf { (a, b) ->
+                val dt = b.wallClockMs - a.wallClockMs
+                if (dt in 0..GAP_THRESHOLD_MS) dt else 0L
+            }
+
+    /** Stretches where nothing was measured, so a chart can say so rather than imply continuity. */
+    val gaps: List<TimeGap>
+        get() = points.zipWithNext()
+            .filter { (a, b) -> b.wallClockMs - a.wallClockMs > GAP_THRESHOLD_MS }
+            .map { (a, b) -> TimeGap(a.wallClockMs, b.wallClockMs) }
+
+    val avgBpm: Double get() = if (points.isEmpty()) 0.0 else points.map { it.bpm }.average()
+
+    companion object {
         const val GAP_THRESHOLD_MS = 10_000L
     }
+}
+
+/** A stretch with no readings, wide enough that drawing through it would invent data. */
+data class TimeGap(val startMs: Long, val endMs: Long) {
+    val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
 }
 
 /**
@@ -143,7 +180,8 @@ data class ConcurrentAnalysis(
                 if (points.isEmpty()) return@mapIndexedNotNull null
 
                 ConcurrentSeries(
-                    recordId = record.metadata.recordId,
+                    id = "record-${record.metadata.recordId}",
+                    recordIds = listOf(record.metadata.recordId),
                     label = labelFor(record, peopleById, watchNames),
                     watchLabel = watchLabelFor(record, peopleById, watchNames),
                     colorArgb = PersonColors.colorFor(record.metadata.personId, peopleById, index),
@@ -153,6 +191,17 @@ data class ConcurrentAnalysis(
                 )
             }
 
+            return of(series, window)
+        }
+
+        /**
+         * Wraps already-built curves in the intensity and peak analysis.
+         *
+         * Split out so an event analysis — which merges several records into one lane per person —
+         * gets the same group intensity, the same peak selection and the same chart, rather than a
+         * parallel implementation free to disagree with this one about what a moment is.
+         */
+        fun of(series: List<ConcurrentSeries>, window: LongRange? = null): ConcurrentAnalysis {
             if (series.isEmpty()) return ConcurrentAnalysis()
 
             val start = window?.first ?: series.minOf { it.points.first().wallClockMs }

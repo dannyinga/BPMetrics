@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -42,7 +41,6 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
@@ -80,7 +78,6 @@ import androidx.compose.material3.Card
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
 import inga.bpmetrics.ui.record.BpmRecordTile
 import inga.bpmetrics.ui.tags.TagSelectionDialog
-import inga.bpmetrics.ui.theme.BpmAccent
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.datasync.IncomingRecordManager
 import inga.bpmetrics.datasync.isActive
@@ -112,8 +109,7 @@ fun LibraryScreen(
      * say what it is waiting for rather than looking like it navigated somewhere arbitrary.
      */
     awaitingConcurrentSelection: Boolean = false,
-    onAnalyseTogether: (Set<Long>) -> Unit = {},
-    onAnalyseCurrentFilter: (LibraryViewModel.FilterState) -> Unit = {}
+    onAnalyseTogether: (Set<Long>) -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
@@ -483,28 +479,6 @@ fun LibraryScreen(
                 )
             }
         },
-        bottomBar = {
-            if (!isSelectionMode) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Button(
-                        // Analyses exactly what the Library is showing. Choosing a different
-                        // scope means filtering here first, where the effect is visible, rather
-                        // than through a dialog that silently re-filtered the list behind it.
-                        onClick = { onAnalyseCurrentFilter(filterState) },
-                        modifier = Modifier.fillMaxWidth(0.7f),
-                        colors = ButtonDefaults.buttonColors(containerColor = BpmAccent)
-                    ) {
-                        Text("Analyze", style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-            }
-        }
     ) { paddingValues ->
         Column(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
             if (awaitingConcurrentSelection && !isSelectionMode) {
@@ -646,6 +620,7 @@ fun LibraryScreen(
                         expandedIds = if (id in expandedIds) expandedIds - id else expandedIds + id
                     },
                     onCreateEvent = { showCreateEventDialog = true },
+                    onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onRename = { renamingEvent = it },
                     onMoveToGroup = { movingEvent = it },
                     onDelete = { deletingEvent = it },
@@ -664,7 +639,8 @@ fun LibraryScreen(
                     onCreateGroup = { showCreateGroupDialog = true },
                     onRenameGroup = { renamingGroup = it },
                     onDeleteGroup = { deletingGroup = it },
-                    onMoveEvent = { movingEvent = it }
+                    onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
+                    onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
                 )
             }
         }
@@ -933,6 +909,7 @@ private fun EventsList(
     expandedIds: Set<Long>,
     onToggleExpand: (Long) -> Unit,
     onCreateEvent: () -> Unit,
+    onOpenEvent: (Long) -> Unit,
     onRename: (EventSummary) -> Unit,
     onMoveToGroup: (EventSummary) -> Unit,
     onDelete: (EventSummary) -> Unit,
@@ -975,6 +952,7 @@ private fun EventsList(
                 summary = summary,
                 groupName = summary.event.groupId?.let { groupNames[it] },
                 expanded = summary.event.eventId in expandedIds,
+                onOpen = { onOpenEvent(summary.event.eventId) },
                 onToggleExpand = { onToggleExpand(summary.event.eventId) },
                 onRename = { onRename(summary) },
                 onMoveToGroup = { onMoveToGroup(summary) },
@@ -1013,7 +991,8 @@ private fun GroupsList(
     onCreateGroup: () -> Unit,
     onRenameGroup: (GroupSummary) -> Unit,
     onDeleteGroup: (GroupSummary) -> Unit,
-    onMoveEvent: (EventSummary) -> Unit
+    onOpenEvent: (Long) -> Unit,
+    onOpenGroup: (Long) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1032,12 +1011,13 @@ private fun GroupsList(
             GroupCard(
                 summary = summary,
                 expanded = summary.group.groupId in expandedIds,
+                onOpen = { onOpenGroup(summary.group.groupId) },
                 onToggleExpand = { onToggleExpand(summary.group.groupId) },
                 onRename = { onRenameGroup(summary) },
                 onDelete = { onDeleteGroup(summary) }
             ) {
                 summary.events.forEach { event ->
-                    NestedEventRow(event) { onMoveEvent(event) }
+                    NestedEventRow(event) { onOpenEvent(event.event.eventId) }
                 }
             }
         }
@@ -1047,7 +1027,7 @@ private fun GroupsList(
             items(ungrouped, key = { "ungrouped-${it.event.eventId}" }) { event ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Box(Modifier.padding(horizontal = 12.dp)) {
-                        NestedEventRow(event) { onMoveEvent(event) }
+                        NestedEventRow(event) { onOpenEvent(event.event.eventId) }
                     }
                 }
             }

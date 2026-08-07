@@ -35,6 +35,9 @@ import kotlin.math.roundToInt
  * @param window The stretch currently shown. Pinching adjusts it; the caller supplies the slider.
  * @param scrubbedMs Instant to mark, for tying the chart to a selected moment.
  * @param onScrub Reports the instant under the user's finger.
+ * @param isolatedId [ConcurrentSeries.id] to bring forward, dimming the rest. Null shows all.
+ * @param onIsolate Reports a tap that landed on a curve. Null means the same curve was tapped
+ *   again, which restores everything.
  */
 @Composable
 fun ConcurrentChart(
@@ -42,7 +45,9 @@ fun ConcurrentChart(
     window: ConcurrentViewWindow,
     modifier: Modifier = Modifier,
     scrubbedMs: Long? = null,
-    onScrub: (Long?) -> Unit = {}
+    onScrub: (Long?) -> Unit = {},
+    isolatedId: String? = null,
+    onIsolate: (String?) -> Unit = {}
 ) {
     if (analysis.isEmpty) return
 
@@ -91,9 +96,19 @@ fun ConcurrentChart(
                         }
                     }
                 }
-                .pointerInput(analysis) {
+                .pointerInput(analysis, isolatedId) {
                     detectTapGestures { offset ->
-                        onScrub(window.timeAt(offset.x - AXIS_GUTTER_PX, plotWidth(size.width.toFloat())))
+                        val plotW = plotWidth(size.width.toFloat())
+                        val plotH = size.height - TIME_AXIS_PX
+                        onScrub(window.timeAt(offset.x - AXIS_GUTTER_PX, plotW))
+
+                        // A tap that lands on a curve isolates it; one that lands on empty chart
+                        // leaves the isolation alone. Clearing on any stray tap would undo the
+                        // selection every time someone scrubbed, which is the thing isolation is
+                        // there to help with.
+                        curveAt(offset, analysis, window, minBpm, maxBpm, plotW, plotH)?.let { hit ->
+                            onIsolate(if (hit == isolatedId) null else hit)
+                        }
                     }
                 }
         ) {
@@ -106,8 +121,27 @@ fun ConcurrentChart(
             // shapes on top, not another line competing with them.
             drawIntensityBand(analysis, window, intensityColor, plotWidth, plotHeight)
 
-            analysis.series.forEach { series ->
-                drawSeries(series, window, minBpm, maxBpm, plotWidth, plotHeight)
+            // Dimmed curves first so the isolated one lands on top of them rather than being
+            // crossed by whatever happened to be drawn later.
+            val (dimmed, front) = if (isolatedId == null) {
+                analysis.series to emptyList()
+            } else {
+                analysis.series.partition { it.id != isolatedId }
+            }
+
+            dimmed.forEach { series ->
+                drawSeries(
+                    series, window, minBpm, maxBpm, plotWidth, plotHeight,
+                    alpha = if (isolatedId == null) 1f else DIMMED_ALPHA,
+                    strokeWidth = 3f
+                )
+            }
+            front.forEach { series ->
+                drawSeries(
+                    series, window, minBpm, maxBpm, plotWidth, plotHeight,
+                    alpha = 1f,
+                    strokeWidth = 5f
+                )
             }
 
             drawTimeLabels(window, plotWidth, plotHeight, timeLabelPaint)
@@ -119,6 +153,38 @@ fun ConcurrentChart(
 
 /** Width available to the curves, once the BPM axis has taken its gutter. */
 private fun plotWidth(totalWidth: Float): Float = (totalWidth - AXIS_GUTTER_PX).coerceAtLeast(1f)
+
+/**
+ * Which curve, if any, a tap landed on.
+ *
+ * Requires the nearest curve to be both within [TOUCH_SLOP_PX] and clearly nearer than the next —
+ * where two curves cross, no single one is what the user meant, and picking one at random is worse
+ * than doing nothing.
+ */
+private fun curveAt(
+    offset: Offset,
+    analysis: ConcurrentAnalysis,
+    window: ConcurrentViewWindow,
+    minBpm: Double,
+    maxBpm: Double,
+    plotWidth: Float,
+    plotHeight: Float
+): String? {
+    val at = window.timeAt(offset.x - AXIS_GUTTER_PX, plotWidth)
+    val span = (maxBpm - minBpm).coerceAtLeast(1.0)
+
+    val distances = analysis.series.mapNotNull { series ->
+        val bpm = series.bpmAt(at) ?: return@mapNotNull null
+        val y = plotHeight - (((bpm - minBpm) / span).toFloat() * plotHeight)
+        series.id to kotlin.math.abs(offset.y - y)
+    }.sortedBy { it.second }
+
+    val nearest = distances.firstOrNull() ?: return null
+    if (nearest.second > TOUCH_SLOP_PX) return null
+
+    val runnerUp = distances.getOrNull(1) ?: return nearest.first
+    return if (runnerUp.second - nearest.second < AMBIGUITY_PX) null else nearest.first
+}
 
 private fun DrawScope.drawGridAndBpmLabels(
     color: Color,
@@ -209,12 +275,14 @@ private fun DrawScope.drawSeries(
     minBpm: Double,
     maxBpm: Double,
     plotWidth: Float,
-    plotHeight: Float
+    plotHeight: Float,
+    alpha: Float = 1f,
+    strokeWidth: Float = 3f
 ) {
     if (series.points.isEmpty()) return
 
     val span = (maxBpm - minBpm).coerceAtLeast(1.0)
-    val colour = Color(series.colorArgb)
+    val colour = Color(series.colorArgb).copy(alpha = alpha)
 
     fun yFor(bpm: Double) = plotHeight - (((bpm - minBpm) / span).toFloat() * plotHeight)
 
@@ -247,7 +315,7 @@ private fun DrawScope.drawSeries(
     }
 
     clipRect(left = AXIS_GUTTER_PX, top = 0f, right = size.width, bottom = plotHeight) {
-        drawPath(path, colour, style = Stroke(width = 3f))
+        drawPath(path, colour, style = Stroke(width = strokeWidth))
     }
 }
 
@@ -269,4 +337,17 @@ private const val AXIS_GUTTER_PX = 72f
 /** Room reserved at the bottom for clock labels. */
 private const val TIME_AXIS_PX = 40f
 
-private const val GAP_THRESHOLD_MS = 10_000L
+/**
+ * The same threshold the analysis uses to count active time, so a stated "4m not measured" and a
+ * visible break in the line always describe the same dropout.
+ */
+private const val GAP_THRESHOLD_MS = ConcurrentSeries.GAP_THRESHOLD_MS
+
+/** Faint enough to read past, strong enough to keep the shape as context. */
+private const val DIMMED_ALPHA = 0.18f
+
+/** How close a tap must be to a curve to count as hitting it. */
+private const val TOUCH_SLOP_PX = 48f
+
+/** Two curves within this of each other are a crossing, and the tap picks neither. */
+private const val AMBIGUITY_PX = 12f

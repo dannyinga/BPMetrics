@@ -83,9 +83,18 @@ interface EventDao {
     )
     suspend fun getEventSpan(eventId: Long): NullableSpan?
 
-    /** Recordings not filed under any event. Pinned at the top of the events view. */
+    /** Recordings not filed under any event, shown in their own section of the events view. */
     @Query("SELECT * FROM bpm_records WHERE eventId IS NULL ORDER BY startTime DESC")
     fun getUnfiledRecordsFlow(): Flow<List<BpmRecordEntity>>
+
+    /**
+     * Which of these recordings are not in an event yet.
+     *
+     * Lets a bulk file skip the ones someone has already placed by hand, rather than reassigning
+     * them and silently overruling a decision the user made.
+     */
+    @Query("SELECT recordId FROM bpm_records WHERE recordId IN (:recordIds) AND eventId IS NULL")
+    suspend fun recordIdsWithoutEvent(recordIds: List<Long>): List<Long>
 
     @Query("SELECT COUNT(*) FROM bpm_records WHERE eventId IS NULL")
     fun countUnfiledRecordsFlow(): Flow<Int>

@@ -60,5 +60,10 @@ class BPMetricsApp : Application() {
         // process that is no longer running.
         runCatching { ExportUtils.clearStagedExports(this) }
             .onFailure { Log.e("BPMetricsApp", "Could not reclaim staged exports", it) }
+
+        // Saved same-time analyses become events, once. They were events in all but name — a set
+        // of recordings that happened together, under a name — and leaving both would be two half
+        // features that do not know about each other.
+        libraryRepository.convertConcurrentAnalysesOnce()
     }
 }

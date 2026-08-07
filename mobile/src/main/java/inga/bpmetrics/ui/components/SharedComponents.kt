@@ -92,13 +92,18 @@ fun ExpandableSection(
 
 /**
  * A standard confirmation dialog for deletion actions.
+ *
+ * @param confirmLabel What the destructive button says. Overridable because some of these actions
+ *   are not deletions — taking a recording out of an event keeps it — and a button reading "Delete"
+ *   over a message saying "it is not deleted" is a contradiction the user has to resolve.
  */
 @Composable
 fun DeleteConfirmDialog(
     title: String,
     message: String,
     onDismiss: () -> Unit,
-    onConfirm: () -> Unit
+    onConfirm: () -> Unit,
+    confirmLabel: String = "Delete"
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -109,7 +114,7 @@ fun DeleteConfirmDialog(
                 onClick = onConfirm,
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
             ) {
-                Text("Delete")
+                Text(confirmLabel)
             }
         },
         dismissButton = {

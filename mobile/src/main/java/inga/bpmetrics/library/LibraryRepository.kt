@@ -83,6 +83,28 @@ class LibraryRepository(
     }
 
     /**
+     * Turns any saved same-time analyses into events, once per install.
+     *
+     * Called from [inga.bpmetrics.BPMetricsApp] rather than from this constructor. Constructing a
+     * repository should not move a user's data around — a caller that only wanted to read one
+     * record would trigger it, and a unit test with mocked DAOs would start doing I/O it never
+     * asked for.
+     *
+     * Marked done only on success, so a failure retries next launch rather than stranding them.
+     */
+    fun convertConcurrentAnalysesOnce() {
+        scope.launch {
+            try {
+                if (settingsRepository.hasConvertedConcurrentAnalyses()) return@launch
+                val result = convertConcurrentAnalysesToEvents(this@LibraryRepository)
+                if (result.failure == null) settingsRepository.setConvertedConcurrentAnalyses()
+            } catch (e: Exception) {
+                Log.e(tag, "Could not check whether same-time analyses need converting", e)
+            }
+        }
+    }
+
+    /**
      * Starts a coroutine to collect BPM records from the database
      * and update the [_records] StateFlow.
      */
@@ -299,59 +321,14 @@ class LibraryRepository(
     }
 
     /**
-     * Stores a same-time analysis: which recordings, over what stretch of clock, called what.
+     * Every stored same-time analysis, with its rows.
      *
-     * Unlike a group analysis this does **not** freeze its numbers. A group analysis stores every
-     * value it computed, so it stands alone forever. A same-time analysis is a set of curves —
-     * hundreds of kilobytes — and storing those would be a different order of cost, so what is
-     * kept is the analysis's identity and the curves are re-read from the library on opening.
-     *
-     * The consequence is deliberate and visible: delete a recording and it drops out of a saved
-     * same-time analysis, which the screen reports rather than quietly redrawing without it.
-     *
-     * @return the id of the stored analysis.
+     * Exists for the one-time conversion into events — see [convertConcurrentAnalysesToEvents].
      */
-    suspend fun saveConcurrentAnalysis(
-        name: String,
-        recordIds: Set<Long>,
-        windowStartMs: Long,
-        windowEndMs: Long,
-        records: List<AnalysisSnapshotRecord>
-    ): Long {
-        val analysisId = savedAnalysisDao.insertAnalysis(
-            SavedAnalysisEntity(
-                name = name.trim(),
-                createdAt = System.currentTimeMillis(),
-                filterDescription = "${recordIds.size} recordings, same time",
-                kind = SavedAnalysisKind.CONCURRENT,
-                windowStartMs = windowStartMs,
-                windowEndMs = windowEndMs
-            )
-        )
-
-        // The per-record rows still carry each wearer's summary, so the shelf can describe the
-        // analysis without re-reading the library.
-        savedAnalysisDao.insertRecords(
-            records.map { record ->
-                SavedAnalysisRecordEntity(
-                    analysisId = analysisId,
-                    recordId = record.recordId,
-                    title = record.title,
-                    date = record.date,
-                    minBpm = record.minBpm,
-                    avgBpm = record.avgBpm,
-                    maxBpm = record.maxBpm,
-                    activeDurationMs = record.activeDurationMs,
-                    tagsEncoded = "",
-                    wearerName = record.wearerName,
-                    watchName = record.watchName
-                )
-            }
-        )
-
-        Log.d(tag, "Saved same-time analysis '$name' over ${recordIds.size} recording(s)")
-        return analysisId
-    }
+    suspend fun getConcurrentAnalyses(): List<LoadedAnalysis> =
+        savedAnalysisDao.getAllFlow().first()
+            .filter { it.isConcurrent }
+            .mapNotNull { loadSavedAnalysis(it.analysisId) }
 
     /** Reads a stored analysis back into the shape the analysis screen works from. */
     suspend fun loadSavedAnalysis(analysisId: Long): LoadedAnalysis? {
@@ -447,6 +424,12 @@ class LibraryRepository(
         Log.d(tag, "Filed $changed recording(s) under event ${eventId ?: "nothing"}")
         return changed
     }
+
+    /** Of these recordings, the ones not yet in an event. Chunked for the same reason as above. */
+    suspend fun recordIdsWithoutEvent(recordIds: Collection<Long>): List<Long> =
+        recordIds.toList()
+            .chunked(SQL_VARIABLE_LIMIT)
+            .flatMap { chunk -> eventDao.recordIdsWithoutEvent(chunk) }
 
     fun getAllEventGroups(): Flow<List<EventGroupEntity>> = eventGroupDao.getAllGroupsFlow()
 
