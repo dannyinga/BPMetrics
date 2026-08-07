@@ -77,12 +77,48 @@ import inga.bpmetrics.ui.theme.BpmLow
 
 
 /**
+ * What is rendering, and what has rendered.
+ *
+ * Its own section of the app. It was folded into the export flow's last step for a while, on the
+ * reasoning that an export ends up in the queue — but that made the last thing the flow did be
+ * handing back a list of everything ever queued, and it meant checking on a render that started
+ * yesterday required walking into a new export to find it. Starting a render and watching one are
+ * different errands.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun RenderQueueScreen(onOpenDrawer: () -> Unit) {
+    val queue by RenderQueueManager.queue.collectAsState()
+    val active = queue.count {
+        it.status == RenderStatus.QUEUED || it.status == RenderStatus.RENDERING
+    }
+
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = {
+                    Text(if (active > 0) "Render queue ($active)" else "Render queue")
+                },
+                navigationIcon = {
+                    androidx.compose.material3.IconButton(onClick = onOpenDrawer) {
+                        androidx.compose.material3.Icon(
+                            androidx.compose.material.icons.Icons.Default.Menu,
+                            contentDescription = "Open navigation drawer"
+                        )
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        RenderQueueContent(Modifier.padding(padding))
+    }
+}
+
+/**
  * The queue itself, without a screen around it.
  *
- * Split out so step 4 of the export utility can show the same thing rather than a second
- * implementation of it — an export ends up in the queue, so the last step of making one and the
- * place it lands are the same view. The standalone screen it used to live on is gone: it was
- * reachable only from a drawer entry that step 4 replaces.
+ * Split from [RenderQueueScreen] so anything else that wants to show the queue inline can, without
+ * a second implementation of it drifting away from this one.
  */
 @Composable
 fun RenderQueueContent(modifier: Modifier = Modifier) {

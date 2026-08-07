@@ -72,7 +72,8 @@ import kotlinx.coroutines.withContext
 @Composable
 fun ExportUtilityScreen(
     viewModel: ExportUtilityViewModel,
-    onOpenDrawer: () -> Unit
+    onOpenDrawer: () -> Unit,
+    onOpenQueue: () -> Unit
 ) {
     val step by viewModel.step.collectAsStateWithLifecycle()
     val furthest by viewModel.furthestStep.collectAsStateWithLifecycle()
@@ -88,7 +89,6 @@ fun ExportUtilityScreen(
     val presets by viewModel.presets.collectAsStateWithLifecycle()
     val selectedPresetId by viewModel.selectedPresetId.collectAsStateWithLifecycle()
     val preset by viewModel.preset.collectAsStateWithLifecycle()
-    var showSettings by remember { mutableStateOf(false) }
     var presetToExport by remember {
         mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null)
     }
@@ -105,6 +105,56 @@ fun ExportUtilityScreen(
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val peopleById = remember(people) { people.associateBy { it.personId } }
     val allRecords by repository.records.collectAsStateWithLifecycle()
+    val manualOverlay by viewModel.manualOverlay.collectAsStateWithLifecycle()
+    val previewAt by viewModel.previewAt.collectAsStateWithLifecycle()
+
+    // Which clip step 3 is framing. Held here rather than in the ViewModel because it is a
+    // position on one screen, not part of what will be exported.
+    var previewingUri by remember { mutableStateOf<Uri?>(null) }
+    val previewingClip = pendingJobs.firstOrNull { it.clip.uri == previewingUri }
+        // Falls back to the first ticked clip, so arriving at step 3 shows something rather than
+        // waiting for a selection the strip has not been scrolled to yet.
+        ?: pendingJobs.firstOrNull()
+
+    // The framing on screen: the previewed clip's override if it has one, else the preset's own.
+    // Saving a preset captures this, so a preset carries the framing it was saved looking at.
+    val currentFraming = previewingClip?.graph ?: GraphPlacement.of(preset)
+
+    // Colour comes from the person, never chosen per export — one answer, set in People, so the
+    // same person is the same colour on screen and in the video of the same session.
+    val recordColours = remember(records, peopleById) {
+        records.mapIndexed { index, record ->
+            record.metadata.recordId to inga.bpmetrics.library.PersonColors.colorFor(
+                record.metadata.personId,
+                peopleById,
+                index
+            )
+        }.toMap()
+    }
+
+    // What the estimate falls back to when there are no clips: the span of the recordings
+    // themselves, which is what an unbacked export renders.
+    val fallbackDurationMs = remember(records) {
+        if (records.isEmpty()) 0L
+        else records.maxOf { it.metadata.startTime + it.metadata.durationMs } -
+            records.minOf { it.metadata.startTime }
+    }
+
+    val pickOverlayLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            // Persisted, or the chosen video stops being readable the next time the process
+            // starts — and a queued render outlives the screen that picked it.
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            viewModel.setManualOverlay(it)
+        }
+    }
 
     // A preset travels as a small JSON file, shared and opened through the same plumbing a backup
     // uses. Written to wherever the user picks rather than the share sheet, for the same reason:
@@ -250,6 +300,7 @@ fun ExportUtilityScreen(
                     hasNoClips = hasNoClips,
                     oldestFirst = oldestFirst,
                     onToggleOrder = { viewModel.toggleClipOrder() },
+                    onSelectAll = { viewModel.setAllClipsSelected(it) },
                     onToggleClip = { viewModel.toggleClip(it) },
                     onToggleRecord = { uri, id -> viewModel.toggleRecordOnClip(uri, id) }
                 )
@@ -259,76 +310,84 @@ fun ExportUtilityScreen(
                     jobCount = pendingJobs.size,
                     presets = presets,
                     selectedPresetId = selectedPresetId,
+                    preset = preset,
+                    onPresetChange = { viewModel.setPreset(it) },
+                    // Previewed against the first ticked clip, since that is what most of the
+                    // batch will look like. A preview of nothing would be useless with a batch.
+                    previewOverlay = pendingJobs.firstOrNull()?.clip?.uri ?: manualOverlay,
+                    previewColours = recordColours,
+                    previewTitle = sourceLabel.takeIf { it.isNotBlank() },
+                    previewAt = previewAt,
+                    onScrub = { viewModel.scrubPreview(it) },
+                    framing = currentFraming,
+                    ticked = pendingJobs,
+                    previewing = previewingClip,
+                    onSelectClip = { previewingUri = it },
+                    onPlacementChange = { uri, placement -> viewModel.setClipGraph(uri, placement) },
+                    onScrubClip = { uri, at -> viewModel.scrubClip(uri, at) },
+                    onApplyToAll = { viewModel.applyGraphToAll(it) },
+                    overlay = manualOverlay,
+                    onPickOverlay = { pickOverlayLauncher.launch(arrayOf("video/*")) },
+                    onClearOverlay = { viewModel.setManualOverlay(null) },
                     onApplyPreset = { viewModel.applyPreset(it) },
-                    onSaveAs = { viewModel.savePresetAs(it) },
-                    onUpdatePreset = { viewModel.updatePreset(it) },
+                    onSaveAs = { viewModel.savePresetAs(it, currentFraming) },
+                    onUpdatePreset = { viewModel.updatePreset(it, currentFraming) },
                     onSetDefault = { viewModel.setDefaultPreset(it) },
                     onDeletePreset = { viewModel.deletePreset(it) },
                     onExportPresetFile = { presetToExport = it },
-                    onImportPresetFile = { importPresetLauncher.launch(arrayOf("*/*")) },
-                    onConfigure = { showSettings = true }
+                    onImportPresetFile = { importPresetLauncher.launch(arrayOf("*/*")) }
                 )
 
-                // Already built, already good. Folded in here rather than kept as a separate
-                // drawer entry, because the queue is where an export ends up and nowhere else.
-                ExportStep.MAKE -> RenderQueueContent()
+                ExportStep.MAKE -> MakeStep(
+                    estimate = viewModel.estimate(pendingJobs, fallbackDurationMs),
+                    onOpenQueue = onOpenQueue,
+                    onQueue = {
+                        viewModel.rememberLastUsed()
+                        queueBatch(
+                            context = context,
+                            viewModel = viewModel,
+                            jobs = pendingJobs,
+                            allRecords = records,
+                            colours = recordColours,
+                            manualOverlay = manualOverlay,
+                            label = sourceLabel
+                        )
+                    }
+                )
             }
         }
     }
 
-    // The settings still come from the existing dialog rather than living in step 3 — see the
-    // EXP-1.4 note. It stays the single place a VideoExportConfig is built, so batching cannot
-    // drift from what a one-off export produces.
-    if (showSettings && records.isNotEmpty()) {
-        VideoExportDialog(
-            record = records.first(),
-            records = records,
-            graphTitle = sourceLabel.takeIf { it.isNotBlank() },
-            onDismiss = { showSettings = false },
-            onExport = { config, _ ->
-                // The dialog's own settings win over the preset — the preset was the starting
-                // point, and anything changed in the dialog was changed deliberately. What the
-                // preset still contributes is the graph placement, which the dialog does not ask
-                // about, and it is captured back so "save as" reflects what was actually used.
-                viewModel.setPreset(ExportPreset.from(config, preset.name))
-                viewModel.rememberLastUsed()
-                queueOneJobPerClip(context, config, pendingJobs, records, sourceLabel)
-                showSettings = false
-                viewModel.next()
-            }
-        )
-    }
 }
 
 /**
  * Turns one set of settings into one job per ticked clip.
  *
  * The video is the unit: each job carries its own clip and only the recordings that were running
- * while that clip was filming. The appearance is shared, which is the whole point of configuring
- * once and exporting six — a preset in everything but name, until Sprint 3 gives it one.
+ * while that clip was filming. The appearance is shared, which is the point of configuring once and
+ * exporting six.
  *
  * With no clips at all, a single job still goes out. `VideoExporter` renders against a solid
  * background when no overlay is given, and a session nobody filmed is still worth exporting.
  */
-private fun queueOneJobPerClip(
+private fun queueBatch(
     context: android.content.Context,
-    config: VideoExporter.VideoExportConfig,
+    viewModel: ExportUtilityViewModel,
     jobs: List<ClipSelection>,
     allRecords: List<inga.bpmetrics.library.BpmRecord>,
+    colours: Map<Long, Int>,
+    manualOverlay: Uri?,
     label: String
 ) {
+    if (allRecords.isEmpty()) return
     val name = label.ifBlank { "Export" }
 
     if (jobs.isEmpty()) {
-        // The config is passed through untouched, overlay and all. Entering at step 3 from an
-        // existing entry point skips clip selection entirely, and the dialog's own video picker is
-        // then the only thing that chose an overlay — overriding it here would silently throw away
-        // the video the user just picked.
         BpmExportService.startExport(
             context,
             allRecords.first().metadata.recordId,
             name,
-            config.copy(records = allRecords),
+            viewModel.buildConfig(allRecords, manualOverlay, colours, name),
             null
         )
         return
@@ -343,9 +402,13 @@ private fun queueOneJobPerClip(
             forThisClip.first().metadata.recordId,
             // Named by clip time, so a queue of six is readable rather than six identical rows.
             "$name · ${getTimeString(job.clip.startedAtMs)}",
-            config.copy(
-                overlayVideoUri = job.clip.uri,
-                records = forThisClip
+            viewModel.buildConfig(
+                forRecords = forThisClip,
+                overlay = job.clip.uri,
+                colours = colours,
+                title = name,
+                clip = job.clip,
+                placement = job.graph
             ),
             null
         )
@@ -353,10 +416,88 @@ private fun queueOneJobPerClip(
 }
 
 /**
- * Step 3 for now: a summary and a way into the existing settings dialog.
+ * Step 4 — what this will cost, and the queue it lands in.
  *
- * The sections, the preview and the presets land in Sprints 3 and 4. What matters here is that the
- * flow reaches a real export — the batching is done, and it is the settings that are still to move.
+ * The estimate is up front rather than after configuring everything. `VideoExporter` already
+ * refuses a render there is no room for, but only once you have got that far; a phone has already
+ * been filled by this app once.
+ */
+@Composable
+private fun MakeStep(
+    estimate: ExportEstimate,
+    onQueue: () -> Unit,
+    onOpenQueue: () -> Unit
+) {
+    var queued by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (queued) {
+            // The confirmation, and a way through to watch it — not the queue itself. Ending the
+            // flow by listing every render ever made turned "your export has started" into "here
+            // is your backlog".
+            Text(
+                "Started",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "${estimate.jobCount} render${if (estimate.jobCount == 1) "" else "s"} " +
+                    "queued. They carry on if you leave this screen.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(20.dp))
+            Button(onClick = onOpenQueue) { Text("Watch the render queue") }
+        } else {
+            Text(
+                "${estimate.jobCount} export${if (estimate.jobCount == 1) "" else "s"}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "About ${formatSize(estimate.approxBytes)}, roughly " +
+                    "${formatMinutes(estimate.approxRenderMs)} to render, for " +
+                    "${formatMinutes(estimate.totalDurationMs)} of video.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(20.dp))
+            Button(onClick = { onQueue(); queued = true }) {
+                Text("Start ${estimate.jobCount}")
+            }
+        }
+    }
+}
+
+/** Sizes people can act on. Nobody decides anything from a byte count. */
+private fun formatSize(bytes: Long): String = when {
+    bytes >= 1_000_000_000 -> "%.1f GB".format(bytes / 1_000_000_000.0)
+    bytes >= 1_000_000 -> "${bytes / 1_000_000} MB"
+    else -> "${(bytes / 1_000).coerceAtLeast(1)} KB"
+}
+
+private fun formatMinutes(ms: Long): String {
+    val minutes = ms / 60_000
+    val seconds = (ms % 60_000) / 1000
+    return when {
+        minutes >= 60 -> "${minutes / 60}h ${minutes % 60}m"
+        minutes > 0 -> "${minutes}m"
+        else -> "${seconds}s"
+    }
+}
+
+/**
+ * Step 3 — how the export looks.
+ *
+ * The preview sits at the top and is scrubable, because the whole point of previewing is judging
+ * the settings against the moment that will be hard to read, not against frame zero. Presets next,
+ * then the options in four sections.
  */
 @Composable
 private fun LookStep(
@@ -364,56 +505,125 @@ private fun LookStep(
     jobCount: Int,
     presets: List<inga.bpmetrics.library.ExportPresetEntity>,
     selectedPresetId: Long?,
+    preset: ExportPreset,
+    onPresetChange: (ExportPreset) -> Unit,
+    previewOverlay: Uri?,
+    previewColours: Map<Long, Int>,
+    previewTitle: String?,
+    previewAt: Float,
+    onScrub: (Float) -> Unit,
+    framing: GraphPlacement,
+    ticked: List<ClipSelection>,
+    previewing: ClipSelection?,
+    onSelectClip: (Uri) -> Unit,
+    onPlacementChange: (Uri, GraphPlacement) -> Unit,
+    onScrubClip: (Uri, Float) -> Unit,
+    onApplyToAll: (Uri) -> Unit,
+    overlay: Uri?,
+    onPickOverlay: () -> Unit,
+    onClearOverlay: () -> Unit,
     onApplyPreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onSaveAs: (String) -> Unit,
     onUpdatePreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onSetDefault: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onDeletePreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onExportPresetFile: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
-    onImportPresetFile: () -> Unit,
-    onConfigure: () -> Unit
+    onImportPresetFile: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        PresetBar(
-            presets = presets,
-            selectedId = selectedPresetId,
-            onApply = onApplyPreset,
-            onSaveAs = onSaveAs,
-            onUpdate = onUpdatePreset,
-            onSetDefault = onSetDefault,
-            onDelete = onDeletePreset,
-            onExportFile = onExportPresetFile,
-            onImportFile = onImportPresetFile
-        )
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Pinned, and nothing else is. Every control below changes what this shows, so scrolling it
+        // away would mean adjusting a setting and having to scroll back to see what it did. The
+        // clip strip is deliberately *not* here: it is picked once and then not looked at, and
+        // pinning it spent a third of the screen on a row that had already done its job.
+        if (records.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp)
+            ) {
+                ExportPreview(
+                    records = previewing?.let { selection ->
+                        // Only the people who were recording during this clip, which is what its
+                        // export will draw. Previewing the whole cast would show curves the
+                        // finished video will not have.
+                        records.filter { it.metadata.recordId in selection.recordIds }
+                    } ?: records,
+                    preset = preset,
+                    clip = previewing?.clip,
+                    placement = framing,
+                    onPlacementChange = { placement ->
+                        // Framing a clip overrides the preset for that clip only. With no clip
+                        // being previewed there is nothing to override, so it edits the preset —
+                        // which is where framing lives when it is not clip-specific.
+                        previewing?.let { onPlacementChange(it.clip.uri, placement) }
+                            ?: onPresetChange(placement.into(preset))
+                    },
+                    overlay = previewing?.clip?.uri ?: previewOverlay,
+                    colours = previewColours,
+                    title = previewTitle,
+                    at = previewing?.scrubAt ?: previewAt,
+                    onScrub = { at ->
+                        previewing?.let { onScrubClip(it.clip.uri, at) } ?: onScrub(at)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            HorizontalDivider()
+        }
 
-        Spacer(Modifier.height(28.dp))
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
+        ) {
+            // Which clip is being framed, and the way to copy that framing across — both scroll,
+            // because both are decided once rather than watched.
+            if (records.isNotEmpty() && ticked.size > 1) {
+                ClipSelectorStrip(
+                    clips = ticked,
+                    selectedUri = previewing?.clip?.uri,
+                    onSelect = onSelectClip
+                )
+                if (previewing != null) {
+                    TextButton(onClick = { onApplyToAll(previewing.clip.uri) }) {
+                        Text("Apply this framing to all ${ticked.size} clips")
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
 
-        Text(
-            when {
-                records.isEmpty() -> "Nothing to export"
-                jobCount == 0 -> "1 export, on a plain background"
-                jobCount == 1 -> "1 export"
-                else -> "$jobCount exports, one per clip"
-            },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Canvas, graph placement, background and overlay. Settings apply to every export in " +
-                "this batch.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(20.dp))
-        Button(onClick = onConfigure, enabled = records.isNotEmpty()) {
-            Text(if (jobCount > 1) "Configure and queue $jobCount" else "Configure and queue")
+            LookSections(
+                preset = preset,
+                onChange = onPresetChange,
+                overlay = overlay,
+                onPickOverlay = onPickOverlay,
+                onClearOverlay = onClearOverlay,
+                hasClips = jobCount > 0,
+                syncOffsetMs = preset.syncOffsetMs,
+                onSyncOffsetChange = { onPresetChange(preset.copy(syncOffsetMs = it)) },
+                framing = framing,
+                onFramingChange = { placement ->
+                    previewing?.let { onPlacementChange(it.clip.uri, placement) }
+                        ?: onPresetChange(placement.into(preset))
+                },
+                // Folded in as a section of its own rather than standing above them. A preset is
+                // one more thing about how the export looks, and a permanently open bar over four
+                // collapsed sections claimed a priority it does not have.
+                presetBar = {
+                    PresetBar(
+                        presets = presets,
+                        selectedId = selectedPresetId,
+                        onApply = onApplyPreset,
+                        onSaveAs = onSaveAs,
+                        onUpdate = onUpdatePreset,
+                        onSetDefault = onSetDefault,
+                        onDelete = onDeletePreset,
+                        onExportFile = onExportPresetFile,
+                        onImportFile = onImportPresetFile
+                    )
+                }
+            )
         }
     }
 }
@@ -525,3 +735,4 @@ private fun StepPlaceholder(step: ExportStep, description: String) {
         )
     }
 }
+

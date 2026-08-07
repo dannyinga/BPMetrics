@@ -277,6 +277,45 @@ a queue of six exports is distinguishable.
 **Verify:** switch a 16:9 preset to 9:16 and confirm the graph stays on canvas. Scrub to a moment
 where the pills are crowded, export, and confirm the frame matches what the preview showed.
 
+> **Two carry-overs from Sprint 4.**
+>
+> **Time cropping did not move into step 3.** The old dialog let you trim the exported span, and
+> that is *content*, not appearance — it belongs beside "which recordings" in step 2, not beside
+> canvas size. It is not wired anywhere yet, so an export currently spans the whole timeline; the
+> per-clip case already crops naturally, since a clip's own length bounds it. Move it into step 2
+> rather than restoring it to step 3.
+>
+> **EXP-4.5 — export a still from the previewed instant — is not done.** The renderer is now
+> reachable at an arbitrary playhead, so it is a small addition, but it needs somewhere to put the
+> file and a decision about whether it shares or saves. Left with the image-export work it belongs
+> beside.
+
+#### Sync audit — findings
+
+Traced watch to export, after clips came out visibly misaligned.
+
+The watch side is sound: `RecordingRepository.startRecording` stamps the monotonic and wall clocks
+together at the press, and every sample is an offset from that anchor.
+
+The defect was on the phone. Two places read `MediaStore.DATE_TAKEN` and disagreed about what it
+meant: the clip picker read it as the *first* frame, the exporter as the *last* for anything that
+was not QuickTime. Every MP4 was therefore rendered one clip-duration away from where its own
+preview said it was.
+
+`DATE_TAKEN` genuinely is ambiguous — most camera apps stamp it when the muxer starts, some
+encoders when the file is finalised, and a few write local time into a field defined as UTC. Rather
+than keep a list of which phone does what, `VideoTiming` corroborates the stamp against the file's
+mtime: the file is closed when filming stops, so the correct reading is whichever puts the end of
+the clip where the filesystem says it was finished. A per-file measurement, so it needs no model
+names and keeps working on hardware nobody has tested.
+
+**The lesson worth keeping: two sites deriving the same number is how they come to disagree.** That
+same shape caused three separate bugs in one day — the picker vs the exporter, the preview vs the
+render for the sync offset, and the preview vs the render for single-recording colour. Each was
+fixed by moving the derivation to one place both callers go through (`VideoTiming.resolve`,
+`VideoClip.windowOn`, the record-count branch inside `renderAlignedRecordsOnCanvas`). Prefer that
+over patching the copy that drifted.
+
 ---
 
 ### Sprint 5 — Queue durability

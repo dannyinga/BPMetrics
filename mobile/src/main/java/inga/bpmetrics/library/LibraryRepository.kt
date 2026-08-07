@@ -105,6 +105,9 @@ class LibraryRepository(
         scope.launch {
             try {
                 seedBuiltInPresetsIfEmpty()
+                // After seeding, because a fresh install writes the current framing and has
+                // nothing to bring forward — this is for the installs that already had presets.
+                refreshSupersededPresetFraming()
             } catch (e: Exception) {
                 Log.e(tag, "Could not seed the built-in export presets", e)
             }
@@ -609,6 +612,26 @@ class LibraryRepository(
             )
         }
         Log.i(tag, "Seeded ${inga.bpmetrics.export.ExportPreset.BUILT_IN.size} built-in presets")
+    }
+
+    /**
+     * Brings presets still carrying an old shipped framing up to the current one.
+     *
+     * Seeding only runs on an empty table, so an install from before the default changed keeps
+     * drawing the graph where that build put it — and because a preset reapplies itself on every
+     * export, dragging the frame fixes the clip in hand and nothing after it. Only framing nobody
+     * chose is touched; a preset dragged even slightly off a shipped default is left alone.
+     */
+    suspend fun refreshSupersededPresetFraming() {
+        var updated = 0
+        presetDao.getAll().forEach { entity ->
+            val preset = inga.bpmetrics.export.ExportPreset.fromJson(entity.configJson)
+                ?: return@forEach
+            if (!preset.hasSupersededFraming()) return@forEach
+            presetDao.updateConfig(entity.presetId, preset.withDefaultFraming().toJson())
+            updated++
+        }
+        if (updated > 0) Log.i(tag, "Moved $updated preset(s) onto the current graph framing")
     }
 
     suspend fun saveExportPreset(name: String, configJson: String): Long =

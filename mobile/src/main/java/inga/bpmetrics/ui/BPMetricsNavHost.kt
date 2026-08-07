@@ -456,8 +456,13 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             composable(Routes.EXPORT) {
                 ExportUtilityScreen(
                     viewModel = exportViewModel,
-                    onOpenDrawer = openDrawer
+                    onOpenDrawer = openDrawer,
+                    onOpenQueue = { navController.navigate(Routes.RENDER_QUEUE) }
                 )
+            }
+
+            composable(Routes.RENDER_QUEUE) {
+                inga.bpmetrics.ui.export.RenderQueueScreen(onOpenDrawer = openDrawer)
             }
         }
     }
@@ -488,11 +493,20 @@ object Routes {
     const val DETAIL = "detail"
     const val SETTINGS = "settings"
     const val GRAPH_DETAIL = "graph_detail"
-    // The render queue is no longer a section of its own — it is step 4 of the export flow, which
-    // is where an export ends up and the only place worth looking for it.
 
     /** The staged export flow: source, contents, look, make. */
     const val EXPORT = "export"
+
+    /**
+     * What is rendering, and what has rendered.
+     *
+     * A section of its own rather than the tail of the export flow. Folding it into step 4 meant
+     * the last thing the flow asked was "start these" and the first thing it then showed was a
+     * list of everything ever queued — so finishing an export looked like being handed a backlog.
+     * Renders also outlive the flow that made them: coming back to check on one should not mean
+     * walking through four steps of a new export to reach it.
+     */
+    const val RENDER_QUEUE = "render_queue"
     const val WATCHES = "watches"
     const val PEOPLE = "people"
     const val ABOUT = "about"

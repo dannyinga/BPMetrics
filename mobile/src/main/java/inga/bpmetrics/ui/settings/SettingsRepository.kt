@@ -35,7 +35,6 @@ class SettingsRepository(context: Context) {
         val IMG_WIDTH = stringPreferencesKey("img_width")
         val IMG_HEIGHT = stringPreferencesKey("img_height")
         val IMG_OPACITY = floatPreferencesKey("img_opacity")
-        val IMG_SHOW_AXES = booleanPreferencesKey("img_show_axes")
         val IMG_SHOW_LABELS = booleanPreferencesKey("img_show_labels")
         val IMG_SHOW_GRID = booleanPreferencesKey("img_show_grid")
         val IMG_SHOW_TITLE = booleanPreferencesKey("img_show_title")
@@ -46,7 +45,6 @@ class SettingsRepository(context: Context) {
         val VID_WINDOW_SIZE = stringPreferencesKey("vid_window_size")
         val VID_FRAME_RATE = stringPreferencesKey("vid_frame_rate")
         val VID_OPACITY = floatPreferencesKey("vid_opacity")
-        val VID_SHOW_AXES = booleanPreferencesKey("vid_show_axes")
         val VID_SHOW_LABELS = booleanPreferencesKey("vid_show_labels")
         val VID_SHOW_GRID = booleanPreferencesKey("vid_show_grid")
         val VID_SHOW_TITLE = booleanPreferencesKey("vid_show_title")
@@ -210,7 +208,6 @@ class SettingsRepository(context: Context) {
     val imgWidth = dataStore.data.map { it[PreferencesKeys.IMG_WIDTH] ?: "1920" }
     val imgHeight = dataStore.data.map { it[PreferencesKeys.IMG_HEIGHT] ?: "1080" }
     val imgOpacity = dataStore.data.map { it[PreferencesKeys.IMG_OPACITY] ?: 100f }
-    val imgShowAxes = dataStore.data.map { it[PreferencesKeys.IMG_SHOW_AXES] ?: true }
     val imgShowLabels = dataStore.data.map { it[PreferencesKeys.IMG_SHOW_LABELS] ?: true }
     val imgShowGrid = dataStore.data.map { it[PreferencesKeys.IMG_SHOW_GRID] ?: true }
     val imgShowTitle = dataStore.data.map { it[PreferencesKeys.IMG_SHOW_TITLE] ?: true }
@@ -221,7 +218,6 @@ class SettingsRepository(context: Context) {
             p[PreferencesKeys.IMG_WIDTH] = config.width.toString()
             p[PreferencesKeys.IMG_HEIGHT] = config.height.toString()
             p[PreferencesKeys.IMG_OPACITY] = config.backgroundOpacity.toFloat()
-            p[PreferencesKeys.IMG_SHOW_AXES] = config.showAxes
             p[PreferencesKeys.IMG_SHOW_LABELS] = config.showLabels
             p[PreferencesKeys.IMG_SHOW_GRID] = config.showGrid
             p[PreferencesKeys.IMG_SHOW_TITLE] = config.showTitle
@@ -234,7 +230,6 @@ class SettingsRepository(context: Context) {
     val vidWindowSize = dataStore.data.map { it[PreferencesKeys.VID_WINDOW_SIZE] ?: "30" }
     val vidFrameRate = dataStore.data.map { it[PreferencesKeys.VID_FRAME_RATE] ?: "30" }
     val vidOpacity = dataStore.data.map { it[PreferencesKeys.VID_OPACITY] ?: 40f }
-    val vidShowAxes = dataStore.data.map { it[PreferencesKeys.VID_SHOW_AXES] ?: true }
     val vidShowLabels = dataStore.data.map { it[PreferencesKeys.VID_SHOW_LABELS] ?: false }
     val vidShowGrid = dataStore.data.map { it[PreferencesKeys.VID_SHOW_GRID] ?: false }
     val vidShowTitle = dataStore.data.map { it[PreferencesKeys.VID_SHOW_TITLE] ?: false }
@@ -257,7 +252,6 @@ class SettingsRepository(context: Context) {
 
             // Visuals - Accessing fields from the nested imageConfig
             p[PreferencesKeys.VID_OPACITY] = config.imageConfig.backgroundOpacity.toFloat()
-            p[PreferencesKeys.VID_SHOW_AXES] = config.imageConfig.showAxes
             p[PreferencesKeys.VID_SHOW_LABELS] = config.imageConfig.showLabels
             p[PreferencesKeys.VID_SHOW_GRID] = config.imageConfig.showGrid
             p[PreferencesKeys.VID_SHOW_TITLE] = config.imageConfig.showTitle

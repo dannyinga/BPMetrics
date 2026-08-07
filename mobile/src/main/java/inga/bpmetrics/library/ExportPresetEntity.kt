@@ -47,6 +47,13 @@ interface ExportPresetDao {
     @Query("SELECT COUNT(*) FROM export_presets")
     suspend fun count(): Int
 
+    /** Every stored preset, for maintenance that has to look at all of them at once. */
+    @Query("SELECT * FROM export_presets")
+    suspend fun getAll(): List<ExportPresetEntity>
+
+    @Query("UPDATE export_presets SET configJson = :configJson WHERE presetId = :presetId")
+    suspend fun updateConfig(presetId: Long, configJson: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(preset: ExportPresetEntity): Long
 

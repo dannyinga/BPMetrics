@@ -101,8 +101,19 @@ class ExportPresetTest {
         assertEquals(mapOf(7L to 0xFFFF0000.toInt()), applied.imageConfig.customRecordColors)
         assertEquals("Subtronics 2026", applied.imageConfig.graphTitle)
         assertEquals(original.overlayVideoUri, applied.overlayVideoUri)
-        assertEquals(1234L, applied.syncOffsetMs)
         assertEquals(listOf(7L, 8L), applied.records.map { it.metadata.recordId })
+
+        // Sync offset is not content. It corrects a constant error in how one *phone* stamps its
+        // videos, so it belongs to the look that gets reused across every clip that phone filmed —
+        // which means a preset overwrites it rather than preserving whatever the config carried.
+        assertEquals(0L, applied.syncOffsetMs)
+    }
+
+    @Test
+    fun `a preset carries its sync offset onto whatever it is applied to`() {
+        val corrected = ExportPreset(name = "That old phone", syncOffsetMs = -2_500L)
+
+        assertEquals(-2_500L, corrected.applyTo(contentHeavyConfig()).syncOffsetMs)
     }
 
     @Test
@@ -116,7 +127,6 @@ class ExportPresetTest {
             "876543219",       // endTimeMs
             "Subtronics 2026", // graphTitle
             "content://media", // overlayVideoUri
-            "syncOffset",
             "customRecordColors",
             "records"
         ).forEach { forbidden ->
@@ -125,6 +135,127 @@ class ExportPresetTest {
                 !json.contains(forbidden)
             )
         }
+    }
+
+    @Test
+    fun `every setting survives being saved and read back`() {
+        // Field by field, against a preset where nothing is left at its default — so a new field
+        // added without a line in `from` or `applyTo` shows up here rather than as a setting that
+        // quietly resets itself the next time the preset is applied.
+        val edited = ExportPreset(
+            name = "Everything changed",
+            width = 1440, height = 2560, lockAspectRatio = false,
+            showLabels = false, labelsColor = 0x11223344,
+            showGrid = false, gridColor = 0x55667788,
+            lowBpmColor = 0x1A2B3C4D, highBpmColor = 0x4D3C2B1A,
+            showTitle = false, showCurrentStats = false,
+            headerXPercent = 0.42f, futureOpacity = 0.17f,
+            backgroundOpacity = 37,
+            graphLeft = 0.11f, graphTop = 0.22f, graphRight = 0.83f, graphBottom = 0.94f,
+            windowSizeMs = 12_345L, frameRate = 50, matchSourceFrameRate = true,
+            overlayBitRate = 9_100_000, regularBitRate = 3_200_000,
+            syncOffsetMs = -1_750L, timeZoneId = "Europe/Lisbon"
+        )
+
+        val restored = ExportPreset.fromJson(edited.toJson())
+
+        assertEquals(edited, restored)
+    }
+
+    @Test
+    fun `a payload missing newer fields comes back usable`() {
+        // What Gson does to a preset written before a field existed: absent means the JVM's zero,
+        // not the Kotlin default. A framing of 0,0,0,0 has no area and would draw nothing at all.
+        val ancient = """
+            {"version":1,"name":"From an old build","width":1920,"height":1080,
+             "showLabels":true,"showGrid":true,"showTitle":true,"showCurrentStats":true,
+             "backgroundOpacity":100,"windowSizeMs":30000,"frameRate":30}
+        """.trimIndent()
+
+        val restored = ExportPreset.fromJson(ancient)!!
+        val shipped = ExportPreset()
+
+        assertEquals("From an old build", restored.name)
+        // Framing repaired rather than left with no area.
+        assertEquals(shipped.graphLeft, restored.graphLeft, 0.0001f)
+        assertEquals(shipped.graphBottom, restored.graphBottom, 0.0001f)
+        // A non-null String that Gson would have left null.
+        assertNotNull(restored.timeZoneId)
+        assertTrue(restored.timeZoneId.isNotBlank())
+        // Absent booleans and longs are legitimately false and zero, and stay that way.
+        assertEquals(false, restored.matchSourceFrameRate)
+        assertEquals(0L, restored.syncOffsetMs)
+    }
+
+    @Test
+    fun `nonsense values are repaired rather than carried into a render`() {
+        val broken = ExportPreset(
+            width = 0, height = -4, frameRate = 0, windowSizeMs = 0L,
+            overlayBitRate = 0, regularBitRate = -1,
+            backgroundOpacity = 900, futureOpacity = 4f, headerXPercent = -2f
+        )
+        val shipped = ExportPreset()
+
+        val fixed = broken.sanitised()
+
+        assertEquals(shipped.width, fixed.width)
+        assertEquals(shipped.height, fixed.height)
+        assertEquals(shipped.frameRate, fixed.frameRate)
+        assertEquals(shipped.windowSizeMs, fixed.windowSizeMs)
+        assertEquals(shipped.overlayBitRate, fixed.overlayBitRate)
+        assertEquals(shipped.regularBitRate, fixed.regularBitRate)
+        assertEquals(100, fixed.backgroundOpacity)
+        assertEquals(1f, fixed.futureOpacity, 0.0001f)
+        assertEquals(0f, fixed.headerXPercent, 0.0001f)
+    }
+
+    @Test
+    fun `a preset still carrying an old shipped framing is recognised`() {
+        // The bug this exists for: presets are stored as JSON, so a row seeded under an older
+        // default keeps that framing forever and reapplies it to every export.
+        ExportPreset.SUPERSEDED_FRAMINGS.forEach { (l, t, r, b) ->
+            val stale = ExportPreset(name = "Seeded long ago")
+                .withFraming(l, t, r, b)
+
+            assertTrue("$l,$t,$r,$b should be recognised as superseded", stale.hasSupersededFraming())
+        }
+    }
+
+    @Test
+    fun `a framing someone actually dragged is left alone`() {
+        val chosen = ExportPreset(name = "Mine").withFraming(0.2f, 0.3f, 0.7f, 0.8f)
+
+        assertTrue(!chosen.hasSupersededFraming())
+    }
+
+    @Test
+    fun `repairing a stale framing lands on what this build ships`() {
+        val shipped = ExportPreset()
+        val stale = ExportPreset(name = "Seeded long ago").withFraming(0.04f, 0.62f, 0.96f, 0.97f)
+
+        val repaired = stale.withDefaultFraming()
+
+        assertEquals(shipped.graphLeft, repaired.graphLeft, 0.0001f)
+        assertEquals(shipped.graphTop, repaired.graphTop, 0.0001f)
+        assertEquals(shipped.graphRight, repaired.graphRight, 0.0001f)
+        assertEquals(shipped.graphBottom, repaired.graphBottom, 0.0001f)
+        // Everything else about the preset survives the repair.
+        assertEquals("Seeded long ago", repaired.name)
+        assertTrue(!repaired.hasSupersededFraming())
+    }
+
+    @Test
+    fun `the shipped framing is a portion of the frame, not the whole of it`() {
+        // A graph over the entire video hides what it is annotating, and a frame flush to the edges
+        // puts its own resize handles on the boundary where they cannot be grabbed.
+        val shipped = ExportPreset()
+
+        assertTrue("must not span the full width", shipped.graphRight - shipped.graphLeft <= 0.6f)
+        assertTrue("must not span the full height", shipped.graphBottom - shipped.graphTop <= 0.45f)
+        assertTrue("must sit in the lower half", shipped.graphTop >= 0.5f)
+        // Centred across, so it reads as deliberate rather than nudged.
+        assertEquals(shipped.graphLeft, 1f - shipped.graphRight, 0.0001f)
+        assertTrue("must be inset from every edge", shipped.graphLeft > 0f && shipped.graphBottom < 1f)
     }
 
     @Test

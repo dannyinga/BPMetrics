@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Sell
@@ -56,6 +57,7 @@ enum class AppDestination(
     LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks),
     ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.AutoMirrored.Filled.Sort),
     EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary),
+    RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Render queue", Icons.Default.Movie),
     INCOMING(inga.bpmetrics.ui.Routes.INCOMING, "Incoming", Icons.Default.CloudDownload),
     PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People),
     WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch),
@@ -105,9 +107,8 @@ fun AppDrawerContent(
                     icon = { Icon(destination.icon, contentDescription = null) },
                     badge = {
                         val count = when (destination) {
-                            // The badge follows the queue into the Export section, which is where
-                            // step 4 now shows it.
-                            AppDestination.EXPORT -> activeRenderCount
+                            // On the queue itself, which is the section it describes.
+                            AppDestination.RENDER_QUEUE -> activeRenderCount
                             AppDestination.INCOMING -> incomingCount
                             else -> 0
                         }

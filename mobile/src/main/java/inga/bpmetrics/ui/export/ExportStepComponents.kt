@@ -242,6 +242,7 @@ fun ContentsStep(
     hasNoClips: Boolean,
     oldestFirst: Boolean,
     onToggleOrder: () -> Unit,
+    onSelectAll: (Boolean) -> Unit,
     onToggleClip: (android.net.Uri) -> Unit,
     onToggleRecord: (android.net.Uri, Long) -> Unit
 ) {
@@ -284,26 +285,44 @@ fun ContentsStep(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val ticked = clips.count { it.selected }
-                Text(
-                    "$ticked of ${clips.size} clip${if (clips.size == 1) "" else "s"} · " +
-                        "one export each",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                TextButton(onClick = onToggleOrder) {
-                    Icon(
-                        Icons.Default.SwapVert,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
+            val ticked = clips.count { it.selected }
+            // Anything with nobody recording during it can never be ticked, so it must not count
+            // toward "all selected" — otherwise the button would never settle on "Deselect all".
+            val selectable = clips.count { it.recordIds.isNotEmpty() }
+
+            Column(Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (ticked == 0) {
+                            "Choose which clips to export"
+                        } else {
+                            "$ticked of ${clips.size} clip${if (clips.size == 1) "" else "s"} · " +
+                                "one export each"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(Modifier.width(4.dp))
-                    Text(if (oldestFirst) "Oldest first" else "Newest first")
+                    TextButton(onClick = onToggleOrder) {
+                        Icon(
+                            Icons.Default.SwapVert,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (oldestFirst) "Oldest first" else "Newest first")
+                    }
+                }
+                if (selectable > 1) {
+                    TextButton(
+                        onClick = { onSelectAll(ticked < selectable) },
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Text(if (ticked < selectable) "Select all" else "Deselect all")
+                    }
                 }
             }
         }

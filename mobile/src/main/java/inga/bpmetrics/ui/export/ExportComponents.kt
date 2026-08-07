@@ -148,7 +148,6 @@ fun ImageExportDialog(
     val savedW by settingsRepository.imgWidth.collectAsStateWithLifecycle(initialValue = "1920")
     val savedH by settingsRepository.imgHeight.collectAsStateWithLifecycle(initialValue = "1080")
     val savedO by settingsRepository.imgOpacity.collectAsStateWithLifecycle(initialValue = 100f)
-    val savedAxes by settingsRepository.imgShowAxes.collectAsStateWithLifecycle(initialValue = true)
     val savedLabels by settingsRepository.imgShowLabels.collectAsStateWithLifecycle(initialValue = true)
     val savedGrid by settingsRepository.imgShowGrid.collectAsStateWithLifecycle(initialValue = true)
     val savedTitle by settingsRepository.imgShowTitle.collectAsStateWithLifecycle(initialValue = true)
@@ -158,7 +157,6 @@ fun ImageExportDialog(
     var startInput by remember { mutableStateOf(TimeUtils.formatMs(0L)) }
     var endInput by remember { mutableStateOf(TimeUtils.formatMs(record.metadata.durationMs)) }
     var opacity by remember(savedO) { mutableFloatStateOf(savedO) }
-    var showAxes by remember(savedAxes) { mutableStateOf(savedAxes) }
     var showLabels by remember(savedLabels) { mutableStateOf(savedLabels) }
     var showGrid by remember(savedGrid) { mutableStateOf(savedGrid) }
     var showTitle by remember(savedTitle) { mutableStateOf(savedTitle) }
@@ -189,7 +187,6 @@ fun ImageExportDialog(
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         ExportToggle("Show Title", showTitle) { showTitle = it }
-                        ExportToggle("Show Axes", showAxes) { showAxes = it }
                         ExportToggle("Show Labels", showLabels) { showLabels = it }
                         ExportToggle("Show Grid", showGrid) { showGrid = it }
                     }
@@ -216,7 +213,7 @@ fun ImageExportDialog(
         confirmButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = {
-                    val config = createConfig(widthPx, heightPx, startInput, endInput, record, opacity, showAxes, showLabels, showGrid, showTitle)
+                    val config = createConfig(widthPx, heightPx, startInput, endInput, record, opacity, showLabels, showGrid, showTitle)
                     if (saveAsDefault) {
                         scope.launch { settingsRepository.setImageDefaults(config) }
                     }
@@ -224,7 +221,7 @@ fun ImageExportDialog(
                     onDismiss()
                 }) { Text("Save") }
 //                TextButton(onClick = {
-//                    val config = createConfig(widthPx, heightPx, startInput, endInput, record, opacity, showAxes, showLabels, showGrid, showTitle)
+//                    val config = createConfig(widthPx, heightPx, startInput, endInput, record, opacity, showLabels, showGrid, showTitle)
 //                    if (saveAsDefault) {
 //                        scope.launch { settingsRepository.setImageDefaults(config) }
 //                    }
@@ -276,7 +273,6 @@ fun VideoExportDialog(
     val savedWin by viewModel.savedWindowSize.collectAsStateWithLifecycle()
     val savedFPS by viewModel.savedFrameRate.collectAsStateWithLifecycle()
     val savedO by viewModel.savedOpacity.collectAsStateWithLifecycle()
-    val savedAxes by viewModel.savedShowAxes.collectAsStateWithLifecycle()
     val savedLabels by viewModel.savedShowLabels.collectAsStateWithLifecycle()
     val savedGrid by viewModel.savedShowGrid.collectAsStateWithLifecycle()
     val savedTitle by viewModel.savedShowTitle.collectAsStateWithLifecycle()
@@ -406,7 +402,6 @@ fun VideoExportDialog(
     var opacity by remember(savedO) { mutableFloatStateOf(savedO) }
     var overlayScale by remember { mutableFloatStateOf(1.0f) }
 
-    var showAxes by remember(savedAxes) { mutableStateOf(savedAxes) }
     var showLabels by remember(savedLabels) { mutableStateOf(savedLabels) }
     var showGrid by remember(savedGrid) { mutableStateOf(savedGrid) }
     var showTitle by remember(savedTitle) { mutableStateOf(savedTitle) }
@@ -949,7 +944,6 @@ fun VideoExportDialog(
                             ExportToggle("Show HUD Stats", showCurrentStats) {
                                 showCurrentStats = it
                             }
-                            ExportToggle("Show Axes", showAxes) { showAxes = it }
                             ExportToggle("Show Labels", showLabels) { showLabels = it }
                             ExportToggle("Show Grid", showGrid) { showGrid = it }
                             ExportToggle("Show Title", showTitle) { showTitle = it }
@@ -1064,7 +1058,6 @@ fun VideoExportDialog(
                         windowSizeSec = windowSizeSec,
                         frameRate = frameRateInput,
                         opacity = opacity,
-                        showAxes = showAxes,
                         showLabels = showLabels,
                         showGrid = showGrid,
                         showTitle = showTitle,
@@ -1325,7 +1318,6 @@ private fun prepareVideoConfig(
     windowSizeSec: String,
     frameRate: String,
     opacity: Float,
-    showAxes: Boolean,
     showLabels: Boolean,
     showGrid: Boolean,
     showTitle: Boolean,
@@ -1349,7 +1341,6 @@ private fun prepareVideoConfig(
         startTimeMs = startTimeMs,
         endTimeMs = endTimeMs,
         backgroundOpacity = opacity.toInt(),
-        showAxes = showAxes,
         showLabels = showLabels,
         showGrid = showGrid,
         showTitle = showTitle,
@@ -1390,7 +1381,7 @@ private fun ExportToggle(label: String, checked: Boolean, onCheckedChange: (Bool
     }
 }
 
-private fun createConfig(w: String, h: String, s: String, e: String, r: BpmRecord, o: Float, ax: Boolean, l: Boolean, g: Boolean, t: Boolean) : ImageExporter.ImageExportConfig {
+private fun createConfig(w: String, h: String, s: String, e: String, r: BpmRecord, o: Float, l: Boolean, g: Boolean, t: Boolean) : ImageExporter.ImageExportConfig {
     val start = TimeUtils.parseToMs(s) ?: 0L
     val end = TimeUtils.parseToMs(e) ?: r.metadata.durationMs
     return ImageExporter.ImageExportConfig(
@@ -1399,7 +1390,6 @@ private fun createConfig(w: String, h: String, s: String, e: String, r: BpmRecor
         startTimeMs = start,
         endTimeMs = end,
         backgroundOpacity = o.toInt(), 
-        showAxes = ax, 
         showLabels = l, 
         showGrid = g, 
         showTitle = t

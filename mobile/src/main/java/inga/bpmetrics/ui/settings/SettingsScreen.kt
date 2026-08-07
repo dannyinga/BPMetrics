@@ -69,7 +69,6 @@ fun SettingsScreen(
     val savedImgW by viewModel.imgWidth.collectAsStateWithLifecycle()
     val savedImgH by viewModel.imgHeight.collectAsStateWithLifecycle()
     val savedImgO by viewModel.imgOpacity.collectAsStateWithLifecycle()
-    val savedImgAxes by viewModel.imgShowAxes.collectAsStateWithLifecycle()
     val savedImgLabels by viewModel.imgShowLabels.collectAsStateWithLifecycle()
     val savedImgGrid by viewModel.imgShowGrid.collectAsStateWithLifecycle()
     val savedImgTitle by viewModel.imgShowTitle.collectAsStateWithLifecycle()
@@ -79,7 +78,6 @@ fun SettingsScreen(
     val savedVidWin by viewModel.vidWindowSize.collectAsStateWithLifecycle()
     val savedVidFPS by viewModel.vidFrameRate.collectAsStateWithLifecycle()
     val savedVidO by viewModel.vidOpacity.collectAsStateWithLifecycle()
-    val savedVidAxes by viewModel.vidShowAxes.collectAsStateWithLifecycle()
     val savedVidLabels by viewModel.vidShowLabels.collectAsStateWithLifecycle()
     val savedVidGrid by viewModel.vidShowGrid.collectAsStateWithLifecycle()
     val savedVidTitle by viewModel.vidShowTitle.collectAsStateWithLifecycle()
@@ -92,7 +90,6 @@ fun SettingsScreen(
     var imgW by remember(savedImgW) { mutableStateOf(savedImgW) }
     var imgH by remember(savedImgH) { mutableStateOf(savedImgH) }
     var imgO by remember(savedImgO) { mutableFloatStateOf(savedImgO) }
-    var imgAxes by remember(savedImgAxes) { mutableStateOf(savedImgAxes) }
     var imgLabels by remember(savedImgLabels) { mutableStateOf(savedImgLabels) }
     var imgGrid by remember(savedImgGrid) { mutableStateOf(savedImgGrid) }
     var imgTitle by remember(savedImgTitle) { mutableStateOf(savedImgTitle) }
@@ -102,7 +99,6 @@ fun SettingsScreen(
     var vidWin by remember(savedVidWin) { mutableStateOf(savedVidWin) }
     var vidFPS by remember(savedVidFPS) { mutableStateOf(savedVidFPS) }
     var vidO by remember(savedVidO) { mutableFloatStateOf(savedVidO) }
-    var vidAxes by remember(savedVidAxes) { mutableStateOf(savedVidAxes) }
     var vidLabels by remember(savedVidLabels) { mutableStateOf(savedVidLabels) }
     var vidGrid by remember(savedVidGrid) { mutableStateOf(savedVidGrid) }
     var vidTitle by remember(savedVidTitle) { mutableStateOf(savedVidTitle) }
@@ -116,9 +112,9 @@ fun SettingsScreen(
     var showUnsavedDialog by remember { mutableStateOf(false) }
 
     val hasUnsavedChanges = imgW != savedImgW || imgH != savedImgH || imgO != savedImgO ||
-            imgAxes != savedImgAxes || imgLabels != savedImgLabels || imgGrid != savedImgGrid ||
+imgLabels != savedImgLabels || imgGrid != savedImgGrid ||
             imgTitle != savedImgTitle || vidW != savedVidW || vidH != savedVidH ||
-            vidWin != savedVidWin || vidFPS != savedVidFPS || vidO != savedVidO || vidAxes != savedVidAxes ||
+            vidWin != savedVidWin || vidFPS != savedVidFPS || vidO != savedVidO || 
             vidLabels != savedVidLabels || vidGrid != savedVidGrid || vidTitle != savedVidTitle ||
             vidStats != savedVidStats || vidLock != savedVidLock || vidOffset != savedVidOffset.toString() ||
             defaultTz != savedDefaultTz
@@ -128,7 +124,6 @@ fun SettingsScreen(
             width = imgW.toIntOrNull() ?: 1920,
             height = imgH.toIntOrNull() ?: 1080,
             backgroundOpacity = imgO.toInt(),
-            showAxes = imgAxes,
             showGrid = imgGrid,
             showLabels = imgLabels,
             showTitle = imgTitle,
@@ -140,7 +135,6 @@ fun SettingsScreen(
                 width = vidW.toIntOrNull() ?: 1280,
                 height = vidH.toIntOrNull() ?: 720,
                 backgroundOpacity = vidO.toInt(),
-                showAxes = vidAxes,
                 showLabels = vidLabels,
                 showGrid = vidGrid,
                 showTitle = vidTitle,
@@ -245,7 +239,6 @@ fun SettingsScreen(
                 OutlinedTextField(value = imgH, onValueChange = { imgH = it }, label = { Text("Height") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             }
             SettingsToggle("Show Title", imgTitle) { imgTitle = it }
-            SettingsToggle("Show Axes", imgAxes) { imgAxes = it }
             SettingsToggle("Show Labels", imgLabels) { imgLabels = it }
             SettingsToggle("Show Grid", imgGrid) { imgGrid = it }
             Text("Background Opacity: ${imgO.toInt()}%", modifier = Modifier.padding(top = 8.dp))
@@ -264,7 +257,6 @@ fun SettingsScreen(
             SettingsToggle("Lock Aspect Ratio", vidLock) { vidLock = it }
             SettingsToggle("Show Title", vidTitle) { vidTitle = it }
             SettingsToggle("Show Stats", vidStats) { vidStats = it }
-            SettingsToggle("Show Axes", vidAxes) { vidAxes = it }
             SettingsToggle("Show Labels", vidLabels) { vidLabels = it }
             SettingsToggle("Show Grid", vidGrid) { vidGrid = it }
             Text("Background Opacity: ${vidO.toInt()}%", modifier = Modifier.padding(top = 8.dp))

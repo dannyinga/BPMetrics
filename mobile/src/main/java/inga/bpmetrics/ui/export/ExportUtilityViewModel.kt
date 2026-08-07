@@ -72,10 +72,160 @@ data class ClipSelection(
      * A filename and a timestamp say nothing about whether the moment was any good. A glance at the
      * shape does: a clip where three curves all climb is the one to export, and a flat one is not.
      */
-    val sparks: List<ClipSpark> = emptyList()
+    val sparks: List<ClipSpark> = emptyList(),
+    /**
+     * Where the graph sits on this clip, as fractions of the canvas.
+     *
+     * Per clip rather than per batch: a graph that works over a wide shot covers someone's face in
+     * a close-up. Null means it has not been placed yet and the shared default applies, which is
+     * what makes "apply to all" meaningful — it fills these in rather than erasing a distinction
+     * that was never made.
+     */
+    val graph: GraphPlacement? = null,
+    /** Where this clip's preview is scrubbed to, 0..1. Its own, because each clip is its own shot. */
+    val scrubAt: Float = 0f
 ) {
     /** The highest anyone reached during the clip. Null when nobody was recording. */
     val peakBpm: Int? get() = sparks.maxOfOrNull { it.peakBpm }
+}
+
+/**
+ * Which part of the graph frame a drag is holding.
+ *
+ * Edges as well as corners: pulling a frame narrower without also changing its height is the common
+ * adjustment, and corner-only meant doing it twice and accepting whatever the second drag did to
+ * the first.
+ */
+enum class GraphHandle {
+    TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT,
+    LEFT, RIGHT, TOP, BOTTOM
+}
+
+/** Where the graph sits on the canvas, in fractions so it survives an aspect change. */
+data class GraphPlacement(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float
+) {
+    fun toRectF(): android.graphics.RectF = android.graphics.RectF(left, top, right, bottom)
+
+    val width: Float get() = right - left
+    val height: Float get() = bottom - top
+
+    /** Writes this framing into a preset, so saving one carries what is on screen. */
+    fun into(preset: ExportPreset): ExportPreset = preset.withFraming(left, top, right, bottom)
+
+    /** Resizes from the top-left, sliding back into frame if the new size would overflow. */
+    fun withSize(newWidth: Float, newHeight: Float): GraphPlacement {
+        val w = newWidth.coerceIn(MIN_SIZE, 1f)
+        val h = newHeight.coerceIn(MIN_SIZE, 1f)
+        val x = left.coerceIn(0f, 1f - w)
+        val y = top.coerceIn(0f, 1f - h)
+        return GraphPlacement(x, y, x + w, y + h)
+    }
+
+    /** Centres left-to-right, keeping the height and vertical position. */
+    fun centredHorizontally(): GraphPlacement = movedTo((1f - width) / 2f, top)
+
+    /** Centres top-to-bottom, keeping the width and horizontal position. */
+    fun centredVertically(): GraphPlacement = movedTo(left, (1f - height) / 2f)
+
+    /** Whether a point, in the same 0..1 space, falls inside the frame. */
+    fun contains(x: Float, y: Float): Boolean = x in left..right && y in top..bottom
+
+    /** Whether this is the same framing, allowing for a drag that landed a hair off. */
+    fun matches(other: GraphPlacement): Boolean =
+        kotlin.math.abs(left - other.left) < 0.005f &&
+            kotlin.math.abs(top - other.top) < 0.005f &&
+            kotlin.math.abs(right - other.right) < 0.005f &&
+            kotlin.math.abs(bottom - other.bottom) < 0.005f
+
+    /**
+     * Drags one handle, keeping the opposite side fixed.
+     *
+     * Stops at the minimum size rather than letting a side cross the one opposite it, which would
+     * invert the rectangle and draw the graph inside out.
+     */
+    fun resizedBy(handle: GraphHandle, dx: Float, dy: Float): GraphPlacement {
+        val movesLeft = handle in setOf(GraphHandle.TOP_LEFT, GraphHandle.BOTTOM_LEFT, GraphHandle.LEFT)
+        val movesRight = handle in setOf(GraphHandle.TOP_RIGHT, GraphHandle.BOTTOM_RIGHT, GraphHandle.RIGHT)
+        val movesTop = handle in setOf(GraphHandle.TOP_LEFT, GraphHandle.TOP_RIGHT, GraphHandle.TOP)
+        val movesBottom = handle in setOf(GraphHandle.BOTTOM_LEFT, GraphHandle.BOTTOM_RIGHT, GraphHandle.BOTTOM)
+
+        return copy(
+            left = if (movesLeft) (left + dx).coerceIn(0f, right - MIN_SIZE) else left,
+            right = if (movesRight) (right + dx).coerceIn(left + MIN_SIZE, 1f) else right,
+            top = if (movesTop) (top + dy).coerceIn(0f, bottom - MIN_SIZE) else top,
+            bottom = if (movesBottom) (bottom + dy).coerceIn(top + MIN_SIZE, 1f) else bottom
+        )
+    }
+
+    /** Moves without resizing. The graph keeps its size and stops at the edge of the canvas. */
+    fun movedTo(x: Float, y: Float): GraphPlacement {
+        val w = width
+        val h = height
+        val newX = x.coerceIn(0f, 1f - w)
+        val newY = y.coerceIn(0f, 1f - h)
+        return GraphPlacement(newX, newY, newX + w, newY + h)
+    }
+
+    companion object {
+        fun of(rect: android.graphics.RectF) =
+            GraphPlacement(rect.left, rect.top, rect.right, rect.bottom)
+
+        /**
+         * The default placement for a clip: half the width, a third of the height, centred across
+         * and sitting low.
+         *
+         * A graph covering the entire video hides the thing it is annotating — the footage is the
+         * subject and the curve is the caption. Inset from every edge on purpose, so its handles
+         * are grabbable from the moment it appears rather than pinned against the frame border.
+         */
+        val DEFAULT = GraphPlacement(0.25f, 0.58f, 0.75f, 0.91f)
+
+        /**
+         * Framings worth one tap.
+         *
+         * Dragging to a clean lower third is fiddly and the result is never quite square with the
+         * frame. These are the arrangements people actually want, stated exactly.
+         */
+        val PRESETS: List<Pair<String, GraphPlacement>> = listOf(
+            "Lower band" to DEFAULT,
+            "Lower third" to GraphPlacement(0.05f, 0.62f, 0.95f, 0.95f),
+            "Bottom left" to GraphPlacement(0.04f, 0.60f, 0.52f, 0.94f),
+            "Bottom right" to GraphPlacement(0.48f, 0.60f, 0.96f, 0.94f),
+            "Upper band" to GraphPlacement(0.25f, 0.06f, 0.75f, 0.39f),
+            "Centred" to GraphPlacement(0.18f, 0.33f, 0.82f, 0.67f),
+            "Full frame" to GraphPlacement(0f, 0f, 1f, 1f)
+        )
+
+        /**
+         * The framing a preset carries, which is what a clip falls back to before it is framed.
+         *
+         * Falls back to [DEFAULT] when the stored rectangle is one nothing could have chosen on
+         * purpose. Two ways that happens, and both leave a preset that cannot be dragged back into
+         * shape: a preset saved before framing existed deserializes with zeroes, because Gson fills
+         * absent fields with zero rather than running Kotlin's defaults; and `RectF(0, 0, 1, 1)` is
+         * the untouched default of a config, meaning "nobody set this" rather than "full frame".
+         * A frame the user really did drag to the edges differs from that sentinel on some side.
+         */
+        fun of(preset: ExportPreset): GraphPlacement {
+            val stored = GraphPlacement(
+                preset.graphLeft,
+                preset.graphTop,
+                preset.graphRight,
+                preset.graphBottom
+            )
+            val degenerate = stored.width < MIN_SIZE || stored.height < MIN_SIZE
+            val unset = stored.left == 0f && stored.top == 0f &&
+                stored.right == 1f && stored.bottom == 1f
+            return if (degenerate || unset) DEFAULT else stored
+        }
+
+        /** Below this the graph is unreadable, so a drag stops rather than allowing it. */
+        const val MIN_SIZE = 0.1f
+    }
 }
 
 /**
@@ -91,6 +241,19 @@ data class ClipSpark(
     /** Evenly sampled across the clip, 0..1. Null where that person was not recording. */
     val points: List<Float?>,
     val peakBpm: Int
+)
+
+/**
+ * What a batch will cost, before starting it.
+ *
+ * Approximate on purpose. The point is catching "there is no room for this" before twenty minutes
+ * of rendering, not predicting the file size to the byte.
+ */
+data class ExportEstimate(
+    val jobCount: Int,
+    val totalDurationMs: Long,
+    val approxBytes: Long,
+    val approxRenderMs: Long
 )
 
 /**
@@ -243,20 +406,26 @@ class ExportUtilityViewModel(
         _selectedPresetId.value = null
     }
 
-    fun savePresetAs(name: String) {
+    /**
+     * Saves the current look, including the framing being looked at.
+     *
+     * The framing is passed in rather than read from the preset, because while a clip is being
+     * previewed the framing on screen is that clip's override — and that is the one the user means
+     * when they save.
+     */
+    fun savePresetAs(name: String, framing: GraphPlacement) {
         viewModelScope.launch {
-            val id = repository.saveExportPreset(name, _preset.value.copy(name = name).toJson())
-            _selectedPresetId.value = id
+            val toSave = framing.into(_preset.value).copy(name = name)
+            _preset.value = toSave
+            _selectedPresetId.value = repository.saveExportPreset(name, toSave.toJson())
         }
     }
 
-    fun updatePreset(entity: ExportPresetEntity) {
+    fun updatePreset(entity: ExportPresetEntity, framing: GraphPlacement) {
         viewModelScope.launch {
-            repository.updateExportPreset(
-                entity.presetId,
-                entity.name,
-                _preset.value.copy(name = entity.name).toJson()
-            )
+            val toSave = framing.into(_preset.value).copy(name = entity.name)
+            _preset.value = toSave
+            repository.updateExportPreset(entity.presetId, entity.name, toSave.toJson())
         }
     }
 
@@ -298,6 +467,133 @@ class ExportUtilityViewModel(
             _selectedPresetId.value = id
             onDone(true)
         }
+    }
+
+    /**
+     * The background chosen for a source with no clips of its own.
+     *
+     * Batched exports take their background from the clip. This is for the other case — a session
+     * nobody filmed, or one where the user wants a video the overlap search did not turn up.
+     */
+    private val _manualOverlay = MutableStateFlow<android.net.Uri?>(null)
+    val manualOverlay: StateFlow<android.net.Uri?> = _manualOverlay.asStateFlow()
+
+    fun setManualOverlay(uri: android.net.Uri?) {
+        _manualOverlay.value = uri
+    }
+
+    /**
+     * Where the preview is scrubbed to, as a fraction of the export.
+     *
+     * A fraction rather than a timestamp so it survives changing which clip is being previewed —
+     * the interesting instant is usually "about a third in", not a particular millisecond.
+     */
+    private val _previewAt = MutableStateFlow(0f)
+    val previewAt: StateFlow<Float> = _previewAt.asStateFlow()
+
+    fun scrubPreview(fraction: Float) {
+        _previewAt.value = fraction.coerceIn(0f, 1f)
+    }
+
+    /**
+     * Builds the config for one export.
+     *
+     * The single place a [VideoExporter.VideoExportConfig] is assembled: appearance from the
+     * preset, content from the arguments. Nothing else constructs one, so a batched export and a
+     * one-off cannot drift apart.
+     */
+    fun buildConfig(
+        forRecords: List<BpmRecord>,
+        overlay: android.net.Uri?,
+        colours: Map<Long, Int>,
+        title: String?,
+        /** The clip this is drawn over, when there is one. Decides the sync and the crop. */
+        clip: VideoExporter.VideoClip? = null,
+        placement: GraphPlacement? = null
+    ): VideoExporter.VideoExportConfig {
+        // Always clock-aligned. A recording happened at a particular time, and starting it at 0:00
+        // of a video only ever looked right when the two happened to begin together.
+        val timeline = inga.bpmetrics.export.ImageExporter.timelineFor(forRecords, false)
+
+        // The clip's own window on the shared timeline. Without this the export spans the whole
+        // recording and the footage drifts out of sync within seconds.
+        val window = clip?.windowOn(timeline, _preset.value.syncOffsetMs)
+        val startMs = window?.startMs ?: 0L
+        val endMs = window?.endMs ?: timeline.durationMs
+
+        val base = VideoExporter.VideoExportConfig(
+            imageConfig = inga.bpmetrics.export.ImageExporter.ImageExportConfig(
+                startTimeMs = startMs,
+                endTimeMs = endMs.coerceAtLeast(startMs + 1000L),
+                customRecordColors = colours,
+                graphTitle = title,
+                alignByElapsedTime = false
+            ),
+            overlayVideoUri = overlay,
+            // The render aligns against exactly what the picker resolved and the preview drew.
+            overlayStartedAtMs = clip?.startedAtMs,
+            records = forRecords
+        )
+
+        return _preset.value.applyTo(base).let { applied ->
+            applied.copy(
+                // The clip's own framing when it has been given one, otherwise whatever the
+                // preset carries — framing is part of a look, so a preset has to bring its own.
+                graphRect = (placement ?: GraphPlacement.of(_preset.value)).toRectF()
+            )
+        }
+    }
+
+    /** Moves or resizes the graph on one clip. */
+    fun setClipGraph(uri: android.net.Uri, placement: GraphPlacement) {
+        _clips.value = _clips.value.map {
+            if (it.clip.uri == uri) it.copy(graph = placement) else it
+        }
+    }
+
+    fun scrubClip(uri: android.net.Uri, at: Float) {
+        _clips.value = _clips.value.map {
+            if (it.clip.uri == uri) it.copy(scrubAt = at.coerceIn(0f, 1f)) else it
+        }
+    }
+
+    /**
+     * Gives every clip the placement one of them has.
+     *
+     * The scrub position is deliberately not copied — it points at a moment inside one particular
+     * clip, and the same fraction of a different shot is a different moment.
+     */
+    fun applyGraphToAll(from: android.net.Uri) {
+        val source = _clips.value.firstOrNull { it.clip.uri == from }?.graph ?: return
+        _clips.value = _clips.value.map { it.copy(graph = source) }
+    }
+
+    /**
+     * Roughly how large the queued exports will be, and how long they will take.
+     *
+     * Bitrate times duration, which is what the encoder is actually bounded by. Deliberately
+     * approximate and labelled as such — the alternative is finding out after twenty minutes of
+     * rendering that there was no room, which this app has already done to someone once.
+     */
+    fun estimate(jobs: List<ClipSelection>, fallbackDurationMs: Long): ExportEstimate {
+        val preset = _preset.value
+        val totalMs = if (jobs.isEmpty()) {
+            fallbackDurationMs
+        } else {
+            jobs.sumOf { it.clip.durationMs }
+        }
+        val bitsPerSecond = if (jobs.isEmpty()) preset.regularBitRate else preset.overlayBitRate
+        val bytes = (totalMs / 1000.0) * (bitsPerSecond / 8.0)
+
+        return ExportEstimate(
+            jobCount = jobs.size.coerceAtLeast(1),
+            totalDurationMs = totalMs,
+            approxBytes = bytes.toLong(),
+            // Encoding runs slower than real time on a phone, and more so with an overlay. A
+            // deliberately pessimistic multiplier: an estimate that undershoots is the one that
+            // makes people think it has hung.
+            approxRenderMs = (totalMs * if (jobs.isEmpty()) 1.5 else 3.0).toLong()
+        )
     }
 
     // --- Step 2: which clips, and whose curves go on each ---
@@ -349,9 +645,10 @@ class ExportUtilityViewModel(
                 recordIds = sourceRecords.filter { clip.overlaps(it) }
                     .map { it.metadata.recordId }
                     .toSet(),
-                // Ticked by default, because having found the clips the likely answer is "all of
-                // them" and unticking is cheaper than ticking six.
-                selected = true
+                // Nothing is ticked to begin with. Choosing what to export is the question this
+                // step asks, and pre-answering it means a stray tap on Next queues renders nobody
+                // asked for — expensive, and on a phone that has already been filled once.
+                selected = false
             )
         }
         _loadingClips.value = false
@@ -425,6 +722,18 @@ class ExportUtilityViewModel(
 
     fun setLoadingClips() {
         _loadingClips.value = true
+    }
+
+    /**
+     * Ticks or unticks everything at once.
+     *
+     * Only clips with somebody recording during them are ticked — selecting all should not select
+     * a clip that would produce an export with an empty graph over it.
+     */
+    fun setAllClipsSelected(selected: Boolean) {
+        _clips.value = _clips.value.map {
+            it.copy(selected = selected && it.recordIds.isNotEmpty())
+        }
     }
 
     fun toggleClip(uri: android.net.Uri) {

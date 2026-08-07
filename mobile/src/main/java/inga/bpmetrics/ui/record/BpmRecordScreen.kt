@@ -365,7 +365,7 @@ fun BpmRecordScreen(
 /**
  * The way back up: this recording's event, and that event's group.
  *
- * Nothing at all when the recording is unfiled, rather than a row of empty chips â€” an absence
+ * Nothing at all when the recording is unfiled, rather than a row of empty chips — an absence
  * stated is worse than an absence.
  */
 @Composable
@@ -603,7 +603,7 @@ private fun InsightStat(label: String, value: String, modifier: Modifier = Modif
     }
 }
 
-/** "1st", "2nd", "23rd" â€” the ranking reads as a sentence rather than as a number. */
+/** "1st", "2nd", "23rd" — the ranking reads as a sentence rather than as a number. */
 private fun ordinal(n: Int): String {
     val suffix = when {
         n % 100 in 11..13 -> "th"
