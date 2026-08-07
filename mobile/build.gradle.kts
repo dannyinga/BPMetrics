@@ -69,6 +69,28 @@ android {
                 debugSymbolLevel = "FULL"
             }
         }
+
+        /**
+         * Sideloadable builds for people testing before something reaches Play.
+         *
+         * Carries its own application id, so it installs *alongside* a Play copy rather than
+         * fighting it. An APK signed with the upload key and one delivered by Play have different
+         * signatures and can never replace each other, so without the suffix a tester would have to
+         * uninstall — and lose their recordings — every time they moved between the two.
+         *
+         * Separate id also means separate storage, so an experimental build cannot damage real
+         * data. That matters more the more testers there are.
+         *
+         * The version name carries the CI run, so "which build is this?" is answerable from the
+         * phone's app info rather than by guessing.
+         */
+        create("beta") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".beta"
+            versionNameSuffix = "-beta.${System.getenv("GITHUB_RUN_NUMBER") ?: "local"}"
+            // :core only defines debug and release, so tell AGP which of those to link against.
+            matchingFallbacks += listOf("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

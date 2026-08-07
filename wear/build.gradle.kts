@@ -64,6 +64,21 @@ android {
                 debugSymbolLevel = "FULL"
             }
         }
+
+        /**
+         * The watch half of the sideloadable beta.
+         *
+         * Must carry the same suffix as the phone module: the Data Layer routes between apps by
+         * package name, so a beta phone app and a production watch app cannot see each other. They
+         * pair as their own app, which is the intent — a beta pair and a Play pair coexisting on
+         * the same devices without interfering.
+         */
+        create("beta") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".beta"
+            versionNameSuffix = "-beta.${System.getenv("GITHUB_RUN_NUMBER") ?: "local"}"
+            matchingFallbacks += listOf("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Overrides the name for beta builds only. A beta installs alongside a Play copy, so without a
+      distinct name there would be two identical icons and no way to tell which is which.
+    -->
+    <string name="app_name">BPMetrics Beta</string>
+</resources>
