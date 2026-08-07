@@ -6,8 +6,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.ui.settings.SettingsRepository
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -35,13 +37,17 @@ class LibraryInstrumentationTest {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         db = Room.inMemoryDatabaseBuilder(context, LibraryDatabase::class.java).build()
 
+        // A relaxed mock returns a Flow that never emits, and `addTagToRecord` calls `.first()` on
+        // this one — which throws rather than yielding a default. Stubbed explicitly: no category
+        // drives auto-naming in these tests.
+        every { settingsRepository.defaultNamingCategoryId } returns flowOf(null)
+
         // Handed the database rather than having its fields swapped afterwards.
         //
         // The reflection this replaces could never have worked: the repository starts collecting
         // from its DAOs in `init`, so by the time a test overwrote the fields, `records` was
         // already wired to the real on-disk database. Writes went to the in-memory one and reads
-        // came from the real one, which is why these tests failed with a bare assertion and why
-        // they saw each other's data.
+        // came from the real one, which is why these tests saw each other's data.
         repository = LibraryRepository(context, settingsRepository, db)
     }
 
@@ -60,14 +66,16 @@ class LibraryInstrumentationTest {
             endTime = System.currentTimeMillis() + 2000,
         )
         
-        repository.saveWatchRecordToLibrary(watchRecord)
-        
+        // Read back by the id the save returns, rather than through `repository.records`.
+        //
+        // That flow is fed by a background collector, so immediately after a save it may hold the
+        // list from before the record was auto-named — or from before it existed at all. Asserting
+        // against it is a race the test loses roughly whenever the collector is a moment behind.
+        val recordId = repository.saveWatchRecordToLibrary(watchRecord)
+
         // 2. Verify it's in the library with default name
-        val records = repository.records.first()
-        assertEquals(1, records.size)
-        assertTrue(records[0].metadata.title.contains("Untitled"))
-        
-        val recordId = records[0].metadata.recordId
+        val saved = repository.getRecordWithId(recordId)
+        assertTrue(saved.metadata.title.contains("Untitled"))
 
         // 3. Edit the title
         repository.updateRecordTitle(recordId, "Morning Run")
@@ -79,9 +87,10 @@ class LibraryInstrumentationTest {
 
     @Test
     fun testAddingAndRemovingTags() = runBlocking {
-        // 1. Setup a record
-        repository.saveWatchRecordToLibrary(BpmWatchRecord(Date(0), listOf(BpmDataPoint(0, 60.0)), 0, 1000))
-        val recordId = repository.records.first()[0].metadata.recordId
+        // 1. Setup a record — id taken from the save, not from the eventually-consistent flow.
+        val recordId = repository.saveWatchRecordToLibrary(
+            BpmWatchRecord(Date(0), listOf(BpmDataPoint(0, 60.0)), 0, 1000)
+        )
 
         // 2. Create a Category and Tag
         repository.createCategory("Activity")
