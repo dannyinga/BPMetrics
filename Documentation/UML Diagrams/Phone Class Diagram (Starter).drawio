@@ -1,0 +1,94 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.1.2 Chrome/138.0.7204.243 Electron/37.4.0 Safari/537.36" version="28.1.2">
+  <diagram name="Page-1" id="MRyjQ9RO3vWZrvARsO4e">
+    <mxGraphModel dx="1426" dy="841" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-1" value="BpmLibrary" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="170" y="40" width="350" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-2" value="&lt;div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- records : List&amp;lt;BpmRecords&amp;gt;&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;&lt;div&gt;&lt;div&gt;&lt;div&gt;&lt;/div&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;- idRecordMap : Map&amp;lt;Integer, BpmRecord&amp;gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" parent="6E88V9DMKjhOiy4Sm2b_-1" vertex="1">
+          <mxGeometry y="26" width="350" height="144" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-3" value="" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;spacingTop=-1;spacingLeft=3;spacingRight=3;rotatable=0;labelPosition=right;points=[];portConstraint=eastwest;strokeColor=inherit;" parent="6E88V9DMKjhOiy4Sm2b_-1" vertex="1">
+          <mxGeometry y="170" width="350" height="8" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-4" value="&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;+ addRecord(record: BpmRecord)&lt;/span&gt;&lt;/div&gt;&lt;div&gt;+ removeRecord(record : BpmRecord)&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;div&gt;+ getRecords() : List&amp;lt;BpmRecords&amp;gt;&lt;/div&gt;&lt;div&gt;+ getRecordWithId(id : Integer) : BpmRecord&lt;/div&gt;&lt;/div&gt;&lt;div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" parent="6E88V9DMKjhOiy4Sm2b_-1" vertex="1">
+          <mxGeometry y="178" width="350" height="152" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-18" value="BpmLibrarian" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="595" y="35" width="410" height="270" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-19" value="&lt;div&gt;- library : BpmLibrary&lt;/div&gt;&lt;div&gt;- view : BpmLibraryView&lt;/div&gt;&lt;div&gt;- receiver : BpmWatchListener&lt;br&gt;&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" parent="6E88V9DMKjhOiy4Sm2b_-18" vertex="1">
+          <mxGeometry y="26" width="410" height="134" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-20" value="" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;spacingTop=-1;spacingLeft=3;spacingRight=3;rotatable=0;labelPosition=right;points=[];portConstraint=eastwest;strokeColor=inherit;" parent="6E88V9DMKjhOiy4Sm2b_-18" vertex="1">
+          <mxGeometry y="160" width="410" height="8" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-21" value="&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;+ sendRecordToLibrary(record : BpmRecord)&lt;/span&gt;&lt;/div&gt;&lt;div&gt;+ getDetailedRecordView(record : BpmRecord) : BpmRecordView&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" parent="6E88V9DMKjhOiy4Sm2b_-18" vertex="1">
+          <mxGeometry y="168" width="410" height="102" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-22" value="BpmLibraryView" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1060" y="50" width="300" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-23" value="&lt;div&gt;- librarian : BpmLibrarian&lt;/div&gt;- currentRecords : List&amp;lt;BpmRecord&amp;gt;&lt;div&gt;- currentRecordsListBox : ListBox&lt;br&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" parent="6E88V9DMKjhOiy4Sm2b_-22" vertex="1">
+          <mxGeometry y="26" width="300" height="134" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-24" value="" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;spacingTop=-1;spacingLeft=3;spacingRight=3;rotatable=0;labelPosition=right;points=[];portConstraint=eastwest;strokeColor=inherit;" parent="6E88V9DMKjhOiy4Sm2b_-22" vertex="1">
+          <mxGeometry y="160" width="300" height="8" as="geometry" />
+        </mxCell>
+        <mxCell id="6E88V9DMKjhOiy4Sm2b_-25" value="&lt;div&gt;+ updateCurrentRecords(records : List&amp;lt;BpmRecord&amp;gt;)&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" parent="6E88V9DMKjhOiy4Sm2b_-22" vertex="1">
+          <mxGeometry y="168" width="300" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-21" value="BpmRecord" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="650" y="470" width="220" height="240" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-22" value="&lt;div&gt;- id: Integer&lt;/div&gt;&lt;div&gt;- dataPoints : List&amp;lt;BpmDataPoint&amp;gt;&lt;/div&gt;- title : String&lt;div&gt;- date : String&lt;/div&gt;&lt;div&gt;- startTime : Long&lt;/div&gt;&lt;div&gt;- endTime : Long&lt;/div&gt;&lt;div&gt;- maxBpm :&amp;nbsp; BpmDataPoint&lt;/div&gt;&lt;div&gt;- minBpm : BpmDataPoint&lt;/div&gt;&lt;div&gt;- average : Integer&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-21">
+          <mxGeometry y="26" width="220" height="154" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-23" value="" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;spacingTop=-1;spacingLeft=3;spacingRight=3;rotatable=0;labelPosition=right;points=[];portConstraint=eastwest;strokeColor=inherit;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-21">
+          <mxGeometry y="180" width="220" height="8" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-24" value="&lt;div&gt;&lt;br&gt;&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-21">
+          <mxGeometry y="188" width="220" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-25" value="BpmDataPoint" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="680" y="750" width="160" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-26" value="+ timestamp : Long&lt;div&gt;+ bpm : Int&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-25">
+          <mxGeometry y="26" width="160" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-27" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.496;exitY=1.005;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="SczgMOeJPrY5EqiA1LiP-24" target="SczgMOeJPrY5EqiA1LiP-25">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1250" y="690" as="sourcePoint" />
+            <mxPoint x="1300" y="640" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-28" value="BpmWatchListener" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="170" y="420" width="320" height="278" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-29" value="&lt;div&gt;- librarian : BpmLibrarian&lt;/div&gt;&lt;div&gt;- watch : Watch&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-28">
+          <mxGeometry y="26" width="320" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-30" value="" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;spacingTop=-1;spacingLeft=3;spacingRight=3;rotatable=0;labelPosition=right;points=[];portConstraint=eastwest;strokeColor=inherit;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-28">
+          <mxGeometry y="80" width="320" height="8" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-31" value="&lt;div&gt;- receiveDataAndSendToLibrary()&lt;/div&gt;&lt;div&gt;-&amp;nbsp;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;sendNewRecordToLibrary(record : BpmRecord)&lt;/span&gt;&lt;/div&gt;&lt;div&gt;-&amp;nbsp;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;sendNewRecordsToLibrary(records : List&amp;lt;BpmRecord&amp;gt;)&lt;/span&gt;&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-28">
+          <mxGeometry y="88" width="320" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-33" value="BpmRecordView" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="360" width="300" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-34" value="&lt;div&gt;- record : BpmRecord&lt;/div&gt;&lt;div&gt;- recordTitleText : Text&lt;/div&gt;&lt;div&gt;- recordDateText : Text&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;- max : BpmDataPoint&lt;/div&gt;&lt;div&gt;- avg : Integer&lt;/div&gt;&lt;div&gt;- min : BpmDataPoint&lt;/div&gt;&lt;div&gt;- maxText : Text&lt;/div&gt;&lt;div&gt;- avgText : Text&lt;/div&gt;&lt;div&gt;- minText : min&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-33">
+          <mxGeometry y="26" width="300" height="164" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-35" value="" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;spacingTop=-1;spacingLeft=3;spacingRight=3;rotatable=0;labelPosition=right;points=[];portConstraint=eastwest;strokeColor=inherit;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-33">
+          <mxGeometry y="190" width="300" height="8" as="geometry" />
+        </mxCell>
+        <mxCell id="SczgMOeJPrY5EqiA1LiP-36" value="+&amp;nbsp;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" vertex="1" parent="SczgMOeJPrY5EqiA1LiP-33">
+          <mxGeometry y="198" width="300" height="52" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -54,6 +54,30 @@ play-service-account*.json
 # Windows files
 Thumbs.db
 
-# My Documentation
-/Documentation
+# Documentation
+#
+# Product and process docs are versioned with the code deliberately: they name real files and
+# functions, so a rename that leaves a doc stale shows up in the same pull request. They also carry
+# the reasoning behind decisions that the code cannot state on its own — why tags inherit rather
+# than copy, why the watch stays at a higher minSdk than the phone — which is the part that is
+# expensive to rediscover.
+#
+# What stays out is anything personal, binary, or editor debris.
+/Documentation/Private
+/Documentation/**/*.docx
+/Documentation/*.docx
+
+# draw.io writes backups and temp files beside the real diagram
+/Documentation/**/.$*
+*.drawio.bkp
+*.drawio.dtmp
+
+# Screenshots, excluded until reviewed one by one.
+#
+# This repository is public and its history is permanent, so anything here is published for good.
+# At least one file in this folder is a full desktop capture that happens to include a private
+# Discord conversation with a third party — not a mockup at all. Review each image before removing
+# this rule, and prefer cropped captures of the app itself.
+/Documentation/UI Mockups
+
 /Private_Media
