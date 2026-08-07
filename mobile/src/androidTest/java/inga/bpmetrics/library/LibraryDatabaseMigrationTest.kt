@@ -42,7 +42,8 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_10_11,
             LibraryDatabase.MIGRATION_11_12,
             LibraryDatabase.MIGRATION_12_13,
-            LibraryDatabase.MIGRATION_13_14
+            LibraryDatabase.MIGRATION_13_14,
+            LibraryDatabase.MIGRATION_14_15
         )
     }
 
@@ -211,7 +212,7 @@ class LibraryDatabaseMigrationTest {
      * Running the whole chain is what a user upgrading from an older install actually experiences.
      */
     @Test
-    fun migrate5To14_runsTheWholeChain() {
+    fun migrate5To15_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 5).apply {
             execSQL(
                 """
@@ -224,7 +225,7 @@ class LibraryDatabaseMigrationTest {
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -249,7 +250,7 @@ class LibraryDatabaseMigrationTest {
             "(4, 'Nobody', '', 4000, 4000, 5000, 1000, NULL, 70.0, NULL, 'Watch C', '')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         // One profile per distinct name — the two Kyle recordings share a person, not one each.
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
@@ -297,7 +298,7 @@ class LibraryDatabaseMigrationTest {
     fun migrate10To11_handlesALibraryWithNoWearers() {
         helper.createDatabase(TEST_DB, 5).close()
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -317,7 +318,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate11To12_producesTheSchemaRoomExpects() {
         helper.createDatabase(TEST_DB, 5).close()
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS).close()
     }
 
     /**
@@ -330,7 +331,7 @@ class LibraryDatabaseMigrationTest {
             "(1, 'Before events existed', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.query("SELECT eventId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -356,7 +357,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate12To13_producesTheSchemaRoomExpects() {
         helper.createDatabase(TEST_DB, 5).close()
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS).close()
     }
 
     /**
@@ -372,7 +373,7 @@ class LibraryDatabaseMigrationTest {
             "(1, 'Before tags cascaded', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         listOf("event_tag_cross_ref", "event_group_tag_cross_ref").forEach { table ->
             db.query("SELECT COUNT(*) FROM $table").use { cursor ->
@@ -396,7 +397,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun deletingAnEvent_removesItsTagLinksButKeepsTheTag() {
         helper.createDatabase(TEST_DB, 5).close()
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.execSQL("PRAGMA foreign_keys = ON")
         db.execSQL("INSERT INTO categories (categoryId, name) VALUES (1, 'Festivals')")
@@ -427,7 +428,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate13To14_producesTheSchemaRoomExpects() {
         helper.createDatabase(TEST_DB, 5).close()
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS).close()
     }
 
     /**
@@ -440,7 +441,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate13To14_keepsOldSnapshotsAndLeavesTheNewColumnsEmpty() {
         helper.createDatabase(TEST_DB, 5).close()
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.execSQL(
             "INSERT INTO saved_analyses (analysisId, name, createdAt) VALUES (1, 'Coachella', 100)"
@@ -464,6 +465,38 @@ class LibraryDatabaseMigrationTest {
             assertTrue("no event id was ever recorded", cursor.isNull(3))
             assertEquals("", cursor.getString(4))
             assertEquals("", cursor.getString(5))
+        }
+        db.close()
+    }
+
+    /**
+     * The schema check for the presets table.
+     *
+     * Two boolean columns with SQL defaults, which is precisely the shape that has gone wrong here
+     * before — a `DEFAULT 0` written where the entity declares none, or the reverse, opens fine on
+     * a fresh install and refuses to open for everyone upgrading.
+     */
+    @Test
+    fun migrate14To15_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * The migration creates the table and nothing else.
+     *
+     * The built-in presets are seeded by the repository, not here, so that a fresh install and an
+     * upgrade take the same path and what ships is defined once. If the migration ever started
+     * inserting them, this is where the duplication would show.
+     */
+    @Test
+    fun migrate14To15_addsAnEmptyPresetsTable() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT COUNT(*) FROM export_presets").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("presets are seeded in Kotlin, not by the migration", 0, cursor.getInt(0))
         }
         db.close()
     }

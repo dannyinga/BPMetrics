@@ -162,9 +162,10 @@ interface BpmRecordDao {
         EventTagCrossRef::class,
         EventGroupTagCrossRef::class,
         SavedAnalysisEntity::class,
-        SavedAnalysisRecordEntity::class
+        SavedAnalysisRecordEntity::class,
+        ExportPresetEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -175,13 +176,14 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun eventDao(): EventDao
     abstract fun eventGroupDao(): EventGroupDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
+    abstract fun exportPresetDao(): ExportPresetDao
 
     companion object {
         private const val TAG = "LibraryDatabase"
         private const val DB_NAME = "bpmetrics_db"
 
         /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 14
+        private const val CURRENT_VERSION = 15
 
         private const val MAX_BACKUPS = 5
 
@@ -712,6 +714,32 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from 14 to 15: export presets.
+         *
+         * A new table only — nothing existing is touched, and no rows are created here. The
+         * built-in presets are seeded by the repository on first read rather than by this
+         * migration, so a fresh install and an upgrade take the identical path and there is one
+         * definition of what ships rather than two.
+         *
+         * SQL copied verbatim from the generated `15.json`.
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `export_presets` (" +
+                        "`presetId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`configJson` TEXT NOT NULL, " +
+                        "`isDefault` INTEGER NOT NULL DEFAULT 0, " +
+                        "`isBuiltIn` INTEGER NOT NULL DEFAULT 0, " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_14_15: Export presets")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -769,7 +797,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_10_11,
                         MIGRATION_11_12,
                         MIGRATION_12_13,
-                        MIGRATION_13_14
+                        MIGRATION_13_14,
+                        MIGRATION_14_15
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

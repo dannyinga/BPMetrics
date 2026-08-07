@@ -64,6 +64,9 @@ class SettingsRepository(context: Context) {
 
         /** Recordings the user has said, permanently, not to suggest an event for. */
         val DISMISSED_SUGGESTION_RECORDS = stringSetPreferencesKey("dismissed_suggestion_records")
+
+        /** The export appearance last used, for when no preset has been made default. */
+        val LAST_USED_EXPORT_PRESET = stringPreferencesKey("last_used_export_preset")
     }
 
     /**
@@ -108,6 +111,20 @@ class SettingsRepository(context: Context) {
                 .mapNotNull { it.toLongOrNull() }
                 .toSet()
         }
+
+    /**
+     * The export appearance last used, as a serialized preset.
+     *
+     * Distinct from a default preset: a default is something someone chose to pre-select, this is
+     * simply where they left off. The default wins when there is one, because it was a decision
+     * and this is a side effect.
+     */
+    suspend fun lastUsedExportPreset(): String? =
+        dataStore.data.first()[PreferencesKeys.LAST_USED_EXPORT_PRESET]
+
+    suspend fun setLastUsedExportPreset(json: String) {
+        dataStore.edit { it[PreferencesKeys.LAST_USED_EXPORT_PRESET] = json }
+    }
 
     suspend fun dismissSuggestionRecords(recordIds: Set<Long>) {
         dataStore.edit { prefs ->

@@ -79,6 +79,7 @@ class LibraryRepository(
     private val eventDao = database.eventDao()
     private val eventGroupDao = database.eventGroupDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
+    private val presetDao = database.exportPresetDao()
 
     init {
         startRecordFlowFromDB()
@@ -94,6 +95,22 @@ class LibraryRepository(
      *
      * Marked done only on success, so a failure retries next launch rather than stranding them.
      */
+    /**
+     * Writes the built-in presets on first launch, off the main thread.
+     *
+     * Same reasoning as [convertConcurrentAnalysesOnce]: constructing a repository should not write
+     * to the database, so this is called from the application object rather than from `init`.
+     */
+    fun seedBuiltInPresetsOnce() {
+        scope.launch {
+            try {
+                seedBuiltInPresetsIfEmpty()
+            } catch (e: Exception) {
+                Log.e(tag, "Could not seed the built-in export presets", e)
+            }
+        }
+    }
+
     fun convertConcurrentAnalysesOnce() {
         scope.launch {
             try {
@@ -559,6 +576,60 @@ class LibraryRepository(
 
     /** Recordings the user has permanently waved off as an event suggestion. */
     val dismissedSuggestionRecords: Flow<Set<Long>> = settingsRepository.dismissedSuggestionRecords
+
+    // --- Export presets ---
+
+    fun getExportPresets(): Flow<List<ExportPresetEntity>> = presetDao.getAllFlow()
+
+    suspend fun getExportPreset(presetId: Long): ExportPresetEntity? = presetDao.getPreset(presetId)
+
+    suspend fun getDefaultExportPreset(): ExportPresetEntity? = presetDao.getDefault()
+
+    /**
+     * Writes the built-in presets, once.
+     *
+     * Seeded here rather than in the migration so a fresh install and an upgrade take the identical
+     * path — otherwise what ships is defined twice, in Kotlin and in SQL, and the two drift. Keyed
+     * on the table being empty rather than a flag: a user who deletes every preset gets them back,
+     * which is better than an empty list they cannot repopulate.
+     */
+    suspend fun seedBuiltInPresetsIfEmpty() {
+        if (presetDao.count() > 0) return
+        inga.bpmetrics.export.ExportPreset.BUILT_IN.forEachIndexed { index, preset ->
+            presetDao.insert(
+                ExportPresetEntity(
+                    name = preset.name,
+                    configJson = preset.toJson(),
+                    // The first is default so a new export has something selected rather than
+                    // starting from nothing.
+                    isDefault = index == 0,
+                    isBuiltIn = true,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+        }
+        Log.i(tag, "Seeded ${inga.bpmetrics.export.ExportPreset.BUILT_IN.size} built-in presets")
+    }
+
+    suspend fun saveExportPreset(name: String, configJson: String): Long =
+        presetDao.insert(
+            ExportPresetEntity(
+                name = name.trim(),
+                configJson = configJson,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+
+    suspend fun updateExportPreset(presetId: Long, name: String, configJson: String) =
+        presetDao.update(presetId, name.trim(), configJson)
+
+    /** At most one default, enforced by clearing the rest first rather than by a constraint. */
+    suspend fun setDefaultExportPreset(presetId: Long) {
+        presetDao.clearDefault()
+        presetDao.markDefault(presetId)
+    }
+
+    suspend fun deleteExportPreset(presetId: Long) = presetDao.delete(presetId)
 
     suspend fun dismissSuggestionRecords(recordIds: Set<Long>) =
         settingsRepository.dismissSuggestionRecords(recordIds)

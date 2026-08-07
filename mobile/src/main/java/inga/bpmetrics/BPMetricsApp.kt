@@ -65,5 +65,10 @@ class BPMetricsApp : Application() {
         // of recordings that happened together, under a name — and leaving both would be two half
         // features that do not know about each other.
         libraryRepository.convertConcurrentAnalysesOnce()
+
+        // The export presets the app ships with. Seeded from Kotlin rather than the migration so
+        // a fresh install and an upgrade take the same path and there is one definition of what
+        // ships rather than two.
+        libraryRepository.seedBuiltInPresetsOnce()
     }
 }

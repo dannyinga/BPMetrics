@@ -80,7 +80,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
     // "Export video" already knows its source, and making it walk through step 1 to say something
     // it has just said would be a regression on a flow that is currently two taps.
     val exportViewModel: ExportUtilityViewModel = viewModel(
-        factory = ExportUtilityViewModel.Factory(repository)
+        factory = ExportUtilityViewModel.Factory(repository, settingsRepository)
     )
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)

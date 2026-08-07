@@ -1,6 +1,12 @@
 package inga.bpmetrics.ui.export
 
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import inga.bpmetrics.BPMetricsApp
 import inga.bpmetrics.export.BpmExportService
+import inga.bpmetrics.export.ExportPreset
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import kotlinx.coroutines.Dispatchers
@@ -78,7 +85,13 @@ fun ExportUtilityScreen(
     val hasNoClips by viewModel.hasNoClips.collectAsStateWithLifecycle()
     val pendingJobs by viewModel.pendingJobs.collectAsStateWithLifecycle()
     val oldestFirst by viewModel.clipsOldestFirst.collectAsStateWithLifecycle()
+    val presets by viewModel.presets.collectAsStateWithLifecycle()
+    val selectedPresetId by viewModel.selectedPresetId.collectAsStateWithLifecycle()
+    val preset by viewModel.preset.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
+    var presetToExport by remember {
+        mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null)
+    }
 
     val context = LocalContext.current
     val repository = remember(context) {
@@ -92,6 +105,63 @@ fun ExportUtilityScreen(
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val peopleById = remember(people) { people.associateBy { it.personId } }
     val allRecords by repository.records.collectAsStateWithLifecycle()
+
+    // A preset travels as a small JSON file, shared and opened through the same plumbing a backup
+    // uses. Written to wherever the user picks rather than the share sheet, for the same reason:
+    // it is a file you want to be able to find again.
+    val savePresetLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        val chosen = presetToExport
+        presetToExport = null
+        if (uri == null || chosen == null) return@rememberLauncherForActivityResult
+        val ok = runCatching {
+            context.contentResolver.openOutputStream(uri)?.use {
+                it.write(chosen.configJson.toByteArray())
+            } != null
+        }.getOrDefault(false)
+        Toast.makeText(
+            context,
+            if (ok) "Saved ${chosen.name}" else "Could not write the preset",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    val importPresetLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val json = runCatching {
+            context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+        }.getOrNull()
+        if (json == null) {
+            Toast.makeText(context, "Could not read that file", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        viewModel.importPreset(json) { accepted ->
+            Toast.makeText(
+                context,
+                if (accepted) {
+                    "Preset imported"
+                } else {
+                    // Refused rather than half-applied: a preset from a newer build would produce
+                    // an export looking nothing like the one it was shared from.
+                    "That preset was not readable, or was made by a newer version of the app"
+                },
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    LaunchedEffect(presetToExport) {
+        presetToExport?.let {
+            savePresetLauncher.launch("${it.name.replace(" ", "_")}.bpmpreset")
+        }
+    }
+
+    // The default preset, or wherever the user left off. Read once when the utility opens rather
+    // than on every visit to step 3, which would undo edits made on the way back from step 4.
+    LaunchedEffect(Unit) { viewModel.restorePreset() }
 
     // Clips are looked up when step 2 is reached, not when the source changes. This hits the
     // MediaStore, and querying on every tap in step 1 would search for sources the user is only
@@ -187,6 +257,15 @@ fun ExportUtilityScreen(
                 ExportStep.LOOK -> LookStep(
                     records = records,
                     jobCount = pendingJobs.size,
+                    presets = presets,
+                    selectedPresetId = selectedPresetId,
+                    onApplyPreset = { viewModel.applyPreset(it) },
+                    onSaveAs = { viewModel.savePresetAs(it) },
+                    onUpdatePreset = { viewModel.updatePreset(it) },
+                    onSetDefault = { viewModel.setDefaultPreset(it) },
+                    onDeletePreset = { viewModel.deletePreset(it) },
+                    onExportPresetFile = { presetToExport = it },
+                    onImportPresetFile = { importPresetLauncher.launch(arrayOf("*/*")) },
                     onConfigure = { showSettings = true }
                 )
 
@@ -207,6 +286,12 @@ fun ExportUtilityScreen(
             graphTitle = sourceLabel.takeIf { it.isNotBlank() },
             onDismiss = { showSettings = false },
             onExport = { config, _ ->
+                // The dialog's own settings win over the preset — the preset was the starting
+                // point, and anything changed in the dialog was changed deliberately. What the
+                // preset still contributes is the graph placement, which the dialog does not ask
+                // about, and it is captured back so "save as" reflects what was actually used.
+                viewModel.setPreset(ExportPreset.from(config, preset.name))
+                viewModel.rememberLastUsed()
                 queueOneJobPerClip(context, config, pendingJobs, records, sourceLabel)
                 showSettings = false
                 viewModel.next()
@@ -277,13 +362,38 @@ private fun queueOneJobPerClip(
 private fun LookStep(
     records: List<inga.bpmetrics.library.BpmRecord>,
     jobCount: Int,
+    presets: List<inga.bpmetrics.library.ExportPresetEntity>,
+    selectedPresetId: Long?,
+    onApplyPreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
+    onSaveAs: (String) -> Unit,
+    onUpdatePreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
+    onSetDefault: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
+    onDeletePreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
+    onExportPresetFile: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
+    onImportPresetFile: () -> Unit,
     onConfigure: () -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        PresetBar(
+            presets = presets,
+            selectedId = selectedPresetId,
+            onApply = onApplyPreset,
+            onSaveAs = onSaveAs,
+            onUpdate = onUpdatePreset,
+            onSetDefault = onSetDefault,
+            onDelete = onDeletePreset,
+            onExportFile = onExportPresetFile,
+            onImportFile = onImportPresetFile
+        )
+
+        Spacer(Modifier.height(28.dp))
+
         Text(
             when {
                 records.isEmpty() -> "Nothing to export"

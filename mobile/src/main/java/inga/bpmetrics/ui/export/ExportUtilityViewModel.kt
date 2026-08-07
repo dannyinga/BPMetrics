@@ -4,9 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.export.ExportPreset
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.ui.analysis.EventAnalysis
+import inga.bpmetrics.library.ExportPresetEntity
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.ui.settings.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -98,7 +101,8 @@ data class ClipSpark(
  * reorganised into sections and the settings have somewhere to go.
  */
 class ExportUtilityViewModel(
-    private val repository: LibraryRepository
+    private val repository: LibraryRepository,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     private val _step = MutableStateFlow(ExportStep.SOURCE)
@@ -177,6 +181,124 @@ class ExportUtilityViewModel(
 
     private val savedAnalysisName = MutableStateFlow("")
 
+
+    // --- Step 3: presets ---
+
+    val presets: StateFlow<List<ExportPresetEntity>> = repository.getExportPresets()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * The appearance the next export will use.
+     *
+     * Held here rather than in the settings dialog so it survives walking back to step 1 and
+     * forward again — the look is the part worth keeping, and losing it on a source change would
+     * make the flow hostile to changing your mind.
+     */
+    private val _preset = MutableStateFlow(ExportPreset())
+    val preset: StateFlow<ExportPreset> = _preset.asStateFlow()
+
+    /**
+     * Which preset the current settings came from, or null once they have drifted.
+     *
+     * What makes "Update to current settings" safe to offer: it only appears while the settings
+     * still *are* that preset, so it cannot silently absorb changes the user never associated
+     * with it.
+     */
+    private val _selectedPresetId = MutableStateFlow<Long?>(null)
+    val selectedPresetId: StateFlow<Long?> = _selectedPresetId.asStateFlow()
+
+    /**
+     * Restores the default preset, or the settings last used.
+     *
+     * Distinct things: a default is a preset someone chose to be pre-selected, while last-used is
+     * simply where they left off. The default wins when there is one, because it was an explicit
+     * decision and the other is a side effect.
+     */
+    fun restorePreset() {
+        viewModelScope.launch {
+            val default = repository.getDefaultExportPreset()
+            if (default != null) {
+                ExportPreset.fromJson(default.configJson)?.let {
+                    _preset.value = it
+                    _selectedPresetId.value = default.presetId
+                }
+                return@launch
+            }
+            settingsRepository.lastUsedExportPreset()
+                ?.let { ExportPreset.fromJson(it) }
+                ?.let { _preset.value = it }
+        }
+    }
+
+    fun applyPreset(entity: ExportPresetEntity) {
+        ExportPreset.fromJson(entity.configJson)?.let {
+            _preset.value = it
+            _selectedPresetId.value = entity.presetId
+        }
+    }
+
+    /** Records that the settings have moved away from whichever preset was applied. */
+    fun setPreset(preset: ExportPreset) {
+        _preset.value = preset
+        _selectedPresetId.value = null
+    }
+
+    fun savePresetAs(name: String) {
+        viewModelScope.launch {
+            val id = repository.saveExportPreset(name, _preset.value.copy(name = name).toJson())
+            _selectedPresetId.value = id
+        }
+    }
+
+    fun updatePreset(entity: ExportPresetEntity) {
+        viewModelScope.launch {
+            repository.updateExportPreset(
+                entity.presetId,
+                entity.name,
+                _preset.value.copy(name = entity.name).toJson()
+            )
+        }
+    }
+
+    fun setDefaultPreset(entity: ExportPresetEntity) {
+        viewModelScope.launch { repository.setDefaultExportPreset(entity.presetId) }
+    }
+
+    fun deletePreset(entity: ExportPresetEntity) {
+        viewModelScope.launch {
+            repository.deleteExportPreset(entity.presetId)
+            if (_selectedPresetId.value == entity.presetId) _selectedPresetId.value = null
+        }
+    }
+
+    /** Remembers where the user left off, for the next export that has no default to fall back on. */
+    fun rememberLastUsed() {
+        viewModelScope.launch {
+            settingsRepository.setLastUsedExportPreset(_preset.value.toJson())
+        }
+    }
+
+    /**
+     * Applies a preset read from a file.
+     *
+     * @return false when the payload was malformed or written by a newer build, so the caller can
+     *   say so. A half-applied preset would produce an export looking nothing like the one it was
+     *   shared from, which is worse than a refusal.
+     */
+    fun importPreset(json: String, onDone: (Boolean) -> Unit) {
+        val imported = ExportPreset.fromJson(json)
+        if (imported == null) {
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            val name = imported.name.ifBlank { "Imported preset" }
+            val id = repository.saveExportPreset(name, imported.copy(name = name).toJson())
+            _preset.value = imported
+            _selectedPresetId.value = id
+            onDone(true)
+        }
+    }
 
     // --- Step 2: which clips, and whose curves go on each ---
 
@@ -419,9 +541,12 @@ class ExportUtilityViewModel(
         const val SPARK_SAMPLES = 48
     }
 
-    class Factory(private val repository: LibraryRepository) : ViewModelProvider.Factory {
+    class Factory(
+        private val repository: LibraryRepository,
+        private val settingsRepository: SettingsRepository
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            ExportUtilityViewModel(repository) as T
+            ExportUtilityViewModel(repository, settingsRepository) as T
     }
 }
