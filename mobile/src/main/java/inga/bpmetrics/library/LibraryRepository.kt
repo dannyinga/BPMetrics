@@ -4,8 +4,10 @@ import android.content.Context
 import android.util.Log
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.ui.settings.SettingsRepository
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,7 +59,17 @@ class LibraryRepository(
     val records: StateFlow<List<BpmRecord>> = _records.asStateFlow()
 
     private val tag = "LibraryRepository"
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Keeps a database failure in the background collector from reaching the default uncaught
+     * handler and taking the process with it. The library going quiet is bad; the app dying is
+     * worse, and offers no diagnostic either.
+     */
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(tag, "Unhandled failure in library scope", throwable)
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
     private val recordDao = database.bpmRecordDao()
     private val tagDao = database.tagDao()
     private val watchDao = database.watchDao()
@@ -831,6 +843,18 @@ class LibraryRepository(
      * @param recordId The ID of the record.
      */
     fun getTagsForRecord(recordId: Long): Flow<List<TagEntity>> = tagDao.getTagsForRecordFlow(recordId)
+
+    /**
+     * Stops the background collector started in [init].
+     *
+     * Never called in the app — this repository lives as long as the process does. It exists for
+     * tests, which build one per test method against a database they then close: without it the
+     * collector outlives its database and the next emission fails on a closed connection, taking
+     * an unrelated test down with it.
+     */
+    fun close() {
+        scope.cancel()
+    }
 
     private companion object {
         /**

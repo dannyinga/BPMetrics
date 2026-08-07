@@ -53,6 +53,10 @@ class LibraryInstrumentationTest {
 
     @After
     fun closeDb() {
+        // Stop the repository's collector before the database goes away. Closing underneath it
+        // fails the next emission on a closed connection, which surfaces in whichever test happens
+        // to run next rather than in this one.
+        repository.close()
         db.close()
     }
 
