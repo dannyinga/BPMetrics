@@ -208,27 +208,27 @@ fun ConcurrentAnalysisScreen(
     if (showSaveDialog && onSave != null) {
         AlertDialog(
             onDismissRequest = { showSaveDialog = false },
-            title = { Text("Name this analysis") },
+            title = { Text("Keep this as an event") },
             text = {
                 Column {
                     OutlinedTextField(
                         value = saveName,
                         onValueChange = { saveName = it },
-                        label = { Text("Name") },
+                        label = { Text("Event name") },
                         placeholder = { Text("Subtronics 2026") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "Keeps which recordings you compared and the stretch of time. The name " +
-                            "is also used as the heading when you export this as a video.",
+                        "Files these recordings under an event in your Library. The event page " +
+                            "shows one lane per person rather than one per recording, so a watch " +
+                            "that dropped out and restarted stays a single curve.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Unlike a compared-recordings analysis, the curves are read back from " +
-                            "your library, so deleting a recording will remove it from this.",
+                        "The name is also used as the heading when you export it as a video.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }

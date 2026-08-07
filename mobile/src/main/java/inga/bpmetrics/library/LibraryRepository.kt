@@ -9,6 +9,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -74,10 +76,34 @@ class LibraryRepository(
     private val tagDao = database.tagDao()
     private val watchDao = database.watchDao()
     private val personDao = database.personDao()
+    private val eventDao = database.eventDao()
+    private val eventGroupDao = database.eventGroupDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
 
     init {
         startRecordFlowFromDB()
+    }
+
+    /**
+     * Turns any saved same-time analyses into events, once per install.
+     *
+     * Called from [inga.bpmetrics.BPMetricsApp] rather than from this constructor. Constructing a
+     * repository should not move a user's data around — a caller that only wanted to read one
+     * record would trigger it, and a unit test with mocked DAOs would start doing I/O it never
+     * asked for.
+     *
+     * Marked done only on success, so a failure retries next launch rather than stranding them.
+     */
+    fun convertConcurrentAnalysesOnce() {
+        scope.launch {
+            try {
+                if (settingsRepository.hasConvertedConcurrentAnalyses()) return@launch
+                val result = convertConcurrentAnalysesToEvents(this@LibraryRepository)
+                if (result.failure == null) settingsRepository.setConvertedConcurrentAnalyses()
+            } catch (e: Exception) {
+                Log.e(tag, "Could not check whether same-time analyses need converting", e)
+            }
+        }
     }
 
     /**
@@ -287,7 +313,12 @@ class LibraryRepository(
                     activeDurationMs = record.activeDurationMs,
                     tagsEncoded = encodeTags(record.tags),
                     wearerName = record.wearerName,
-                    watchName = record.watchName
+                    watchName = record.watchName,
+                    personId = record.personId,
+                    personColorArgb = record.personColorArgb,
+                    eventId = record.eventId,
+                    eventName = record.eventName,
+                    zonesEncoded = encodeZones(record.zones)
                 )
             }
         )
@@ -297,59 +328,14 @@ class LibraryRepository(
     }
 
     /**
-     * Stores a same-time analysis: which recordings, over what stretch of clock, called what.
+     * Every stored same-time analysis, with its rows.
      *
-     * Unlike a group analysis this does **not** freeze its numbers. A group analysis stores every
-     * value it computed, so it stands alone forever. A same-time analysis is a set of curves —
-     * hundreds of kilobytes — and storing those would be a different order of cost, so what is
-     * kept is the analysis's identity and the curves are re-read from the library on opening.
-     *
-     * The consequence is deliberate and visible: delete a recording and it drops out of a saved
-     * same-time analysis, which the screen reports rather than quietly redrawing without it.
-     *
-     * @return the id of the stored analysis.
+     * Exists for the one-time conversion into events — see [convertConcurrentAnalysesToEvents].
      */
-    suspend fun saveConcurrentAnalysis(
-        name: String,
-        recordIds: Set<Long>,
-        windowStartMs: Long,
-        windowEndMs: Long,
-        records: List<AnalysisSnapshotRecord>
-    ): Long {
-        val analysisId = savedAnalysisDao.insertAnalysis(
-            SavedAnalysisEntity(
-                name = name.trim(),
-                createdAt = System.currentTimeMillis(),
-                filterDescription = "${recordIds.size} recordings, same time",
-                kind = SavedAnalysisKind.CONCURRENT,
-                windowStartMs = windowStartMs,
-                windowEndMs = windowEndMs
-            )
-        )
-
-        // The per-record rows still carry each wearer's summary, so the shelf can describe the
-        // analysis without re-reading the library.
-        savedAnalysisDao.insertRecords(
-            records.map { record ->
-                SavedAnalysisRecordEntity(
-                    analysisId = analysisId,
-                    recordId = record.recordId,
-                    title = record.title,
-                    date = record.date,
-                    minBpm = record.minBpm,
-                    avgBpm = record.avgBpm,
-                    maxBpm = record.maxBpm,
-                    activeDurationMs = record.activeDurationMs,
-                    tagsEncoded = "",
-                    wearerName = record.wearerName,
-                    watchName = record.watchName
-                )
-            }
-        )
-
-        Log.d(tag, "Saved same-time analysis '$name' over ${recordIds.size} recording(s)")
-        return analysisId
-    }
+    suspend fun getConcurrentAnalyses(): List<LoadedAnalysis> =
+        savedAnalysisDao.getAllFlow().first()
+            .filter { it.isConcurrent }
+            .mapNotNull { loadSavedAnalysis(it.analysisId) }
 
     /** Reads a stored analysis back into the shape the analysis screen works from. */
     suspend fun loadSavedAnalysis(analysisId: Long): LoadedAnalysis? {
@@ -367,7 +353,12 @@ class LibraryRepository(
                     activeDurationMs = entity.activeDurationMs,
                     tags = decodeTags(entity.tagsEncoded),
                     wearerName = entity.wearerName,
-                    watchName = entity.watchName
+                    watchName = entity.watchName,
+                    personId = entity.personId,
+                    personColorArgb = entity.personColorArgb,
+                    eventId = entity.eventId,
+                    eventName = entity.eventName,
+                    zones = decodeZones(entity.zonesEncoded)
                 )
             },
             recordsStillInLibrary = savedAnalysisDao.countRecordsStillPresent(analysisId)
@@ -378,6 +369,199 @@ class LibraryRepository(
         savedAnalysisDao.rename(analysisId, name.trim())
 
     suspend fun deleteSavedAnalysis(analysisId: Long) = savedAnalysisDao.deleteAnalysis(analysisId)
+
+    // --- Events and groups ---
+
+    fun getAllEvents(): Flow<List<EventEntity>> = eventDao.getAllEventsFlow()
+
+    fun getEventsForGroup(groupId: Long): Flow<List<EventEntity>> =
+        eventDao.getEventsForGroupFlow(groupId)
+
+    fun getUngroupedEvents(): Flow<List<EventEntity>> = eventDao.getUngroupedEventsFlow()
+
+    fun getRecordsForEvent(eventId: Long): Flow<List<BpmRecordEntity>> =
+        eventDao.getRecordsForEventFlow(eventId)
+
+    /** Recordings filed under no event. Pinned in the events view so nothing goes missing. */
+    fun getUnfiledRecords(): Flow<List<BpmRecordEntity>> = eventDao.getUnfiledRecordsFlow()
+
+    fun countUnfiledRecords(): Flow<Int> = eventDao.countUnfiledRecordsFlow()
+
+    suspend fun getEvent(eventId: Long): EventEntity? = eventDao.getEvent(eventId)
+
+    /** When an event happened, derived from its recordings. Null while it has none. */
+    suspend fun getEventSpan(eventId: Long): TimeSpan? = eventDao.getEventSpan(eventId)?.toSpan()
+
+    suspend fun countRecordsForEvent(eventId: Long): Int = eventDao.countRecordsForEvent(eventId)
+
+    suspend fun createEvent(name: String, groupId: Long? = null): Long {
+        val id = eventDao.insertEvent(
+            EventEntity(name = name.trim(), groupId = groupId, createdAt = System.currentTimeMillis())
+        )
+        Log.d(tag, "Created event '${name.trim()}' as $id")
+        return id
+    }
+
+    suspend fun renameEvent(eventId: Long, name: String) = eventDao.rename(eventId, name.trim())
+
+    suspend fun setEventNotes(eventId: Long, notes: String) = eventDao.updateNotes(eventId, notes)
+
+    suspend fun setEventGroup(eventId: Long, groupId: Long?) = eventDao.setGroup(eventId, groupId)
+
+    /**
+     * Removes an event and releases its recordings.
+     *
+     * Deleting the container must never delete the contents — those recordings are the only copy of
+     * something that happened, and the event is just a label someone put on them.
+     */
+    suspend fun deleteEvent(eventId: Long) {
+        eventDao.unfileRecordsForEvent(eventId)
+        eventDao.deleteEvent(eventId)
+        Log.d(tag, "Deleted event $eventId; its recordings are unfiled, not removed")
+    }
+
+    /**
+     * Files recordings under an event, or unfiles them when [eventId] is null.
+     *
+     * Chunked for the same reason as [assignPersonToRecords]: Room turns `IN (:ids)` into one bind
+     * variable per id and SQLite caps those at 999, which select-all reaches.
+     *
+     * @return how many recordings changed.
+     */
+    suspend fun assignRecordsToEvent(recordIds: Collection<Long>, eventId: Long?): Int {
+        if (recordIds.isEmpty()) return 0
+        val changed = recordIds.toList()
+            .chunked(SQL_VARIABLE_LIMIT)
+            .sumOf { chunk -> eventDao.assignRecordsToEvent(chunk, eventId) }
+        Log.d(tag, "Filed $changed recording(s) under event ${eventId ?: "nothing"}")
+        return changed
+    }
+
+    /** Of these recordings, the ones not yet in an event. Chunked for the same reason as above. */
+    suspend fun recordIdsWithoutEvent(recordIds: Collection<Long>): List<Long> =
+        recordIds.toList()
+            .chunked(SQL_VARIABLE_LIMIT)
+            .flatMap { chunk -> eventDao.recordIdsWithoutEvent(chunk) }
+
+    fun getAllEventGroups(): Flow<List<EventGroupEntity>> = eventGroupDao.getAllGroupsFlow()
+
+    suspend fun getEventGroup(groupId: Long): EventGroupEntity? = eventGroupDao.getGroup(groupId)
+
+    fun getRecordsForGroup(groupId: Long): Flow<List<BpmRecordEntity>> =
+        eventGroupDao.getRecordsForGroupFlow(groupId)
+
+    suspend fun getGroupSpan(groupId: Long): TimeSpan? = eventGroupDao.getGroupSpan(groupId)?.toSpan()
+
+    suspend fun countEventsForGroup(groupId: Long): Int = eventGroupDao.countEventsForGroup(groupId)
+
+    suspend fun countRecordsForGroup(groupId: Long): Int = eventGroupDao.countRecordsForGroup(groupId)
+
+    suspend fun createEventGroup(name: String): Long {
+        val id = eventGroupDao.insertGroup(
+            EventGroupEntity(name = name.trim(), createdAt = System.currentTimeMillis())
+        )
+        Log.d(tag, "Created group '${name.trim()}' as $id")
+        return id
+    }
+
+    suspend fun renameEventGroup(groupId: Long, name: String) =
+        eventGroupDao.rename(groupId, name.trim())
+
+    suspend fun setEventGroupNotes(groupId: Long, notes: String) =
+        eventGroupDao.updateNotes(groupId, notes)
+
+    /** Removes a group and releases its events. The events, and their recordings, survive. */
+    suspend fun deleteEventGroup(groupId: Long) {
+        eventGroupDao.ungroupEvents(groupId)
+        eventGroupDao.deleteGroup(groupId)
+        Log.d(tag, "Deleted group $groupId; its events are ungrouped, not removed")
+    }
+
+    /** Every saved analysis with its frozen rows, for a backup to carry. */
+    suspend fun getSavedAnalysesForBackup(): List<inga.bpmetrics.export.SavedAnalysisDto> =
+        savedAnalysisDao.getAllFlow().first().mapNotNull { meta ->
+            val full = savedAnalysisDao.getAnalysis(meta.analysisId) ?: return@mapNotNull null
+            inga.bpmetrics.export.SavedAnalysisDto(
+                name = full.metadata.name,
+                createdAt = full.metadata.createdAt,
+                filterDescription = full.metadata.filterDescription,
+                kind = full.metadata.kind,
+                windowStartMs = full.metadata.windowStartMs,
+                windowEndMs = full.metadata.windowEndMs,
+                records = full.records.map { row ->
+                    inga.bpmetrics.export.SavedAnalysisRecordDto(
+                        recordId = row.recordId,
+                        title = row.title,
+                        date = row.date,
+                        minBpm = row.minBpm,
+                        avgBpm = row.avgBpm,
+                        maxBpm = row.maxBpm,
+                        activeDurationMs = row.activeDurationMs,
+                        tagsEncoded = row.tagsEncoded,
+                        wearerName = row.wearerName,
+                        watchName = row.watchName
+                    )
+                }
+            )
+        }
+
+    /**
+     * Writes a saved analysis back from a backup.
+     *
+     * Its rows arrive already re-pointed at the recordings' new ids — the caller does the remapping,
+     * because only the restore knows where each recording landed.
+     */
+    suspend fun restoreSavedAnalysis(dto: inga.bpmetrics.export.SavedAnalysisDto) {
+        val analysisId = savedAnalysisDao.insertAnalysis(
+            SavedAnalysisEntity(
+                name = dto.name,
+                createdAt = dto.createdAt,
+                filterDescription = dto.filterDescription,
+                kind = dto.kind,
+                windowStartMs = dto.windowStartMs,
+                windowEndMs = dto.windowEndMs
+            )
+        )
+        savedAnalysisDao.insertRecords(
+            dto.records.map { row ->
+                SavedAnalysisRecordEntity(
+                    analysisId = analysisId,
+                    recordId = row.recordId,
+                    title = row.title,
+                    date = row.date,
+                    minBpm = row.minBpm,
+                    avgBpm = row.avgBpm,
+                    maxBpm = row.maxBpm,
+                    activeDurationMs = row.activeDurationMs,
+                    tagsEncoded = row.tagsEncoded,
+                    wearerName = row.wearerName,
+                    watchName = row.watchName
+                )
+            }
+        )
+    }
+
+    /** Every app preference, for a backup to carry. */
+    suspend fun getSettingsForBackup() = settingsRepository.exportPreferences()
+
+    /** Applies preferences from a backup. Returns how many were understood. */
+    suspend fun restoreSettings(snapshots: List<inga.bpmetrics.ui.settings.PreferenceSnapshot>): Int =
+        settingsRepository.importPreferences(snapshots)
+
+    /**
+     * Which library view the user last had open, read once rather than observed.
+     *
+     * The library owns this while it is on screen; settings only remembers it across launches.
+     */
+    suspend fun getLibraryViewMode(): String = settingsRepository.libraryViewMode.first()
+
+    suspend fun setLibraryViewMode(mode: String) = settingsRepository.setLibraryViewMode(mode)
+
+    /** Recordings the user has permanently waved off as an event suggestion. */
+    val dismissedSuggestionRecords: Flow<Set<Long>> = settingsRepository.dismissedSuggestionRecords
+
+    suspend fun dismissSuggestionRecords(recordIds: Set<Long>) =
+        settingsRepository.dismissSuggestionRecords(recordIds)
 
     /**
      * Flattens tags to `categoryId:categoryName:tagName`, one per line.
@@ -401,6 +585,25 @@ class LibraryRepository(
     }
 
     private fun String.sanitizeForEncoding(): String = replace(":", " ").replace("\n", " ")
+
+    /**
+     * Flattens time-in-band to `name:ms`, one per line — same shape and same reasoning as tags.
+     *
+     * Frozen at save because it cannot be recomputed: a saved analysis keeps no data points, so
+     * the split has to be captured or it is gone.
+     */
+    private fun encodeZones(zones: List<SnapshotZone>): String =
+        zones.joinToString("\n") { "${it.name.sanitizeForEncoding()}:${it.durationMs}" }
+
+    private fun decodeZones(encoded: String): List<SnapshotZone> {
+        if (encoded.isBlank()) return emptyList()
+        return encoded.lineSequence().mapNotNull { line ->
+            val parts = line.split(":", limit = 2)
+            if (parts.size != 2) return@mapNotNull null
+            val ms = parts[1].toLongOrNull() ?: return@mapNotNull null
+            SnapshotZone(name = parts[0], durationMs = ms)
+        }.toList()
+    }
 
     // --- Watch Registry ---
 
@@ -835,6 +1038,54 @@ class LibraryRepository(
      */
     suspend fun removeTagFromRecord(recordId: Long, tagId: Long) {
         tagDao.untagRecord(recordId, tagId)
+    }
+
+    // --- Tags on events and groups ---
+    //
+    // A tag applied here reaches every recording underneath, resolved on read. Nothing is written
+    // onto the recordings: see §2.5 of the product doc, and [EffectiveTagsResolver].
+
+    suspend fun addTagToEvent(eventId: Long, tagId: Long) =
+        tagDao.insertEventTagCrossRef(EventTagCrossRef(eventId, tagId))
+
+    suspend fun removeTagFromEvent(eventId: Long, tagId: Long) = tagDao.untagEvent(eventId, tagId)
+
+    fun getTagsForEvent(eventId: Long): Flow<List<TagEntity>> = tagDao.getTagsForEventFlow(eventId)
+
+    suspend fun addTagToGroup(groupId: Long, tagId: Long) =
+        tagDao.insertGroupTagCrossRef(EventGroupTagCrossRef(groupId, tagId))
+
+    suspend fun removeTagFromGroup(groupId: Long, tagId: Long) = tagDao.untagGroup(groupId, tagId)
+
+    fun getTagsForGroup(groupId: Long): Flow<List<TagEntity>> = tagDao.getTagsForGroupFlow(groupId)
+
+    /** Every event's tags, indexed by event. Live, so applying one anywhere updates every reader. */
+    val allEventTags: Flow<Map<Long, List<TagEntity>>> =
+        tagDao.getAllEventTagsFlow().map { EffectiveTagsResolver.index(it) }
+
+    /** Every group's tags, indexed by group. */
+    val allGroupTags: Flow<Map<Long, List<TagEntity>>> =
+        tagDao.getAllGroupTagsFlow().map { EffectiveTagsResolver.index(it) }
+
+    /**
+     * Effective tags for every recording in the library, keyed by record id.
+     *
+     * One query per level rather than one per recording. Resolving per row would issue three
+     * queries for every visible tile while scrolling, to answer a question that is the same for
+     * every recording in an event.
+     */
+    val effectiveTags: Flow<Map<Long, List<EffectiveTag>>> = combine(
+        records,
+        tagDao.getAllEventTagsFlow(),
+        tagDao.getAllGroupTagsFlow(),
+        eventDao.getAllEventsFlow()
+    ) { library, eventTags, groupTags, events ->
+        EffectiveTagsResolver.resolveAll(
+            records = library,
+            eventTags = EffectiveTagsResolver.index(eventTags),
+            groupTags = EffectiveTagsResolver.index(groupTags),
+            groupIdByEvent = events.associate { it.eventId to it.groupId }
+        )
     }
 
     /**

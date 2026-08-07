@@ -16,7 +16,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -39,6 +44,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.TagSource
 import inga.bpmetrics.library.TagEntity
 import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.components.ExpandableSection
@@ -156,6 +163,53 @@ fun TagSelectionDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+/**
+ * A tag on a recording, drawn to say where it came from.
+ *
+ * A direct tag is filled and can be removed here. An inherited one is outlined and cannot — the
+ * recording is filed under an event in a group that carries it, and "remove this tag from this one
+ * recording" has no meaning. Tapping an inherited chip says where it was applied instead, which is
+ * where it can be removed.
+ *
+ * The distinction has to be visible, or the first thing anyone tries is the thing that cannot work.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EffectiveTagChip(
+    effective: EffectiveTag,
+    onRemove: (() -> Unit)? = null,
+    onExplain: ((String) -> Unit)? = null
+) {
+    val label = effective.tag.name
+
+    if (effective.isInherited) {
+        val from = when (effective.source) {
+            TagSource.EVENT -> "this event"
+            TagSource.GROUP -> "this event's group"
+            TagSource.DIRECT -> ""
+        }
+        AssistChip(
+            onClick = { onExplain?.invoke("$label comes from $from — remove it there") },
+            label = { Text(label) },
+            leadingIcon = {
+                Icon(
+                    // A downward arrow rather than a tag glyph: what is being said is that the
+                    // tag arrived from above, not that it is a tag.
+                    Icons.AutoMirrored.Filled.CallReceived,
+                    contentDescription = "Inherited from $from",
+                    modifier = Modifier.size(16.dp)
+                )
+            },
+            border = AssistChipDefaults.assistChipBorder(enabled = true)
+        )
+    } else {
+        SuggestionChip(
+            onClick = { onRemove?.invoke() },
+            label = { Text(label) }
+        )
+    }
 }
 
 /**

@@ -30,16 +30,18 @@ import inga.bpmetrics.export.BpmExportService
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.LoadedAnalysis
 import inga.bpmetrics.ui.about.AboutScreen
-import inga.bpmetrics.ui.analysis.AnalysisRecord
 import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysisScreen
+import inga.bpmetrics.ui.analysis.EventAnalysisScreen
+import inga.bpmetrics.ui.analysis.EventDetailViewModel
 import inga.bpmetrics.ui.analysis.SavedAnalysesScreen
 import inga.bpmetrics.ui.graph.BpmGraphDetailScreen
 import inga.bpmetrics.ui.record.BpmRecordScreen
 import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.library.LibraryScreen
+import inga.bpmetrics.ui.library.LibraryViewMode
 import inga.bpmetrics.ui.library.LibraryViewModel
 import inga.bpmetrics.ui.navigation.AppDestination
 import inga.bpmetrics.ui.navigation.AppDrawerContent
@@ -155,10 +157,6 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                         awaitingConcurrentSelection = false
                         libraryViewModel.clearSelection()
                         navController.navigate(Routes.ANALYSIS_CONCURRENT)
-                    },
-                    onAnalyseCurrentFilter = { filter ->
-                        analysisFilter = filter
-                        navController.navigate(Routes.ANALYSIS_LIVE)
                     }
                 )
             }
@@ -319,25 +317,68 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     analysis = analysis,
                     title = "Same-time analysis",
                     records = selected,
+                    // Keeping a set of same-time recordings now makes an event rather than a saved
+                    // analysis. It is the same thing named better: it survives in the Library, it
+                    // merges a person's split recordings into one lane, and it can be grouped —
+                    // none of which a frozen analysis row could do.
                     onSave = { name ->
                         scope.launch {
-                            repository.saveConcurrentAnalysis(
-                                name = name,
-                                recordIds = concurrentRecordIds,
-                                windowStartMs = analysis.windowStartMs,
-                                windowEndMs = analysis.windowEndMs,
-                                // Watches are passed so the stored rows carry each watch's given
-                                // name. Tags are not: a same-time analysis does not rank by them,
-                                // and they are dropped when the rows are written.
-                                records = AnalysisRecord
-                                    .from(selected, categories = emptyList(), watches = watches)
-                                    .map { it.toSnapshot() }
-                            )
-                            navController.navigateToSection(AppDestination.ANALYSIS)
+                            val eventId = repository.createEvent(name)
+                            repository.assignRecordsToEvent(concurrentRecordIds, eventId)
+                            navController.navigate("${Routes.EVENT_DETAIL}/$eventId") {
+                                popUpTo(Routes.ANALYSIS_CONCURRENT) { inclusive = true }
+                            }
                         }
                     },
                     onExportVideo = { recs, graphTitle -> videoExportRequest = recs to graphTitle },
                     onOpenDrawer = openDrawer
+                )
+            }
+
+            composable(
+                route = "${Routes.EVENT_DETAIL}/{eventId}",
+                arguments = listOf(navArgument("eventId") { type = NavType.LongType })
+            ) { backStackEntry ->
+                val eventId = backStackEntry.arguments?.getLong("eventId") ?: return@composable
+                val eventViewModel: EventDetailViewModel = viewModel(
+                    // Keyed on the event, or navigating from one event to another through a group
+                    // would reuse the first one's ViewModel and show the wrong chart.
+                    key = "event-$eventId",
+                    factory = EventDetailViewModel.Factory(repository, eventId)
+                )
+                EventAnalysisScreen(
+                    viewModel = eventViewModel,
+                    onBack = { navController.popBackStack() },
+                    onOpenRecord = { navController.navigate("${Routes.DETAIL}/$it") },
+                    onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") },
+                    onExportVideo = { recs, graphTitle -> videoExportRequest = recs to graphTitle }
+                )
+            }
+
+            composable(
+                route = "${Routes.GROUP_DETAIL}/{groupId}",
+                arguments = listOf(navArgument("groupId") { type = NavType.LongType })
+            ) { backStackEntry ->
+                val groupId = backStackEntry.arguments?.getLong("groupId") ?: return@composable
+                val groupViewModel: AnalysisViewModel = viewModel(
+                    key = "group-$groupId",
+                    factory = AnalysisViewModel.groupFactory(repository, groupId)
+                )
+                AnalysisScreen(
+                    navController = navController,
+                    viewModel = groupViewModel,
+                    onOpenDrawer = openDrawer,
+                    onBack = { navController.popBackStack() },
+                    onSave = { name, records ->
+                        scope.launch {
+                            repository.saveAnalysis(
+                                name = name,
+                                filterDescription = "Group",
+                                records = records.map { it.toSnapshot() }
+                            )
+                            navController.navigateToSection(AppDestination.ANALYSIS)
+                        }
+                    }
                 )
             }
 
@@ -369,7 +410,9 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     onBack = { navController.popBackStack() },
                     onDeleted = { navController.popBackStack() },
                     onShowDetailedGraph = { navController.navigate("${Routes.GRAPH_DETAIL}/$recordId") },
-                    onManageTags = { navController.navigate(Routes.TAG_MANAGEMENT) }
+                    onManageTags = { navController.navigate(Routes.TAG_MANAGEMENT) },
+                    onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
+                    onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
                 )
             }
 
@@ -452,4 +495,13 @@ object Routes {
 
     /** Everyone's curves over one shared stretch of time. */
     const val ANALYSIS_CONCURRENT = "analysis_concurrent"
+
+    /** One event: everyone who was there, as one lane each. */
+    const val EVENT_DETAIL = "event_detail"
+
+    /**
+     * One group, aggregated. Renders the same screen as [ANALYSIS_LIVE] — a group is a scope, not
+     * a different kind of analysis.
+     */
+    const val GROUP_DETAIL = "group_detail"
 }

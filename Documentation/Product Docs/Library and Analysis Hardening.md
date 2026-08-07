@@ -78,7 +78,38 @@ Danny            ●━━━━━━━━━━━━━━━━━━━━
 The window runs from the earliest start of any recording in the event to the latest end. Lanes
 begin and end where that person's data does. Gaps are drawn as breaks, never interpolated across.
 
-### 2.4 Tags inherit down; they are never copied
+### 2.4 The three analyses are one system, not three screens
+
+Individual, event and group analysis answer three questions about the same data — *what did I do*,
+*what did we do together*, *what did the weekend look like* — and each is only useful if you can get
+to the others from it. Today they are separate destinations that happen to exist.
+
+**They must link both ways.** From a group, reach its events; from an event, reach the recordings
+in it and the group it belongs to; from a recording, reach the event it was part of. No screen is a
+dead end, and no answer requires going back to the library to find the next one.
+
+**Each must earn its screen.** A chart and a min/avg/max is not analysis. Every level owes the
+reader something they could not have worked out by looking: which moment the group reacted to,
+whose curve moved most, how this set compared to the last one, how this recording compares to that
+person's usual.
+
+**Reading a crowded chart is a feature.** Six curves on one graph is unreadable without a way to
+isolate one. **Tapping a person dims the others and brings theirs forward** — the same gesture on
+the legend, the lane, or the curve itself. Tapping again restores all of them. This is the single
+most valuable interaction on the event screen and should be built with the chart, not bolted on
+afterwards.
+
+Concrete requirements, applied at whichever level each makes sense:
+
+| | Individual | Event | Group |
+|---|---|---|---|
+| Isolate one person | — | tap to highlight | tap to highlight |
+| Cross-links | to its event and group | to its recordings and group | to its events |
+| Comparison | vs this person's other recordings | vs the other people present | vs the other events |
+| Moments | peaks within the recording | peaks the group shared | which event peaked highest |
+| Coverage | gaps stated, not hidden | who was recording when | which events have whom |
+
+### 2.5 Tags inherit down; they are never copied
 
 A tag applied to a group or an event applies to everything underneath it. Tag the "Coachella 2026"
 group with `Festivals › Coachella 2026`, and every recording of every set inside it carries that
@@ -150,11 +181,20 @@ Follow the shape of `MIGRATION_10_11` in `LibraryDatabase.kt`.
 2. `ALTER TABLE bpm_records ADD COLUMN eventId INTEGER DEFAULT NULL`
 3. No backfill — existing recordings start unfiled, which is correct.
 
-> ⚠️ **This project has shipped two migrations whose SQL disagreed with the entities.** Before
-> committing, cross-check the migration against `TableInfo` in the generated
+> ⚠️ **This project has shipped two migrations whose SQL disagreed with the entities, and a third
+> attempt at this very ticket made the same mistake.** Before committing, cross-check the migration
+> against `TableInfo` in the generated
 > `mobile/build/generated/ksp/debug/kotlin/inga/bpmetrics/library/LibraryDatabase_Impl.kt`,
 > and extend `LibraryDatabaseMigrationTest` to cover 11 → 12. A fresh install proves nothing —
 > only an upgrade fails.
+>
+> **The specific trap, all three times:** a Kotlin default (`val createdAt: Long = 0L`) is a
+> *constructor* default, not a SQL one. Room expects `createdAt INTEGER NOT NULL` with no
+> `DEFAULT`. Writing `DEFAULT 0` in the migration produces a column Room rejects. Only add
+> `DEFAULT` to the SQL where the entity carries a matching `@ColumnInfo(defaultValue = …)`.
+>
+> Compare the generated `createSql` against the migration character by character. It is the one
+> check that would have caught every occurrence.
 
 ### 3.4 DAOs
 
@@ -183,8 +223,10 @@ A segmented control below the top bar: **Recordings · Events · Groups**. Persi
 | Events | events, newest first | name, date, people (colour dots), duration, recording count |
 | Groups | groups, newest first | name, date range, event count, people across all events |
 
-Events mode gets an **Unfiled** section pinned at the top when any recording has no event —
-otherwise recordings quietly disappear from the view that is meant to organise them.
+Events mode gets an **Unfiled** section below the events when any recording has no event —
+otherwise recordings quietly disappear from the view that is meant to organise them. It sits below
+rather than above because the view is for the organised library, not the inbox; the suggestion
+cards at the top are what keep unfiled recordings from being missed.
 
 Existing filters and multi-select stay available in Recordings mode. In Events and Groups mode the
 selection actions collapse to the ones that make sense (analyse, export, delete).
@@ -202,15 +244,34 @@ The current `ConcurrentAnalysisScreen`, extended. Sections top to bottom:
 
 Actions: export video, snapshot to a saved analysis, edit, delete.
 
-### 4.3 Group detail
+### 4.3 Group detail — the aggregate analysis, upgraded
 
-1. **Header** — name, date range, totals
-2. **Event ranking** — events by peak group intensity, so "which set went hardest" is answerable
-3. **Aggregate stats** — across every recording in the group, per person
-4. **Event list** — tapping one opens its event page
+**A group analysis is not a new screen.** It is the existing aggregate analysis with a group as its
+scope instead of a filter. Both answer the same question — "across this set of recordings, what
+happened and who did what" — and a user who learns one has learned the other.
 
-This is what satisfies "grouped analysis should have a way to view all the events associated with
-that set of records."
+So `AnalysisScreen` serves both, and gains everything either needs:
+
+1. **Scope header** — what is being analysed, in words. "Coachella 2026 · 3 events · 12 recordings ·
+   14–16 Mar" for a group; the filter stated plainly for a filter. Same shape either way.
+2. **Headline stats** — lowest, time-weighted average, highest, and the totals that give them
+   meaning: recordings, people, total active time.
+3. **Rankings by category** — tabs for Wearer, Watch, **Event**, then each tag category. Every
+   comparison the records support, offered the same way.
+4. **Rankings by record** — each recording by the selected metric, in its wearer's colour.
+5. **Per person** — totals across the whole scope, so "who went hardest all weekend" is answerable.
+   Tapping a person dims the others everywhere on the screen, as on the event page.
+
+The Event tab is what satisfies "grouped analysis should have a way to view all the events
+associated with that set of records" — and because it is a ranking tab rather than a bespoke
+section, a filtered analysis that happens to span events gets it for free.
+
+`AnalysisViewModel` already works from a bare `Flow<List<AnalysisRecord>>` and does not know where
+the records came from. A group is one more factory alongside `liveFactory` and `savedFactory`.
+
+> A saved analysis carries no event or person id — `saved_analysis_records` stores names only. So a
+> frozen analysis offers the Wearer, Watch and tag tabs but not Event, and falls back to palette
+> colours. Persisting them would mean a migration, and Sprint 5 already has one; revisit there.
 
 ---
 
@@ -247,7 +308,7 @@ Ends with events and groups creatable and browsable.
 |---|---|
 | **LAH-2.1** | View-mode switcher in `ui/library/LibraryScreen.kt`. Persist the selection via `SettingsRepository`. |
 | **LAH-2.2** | `EventCard` and `GroupCard` composables in a new `ui/library/EventComponents.kt`. Show people as colour dots using `PersonColors` — reuse `PersonSwatch` from `ui/components/PersonComponents.kt`. |
-| **LAH-2.3** | Events list, including the pinned **Unfiled** section. |
+| **LAH-2.3** | Events list, including the **Unfiled** section below the events. |
 | **LAH-2.4** | Groups list. |
 | **LAH-2.5** | Create / rename / delete dialogs for both. Follow the dialog pattern in `ui/people/PeopleScreen.kt`. |
 | **LAH-2.6** | "Add to event" in the Recordings multi-select menu, mirroring the bulk wearer flow in `LibraryScreen` + `BulkWearerDialog`. Offer existing events and "New event…". |
@@ -270,6 +331,8 @@ The centrepiece. Ends with an event page that is better than today's concurrent 
 | **LAH-3.4** | Event screen shell — header, chart, legend, moments, summary, recordings list with remove. Route `Routes.EVENT_DETAIL`. |
 | **LAH-3.5** | Migrate existing saved **concurrent** analyses into events, one event per analysis, carrying name and recordings. Retire the "save concurrent analysis" entry point; keep saved analyses for group snapshots. |
 | **LAH-3.6** | Video export from the event page, passing the event name as `graphTitle` — the plumbing already exists in `ImageExporter.ImageExportConfig`. |
+| **LAH-3.7** | **Tap to isolate.** Tapping a person — on the legend, their lane, or their curve — dims every other curve and brings theirs forward; tapping again restores all. Selection is chart state, so the readout legend and summary rows follow it. Per §2.4, this is the interaction that makes a six-curve chart readable at all, so build it with the chart rather than after. |
+| **LAH-3.8** | Cross-links out: to each recording in the event, and up to the group it belongs to. |
 
 **Verify:** an event with a deliberately split recording renders as one lane with one gap, in one
 colour. Export a video and confirm the title and colours match the on-screen chart.
@@ -278,15 +341,22 @@ colour. Export a video and confirm the title and colours match the on-screen cha
 
 ### Sprint 4 — Group analysis
 
+Per §4.3 this sprint *upgrades* the aggregate analysis rather than building a second screen beside
+it. A group is a scope; a filter is a scope; the screen is the same.
+
 | Ticket | Work |
 |---|---|
-| **LAH-4.1** | `GroupAnalysis` model: aggregate per person across every recording in the group, plus per-event peak intensity. |
-| **LAH-4.2** | Group detail screen per §4.3, route `Routes.GROUP_DETAIL`. |
-| **LAH-4.3** | Event ranking by peak group intensity, reusing `ConcurrentAnalysis.findPeaks`. |
+| **LAH-4.1** | `AnalysisScope` replaces `FilterDescription`: what is being analysed, its title, counts and date range, for a filter or a group alike. `AnalysisRecord` gains `personId`, `personColorArgb`, `eventId` and `eventName` — live only, not persisted. |
+| **LAH-4.2** | `AnalysisViewModel.groupFactory`, and route `Routes.GROUP_DETAIL` rendering `AnalysisScreen`. Group cards in the Library open it. |
+| **LAH-4.3** | **Event** as a ranking category alongside Wearer and Watch, so events rank against each other by the selected metric. Available to any scope spanning more than one event, not just a group. |
 | **LAH-4.4** | Navigation: group → event → recording, with back behaving sensibly at each level. |
-| **LAH-4.5** | Snapshot a group to a saved analysis, preserving the existing frozen semantics. |
+| **LAH-4.5** | Snapshot to a saved analysis from the group scope, preserving the existing frozen semantics. |
+| **LAH-4.6** | Cross-links: a ranking bar opens what it ranks — an event bar opens the event page, a record row opens the recording. Per §2.4 no analysis screen is a dead end. |
+| **LAH-4.7** | Per-person totals across the scope, with tap-to-isolate carried over from LAH-3.7 dimming the other rows and bars. |
+| **LAH-4.8** | Tidy the screen itself: a real scope header instead of three "All" lines, headline totals, consistent card treatment, and empty states that say what would fill them. |
 
-**Verify:** a group with three events ranks them, and the totals equal the sum of the parts.
+**Verify:** a group with three events ranks them, the totals equal the sum of the parts, and the
+same analysis reached by filtering looks the same as the one reached from the group.
 
 ---
 
@@ -344,6 +414,13 @@ inherited tags, and the naming from Sprint 6.
 | **LAH-7.5** | Context: how this recording compares to that person's others — "their 3rd highest peak", "12% above their average". This is what makes a single recording interesting rather than just a number. |
 | **LAH-7.6** | **Unify the chart implementations.** There are two — `ui/graph/` for single records and `ui/analysis/ConcurrentChart.kt` for several — and only the second has zoom, scrub and axis labels. Extract one chart that draws N lanes, and let a single recording be the N=1 case. Prevents a third from appearing next time. |
 | **LAH-7.7** | Tidy `ui/graph/BpmGraphDetailScreen.kt`: it currently mixes chart rendering, range selection and export launching in 285 lines. Chart comes from LAH-7.6; export moves out per the Export Utility document. |
+
+> **LAH-7.7 is partly deferred, deliberately.** The record page now uses the shared chart, and the
+> dead `BpmGraphPreview` is gone — `ui/graph/` is reachable from exactly one screen. That screen's
+> remaining reason to exist is *drag-to-select a time range for export*, which the shared chart has
+> no notion of and which the Export Utility document moves out of this screen entirely. Building
+> range selection into `ConcurrentChart` now means building it twice. Finish LAH-7.7 when the export
+> wizard lands; at that point `ui/graph/` should be deletable outright.
 
 **Verify:** open a recording with a known dropout and confirm the gap is both drawn and stated;
 confirm the event breadcrumb navigates; confirm the same chart code renders one lane here and

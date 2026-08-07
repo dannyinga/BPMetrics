@@ -157,10 +157,14 @@ interface BpmRecordDao {
         RecordTagCrossRef::class,
         WatchEntity::class,
         PersonEntity::class,
+        EventEntity::class,
+        EventGroupEntity::class,
+        EventTagCrossRef::class,
+        EventGroupTagCrossRef::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class
     ],
-    version = 11,
+    version = 14,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -168,6 +172,8 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun tagDao(): TagDao
     abstract fun watchDao(): WatchDao
     abstract fun personDao(): PersonDao
+    abstract fun eventDao(): EventDao
+    abstract fun eventGroupDao(): EventGroupDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
 
     companion object {
@@ -175,7 +181,7 @@ abstract class LibraryDatabase : RoomDatabase() {
         private const val DB_NAME = "bpmetrics_db"
 
         /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 11
+        private const val CURRENT_VERSION = 14
 
         private const val MAX_BACKUPS = 5
 
@@ -583,6 +589,129 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from schema version 11 to 12: events and event groups.
+         *
+         * The `CREATE TABLE` statements are copied verbatim from the generated `12.json`, which is
+         * the only reliable way to write one of these. Note `createdAt INTEGER NOT NULL` with **no
+         * `DEFAULT`**: the entity's `createdAt: Long = 0L` is a Kotlin constructor default, not a
+         * SQL one, and adding `DEFAULT 0` here produces a column Room rejects on every upgraded
+         * device while a fresh install works perfectly. That exact mistake has now been made three
+         * times in this project.
+         *
+         * Nothing is backfilled. Existing recordings start unfiled, which is the correct state —
+         * they were made before anyone said what they were part of.
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `event_groups` (" +
+                        "`groupId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`notes` TEXT NOT NULL DEFAULT '', " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `events` (" +
+                        "`eventId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`groupId` INTEGER DEFAULT NULL, " +
+                        "`notes` TEXT NOT NULL DEFAULT '', " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
+
+                if (!columnExists(db, "bpm_records", "eventId")) {
+                    db.execSQL("ALTER TABLE bpm_records ADD COLUMN eventId INTEGER DEFAULT NULL")
+                }
+
+                android.util.Log.i(TAG, "MIGRATION_11_12: Recordings can belong to events")
+            }
+        }
+
+        /**
+         * Migration from 12 to 13: tags can be applied to events and to groups.
+         *
+         * Two join tables mirroring `record_tag_cross_ref`, with the same cascade behaviour —
+         * deleting an event or a tag removes the link, never the other side.
+         *
+         * Nothing is backfilled and nothing is copied downward. A recording's inherited tags are
+         * worked out on read by [EffectiveTagsResolver]; see §2.5 of the product doc for why
+         * writing them onto the recordings would be simpler and wrong.
+         *
+         * SQL copied verbatim from the generated `13.json`. Room compares the live schema against
+         * what it expects column by column, and a hand-written `DEFAULT` that the entity does not
+         * declare produces a database that installs fine and refuses to open on upgrade — a
+         * mistake this project has made three times.
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `event_tag_cross_ref` (" +
+                        "`eventId` INTEGER NOT NULL, `tagId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`eventId`, `tagId`), " +
+                        "FOREIGN KEY(`eventId`) REFERENCES `events`(`eventId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                        "FOREIGN KEY(`tagId`) REFERENCES `tags`(`tagId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_event_tag_cross_ref_tagId` " +
+                        "ON `event_tag_cross_ref` (`tagId`)"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `event_group_tag_cross_ref` (" +
+                        "`groupId` INTEGER NOT NULL, `tagId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`groupId`, `tagId`), " +
+                        "FOREIGN KEY(`groupId`) REFERENCES `event_groups`(`groupId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                        "FOREIGN KEY(`tagId`) REFERENCES `tags`(`tagId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_event_group_tag_cross_ref_tagId` " +
+                        "ON `event_group_tag_cross_ref` (`tagId`)"
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_12_13: Events and groups can carry tags")
+            }
+        }
+
+        /**
+         * Migration from 13 to 14: a saved analysis remembers who and where, not just what.
+         *
+         * Snapshots captured names only, so a frozen analysis could group by wearer but could not
+         * colour anyone, could not offer the Event tab, and lost the time-in-band breakdown — the
+         * ids and the bands were simply never written down, and the data points they would have
+         * been recomputed from are gone by then.
+         *
+         * Existing rows get NULL and empty string, which is exactly the state they were already
+         * in. Nothing is backfilled: the values were not recorded, and inventing them from the
+         * current library would make a frozen analysis reflect a present it is meant to predate.
+         *
+         * `ALTER TABLE ADD COLUMN` only, so no table rebuild and no foreign keys to re-declare.
+         * The defaults here match the entity's `@ColumnInfo(defaultValue = ...)` exactly — a
+         * mismatch produces a database that installs fine and refuses to open on upgrade.
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val additions = listOf(
+                    "personId" to "INTEGER DEFAULT NULL",
+                    "personColorArgb" to "INTEGER DEFAULT NULL",
+                    "eventId" to "INTEGER DEFAULT NULL",
+                    "eventName" to "TEXT NOT NULL DEFAULT ''",
+                    "zonesEncoded" to "TEXT NOT NULL DEFAULT ''"
+                )
+                additions.forEach { (column, type) ->
+                    if (!columnExists(db, "saved_analysis_records", column)) {
+                        db.execSQL("ALTER TABLE saved_analysis_records ADD COLUMN $column $type")
+                    }
+                }
+
+                android.util.Log.i(TAG, "MIGRATION_13_14: Saved analyses remember who and where")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -637,7 +766,10 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_7_8,
                         MIGRATION_8_9,
                         MIGRATION_9_10,
-                        MIGRATION_10_11
+                        MIGRATION_10_11,
+                        MIGRATION_11_12,
+                        MIGRATION_12_13,
+                        MIGRATION_13_14
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

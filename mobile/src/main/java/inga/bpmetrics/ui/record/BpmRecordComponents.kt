@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.displayName
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDurationString
@@ -118,7 +119,9 @@ private fun TileBody(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = record.metadata.title,
+                        // Never a bare "Untitled 4" where a wearer is known — see
+                        // RecordNameFormatter. A user's own title always wins.
+                        text = record.displayName(wearer?.displayName, watchName),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )

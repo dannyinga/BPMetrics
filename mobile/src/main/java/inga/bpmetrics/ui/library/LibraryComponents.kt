@@ -62,7 +62,9 @@ fun LibraryFilterDialog(
     onApply: (LibraryViewModel.FilterState) -> Unit,
     repository: inga.bpmetrics.library.LibraryRepository,
     availablePeople: List<inga.bpmetrics.library.PersonEntity> = emptyList(),
-    availableWatches: List<inga.bpmetrics.library.WatchEntity> = emptyList()
+    availableWatches: List<inga.bpmetrics.library.WatchEntity> = emptyList(),
+    availableEvents: List<inga.bpmetrics.library.EventEntity> = emptyList(),
+    availableGroups: List<inga.bpmetrics.library.EventGroupEntity> = emptyList()
 ) {
     var dateRange by remember { mutableStateOf(currentFilter.dateRange) }
     var selectedTagIds by remember { mutableStateOf(currentFilter.selectedTagIds) }
@@ -70,6 +72,8 @@ fun LibraryFilterDialog(
     var maxBpm by remember { mutableStateOf(currentFilter.maxBpm?.toString() ?: "") }
     var selectedPersonIds by remember { mutableStateOf(currentFilter.selectedPersonIds) }
     var selectedWatchIds by remember { mutableStateOf(currentFilter.selectedWatchIds) }
+    var selectedEventIds by remember { mutableStateOf(currentFilter.selectedEventIds) }
+    var selectedGroupIds by remember { mutableStateOf(currentFilter.selectedGroupIds) }
 
     // Room hands back a new Flow per call and collection is keyed on the instance, so building
     // this inline restarted the query on every recomposition.
@@ -270,8 +274,68 @@ fun LibraryFilterDialog(
                     }
                 }
 
+                if (availableEvents.isNotEmpty()) {
+                    item {
+                        Text("Event", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "The occasion a recording is filed under.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            availableEvents.forEach { event ->
+                                FilterChip(
+                                    selected = event.eventId in selectedEventIds,
+                                    onClick = {
+                                        selectedEventIds = if (event.eventId in selectedEventIds) {
+                                            selectedEventIds - event.eventId
+                                        } else {
+                                            selectedEventIds + event.eventId
+                                        }
+                                    },
+                                    label = { Text(event.displayName) }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (availableGroups.isNotEmpty()) {
+                    item {
+                        Text("Group", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Matches everything in every event in the group.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            availableGroups.forEach { group ->
+                                FilterChip(
+                                    selected = group.groupId in selectedGroupIds,
+                                    onClick = {
+                                        selectedGroupIds = if (group.groupId in selectedGroupIds) {
+                                            selectedGroupIds - group.groupId
+                                        } else {
+                                            selectedGroupIds + group.groupId
+                                        }
+                                    },
+                                    label = { Text("📁 ${group.displayName}") }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 item {
                     Text("Tags", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Includes tags a recording inherits from its event or group.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
 
                 items(categories, key = { it.categoryId }) { category ->
@@ -339,7 +403,9 @@ fun LibraryFilterDialog(
                         minBpm = minBpm.toDoubleOrNull() ?: 0.0,
                         maxBpm = maxBpm.toDoubleOrNull(),
                         selectedPersonIds = selectedPersonIds,
-                        selectedWatchIds = selectedWatchIds
+                        selectedWatchIds = selectedWatchIds,
+                        selectedEventIds = selectedEventIds,
+                        selectedGroupIds = selectedGroupIds
                     ))
             }) { Text("Apply") }
         },

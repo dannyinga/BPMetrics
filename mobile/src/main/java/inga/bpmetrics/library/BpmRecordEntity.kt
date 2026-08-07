@@ -63,7 +63,17 @@ data class BpmRecordEntity (
      * Null for recordings that predate profiles, and for imports that arrive with only a name.
      * Those fall back to [wearerName].
      */
-    @ColumnInfo(defaultValue = "NULL") val personId: Long? = null
+    @ColumnInfo(defaultValue = "NULL") val personId: Long? = null,
+    /**
+     * The event this recording was part of, referencing [EventEntity.eventId].
+     *
+     * Null means unfiled, which is a real state rather than a gap: recordings arrive from a watch
+     * long before anyone decides what they were part of, and the library shows them as such.
+     *
+     * At most one, because a recording happened at one place at one time. Many-to-many would let a
+     * recording appear under two sets, which corresponds to nothing.
+     */
+    @ColumnInfo(defaultValue = "NULL") val eventId: Long? = null
     ) {
 
     /**

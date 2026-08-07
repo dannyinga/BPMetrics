@@ -6,13 +6,17 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.ui.settings.SettingsRepository.PreferencesKeys.DEFAULT_NAMING_CATEGORY_ID
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -51,11 +55,126 @@ class SettingsRepository(context: Context) {
         val VID_SYNC_OFFSET = longPreferencesKey("vid_sync_offset")
         val VID_GRAPH_RECT = stringPreferencesKey("vid_graph_rect")
         val DEFAULT_TIME_ZONE = stringPreferencesKey("default_timezone")
+
+        /** Which of the library's three views was last open. */
+        val LIBRARY_VIEW_MODE = stringPreferencesKey("library_view_mode")
+
+        /** Whether saved same-time analyses have already been turned into events. */
+        val CONCURRENT_ANALYSES_CONVERTED = booleanPreferencesKey("concurrent_analyses_converted")
+
+        /** Recordings the user has said, permanently, not to suggest an event for. */
+        val DISMISSED_SUGGESTION_RECORDS = stringSetPreferencesKey("dismissed_suggestion_records")
+    }
+
+    /**
+     * The library view last used, so the app reopens where it was left.
+     *
+     * Stored as the enum's name rather than its ordinal: reordering or inserting a mode later would
+     * silently reassign everyone's saved choice to a different view.
+     */
+    val libraryViewMode: Flow<String> = dataStore.data
+        .map { it[PreferencesKeys.LIBRARY_VIEW_MODE] ?: "RECORDINGS" }
+
+    suspend fun setLibraryViewMode(mode: String) {
+        dataStore.edit { it[PreferencesKeys.LIBRARY_VIEW_MODE] = mode }
+    }
+
+    /**
+     * Whether the one-time conversion of saved same-time analyses into events has run.
+     *
+     * A preference rather than a schema version because the conversion is not a schema change and
+     * must be allowed to fail and retry. A Room migration gets one attempt, and failing it means an
+     * app that will not open.
+     */
+    suspend fun hasConvertedConcurrentAnalyses(): Boolean =
+        dataStore.data.first()[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] ?: false
+
+    suspend fun setConvertedConcurrentAnalyses() {
+        dataStore.edit { it[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] = true }
+    }
+
+    /**
+     * Recordings that should never be suggested as an event again.
+     *
+     * Stored by record id rather than by cluster, because a cluster has no identity — one more
+     * recording arriving from a watch changes its membership and it would come back as a new
+     * suggestion the user has to dismiss all over again. The recordings are the thing the user
+     * actually said no about.
+     */
+    val dismissedSuggestionRecords: Flow<Set<Long>> = dataStore.data
+        .map { prefs ->
+            prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS]
+                .orEmpty()
+                .mapNotNull { it.toLongOrNull() }
+                .toSet()
+        }
+
+    suspend fun dismissSuggestionRecords(recordIds: Set<Long>) {
+        dataStore.edit { prefs ->
+            val existing = prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS].orEmpty()
+            prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS] =
+                existing + recordIds.map { it.toString() }
+        }
     }
 
     /**
      * The ID of the category currently used for auto-naming new records.
      */
+    /**
+     * Every stored preference, as key/type/value triples.
+     *
+     * Walks the DataStore rather than listing the keys by hand, so a setting added later is carried
+     * by a backup without anyone remembering to add it here — the failure mode of an explicit list
+     * is that it silently stops being complete.
+     *
+     * The type travels with the value because DataStore keys are typed and JSON is not: a float
+     * `100f` and a long `100` are indistinguishable once serialized, and restoring one as the other
+     * throws at read time.
+     */
+    suspend fun exportPreferences(): List<PreferenceSnapshot> =
+        dataStore.data.first().asMap().mapNotNull { (key, value) ->
+            val type = when (value) {
+                is String -> "string"
+                is Boolean -> "boolean"
+                is Float -> "float"
+                is Long -> "long"
+                is Int -> "int"
+                is Double -> "double"
+                // Sets and anything else are skipped rather than guessed at.
+                else -> return@mapNotNull null
+            }
+            PreferenceSnapshot(key.name, type, value.toString())
+        }
+
+    /**
+     * Restores preferences captured by [exportPreferences].
+     *
+     * An unrecognised type or unparseable value is skipped, not fatal — a backup written by a newer
+     * build should restore everything it can rather than nothing.
+     *
+     * @return how many were applied.
+     */
+    suspend fun importPreferences(snapshots: List<PreferenceSnapshot>): Int {
+        var applied = 0
+        dataStore.edit { prefs ->
+            snapshots.forEach { snapshot ->
+                val ok = runCatching {
+                    when (snapshot.type) {
+                        "string" -> prefs[stringPreferencesKey(snapshot.key)] = snapshot.value
+                        "boolean" -> prefs[booleanPreferencesKey(snapshot.key)] = snapshot.value.toBooleanStrict()
+                        "float" -> prefs[floatPreferencesKey(snapshot.key)] = snapshot.value.toFloat()
+                        "long" -> prefs[longPreferencesKey(snapshot.key)] = snapshot.value.toLong()
+                        "int" -> prefs[intPreferencesKey(snapshot.key)] = snapshot.value.toInt()
+                        "double" -> prefs[doublePreferencesKey(snapshot.key)] = snapshot.value.toDouble()
+                        else -> throw IllegalArgumentException("unknown type ${snapshot.type}")
+                    }
+                }.isSuccess
+                if (ok) applied++
+            }
+        }
+        return applied
+    }
+
     val defaultNamingCategoryId: Flow<Long?> = dataStore.data
         .map { preferences -> preferences[DEFAULT_NAMING_CATEGORY_ID] }
 
@@ -162,3 +281,15 @@ class SettingsRepository(context: Context) {
     }
 
 }
+
+/**
+ * One stored preference, with enough type information to be restored as what it was.
+ *
+ * Lives outside [SettingsRepository] so the backup format can name it without importing the whole
+ * settings layer.
+ */
+data class PreferenceSnapshot(
+    val key: String,
+    val type: String,
+    val value: String
+)

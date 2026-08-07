@@ -2,6 +2,8 @@ package inga.bpmetrics.ui
 
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordEntity
+import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.ui.library.LibraryViewModel
 import io.mockk.every
@@ -22,10 +24,18 @@ class LibraryViewModelTest {
 
     private val repository = mockk<LibraryRepository>(relaxed = true)
     private val recordsFlow = MutableStateFlow<List<BpmRecord>>(emptyList())
+    private val effectiveTagsFlow = MutableStateFlow<Map<Long, List<EffectiveTag>>>(emptyMap())
+    private val eventsFlow = MutableStateFlow<List<EventEntity>>(emptyList())
 
     @Before
     fun setup() {
+        // Every flow `filteredRecords` combines has to be stubbed, not just the one under test.
+        // A relaxed mock hands back a Flow that never emits, and `combine` waits for a first value
+        // from all of its sources — so one missing stub hangs the whole list and the test fails
+        // with a timeout that says nothing about which flow was missing.
         every { repository.records } returns recordsFlow
+        every { repository.effectiveTags } returns effectiveTagsFlow
+        every { repository.getAllEvents() } returns eventsFlow
     }
 
     @Test

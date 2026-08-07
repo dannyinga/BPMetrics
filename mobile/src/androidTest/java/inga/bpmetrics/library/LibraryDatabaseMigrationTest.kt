@@ -39,7 +39,10 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_7_8,
             LibraryDatabase.MIGRATION_8_9,
             LibraryDatabase.MIGRATION_9_10,
-            LibraryDatabase.MIGRATION_10_11
+            LibraryDatabase.MIGRATION_10_11,
+            LibraryDatabase.MIGRATION_11_12,
+            LibraryDatabase.MIGRATION_12_13,
+            LibraryDatabase.MIGRATION_13_14
         )
     }
 
@@ -208,7 +211,7 @@ class LibraryDatabaseMigrationTest {
      * Running the whole chain is what a user upgrading from an older install actually experiences.
      */
     @Test
-    fun migrate5To11_runsTheWholeChain() {
+    fun migrate5To14_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 5).apply {
             execSQL(
                 """
@@ -221,7 +224,7 @@ class LibraryDatabaseMigrationTest {
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -246,7 +249,7 @@ class LibraryDatabaseMigrationTest {
             "(4, 'Nobody', '', 4000, 4000, 5000, 1000, NULL, 70.0, NULL, 'Watch C', '')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         // One profile per distinct name — the two Kyle recordings share a person, not one each.
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
@@ -294,11 +297,173 @@ class LibraryDatabaseMigrationTest {
     fun migrate10To11_handlesALibraryWithNoWearers() {
         helper.createDatabase(TEST_DB, 5).close()
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
 
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals(0, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * The check that catches the mistake this project keeps making.
+     *
+     * `runMigrationsAndValidate` compares the migrated schema against `12.json` column by column,
+     * including default values. An earlier attempt at this migration wrote
+     * `createdAt INTEGER NOT NULL DEFAULT 0` while the entity declares no SQL default — a database
+     * that opens perfectly on a fresh install and refuses to open for everyone upgrading.
+     */
+    @Test
+    fun migrate11To12_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Existing recordings arrive unfiled, which is the correct state — they were made before
+     * anyone said what they were part of.
+     */
+    @Test
+    fun migrate11To12_leavesExistingRecordingsUnfiled() {
+        seedVersion5With(
+            "(1, 'Before events existed', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
+        )
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT eventId FROM bpm_records WHERE recordId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue("an existing recording belongs to no event", cursor.isNull(0))
+        }
+        // The tables exist and start empty; nothing is invented on the user's behalf.
+        listOf("events", "event_groups").forEach { table ->
+            db.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("$table should start empty", 0, cursor.getInt(0))
+            }
+        }
+        db.close()
+    }
+
+    /**
+     * The check that has caught the same class of bug three times now.
+     *
+     * A hand-written `DEFAULT` the entity does not declare, or a missing index, produces a database
+     * that installs perfectly and refuses to open for everyone upgrading. `validateDroppedTables`
+     * is on, so this compares the live schema against what Room expects column for column.
+     */
+    @Test
+    fun migrate12To13_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Tags on events and groups start empty, and nothing is copied onto existing recordings.
+     *
+     * Inheritance is resolved on read — see §2.5. If the upgrade ever started writing tags downward
+     * this is where it would show, because a library that had no event tags before the upgrade
+     * cannot legitimately have any after it.
+     */
+    @Test
+    fun migrate12To13_addsEmptyTagTablesAndTouchesNothing() {
+        seedVersion5With(
+            "(1, 'Before tags cascaded', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
+        )
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+
+        listOf("event_tag_cross_ref", "event_group_tag_cross_ref").forEach { table ->
+            db.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("$table should start empty", 0, cursor.getInt(0))
+            }
+        }
+        db.query("SELECT COUNT(*) FROM record_tag_cross_ref").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("no tags were written onto existing recordings", 0, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * Deleting an event releases its tag links without touching the tags themselves.
+     *
+     * The cascade runs the wrong way round if the foreign keys are declared backwards, which would
+     * mean deleting one event deleted a tag out of every recording that used it.
+     */
+    @Test
+    fun deletingAnEvent_removesItsTagLinksButKeepsTheTag() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+
+        db.execSQL("PRAGMA foreign_keys = ON")
+        db.execSQL("INSERT INTO categories (categoryId, name) VALUES (1, 'Festivals')")
+        db.execSQL("INSERT INTO tags (tagId, name, parentCategoryId) VALUES (1, 'Coachella', 1)")
+        db.execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (1, 'Saturday', 0)")
+        db.execSQL("INSERT INTO event_tag_cross_ref (eventId, tagId) VALUES (1, 1)")
+
+        db.execSQL("DELETE FROM events WHERE eventId = 1")
+
+        db.query("SELECT COUNT(*) FROM event_tag_cross_ref").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("the link goes with the event", 0, cursor.getInt(0))
+        }
+        db.query("SELECT COUNT(*) FROM tags WHERE tagId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("the tag itself survives", 1, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * The schema check for the columns a saved analysis gained.
+     *
+     * Five `ALTER TABLE ADD COLUMN` statements whose defaults have to match the entity exactly. A
+     * `DEFAULT NULL` written where the entity declares none — or the other way round — produces a
+     * database that installs fine and refuses to open on upgrade.
+     */
+    @Test
+    fun migrate13To14_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * An analysis saved before the upgrade keeps its numbers and gains empty new ones.
+     *
+     * Nothing is backfilled on purpose: the ids and the band split were never recorded, and
+     * inventing them from the current library would make a frozen analysis reflect a present it is
+     * meant to predate.
+     */
+    @Test
+    fun migrate13To14_keepsOldSnapshotsAndLeavesTheNewColumnsEmpty() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+
+        db.execSQL(
+            "INSERT INTO saved_analyses (analysisId, name, createdAt) VALUES (1, 'Coachella', 100)"
+        )
+        db.execSQL(
+            """
+            INSERT INTO saved_analysis_records
+                (analysisId, recordId, title, date, minBpm, avgBpm, maxBpm, activeDurationMs, wearerName)
+            VALUES (1, 7, 'Saturday', 100, 60.0, 120.0, 180.0, 60000, 'Kyle')
+            """.trimIndent()
+        )
+
+        db.query(
+            "SELECT wearerName, maxBpm, personId, eventId, eventName, zonesEncoded " +
+                "FROM saved_analysis_records WHERE recordId = 7"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Kyle", cursor.getString(0))
+            assertEquals(180.0, cursor.getDouble(1), 0.001)
+            assertTrue("no person id was ever recorded", cursor.isNull(2))
+            assertTrue("no event id was ever recorded", cursor.isNull(3))
+            assertEquals("", cursor.getString(4))
+            assertEquals("", cursor.getString(5))
         }
         db.close()
     }
