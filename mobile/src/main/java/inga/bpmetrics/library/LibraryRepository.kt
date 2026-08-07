@@ -4,8 +4,10 @@ import android.content.Context
 import android.util.Log
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.ui.settings.SettingsRepository
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +32,16 @@ import java.util.Locale
  */
 class LibraryRepository(
     context: Context,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    /**
+     * The database to work against. Defaults to the real one, so no production call site changes.
+     *
+     * Injectable because [init] starts collecting from the DAOs immediately: a test that swapped
+     * the DAO fields by reflection afterwards would have its writes go to one database while
+     * [records] kept reading the collector wired up at construction — which is exactly what the
+     * instrumented tests were doing, silently, for as long as they existed.
+     */
+    private val database: LibraryDatabase = LibraryDatabase.getInstance(context)
 ) {
 
     // A flow that emits true when a record is being saved, and false otherwise.
@@ -48,8 +59,17 @@ class LibraryRepository(
     val records: StateFlow<List<BpmRecord>> = _records.asStateFlow()
 
     private val tag = "LibraryRepository"
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val database = LibraryDatabase.getInstance(context)
+
+    /**
+     * Keeps a database failure in the background collector from reaching the default uncaught
+     * handler and taking the process with it. The library going quiet is bad; the app dying is
+     * worse, and offers no diagnostic either.
+     */
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(tag, "Unhandled failure in library scope", throwable)
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
     private val recordDao = database.bpmRecordDao()
     private val tagDao = database.tagDao()
     private val watchDao = database.watchDao()
@@ -76,14 +96,17 @@ class LibraryRepository(
     /**
      * Updates the title of a BPM record.
      *
+     * Suspends until the write has happened, rather than launching it into the repository's own
+     * scope and returning. Both callers already reload the record immediately afterwards, so
+     * fire-and-forget meant they reliably reloaded the value from *before* the edit — a rename
+     * that appeared not to take until something else refreshed the screen.
+     *
      * @param recordId The ID of the record to update.
      * @param newTitle The new title for the record.
      */
-    fun updateRecordTitle(recordId: Long, newTitle: String) {
-        scope.launch {
-            Log.d(tag, "Updating title for record $recordId to: $newTitle")
-            recordDao.updateTitleOnly(recordId, newTitle)
-        }
+    suspend fun updateRecordTitle(recordId: Long, newTitle: String) {
+        Log.d(tag, "Updating title for record $recordId to: $newTitle")
+        recordDao.updateTitleOnly(recordId, newTitle)
     }
 
     /**
@@ -92,11 +115,9 @@ class LibraryRepository(
      * @param recordId The ID of the record to update.
      * @param newDescription The new description for the record.
      */
-    fun updateRecordDescription(recordId: Long, newDescription: String) {
-        scope.launch {
-            Log.d(tag, "Updating description for record $recordId to: $newDescription")
-            recordDao.updateDescriptionOnly(recordId, newDescription)
-        }
+    suspend fun updateRecordDescription(recordId: Long, newDescription: String) {
+        Log.d(tag, "Updating description for record $recordId to: $newDescription")
+        recordDao.updateDescriptionOnly(recordId, newDescription)
     }
 
     /**
@@ -822,6 +843,18 @@ class LibraryRepository(
      * @param recordId The ID of the record.
      */
     fun getTagsForRecord(recordId: Long): Flow<List<TagEntity>> = tagDao.getTagsForRecordFlow(recordId)
+
+    /**
+     * Stops the background collector started in [init].
+     *
+     * Never called in the app — this repository lives as long as the process does. It exists for
+     * tests, which build one per test method against a database they then close: without it the
+     * collector outlives its database and the next emission fails on a closed connection, taking
+     * an unrelated test down with it.
+     */
+    fun close() {
+        scope.cancel()
+    }
 
     private companion object {
         /**

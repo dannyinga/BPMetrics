@@ -58,6 +58,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // See the mobile module — symbols for whatever native code the bundle carries, so a
+            // native crash is readable in the Play Console rather than a list of addresses.
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
         }
     }
     compileOptions {

@@ -62,6 +62,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Ships symbols for the native libraries the bundle carries — Media3's codecs, mostly.
+            // Without them a crash inside native code arrives in the Play Console as raw addresses,
+            // which is not something anyone can act on.
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
         }
     }
     compileOptions {

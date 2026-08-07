@@ -63,7 +63,23 @@ jobs:
       - name: Build, test and lint
         run: ./gradlew build --stacktrace
 
+      # See release-staging.yml — the publish steps stand down until the credentials exist, so
+      # landing this pipeline before the Play Console is configured does not turn the branch red.
+      - name: Check for publishing credentials
+        id: creds
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$PLAY_JSON" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Built and tested, but not released — signing or Play credentials are not configured yet. See Documentation/Play Console Setup.md."
+          fi
+
       - name: Restore upload keystore
+        if: steps.creds.outputs.ready == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
@@ -71,6 +87,7 @@ jobs:
 
       # The bundles go to Play; the APK is what gets attached to the GitHub Release.
       - name: Build signed bundles and APK
+        if: steps.creds.outputs.ready == 'true'
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -81,6 +98,7 @@ jobs:
       # 10% first. A problem then reaches a tenth of your users rather than all of them, and the
       # rollout can be halted from the Play Console without shipping anything new.
       - name: Publish phone build
+        if: steps.creds.outputs.ready == 'true'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -90,17 +108,22 @@ jobs:
           status: inProgress
           userFraction: 0.1
 
+      # A dedicated Wear track, required by Play since August 2023 so that watch releases and watch
+      # testers are managed separately from the phone app. See release-staging.yml for how to list
+      # the real track names if this is rejected as unknown.
       - name: Publish watch build
+        if: steps.creds.outputs.ready == 'true'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: inga.bpmetrics
           releaseFiles: wear/build/outputs/bundle/release/wear-release.aab
-          track: production
+          track: wear:production
           status: inProgress
           userFraction: 0.1
 
       - name: Create GitHub Release
+        if: steps.creds.outputs.ready == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
