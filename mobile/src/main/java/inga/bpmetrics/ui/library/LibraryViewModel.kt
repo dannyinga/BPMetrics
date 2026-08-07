@@ -10,6 +10,11 @@ import inga.bpmetrics.export.RestoreResult
 import inga.bpmetrics.export.restoreBackup
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.EventEntity
+import inga.bpmetrics.library.EventGroupEntity
+import inga.bpmetrics.library.EventSuggestion
+import inga.bpmetrics.library.suggestEvents
+import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
@@ -76,6 +81,144 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /** Watches known to the registry, for the filter to offer. */
     val availableWatches: StateFlow<List<WatchEntity>> = repository.getAllWatches()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // --- Events and groups ---
+
+    /**
+     * Which of the three library views is showing, restored from settings.
+     *
+     * Read once at construction rather than collected: this is where the user left off, not a live
+     * value, and treating it as a flow would fight their taps every time settings emitted.
+     */
+    private val _viewMode = MutableStateFlow(LibraryViewMode.RECORDINGS)
+    val viewMode: StateFlow<LibraryViewMode> = _viewMode.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            val saved = repository.getLibraryViewMode()
+            _viewMode.value = LibraryViewMode.entries.firstOrNull { it.name == saved }
+                ?: LibraryViewMode.RECORDINGS
+        }
+    }
+
+    fun setViewMode(mode: LibraryViewMode) {
+        _viewMode.value = mode
+        viewModelScope.launch { repository.setLibraryViewMode(mode.name) }
+    }
+
+    /**
+     * Events with everything the list needs to describe them without a second query per row.
+     *
+     * A card wants the span, the recording count and who was there — all of which are joins. Doing
+     * them per row would issue three queries per visible event while scrolling.
+     */
+    val events: StateFlow<List<EventSummary>> = combine(
+        repository.getAllEvents(),
+        repository.records,
+        peopleById
+    ) { events, records, people ->
+        val byEvent = records.groupBy { it.metadata.eventId }
+        events.map { event ->
+            val its = byEvent[event.eventId].orEmpty()
+            EventSummary(
+                event = event,
+                records = its.sortedByDescending { it.metadata.startTime },
+                people = its.mapNotNull { r -> r.metadata.personId?.let { people[it] } }.distinct()
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Groups, built from the event summaries rather than re-queried.
+     *
+     * A group is exactly its events, so its span, count and people are theirs added up. Deriving it
+     * a second way from the records would be a second definition of the same number, free to drift.
+     */
+    val eventGroups: StateFlow<List<GroupSummary>> = combine(
+        repository.getAllEventGroups(),
+        events
+    ) { groups, summaries ->
+        val byGroup = summaries.groupBy { it.event.groupId }
+        groups.map { group -> GroupSummary(group, byGroup[group.groupId].orEmpty()) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Events belonging to no group, shown alongside the groups so they are not lost. */
+    val ungroupedEvents: StateFlow<List<EventSummary>> = events
+        .map { summaries -> summaries.filter { it.event.groupId == null } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Recordings filed under no event.
+     *
+     * Pinned above the events list rather than hidden. Without it, a recording that has not been
+     * filed simply disappears from the view whose purpose is organising it.
+     */
+    val unfiledRecords: StateFlow<List<BpmRecord>> = repository.records
+        .map { records -> records.filter { it.metadata.eventId == null } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Clusters of unfiled recordings that look like one occasion, minus the ones already waved off.
+     *
+     * Dismissals are held in memory rather than persisted: they last as long as the session, which
+     * is as long as the list they are decluttering. Storing them would mean a schema for "things the
+     * user was not interested in once", and a suggestion worth making again after a relaunch.
+     */
+    private val _dismissedSuggestions = MutableStateFlow<Set<Set<Long>>>(emptySet())
+
+    val suggestions: StateFlow<List<EventSuggestion>> = combine(
+        unfiledRecords,
+        _dismissedSuggestions
+    ) { records, dismissed ->
+        suggestEvents(records).filter { it.records.map { r -> r.metadata.recordId }.toSet() !in dismissed }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun dismissSuggestion(suggestion: EventSuggestion) {
+        val ids = suggestion.records.map { it.metadata.recordId }.toSet()
+        _dismissedSuggestions.value = _dismissedSuggestions.value + setOf(ids)
+    }
+
+    fun createEvent(name: String, recordIds: Set<Long> = emptySet()) {
+        viewModelScope.launch {
+            val id = repository.createEvent(name)
+            if (recordIds.isNotEmpty()) repository.assignRecordsToEvent(recordIds, id)
+            clearSelection()
+        }
+    }
+
+    fun renameEvent(eventId: Long, name: String) {
+        viewModelScope.launch { repository.renameEvent(eventId, name) }
+    }
+
+    fun deleteEvent(eventId: Long) {
+        viewModelScope.launch { repository.deleteEvent(eventId) }
+    }
+
+    fun setEventGroup(eventId: Long, groupId: Long?) {
+        viewModelScope.launch { repository.setEventGroup(eventId, groupId) }
+    }
+
+    fun createEventGroup(name: String) {
+        viewModelScope.launch { repository.createEventGroup(name) }
+    }
+
+    fun renameEventGroup(groupId: Long, name: String) {
+        viewModelScope.launch { repository.renameEventGroup(groupId, name) }
+    }
+
+    fun deleteEventGroup(groupId: Long) {
+        viewModelScope.launch { repository.deleteEventGroup(groupId) }
+    }
+
+    /** Files the current selection under an event, or unfiles it when [eventId] is null. */
+    fun assignSelectedToEvent(eventId: Long?) {
+        val ids = _selectedRecordIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.assignRecordsToEvent(ids, eventId)
+            clearSelection()
+        }
+    }
 
     /**
      * The combined UI state, emitting a sorted and filtered list of records for the library list.
@@ -353,3 +496,44 @@ data class LibraryUIState(
     val records: List<BpmRecord> = emptyList(),
     val isLoading: Boolean = true
 )
+
+/**
+ * Which of the library's three views is showing.
+ *
+ * The same recordings, organised three ways — flat, by what they were part of, and by the
+ * collection that belonged to.
+ */
+enum class LibraryViewMode { RECORDINGS, EVENTS, GROUPS }
+
+/**
+ * An event with what a list row needs to describe it.
+ *
+ * [span] and [people] are derived rather than stored, for the reason events carry no times of their
+ * own: both change the moment a recording is filed or unfiled.
+ */
+data class EventSummary(
+    val event: EventEntity,
+    val records: List<BpmRecord>,
+    val people: List<PersonEntity>
+) {
+    val recordCount: Int get() = records.size
+    val span: TimeSpan? get() = records.spanOrNull()
+}
+
+/** A group described entirely by its events, so the two can never disagree. */
+data class GroupSummary(
+    val group: EventGroupEntity,
+    val events: List<EventSummary>
+) {
+    val eventCount: Int get() = events.size
+    val recordCount: Int get() = events.sumOf { it.recordCount }
+    val people: List<PersonEntity> get() = events.flatMap { it.people }.distinct()
+    val span: TimeSpan?
+        get() = events.mapNotNull { it.span }.takeIf { it.isNotEmpty() }
+            ?.let { spans -> TimeSpan(spans.minOf { it.startMs }, spans.maxOf { it.endMs }) }
+}
+
+/** The span a set of recordings covers, or null when there are none. */
+fun List<BpmRecord>.spanOrNull(): TimeSpan? =
+    if (isEmpty()) null
+    else TimeSpan(minOf { it.metadata.startTime }, maxOf { it.metadata.endTime })

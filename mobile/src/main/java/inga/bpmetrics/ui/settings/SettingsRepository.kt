@@ -54,6 +54,22 @@ class SettingsRepository(context: Context) {
         val VID_SYNC_OFFSET = longPreferencesKey("vid_sync_offset")
         val VID_GRAPH_RECT = stringPreferencesKey("vid_graph_rect")
         val DEFAULT_TIME_ZONE = stringPreferencesKey("default_timezone")
+
+        /** Which of the library's three views was last open. */
+        val LIBRARY_VIEW_MODE = stringPreferencesKey("library_view_mode")
+    }
+
+    /**
+     * The library view last used, so the app reopens where it was left.
+     *
+     * Stored as the enum's name rather than its ordinal: reordering or inserting a mode later would
+     * silently reassign everyone's saved choice to a different view.
+     */
+    val libraryViewMode: Flow<String> = dataStore.data
+        .map { it[PreferencesKeys.LIBRARY_VIEW_MODE] ?: "RECORDINGS" }
+
+    suspend fun setLibraryViewMode(mode: String) {
+        dataStore.edit { it[PreferencesKeys.LIBRARY_VIEW_MODE] = mode }
     }
 
     /**

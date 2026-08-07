@@ -21,6 +21,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import inga.bpmetrics.library.EventSuggestion
+import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
@@ -140,6 +147,32 @@ fun LibraryScreen(
 
     var showMultiVideoDialog by remember { mutableStateOf(false) }
     var selectedRecordsForMultiVideo by remember { mutableStateOf<List<BpmRecord>>(emptyList()) }
+
+    // --- Events and groups ---
+
+    val viewMode by viewModel.viewMode.collectAsStateWithLifecycle()
+    val events by viewModel.events.collectAsStateWithLifecycle()
+    val eventGroups by viewModel.eventGroups.collectAsStateWithLifecycle()
+    val ungroupedEvents by viewModel.ungroupedEvents.collectAsStateWithLifecycle()
+    val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
+    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
+
+    // Events and groups share one expansion set. Their ids come from different tables and could
+    // collide, but the two never appear in the same view, so a collision is never visible.
+    var expandedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+
+    var showCreateEventDialog by remember { mutableStateOf(false) }
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var renamingEvent by remember { mutableStateOf<EventSummary?>(null) }
+    var renamingGroup by remember { mutableStateOf<GroupSummary?>(null) }
+    var deletingEvent by remember { mutableStateOf<EventSummary?>(null) }
+    var deletingGroup by remember { mutableStateOf<GroupSummary?>(null) }
+    var movingEvent by remember { mutableStateOf<EventSummary?>(null) }
+    var showAddToEventDialog by remember { mutableStateOf(false) }
+    var suggestionToName by remember { mutableStateOf<EventSuggestion?>(null) }
+    // Set when "New event…" is chosen from the bulk menu, so the name dialog knows to file the
+    // current selection into whatever it creates rather than creating an empty event.
+    var namingEventForSelection by remember { mutableStateOf(false) }
 
     if (isSelectionMode) {
         BackHandler {
@@ -325,6 +358,15 @@ fun LibraryScreen(
                                 }
                             )
 
+                            DropdownMenuItem(
+                                text = { Text("Add to event") },
+                                leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    showAddToEventDialog = true
+                                }
+                            )
+
                             HorizontalDivider()
 
                             DropdownMenuItem(
@@ -481,8 +523,31 @@ fun LibraryScreen(
                 }
             }
 
+            // Three ways of looking at the same recordings, so the switch sits above everything
+            // that only applies to one of them.
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
+                LibraryViewMode.entries.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = viewMode == mode,
+                        onClick = { viewModel.setViewMode(mode) },
+                        shape = SegmentedButtonDefaults.itemShape(index, LibraryViewMode.entries.size)
+                    ) {
+                        Text(
+                            when (mode) {
+                                LibraryViewMode.RECORDINGS -> "Recordings"
+                                LibraryViewMode.EVENTS -> "Events"
+                                LibraryViewMode.GROUPS -> "Groups"
+                            }
+                        )
+                    }
+                }
+            }
+
+            if (viewMode == LibraryViewMode.RECORDINGS) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), 
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -532,27 +597,75 @@ fun LibraryScreen(
                     Text("Filter")
                 }
             }
+            }
 
-            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(uiState.records) { record ->
-                    val isSelected = selectedRecordIds.contains(record.metadata.recordId)
-                    BpmRecordTile(
-                        record = record,
-                        isSelected = isSelected,
-                        watchName = record.metadata.watchId?.let { watchNames[it] },
-                        wearer = record.metadata.personId?.let { peopleById[it] },
-                        onClick = {
-                            if (isSelectionMode) {
-                                viewModel.toggleRecordSelection(record.metadata.recordId)
-                            } else {
-                                navController.navigate("detail/${record.metadata.recordId}")
-                            }
-                        },
-                        onLongClick = {
+            // A tile, wherever one appears — in the flat list, inside an event, or under a
+            // suggestion. Selection and navigation behave the same in all three, which is what
+            // makes press-and-hold-then-file work from anywhere.
+            val tile: @Composable (BpmRecord) -> Unit = { record ->
+                val isSelected = selectedRecordIds.contains(record.metadata.recordId)
+                BpmRecordTile(
+                    record = record,
+                    isSelected = isSelected,
+                    watchName = record.metadata.watchId?.let { watchNames[it] },
+                    wearer = record.metadata.personId?.let { peopleById[it] },
+                    onClick = {
+                        if (isSelectionMode) {
                             viewModel.toggleRecordSelection(record.metadata.recordId)
+                        } else {
+                            navController.navigate("detail/${record.metadata.recordId}")
                         }
-                    )
+                    },
+                    onLongClick = {
+                        viewModel.toggleRecordSelection(record.metadata.recordId)
+                    }
+                )
+            }
+
+            when (viewMode) {
+                LibraryViewMode.RECORDINGS -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(uiState.records) { record -> tile(record) }
+                    }
                 }
+
+                LibraryViewMode.EVENTS -> EventsList(
+                    events = events,
+                    unfiled = unfiled,
+                    suggestions = suggestions,
+                    groupNames = remember(eventGroups) {
+                        eventGroups.associate { it.group.groupId to it.group.displayName }
+                    },
+                    peopleById = peopleById,
+                    expandedIds = expandedIds,
+                    onToggleExpand = { id ->
+                        expandedIds = if (id in expandedIds) expandedIds - id else expandedIds + id
+                    },
+                    onCreateEvent = { showCreateEventDialog = true },
+                    onRename = { renamingEvent = it },
+                    onMoveToGroup = { movingEvent = it },
+                    onDelete = { deletingEvent = it },
+                    onAcceptSuggestion = { suggestionToName = it },
+                    onDismissSuggestion = { viewModel.dismissSuggestion(it) },
+                    tile = tile
+                )
+
+                LibraryViewMode.GROUPS -> GroupsList(
+                    groups = eventGroups,
+                    ungrouped = ungroupedEvents,
+                    expandedIds = expandedIds,
+                    onToggleExpand = { id ->
+                        expandedIds = if (id in expandedIds) expandedIds - id else expandedIds + id
+                    },
+                    onCreateGroup = { showCreateGroupDialog = true },
+                    onRenameGroup = { renamingGroup = it },
+                    onDeleteGroup = { deletingGroup = it },
+                    onMoveEvent = { movingEvent = it }
+                )
             }
         }
     }
@@ -647,6 +760,328 @@ fun LibraryScreen(
                 viewModel.assignPersonToSelectedRecords(personId)
                 showBulkWearerDialog = false
             }
+        )
+    }
+
+    // --- Event and group dialogs ---
+
+    if (showAddToEventDialog) {
+        AddToEventDialog(
+            recordCount = selectedRecordIds.size,
+            events = events,
+            onDismiss = { showAddToEventDialog = false },
+            onPick = { eventId ->
+                viewModel.assignSelectedToEvent(eventId)
+                showAddToEventDialog = false
+            },
+            onCreateEvent = {
+                showAddToEventDialog = false
+                namingEventForSelection = true
+                showCreateEventDialog = true
+            }
+        )
+    }
+
+    if (showCreateEventDialog) {
+        val forSelection = namingEventForSelection
+        val count = selectedRecordIds.size
+        NameDialog(
+            title = "New event",
+            label = "Event name",
+            confirmLabel = "Create",
+            supporting = if (forSelection) {
+                "The $count selected recording${if (count == 1) "" else "s"} will be filed here."
+            } else null,
+            onDismiss = {
+                showCreateEventDialog = false
+                namingEventForSelection = false
+            },
+            onConfirm = { name ->
+                viewModel.createEvent(name, if (forSelection) selectedRecordIds else emptySet())
+                showCreateEventDialog = false
+                namingEventForSelection = false
+            }
+        )
+    }
+
+    // Naming a suggested event is the same dialog, pre-filled with nothing — the app has no idea
+    // what the occasion was, only that it happened.
+    suggestionToName?.let { suggestion ->
+        NameDialog(
+            title = "New event",
+            label = "Event name",
+            confirmLabel = "Create",
+            supporting = "${suggestion.size} recordings from ${formatSpan(suggestion.span)}.",
+            onDismiss = { suggestionToName = null },
+            onConfirm = { name ->
+                viewModel.createEvent(
+                    name,
+                    suggestion.records.map { it.metadata.recordId }.toSet()
+                )
+                suggestionToName = null
+            }
+        )
+    }
+
+    if (showCreateGroupDialog) {
+        NameDialog(
+            title = "New group",
+            label = "Group name",
+            confirmLabel = "Create",
+            supporting = "A group collects events that belong together — a tour, a season, a study.",
+            onDismiss = { showCreateGroupDialog = false },
+            onConfirm = { name ->
+                viewModel.createEventGroup(name)
+                showCreateGroupDialog = false
+            }
+        )
+    }
+
+    renamingEvent?.let { summary ->
+        NameDialog(
+            title = "Rename event",
+            label = "Event name",
+            initial = summary.event.name,
+            onDismiss = { renamingEvent = null },
+            onConfirm = { name ->
+                viewModel.renameEvent(summary.event.eventId, name)
+                renamingEvent = null
+            }
+        )
+    }
+
+    renamingGroup?.let { summary ->
+        NameDialog(
+            title = "Rename group",
+            label = "Group name",
+            initial = summary.group.name,
+            onDismiss = { renamingGroup = null },
+            onConfirm = { name ->
+                viewModel.renameEventGroup(summary.group.groupId, name)
+                renamingGroup = null
+            }
+        )
+    }
+
+    movingEvent?.let { summary ->
+        GroupPickerDialog(
+            eventName = summary.event.displayName,
+            groups = eventGroups,
+            currentGroupId = summary.event.groupId,
+            onDismiss = { movingEvent = null },
+            onPick = { groupId ->
+                viewModel.setEventGroup(summary.event.eventId, groupId)
+                movingEvent = null
+            },
+            onCreateGroup = {
+                movingEvent = null
+                showCreateGroupDialog = true
+            }
+        )
+    }
+
+    deletingEvent?.let { summary ->
+        DeleteConfirmDialog(
+            title = "Delete ${summary.event.displayName}?",
+            message = if (summary.recordCount > 0) {
+                "Its ${summary.recordCount} recording" +
+                    "${if (summary.recordCount == 1) "" else "s"} will be kept and move back to " +
+                    "Unfiled. Only the event is deleted."
+            } else {
+                "This event has no recordings in it."
+            },
+            onDismiss = { deletingEvent = null },
+            onConfirm = {
+                viewModel.deleteEvent(summary.event.eventId)
+                deletingEvent = null
+            }
+        )
+    }
+
+    deletingGroup?.let { summary ->
+        DeleteConfirmDialog(
+            title = "Delete ${summary.group.displayName}?",
+            message = if (summary.eventCount > 0) {
+                "Its ${summary.eventCount} event${if (summary.eventCount == 1) "" else "s"} will " +
+                    "be kept and stop belonging to any group. No recordings are deleted."
+            } else {
+                "This group has no events in it."
+            },
+            onDismiss = { deletingGroup = null },
+            onConfirm = {
+                viewModel.deleteEventGroup(summary.group.groupId)
+                deletingGroup = null
+            }
+        )
+    }
+}
+
+/**
+ * The events view: suggestions, then the events, then Unfiled.
+ *
+ * Events come first because they are what the view is for — the organised library, not the inbox.
+ * Unfiled sits below as its own section rather than mixed in, and the suggestion cards at the top
+ * are what keeps it from being missed.
+ */
+@Composable
+private fun EventsList(
+    events: List<EventSummary>,
+    unfiled: List<BpmRecord>,
+    suggestions: List<EventSuggestion>,
+    groupNames: Map<Long, String>,
+    peopleById: Map<Long, inga.bpmetrics.library.PersonEntity>,
+    expandedIds: Set<Long>,
+    onToggleExpand: (Long) -> Unit,
+    onCreateEvent: () -> Unit,
+    onRename: (EventSummary) -> Unit,
+    onMoveToGroup: (EventSummary) -> Unit,
+    onDelete: (EventSummary) -> Unit,
+    onAcceptSuggestion: (EventSuggestion) -> Unit,
+    onDismissSuggestion: (EventSuggestion) -> Unit,
+    tile: @Composable (BpmRecord) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            OutlinedButton(onClick = onCreateEvent, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Add, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("New event")
+            }
+        }
+
+        // Keys are prefixed because record ids, event ids and group ids come from different tables
+        // and freely collide. LazyColumn requires them unique across the whole list, so an event
+        // numbered 3 sitting under a recording numbered 3 would crash the screen.
+        items(suggestions, key = { "suggestion-${it.records.first().metadata.recordId}" }) { suggestion ->
+            SuggestionCard(
+                suggestion = suggestion,
+                people = suggestion.records
+                    .mapNotNull { r -> r.metadata.personId?.let { peopleById[it] } }
+                    .distinct(),
+                onAccept = { onAcceptSuggestion(suggestion) },
+                onDismiss = { onDismissSuggestion(suggestion) }
+            )
+        }
+
+        if (events.isNotEmpty()) {
+            item { SectionHeader("Events", "${events.size}") }
+        }
+        items(events, key = { "event-${it.event.eventId}" }) { summary ->
+            EventCard(
+                summary = summary,
+                groupName = summary.event.groupId?.let { groupNames[it] },
+                expanded = summary.event.eventId in expandedIds,
+                onToggleExpand = { onToggleExpand(summary.event.eventId) },
+                onRename = { onRename(summary) },
+                onMoveToGroup = { onMoveToGroup(summary) },
+                onDelete = { onDelete(summary) }
+            ) {
+                summary.records.forEach { record -> tile(record) }
+            }
+        }
+
+        if (unfiled.isNotEmpty()) {
+            item {
+                SectionHeader("Unfiled", "${unfiled.size}")
+            }
+            items(unfiled, key = { "unfiled-${it.metadata.recordId}" }) { record -> tile(record) }
+        }
+
+        if (events.isEmpty() && unfiled.isEmpty()) {
+            item {
+                Text(
+                    "No recordings yet. Once some arrive from a watch, group them into events here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/** The groups view: groups, then the events that belong to none of them. */
+@Composable
+private fun GroupsList(
+    groups: List<GroupSummary>,
+    ungrouped: List<EventSummary>,
+    expandedIds: Set<Long>,
+    onToggleExpand: (Long) -> Unit,
+    onCreateGroup: () -> Unit,
+    onRenameGroup: (GroupSummary) -> Unit,
+    onDeleteGroup: (GroupSummary) -> Unit,
+    onMoveEvent: (EventSummary) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            OutlinedButton(onClick = onCreateGroup, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Add, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("New group")
+            }
+        }
+
+        items(groups, key = { "group-${it.group.groupId}" }) { summary ->
+            GroupCard(
+                summary = summary,
+                expanded = summary.group.groupId in expandedIds,
+                onToggleExpand = { onToggleExpand(summary.group.groupId) },
+                onRename = { onRenameGroup(summary) },
+                onDelete = { onDeleteGroup(summary) }
+            ) {
+                summary.events.forEach { event ->
+                    NestedEventRow(event) { onMoveEvent(event) }
+                }
+            }
+        }
+
+        if (ungrouped.isNotEmpty()) {
+            item { SectionHeader("Not in a group", "${ungrouped.size}") }
+            items(ungrouped, key = { "ungrouped-${it.event.eventId}" }) { event ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Box(Modifier.padding(horizontal = 12.dp)) {
+                        NestedEventRow(event) { onMoveEvent(event) }
+                    }
+                }
+            }
+        }
+
+        if (groups.isEmpty() && ungrouped.isEmpty()) {
+            item {
+                Text(
+                    "Groups collect events that belong together — a tour, a season, a study. " +
+                        "Create some events first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, count: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            count,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

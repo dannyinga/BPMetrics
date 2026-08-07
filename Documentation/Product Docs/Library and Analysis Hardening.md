@@ -223,8 +223,10 @@ A segmented control below the top bar: **Recordings · Events · Groups**. Persi
 | Events | events, newest first | name, date, people (colour dots), duration, recording count |
 | Groups | groups, newest first | name, date range, event count, people across all events |
 
-Events mode gets an **Unfiled** section pinned at the top when any recording has no event —
-otherwise recordings quietly disappear from the view that is meant to organise them.
+Events mode gets an **Unfiled** section below the events when any recording has no event —
+otherwise recordings quietly disappear from the view that is meant to organise them. It sits below
+rather than above because the view is for the organised library, not the inbox; the suggestion
+cards at the top are what keep unfiled recordings from being missed.
 
 Existing filters and multi-select stay available in Recordings mode. In Events and Groups mode the
 selection actions collapse to the ones that make sense (analyse, export, delete).
@@ -287,7 +289,7 @@ Ends with events and groups creatable and browsable.
 |---|---|
 | **LAH-2.1** | View-mode switcher in `ui/library/LibraryScreen.kt`. Persist the selection via `SettingsRepository`. |
 | **LAH-2.2** | `EventCard` and `GroupCard` composables in a new `ui/library/EventComponents.kt`. Show people as colour dots using `PersonColors` — reuse `PersonSwatch` from `ui/components/PersonComponents.kt`. |
-| **LAH-2.3** | Events list, including the pinned **Unfiled** section. |
+| **LAH-2.3** | Events list, including the **Unfiled** section below the events. |
 | **LAH-2.4** | Groups list. |
 | **LAH-2.5** | Create / rename / delete dialogs for both. Follow the dialog pattern in `ui/people/PeopleScreen.kt`. |
 | **LAH-2.6** | "Add to event" in the Recordings multi-select menu, mirroring the bulk wearer flow in `LibraryScreen` + `BulkWearerDialog`. Offer existing events and "New event…". |

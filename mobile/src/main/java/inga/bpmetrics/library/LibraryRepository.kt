@@ -554,6 +554,15 @@ class LibraryRepository(
         settingsRepository.importPreferences(snapshots)
 
     /**
+     * Which library view the user last had open, read once rather than observed.
+     *
+     * The library owns this while it is on screen; settings only remembers it across launches.
+     */
+    suspend fun getLibraryViewMode(): String = settingsRepository.libraryViewMode.first()
+
+    suspend fun setLibraryViewMode(mode: String) = settingsRepository.setLibraryViewMode(mode)
+
+    /**
      * Flattens tags to `categoryId:categoryName:tagName`, one per line.
      *
      * Colons and newlines are stripped from the parts rather than escaped — these are display
