@@ -415,6 +415,13 @@ inherited tags, and the naming from Sprint 6.
 | **LAH-7.6** | **Unify the chart implementations.** There are two — `ui/graph/` for single records and `ui/analysis/ConcurrentChart.kt` for several — and only the second has zoom, scrub and axis labels. Extract one chart that draws N lanes, and let a single recording be the N=1 case. Prevents a third from appearing next time. |
 | **LAH-7.7** | Tidy `ui/graph/BpmGraphDetailScreen.kt`: it currently mixes chart rendering, range selection and export launching in 285 lines. Chart comes from LAH-7.6; export moves out per the Export Utility document. |
 
+> **LAH-7.7 is partly deferred, deliberately.** The record page now uses the shared chart, and the
+> dead `BpmGraphPreview` is gone — `ui/graph/` is reachable from exactly one screen. That screen's
+> remaining reason to exist is *drag-to-select a time range for export*, which the shared chart has
+> no notion of and which the Export Utility document moves out of this screen entirely. Building
+> range selection into `ConcurrentChart` now means building it twice. Finish LAH-7.7 when the export
+> wizard lands; at that point `ui/graph/` should be deletable outright.
+
 **Verify:** open a recording with a known dropout and confirm the gap is both drawn and stated;
 confirm the event breadcrumb navigates; confirm the same chart code renders one lane here and
 several on the event page.

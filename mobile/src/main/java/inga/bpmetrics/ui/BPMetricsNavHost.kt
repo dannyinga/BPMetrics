@@ -410,7 +410,9 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     onBack = { navController.popBackStack() },
                     onDeleted = { navController.popBackStack() },
                     onShowDetailedGraph = { navController.navigate("${Routes.GRAPH_DETAIL}/$recordId") },
-                    onManageTags = { navController.navigate(Routes.TAG_MANAGEMENT) }
+                    onManageTags = { navController.navigate(Routes.TAG_MANAGEMENT) },
+                    onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
+                    onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
                 )
             }
 

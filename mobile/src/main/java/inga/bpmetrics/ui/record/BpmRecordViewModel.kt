@@ -7,16 +7,31 @@ import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.EventEntity
+import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TagEntity
+import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
+import inga.bpmetrics.ui.analysis.EventAnalysis
+import inga.bpmetrics.ui.analysis.RecordAnalysis
+import inga.bpmetrics.ui.analysis.RecordInsights
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+/** Where a recording sits in the hierarchy, for the breadcrumb. Both null when it is unfiled. */
+data class RecordPlacement(
+    val event: EventEntity? = null,
+    val group: EventGroupEntity? = null
+)
 
 /**
  * ViewModel for managing the state and interactions of a single BPM record detail screen.
@@ -62,6 +77,61 @@ class BpmRecordViewModel(
     val effectiveTags: StateFlow<List<EffectiveTag>> = repository.effectiveTags
         .map { all -> all[recordId].orEmpty() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * This recording as a one-lane analysis, so the chart here is the chart on the event page.
+     *
+     * [EventAnalysis] at N=1 rather than a second chart implementation — same gap threshold, same
+     * active duration, same zone split, same drawing code. There used to be two charts and only
+     * one of them could zoom or scrub.
+     */
+    val analysis: StateFlow<ConcurrentAnalysis> = combine(
+        _record,
+        repository.getAllPeople(),
+        repository.getAllWatches()
+    ) { rec, people, watches ->
+        rec?.let { EventAnalysis.from(listOf(it), watches = watches, people = people) }
+            ?: ConcurrentAnalysis()
+    }
+        // Merging and sampling is real work for a long recording, and it has no business on the
+        // thread that draws the result.
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConcurrentAnalysis())
+
+    /** Which event and group this belongs to, for the breadcrumb. */
+    val placement: StateFlow<RecordPlacement> = combine(
+        _record,
+        repository.getAllEvents(),
+        repository.getAllEventGroups()
+    ) { rec, events, groups ->
+        val event = rec?.metadata?.eventId?.let { id -> events.firstOrNull { it.eventId == id } }
+        RecordPlacement(
+            event = event,
+            group = event?.groupId?.let { id -> groups.firstOrNull { it.groupId == id } }
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecordPlacement())
+
+    /**
+     * What this recording says about itself, and how it compares to that person's others.
+     *
+     * The comparison needs the rest of the library, which is why it lives here rather than on the
+     * record: "their third highest" is not a property of one recording.
+     */
+    val insights: StateFlow<RecordInsights> = combine(
+        _record,
+        analysis,
+        repository.records
+    ) { rec, current, library ->
+        if (rec == null) return@combine RecordInsights()
+        val theirs = rec.metadata.personId?.let { personId ->
+            library.filter {
+                it.metadata.personId == personId && it.metadata.recordId != rec.metadata.recordId
+            }
+        }.orEmpty()
+        RecordAnalysis.from(current.series.firstOrNull(), rec, theirs)
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecordInsights())
 
     init {
         loadRecord()

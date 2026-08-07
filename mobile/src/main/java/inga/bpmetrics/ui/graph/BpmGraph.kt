@@ -40,63 +40,6 @@ import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
 import kotlin.math.abs
 
-/**
- * A non-interactive preview of the heart rate graph.
- * Clicking this should navigate to the detailed graph view.
- * 
- * Styled as a clickable card to indicate to the user that they can tap for more details.
- */
-@Composable
-fun BpmGraphPreview(
-    record: BpmRecord,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    if (record.dataPoints.isEmpty() || record.maxDataPoint == null || record.minDataPoint == null) return
-
-    val state = rememberGraphState(totalDuration = record.metadata.durationMs)
-
-    OutlinedCard(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
-        shape = MaterialTheme.shapes.medium
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            GraphRenderer(
-                record = record,
-                state = state,
-                modifier = Modifier.height(230.dp), // Reduced height to ensure footer fits in constrained parents
-                isInteractive = false
-            )
-            
-            Spacer(Modifier.height(16.dp))
-            
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = Icons.Default.OpenInFull,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = "Graph Details & Export",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
-    }
-}
 
 /**
  * The full interactive BPM Graph feature. 
