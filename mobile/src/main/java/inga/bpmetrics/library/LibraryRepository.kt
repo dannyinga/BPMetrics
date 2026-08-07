@@ -9,6 +9,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -1001,6 +1003,54 @@ class LibraryRepository(
      */
     suspend fun removeTagFromRecord(recordId: Long, tagId: Long) {
         tagDao.untagRecord(recordId, tagId)
+    }
+
+    // --- Tags on events and groups ---
+    //
+    // A tag applied here reaches every recording underneath, resolved on read. Nothing is written
+    // onto the recordings: see §2.5 of the product doc, and [EffectiveTagsResolver].
+
+    suspend fun addTagToEvent(eventId: Long, tagId: Long) =
+        tagDao.insertEventTagCrossRef(EventTagCrossRef(eventId, tagId))
+
+    suspend fun removeTagFromEvent(eventId: Long, tagId: Long) = tagDao.untagEvent(eventId, tagId)
+
+    fun getTagsForEvent(eventId: Long): Flow<List<TagEntity>> = tagDao.getTagsForEventFlow(eventId)
+
+    suspend fun addTagToGroup(groupId: Long, tagId: Long) =
+        tagDao.insertGroupTagCrossRef(EventGroupTagCrossRef(groupId, tagId))
+
+    suspend fun removeTagFromGroup(groupId: Long, tagId: Long) = tagDao.untagGroup(groupId, tagId)
+
+    fun getTagsForGroup(groupId: Long): Flow<List<TagEntity>> = tagDao.getTagsForGroupFlow(groupId)
+
+    /** Every event's tags, indexed by event. Live, so applying one anywhere updates every reader. */
+    val allEventTags: Flow<Map<Long, List<TagEntity>>> =
+        tagDao.getAllEventTagsFlow().map { EffectiveTagsResolver.index(it) }
+
+    /** Every group's tags, indexed by group. */
+    val allGroupTags: Flow<Map<Long, List<TagEntity>>> =
+        tagDao.getAllGroupTagsFlow().map { EffectiveTagsResolver.index(it) }
+
+    /**
+     * Effective tags for every recording in the library, keyed by record id.
+     *
+     * One query per level rather than one per recording. Resolving per row would issue three
+     * queries for every visible tile while scrolling, to answer a question that is the same for
+     * every recording in an event.
+     */
+    val effectiveTags: Flow<Map<Long, List<EffectiveTag>>> = combine(
+        records,
+        tagDao.getAllEventTagsFlow(),
+        tagDao.getAllGroupTagsFlow(),
+        eventDao.getAllEventsFlow()
+    ) { library, eventTags, groupTags, events ->
+        EffectiveTagsResolver.resolveAll(
+            records = library,
+            eventTags = EffectiveTagsResolver.index(eventTags),
+            groupTags = EffectiveTagsResolver.index(groupTags),
+            groupIdByEvent = events.associate { it.eventId to it.groupId }
+        )
     }
 
     /**

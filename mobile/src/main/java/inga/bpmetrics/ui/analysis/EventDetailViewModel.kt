@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.EffectiveTagsResolver
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.LibraryRepository
@@ -14,6 +16,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -88,6 +91,47 @@ class EventDetailViewModel(
         // screen it is meant to draw.
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EventDetailState())
+
+    /**
+     * Tags applied to this event, and the ones it inherits from its group.
+     *
+     * A group tag is shown here for the same reason it is shown on a recording: it applies, and
+     * hiding it would leave someone wondering why their filter matched. It is not removable here.
+     */
+    val tags: StateFlow<List<EffectiveTag>> = combine(
+        repository.getTagsForEvent(eventId),
+        eventFlow,
+        // Observed rather than read once, so tagging the group refreshes this page rather than
+        // waiting for something else to reload it.
+        repository.allGroupTags
+    ) { own, event, groupTags ->
+        EffectiveTagsResolver.resolve(
+            // The event's own tags are direct *here*: this is the level they were applied at. The
+            // same resolver, asked from one rung down the hierarchy.
+            directTags = own,
+            eventId = null,
+            groupId = event?.groupId,
+            eventTags = emptyMap(),
+            groupTags = groupTags
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun setTags(tagIds: List<Long>) {
+        viewModelScope.launch {
+            val current = repository.getTagsForEvent(eventId).first().map { it.tagId }
+            current.filterNot { it in tagIds }.forEach { repository.removeTagFromEvent(eventId, it) }
+            tagIds.filterNot { it in current }.forEach { repository.addTagToEvent(eventId, it) }
+        }
+    }
+
+    fun removeTag(tagId: Long) {
+        viewModelScope.launch { repository.removeTagFromEvent(eventId, tagId) }
+    }
+
+    val categories = repository.getAllCategories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun tagsInCategory(categoryId: Long) = repository.getTagsByCategory(categoryId)
 
     fun rename(name: String) {
         viewModelScope.launch { repository.renameEvent(eventId, name) }

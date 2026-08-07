@@ -12,6 +12,7 @@ import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.EventGroupEntity
+import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EventSuggestion
 import inga.bpmetrics.library.suggestEvents
 import inga.bpmetrics.library.TimeSpan
@@ -58,10 +59,20 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     val filteredRecords: Flow<List<BpmRecord>> = combine(
         repository.records,
-        _filterState
-    ) { records, filter ->
-        applyFilter(records, filter)
+        _filterState,
+        repository.effectiveTags
+    ) { records, filter, tags ->
+        applyFilter(records, filter, tags)
     }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
+
+    /**
+     * Each recording's tags including what it inherits, for the tiles to show provenance.
+     *
+     * Resolved once here rather than per tile: the answer is the same for every recording in an
+     * event, and asking per row would be three queries a tile while scrolling.
+     */
+    val effectiveTags: StateFlow<Map<Long, List<EffectiveTag>>> = repository.effectiveTags
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
      * Everyone who wears a watch, for the filter to offer and for the library to colour by.
@@ -430,9 +441,36 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
          * Lives here rather than inside [filteredRecords] because Analysis filters independently:
          * choosing what to analyse must not disturb what the Library is showing.
          */
-        fun applyFilter(records: List<BpmRecord>, filter: FilterState): List<BpmRecord> {
-            // Build a mapping of Tag ID -> Category ID from all available records
-            val tagToCategoryMap = records.flatMap { it.tags }.associate { it.tagId to it.parentCategoryId }
+        /**
+         * @param effectiveTags Each recording's tags including the ones inherited from its event
+         *   and group, keyed by record id. Empty means fall back to the recording's own tags,
+         *   which is correct for callers that have not resolved inheritance.
+         */
+        fun applyFilter(
+            records: List<BpmRecord>,
+            filter: FilterState,
+            effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap()
+        ): List<BpmRecord> {
+            // Tag ids resolved through the hierarchy, so filtering by a group's tag returns every
+            // recording underneath it — the point of §2.5. Falls back to the recording's own tags
+            // where inheritance has not been resolved.
+            fun tagIdsFor(record: BpmRecord): Set<Long> =
+                effectiveTags[record.metadata.recordId]
+                    ?.map { it.tag.tagId }
+                    ?.toSet()
+                    ?: record.tags.map { it.tagId }.toSet()
+
+            // Category comes from the tags in play, which now include inherited ones — a tag that
+            // only ever appears via a group would otherwise have no category and be skipped,
+            // silently matching everything.
+            val tagToCategoryMap = buildMap {
+                records.forEach { record ->
+                    record.tags.forEach { put(it.tagId, it.parentCategoryId) }
+                    effectiveTags[record.metadata.recordId]?.forEach {
+                        put(it.tag.tagId, it.tag.parentCategoryId)
+                    }
+                }
+            }
 
             return records.filter { record ->
                 // 1. Date Filter
@@ -446,7 +484,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                         .mapNotNull { tagId -> tagToCategoryMap[tagId]?.let { catId -> catId to tagId } }
                         .groupBy({ it.first }, { it.second })
 
-                    val recordTagIds = record.tags.map { it.tagId }.toSet()
+                    val recordTagIds = tagIdsFor(record)
 
                     selectedTagsByCategory.all { (_, selectedTagIds) ->
                         selectedTagIds.any { it in recordTagIds }

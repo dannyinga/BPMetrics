@@ -4,7 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.TagEntity
+import inga.bpmetrics.library.TagSource
 import inga.bpmetrics.ui.library.LibraryViewModel
 import kotlinx.coroutines.flow.*
 
@@ -58,6 +62,16 @@ class AnalysisViewModel(
     fun isolatePerson(personId: Long?) {
         _isolatedPersonId.value = if (personId == _isolatedPersonId.value) null else personId
     }
+
+    /**
+     * Tag editing, wired only for a group scope.
+     *
+     * A filter is not a thing that can carry a tag — it describes a selection, not an occasion —
+     * and a saved analysis is frozen. Null on both, and the screen omits the section rather than
+     * offering an action that would have nowhere to write.
+     */
+    var tagging: ScopeTagging? = null
+        internal set
 
     /** True when viewing a stored analysis, which cannot be re-saved or re-filtered. */
     val isFrozen: Boolean = savedAnalysisId != null
@@ -317,8 +331,10 @@ class AnalysisViewModel(
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
                 AnalysisViewModel(
-                    analysisRecords = repository.analysisRecords { library ->
-                        LibraryViewModel.applyFilter(library, filter)
+                    // Tags passed to the filter as well as to the reduction, so filtering by a
+                    // group's tag selects everything underneath it — §2.5.
+                    analysisRecords = repository.analysisRecords { library, tags ->
+                        LibraryViewModel.applyFilter(library, filter, tags)
                     },
                     savedAnalysisId = null,
                     scope = flowOf(AnalysisScope.Filter(filter))
@@ -343,19 +359,27 @@ class AnalysisViewModel(
                 // its active duration, which walks every data point it has — doing that for the
                 // whole library to keep a dozen recordings would be most of the work wasted.
                 val records = combine(
-                    repository.records,
-                    repository.getAllCategories(),
-                    repository.getAllWatches(),
-                    repository.getAllPeople(),
-                    repository.getAllEvents()
-                ) { library, categories, watches, people, events ->
-                    val ids = events.filter { it.groupId == groupId }.map { it.eventId }.toSet()
+                    combine(
+                        repository.records,
+                        repository.getAllCategories(),
+                        repository.getAllWatches(),
+                        repository.getAllPeople(),
+                        repository.getAllEvents(),
+                        ::Library
+                    ),
+                    repository.effectiveTags
+                ) { library, tags ->
+                    val ids = library.events
+                        .filter { it.groupId == groupId }
+                        .map { it.eventId }
+                        .toSet()
                     AnalysisRecord.from(
-                        library.filter { it.metadata.eventId in ids },
-                        categories,
-                        watches,
-                        people,
-                        events
+                        library.records.filter { it.metadata.eventId in ids },
+                        library.categories,
+                        library.watches,
+                        library.people,
+                        library.events,
+                        tags
                     )
                 }
 
@@ -374,7 +398,7 @@ class AnalysisViewModel(
                     analysisRecords = records,
                     savedAnalysisId = null,
                     scope = scope
-                ) as T
+                ).apply { tagging = ScopeTagging(repository, groupId) } as T
             }
         }
 
@@ -410,19 +434,63 @@ class AnalysisViewModel(
  * @param select Which of the library's records to include.
  */
 private fun LibraryRepository.analysisRecords(
-    select: (List<inga.bpmetrics.library.BpmRecord>) -> List<inga.bpmetrics.library.BpmRecord>
+    select: (
+        List<inga.bpmetrics.library.BpmRecord>,
+        Map<Long, List<inga.bpmetrics.library.EffectiveTag>>
+    ) -> List<inga.bpmetrics.library.BpmRecord>
 ): Flow<List<AnalysisRecord>> = combine(
-    records,
-    getAllCategories(),
-    getAllWatches(),
-    getAllPeople(),
-    getAllEvents()
-) { library, categories, watches, people, events ->
-    AnalysisRecord.from(select(library), categories, watches, people, events)
+    combine(records, getAllCategories(), getAllWatches(), getAllPeople(), getAllEvents(), ::Library),
+    effectiveTags
+) { library, tags ->
+    AnalysisRecord.from(
+        select(library.records, tags),
+        library.categories,
+        library.watches,
+        library.people,
+        library.events,
+        tags
+    )
 }
+
+/** The five tables an analysis reads, bundled so they can be combined with the resolved tags. */
+private data class Library(
+    val records: List<inga.bpmetrics.library.BpmRecord>,
+    val categories: List<inga.bpmetrics.library.CategoryEntity>,
+    val watches: List<inga.bpmetrics.library.WatchEntity>,
+    val people: List<inga.bpmetrics.library.PersonEntity>,
+    val events: List<inga.bpmetrics.library.EventEntity>
+)
 
 /** A tag category present in the analysed records. */
 data class AnalysisCategory(val categoryId: Long, val name: String)
+
+/**
+ * Reading and writing a group's tags, for the scopes where that means something.
+ *
+ * A group is the top of the hierarchy, so everything on it is direct and removable here — the
+ * resolver is not needed. Kept separate from [AnalysisViewModel] so the shared screen can simply
+ * ask whether tagging is available rather than knowing which scope it is showing.
+ */
+class ScopeTagging(
+    private val repository: LibraryRepository,
+    private val groupId: Long
+) {
+    val tags: Flow<List<EffectiveTag>> = repository.getTagsForGroup(groupId)
+        .map { list -> list.map { EffectiveTag(it, TagSource.DIRECT) } }
+
+    val categories: Flow<List<CategoryEntity>> = repository.getAllCategories()
+
+    fun tagsInCategory(categoryId: Long): Flow<List<TagEntity>> =
+        repository.getTagsByCategory(categoryId)
+
+    suspend fun setTags(tagIds: List<Long>) {
+        val current = repository.getTagsForGroup(groupId).first().map { it.tagId }
+        current.filterNot { it in tagIds }.forEach { repository.removeTagFromGroup(groupId, it) }
+        tagIds.filterNot { it in current }.forEach { repository.addTagToGroup(groupId, it) }
+    }
+
+    suspend fun removeTag(tagId: Long) = repository.removeTagFromGroup(groupId, tagId)
+}
 
 /**
  * Data representing the UI state of the Analysis Screen.

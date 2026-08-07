@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapVert
@@ -42,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +54,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import inga.bpmetrics.ui.Routes
+import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.tags.EffectiveTagChip
+import inga.bpmetrics.ui.tags.TagSelectionDialog
+import kotlinx.coroutines.launch
 import inga.bpmetrics.ui.theme.BpmAvg
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
@@ -158,7 +164,7 @@ fun AnalysisScreen(
             )
 
             when (section) {
-                AnalysisSection.SUMMARY -> SummarySection(uiState)
+                AnalysisSection.SUMMARY -> SummarySection(uiState, viewModel.tagging)
 
                 AnalysisSection.COMPARE -> CompareSection(
                     uiState = uiState,
@@ -310,14 +316,74 @@ private fun SectionBar(
 }
 
 @Composable
-private fun SummarySection(uiState: AnalysisUiState) {
+private fun SummarySection(uiState: AnalysisUiState, tagging: ScopeTagging?) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { ScopeHeader(uiState) }
+        // Only a group can carry tags. A filter describes a selection rather than an occasion, and
+        // a saved analysis is frozen — offering the action there would have nowhere to write.
+        tagging?.let { item { GroupTags(it) } }
         item { Highlights(uiState) }
+    }
+}
+
+/**
+ * Tags on the group, which reach every event in it and every recording in those.
+ *
+ * This is the level a festival name belongs at: applied once, true of everything underneath, and
+ * correct again the moment an event is moved out — because nothing was written downward.
+ */
+@Composable
+private fun GroupTags(tagging: ScopeTagging) {
+    val tags by tagging.tags.collectAsStateWithLifecycle(initialValue = emptyList())
+    val scope = rememberCoroutineScope()
+    var showDialog by remember { mutableStateOf(false) }
+
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Tags", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            IconButton(onClick = { showDialog = true }) {
+                Icon(Icons.Default.Add, contentDescription = "Tag this group")
+            }
+        }
+        if (tags.isEmpty()) {
+            Text(
+                "A tag here applies to every event in this group, and every recording in them.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                tags.forEach { effective ->
+                    EffectiveTagChip(
+                        effective = effective,
+                        onRemove = { scope.launch { tagging.removeTag(effective.tag.tagId) } }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showDialog) {
+        val categories by tagging.categories.collectAsStateWithLifecycle(initialValue = emptyList())
+        TagSelectionDialog(
+            onDismiss = { showDialog = false },
+            onSave = { selected ->
+                scope.launch { tagging.setTags(selected) }
+                showDialog = false
+            },
+            onManageTags = { showDialog = false },
+            categories = categories,
+            getTagsByCategoryFlow = { tagging.tagsInCategory(it) },
+            initialSelectedTagIds = tags.map { it.tag.tagId }
+        )
     }
 }
 

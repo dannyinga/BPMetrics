@@ -1,6 +1,7 @@
 package inga.bpmetrics.ui.record
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +45,7 @@ import inga.bpmetrics.export.CsvExporter
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.graph.BpmGraphPreview
+import inga.bpmetrics.ui.tags.EffectiveTagChip
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.components.FlowRow
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
@@ -74,6 +76,7 @@ fun BpmRecordScreen(
     val record by viewModel.record.collectAsState()
     val watchName by viewModel.watchName.collectAsState()
     val people by viewModel.people.collectAsState()
+    val effectiveTags by viewModel.effectiveTags.collectAsState()
     var isEditing by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -242,13 +245,19 @@ fun BpmRecordScreen(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        if (r.tags.isEmpty()) {
+                        if (effectiveTags.isEmpty()) {
                             Text("No tags", style = MaterialTheme.typography.bodySmall)
                         } else {
-                            r.tags.forEach { tag ->
-                                SuggestionChip(
-                                    onClick = { viewModel.removeTag(tag.tagId) },
-                                    label = { Text(tag.name) }
+                            // Inherited tags are drawn outlined and cannot be removed here — the
+                            // recording is under an event or group that carries them, so removing
+                            // one from this recording alone could not mean anything.
+                            effectiveTags.forEach { effective ->
+                                EffectiveTagChip(
+                                    effective = effective,
+                                    onRemove = { viewModel.removeTag(effective.tag.tagId) },
+                                    onExplain = { message ->
+                                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                    }
                                 )
                             }
                         }

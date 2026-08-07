@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -50,11 +52,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
+import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.tags.EffectiveTagChip
+import inga.bpmetrics.ui.tags.TagSelectionDialog
+import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.ui.library.NameDialog
 import inga.bpmetrics.ui.library.formatSpan
 import inga.bpmetrics.library.TimeSpan
@@ -84,11 +91,14 @@ fun EventAnalysisScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val isolatedId by viewModel.isolatedId.collectAsStateWithLifecycle()
+    val tags by viewModel.tags.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     var scrubbedMs by remember { mutableStateOf<Long?>(null) }
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+    var showTagDialog by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<BpmRecord?>(null) }
 
     val analysis = state.analysis
@@ -163,6 +173,16 @@ fun EventAnalysisScreen(
                     personCount = analysis.series.size,
                     groupName = state.group?.displayName,
                     onOpenGroup = { state.group?.let { onOpenGroup(it.groupId) } }
+                )
+            }
+
+            // Tagging here reaches every recording in the event without writing to any of them.
+            item {
+                EventTags(
+                    tags = tags,
+                    onAdd = { showTagDialog = true },
+                    onRemove = { viewModel.removeTag(it) },
+                    onExplain = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
                 )
             }
 
@@ -309,6 +329,23 @@ fun EventAnalysisScreen(
         }
     }
 
+    if (showTagDialog) {
+        val categories by viewModel.categories.collectAsStateWithLifecycle()
+        TagSelectionDialog(
+            onDismiss = { showTagDialog = false },
+            onSave = { selected ->
+                viewModel.setTags(selected)
+                showTagDialog = false
+            },
+            onManageTags = { showTagDialog = false },
+            categories = categories,
+            getTagsByCategoryFlow = { viewModel.tagsInCategory(it) },
+            // Only what was applied *here* is pre-selected. Offering an inherited tag as though it
+            // could be unticked would promise something this dialog cannot do.
+            initialSelectedTagIds = tags.filterNot { it.isInherited }.map { it.tag.tagId }
+        )
+    }
+
     if (showRename) {
         NameDialog(
             title = "Rename event",
@@ -358,6 +395,50 @@ fun EventAnalysisScreen(
  *
  * The breadcrumb is a link rather than a label because per §2.4 no analysis screen is a dead end.
  */
+/**
+ * Tags on the event, plus the ones it inherits from its group.
+ *
+ * Applying one here reaches every recording underneath without writing to any of them, which is
+ * what makes moving a recording out immediately correct — see §2.5.
+ */
+@Composable
+private fun EventTags(
+    tags: List<EffectiveTag>,
+    onAdd: () -> Unit,
+    onRemove: (Long) -> Unit,
+    onExplain: (String) -> Unit
+) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Tags", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onAdd) {
+                Icon(Icons.Default.Add, contentDescription = "Tag this event")
+            }
+        }
+        if (tags.isEmpty()) {
+            Text(
+                "A tag here applies to every recording in this event.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                tags.forEach { effective ->
+                    EffectiveTagChip(
+                        effective = effective,
+                        onRemove = { onRemove(effective.tag.tagId) },
+                        onExplain = onExplain
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun EventHeader(
     span: TimeSpan?,

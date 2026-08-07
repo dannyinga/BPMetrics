@@ -159,10 +159,12 @@ interface BpmRecordDao {
         PersonEntity::class,
         EventEntity::class,
         EventGroupEntity::class,
+        EventTagCrossRef::class,
+        EventGroupTagCrossRef::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -179,7 +181,7 @@ abstract class LibraryDatabase : RoomDatabase() {
         private const val DB_NAME = "bpmetrics_db"
 
         /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 12
+        private const val CURRENT_VERSION = 13
 
         private const val MAX_BACKUPS = 5
 
@@ -626,6 +628,55 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from 12 to 13: tags can be applied to events and to groups.
+         *
+         * Two join tables mirroring `record_tag_cross_ref`, with the same cascade behaviour —
+         * deleting an event or a tag removes the link, never the other side.
+         *
+         * Nothing is backfilled and nothing is copied downward. A recording's inherited tags are
+         * worked out on read by [EffectiveTagsResolver]; see §2.5 of the product doc for why
+         * writing them onto the recordings would be simpler and wrong.
+         *
+         * SQL copied verbatim from the generated `13.json`. Room compares the live schema against
+         * what it expects column by column, and a hand-written `DEFAULT` that the entity does not
+         * declare produces a database that installs fine and refuses to open on upgrade — a
+         * mistake this project has made three times.
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `event_tag_cross_ref` (" +
+                        "`eventId` INTEGER NOT NULL, `tagId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`eventId`, `tagId`), " +
+                        "FOREIGN KEY(`eventId`) REFERENCES `events`(`eventId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                        "FOREIGN KEY(`tagId`) REFERENCES `tags`(`tagId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_event_tag_cross_ref_tagId` " +
+                        "ON `event_tag_cross_ref` (`tagId`)"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `event_group_tag_cross_ref` (" +
+                        "`groupId` INTEGER NOT NULL, `tagId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`groupId`, `tagId`), " +
+                        "FOREIGN KEY(`groupId`) REFERENCES `event_groups`(`groupId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                        "FOREIGN KEY(`tagId`) REFERENCES `tags`(`tagId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_event_group_tag_cross_ref_tagId` " +
+                        "ON `event_group_tag_cross_ref` (`tagId`)"
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_12_13: Events and groups can carry tags")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -681,7 +732,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_8_9,
                         MIGRATION_9_10,
                         MIGRATION_10_11,
-                        MIGRATION_11_12
+                        MIGRATION_11_12,
+                        MIGRATION_12_13
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

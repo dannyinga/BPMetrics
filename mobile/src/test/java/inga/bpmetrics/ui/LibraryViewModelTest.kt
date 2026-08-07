@@ -2,6 +2,7 @@ package inga.bpmetrics.ui
 
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordEntity
+import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.ui.library.LibraryViewModel
 import io.mockk.every
@@ -22,10 +23,15 @@ class LibraryViewModelTest {
 
     private val repository = mockk<LibraryRepository>(relaxed = true)
     private val recordsFlow = MutableStateFlow<List<BpmRecord>>(emptyList())
+    private val effectiveTagsFlow = MutableStateFlow<Map<Long, List<EffectiveTag>>>(emptyMap())
 
     @Before
     fun setup() {
         every { repository.records } returns recordsFlow
+        // Filtering combines records with resolved tags, so a relaxed mock that never emits here
+        // leaves the whole list flow waiting for a first value and the test times out rather
+        // than failing with anything that says why.
+        every { repository.effectiveTags } returns effectiveTagsFlow
     }
 
     @Test

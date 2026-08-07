@@ -4,6 +4,7 @@ import inga.bpmetrics.library.AnalysisSnapshotRecord
 import inga.bpmetrics.library.AnalysisSnapshotTag
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
@@ -67,7 +68,15 @@ data class AnalysisRecord(
             watchNames: Map<String, String> = emptyMap(),
             peopleNames: Map<Long, String> = emptyMap(),
             personColors: Map<Long, Int> = emptyMap(),
-            eventNames: Map<Long, String> = emptyMap()
+            eventNames: Map<Long, String> = emptyMap(),
+            /**
+             * Tags including what the recording inherits from its event and group.
+             *
+             * Passing them means a festival tagged once at the group level becomes a category
+             * everything in it can be ranked by — see §2.5. Null falls back to the recording's own
+             * tags, which is what a snapshot has.
+             */
+            effectiveTags: List<EffectiveTag>? = null
         ): AnalysisRecord =
             AnalysisRecord(
                 recordId = record.metadata.recordId,
@@ -79,7 +88,7 @@ data class AnalysisRecord(
                 // Computed now rather than stored, because it depends on the data points and a
                 // saved analysis will not have them.
                 activeDurationMs = record.calculateActiveDurationMs(),
-                tags = record.tags.map { tag ->
+                tags = (effectiveTags?.map { it.tag } ?: record.tags).map { tag ->
                     AnalysisTag(
                         tagName = tag.name,
                         categoryId = tag.parentCategoryId,
@@ -106,7 +115,8 @@ data class AnalysisRecord(
             categories: List<CategoryEntity>,
             watches: List<WatchEntity> = emptyList(),
             people: List<PersonEntity> = emptyList(),
-            events: List<EventEntity> = emptyList()
+            events: List<EventEntity> = emptyList(),
+            effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap()
         ): List<AnalysisRecord> {
             val names = categories.associate { it.categoryId to it.name }
             val watchNames = watches.associate { it.watchId to it.displayName }
@@ -114,7 +124,10 @@ data class AnalysisRecord(
             val personColors = people.associate { it.personId to it.colorArgb }
             val eventNames = events.associate { it.eventId to it.displayName }
             return records.map {
-                from(it, names, watchNames, peopleNames, personColors, eventNames)
+                from(
+                    it, names, watchNames, peopleNames, personColors, eventNames,
+                    effectiveTags[it.metadata.recordId]
+                )
             }
         }
 

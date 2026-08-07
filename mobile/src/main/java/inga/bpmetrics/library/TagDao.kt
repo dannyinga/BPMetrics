@@ -65,6 +65,58 @@ interface TagDao {
     """)
     fun getTagsForRecordFlow(recordId: Long): Flow<List<TagEntity>>
 
+    // --- Event and group tags ---
+    //
+    // Applied at the level they are true at and resolved downward on read by
+    // [EffectiveTagsResolver]. Nothing here writes a tag onto a recording; see §2.5 of the
+    // Library and Analysis Hardening doc for why copying them down is simpler and wrong.
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertEventTagCrossRef(crossRef: EventTagCrossRef)
+
+    @Query("DELETE FROM event_tag_cross_ref WHERE eventId = :eventId AND tagId = :tagId")
+    suspend fun untagEvent(eventId: Long, tagId: Long)
+
+    @Query("""
+        SELECT tags.* FROM tags
+        INNER JOIN event_tag_cross_ref ON tags.tagId = event_tag_cross_ref.tagId
+        WHERE event_tag_cross_ref.eventId = :eventId
+    """)
+    fun getTagsForEventFlow(eventId: Long): Flow<List<TagEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertGroupTagCrossRef(crossRef: EventGroupTagCrossRef)
+
+    @Query("DELETE FROM event_group_tag_cross_ref WHERE groupId = :groupId AND tagId = :tagId")
+    suspend fun untagGroup(groupId: Long, tagId: Long)
+
+    @Query("""
+        SELECT tags.* FROM tags
+        INNER JOIN event_group_tag_cross_ref ON tags.tagId = event_group_tag_cross_ref.tagId
+        WHERE event_group_tag_cross_ref.groupId = :groupId
+    """)
+    fun getTagsForGroupFlow(groupId: Long): Flow<List<TagEntity>>
+
+    /**
+     * Every event's tags at once, for resolving a whole library in one query.
+     *
+     * The library screen needs effective tags for every visible recording. Asking per recording
+     * would be one query per row while scrolling; this is one query for the lot, joined in memory.
+     */
+    @Query("""
+        SELECT event_tag_cross_ref.eventId AS ownerId, tags.*
+        FROM tags
+        INNER JOIN event_tag_cross_ref ON tags.tagId = event_tag_cross_ref.tagId
+    """)
+    fun getAllEventTagsFlow(): Flow<List<OwnedTag>>
+
+    @Query("""
+        SELECT event_group_tag_cross_ref.groupId AS ownerId, tags.*
+        FROM tags
+        INNER JOIN event_group_tag_cross_ref ON tags.tagId = event_group_tag_cross_ref.tagId
+    """)
+    fun getAllGroupTagsFlow(): Flow<List<OwnedTag>>
+
     // --- Group Analysis Operations ---
 
     /**

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TagEntity
@@ -49,6 +50,17 @@ class BpmRecordViewModel(
 
     /** Everyone available to attribute this recording to. */
     val people: StateFlow<List<PersonEntity>> = repository.getAllPeople()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * This recording's tags, including what it inherits from its event and group.
+     *
+     * Read from the library's resolved map rather than from `_record.tags`, which only knows about
+     * tags applied directly. Filing the recording into a tagged event has to change what is shown
+     * here without anything having been written to the recording — that is the point of §2.5.
+     */
+    val effectiveTags: StateFlow<List<EffectiveTag>> = repository.effectiveTags
+        .map { all -> all[recordId].orEmpty() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
