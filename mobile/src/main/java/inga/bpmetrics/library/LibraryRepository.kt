@@ -74,6 +74,8 @@ class LibraryRepository(
     private val tagDao = database.tagDao()
     private val watchDao = database.watchDao()
     private val personDao = database.personDao()
+    private val eventDao = database.eventDao()
+    private val eventGroupDao = database.eventGroupDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
 
     init {
@@ -378,6 +380,107 @@ class LibraryRepository(
         savedAnalysisDao.rename(analysisId, name.trim())
 
     suspend fun deleteSavedAnalysis(analysisId: Long) = savedAnalysisDao.deleteAnalysis(analysisId)
+
+    // --- Events and groups ---
+
+    fun getAllEvents(): Flow<List<EventEntity>> = eventDao.getAllEventsFlow()
+
+    fun getEventsForGroup(groupId: Long): Flow<List<EventEntity>> =
+        eventDao.getEventsForGroupFlow(groupId)
+
+    fun getUngroupedEvents(): Flow<List<EventEntity>> = eventDao.getUngroupedEventsFlow()
+
+    fun getRecordsForEvent(eventId: Long): Flow<List<BpmRecordEntity>> =
+        eventDao.getRecordsForEventFlow(eventId)
+
+    /** Recordings filed under no event. Pinned in the events view so nothing goes missing. */
+    fun getUnfiledRecords(): Flow<List<BpmRecordEntity>> = eventDao.getUnfiledRecordsFlow()
+
+    fun countUnfiledRecords(): Flow<Int> = eventDao.countUnfiledRecordsFlow()
+
+    suspend fun getEvent(eventId: Long): EventEntity? = eventDao.getEvent(eventId)
+
+    /** When an event happened, derived from its recordings. Null while it has none. */
+    suspend fun getEventSpan(eventId: Long): TimeSpan? = eventDao.getEventSpan(eventId)?.toSpan()
+
+    suspend fun countRecordsForEvent(eventId: Long): Int = eventDao.countRecordsForEvent(eventId)
+
+    suspend fun createEvent(name: String, groupId: Long? = null): Long {
+        val id = eventDao.insertEvent(
+            EventEntity(name = name.trim(), groupId = groupId, createdAt = System.currentTimeMillis())
+        )
+        Log.d(tag, "Created event '${name.trim()}' as $id")
+        return id
+    }
+
+    suspend fun renameEvent(eventId: Long, name: String) = eventDao.rename(eventId, name.trim())
+
+    suspend fun setEventNotes(eventId: Long, notes: String) = eventDao.updateNotes(eventId, notes)
+
+    suspend fun setEventGroup(eventId: Long, groupId: Long?) = eventDao.setGroup(eventId, groupId)
+
+    /**
+     * Removes an event and releases its recordings.
+     *
+     * Deleting the container must never delete the contents — those recordings are the only copy of
+     * something that happened, and the event is just a label someone put on them.
+     */
+    suspend fun deleteEvent(eventId: Long) {
+        eventDao.unfileRecordsForEvent(eventId)
+        eventDao.deleteEvent(eventId)
+        Log.d(tag, "Deleted event $eventId; its recordings are unfiled, not removed")
+    }
+
+    /**
+     * Files recordings under an event, or unfiles them when [eventId] is null.
+     *
+     * Chunked for the same reason as [assignPersonToRecords]: Room turns `IN (:ids)` into one bind
+     * variable per id and SQLite caps those at 999, which select-all reaches.
+     *
+     * @return how many recordings changed.
+     */
+    suspend fun assignRecordsToEvent(recordIds: Collection<Long>, eventId: Long?): Int {
+        if (recordIds.isEmpty()) return 0
+        val changed = recordIds.toList()
+            .chunked(SQL_VARIABLE_LIMIT)
+            .sumOf { chunk -> eventDao.assignRecordsToEvent(chunk, eventId) }
+        Log.d(tag, "Filed $changed recording(s) under event ${eventId ?: "nothing"}")
+        return changed
+    }
+
+    fun getAllEventGroups(): Flow<List<EventGroupEntity>> = eventGroupDao.getAllGroupsFlow()
+
+    suspend fun getEventGroup(groupId: Long): EventGroupEntity? = eventGroupDao.getGroup(groupId)
+
+    fun getRecordsForGroup(groupId: Long): Flow<List<BpmRecordEntity>> =
+        eventGroupDao.getRecordsForGroupFlow(groupId)
+
+    suspend fun getGroupSpan(groupId: Long): TimeSpan? = eventGroupDao.getGroupSpan(groupId)?.toSpan()
+
+    suspend fun countEventsForGroup(groupId: Long): Int = eventGroupDao.countEventsForGroup(groupId)
+
+    suspend fun countRecordsForGroup(groupId: Long): Int = eventGroupDao.countRecordsForGroup(groupId)
+
+    suspend fun createEventGroup(name: String): Long {
+        val id = eventGroupDao.insertGroup(
+            EventGroupEntity(name = name.trim(), createdAt = System.currentTimeMillis())
+        )
+        Log.d(tag, "Created group '${name.trim()}' as $id")
+        return id
+    }
+
+    suspend fun renameEventGroup(groupId: Long, name: String) =
+        eventGroupDao.rename(groupId, name.trim())
+
+    suspend fun setEventGroupNotes(groupId: Long, notes: String) =
+        eventGroupDao.updateNotes(groupId, notes)
+
+    /** Removes a group and releases its events. The events, and their recordings, survive. */
+    suspend fun deleteEventGroup(groupId: Long) {
+        eventGroupDao.ungroupEvents(groupId)
+        eventGroupDao.deleteGroup(groupId)
+        Log.d(tag, "Deleted group $groupId; its events are ungrouped, not removed")
+    }
 
     /** Every saved analysis with its frozen rows, for a backup to carry. */
     suspend fun getSavedAnalysesForBackup(): List<inga.bpmetrics.export.SavedAnalysisDto> =

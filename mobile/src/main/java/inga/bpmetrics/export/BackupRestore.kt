@@ -13,6 +13,8 @@ data class RestoreResult(
     val watchesCreated: Int = 0,
     val recordsImported: Int = 0,
     val recordsSkipped: Int = 0,
+    val eventsCreated: Int = 0,
+    val groupsCreated: Int = 0,
     val analysesRestored: Int = 0,
     val settingsRestored: Int = 0,
     val failure: String? = null
@@ -66,6 +68,26 @@ suspend fun restoreBackup(
             }
         }
 
+        // Groups before events before records, so each link exists before something needs it.
+        var groupsCreated = 0
+        val groupIdsByName = mutableMapOf<String, Long>()
+        backup.eventGroups.forEach { group ->
+            groupIdsByName[group.name] = repository.createEventGroup(group.name)
+            groupsCreated++
+        }
+
+        var eventsCreated = 0
+        val eventIdsByName = mutableMapOf<String, Long>()
+        backup.events.forEach { event ->
+            // Two events sharing a name merge, which is a fair reading of naming them the same.
+            if (eventIdsByName.containsKey(event.name)) return@forEach
+            eventIdsByName[event.name] = repository.createEvent(
+                name = event.name,
+                groupId = event.groupName?.let { groupIdsByName[it] }
+            )
+            eventsCreated++
+        }
+
         // Import records and remember where each one landed. Ids are reassigned on insert, so a
         // saved analysis pointing at record 42 has to be told which recording that is now — without
         // this it would point at whatever happens to be 42 in the new library, which is worse than
@@ -78,6 +100,15 @@ suspend fun restoreBackup(
             // arrived from a watch — same analysis, same person resolution, same auto-naming.
             val newId = repository.saveWatchRecordToLibrary(watchRecord)
             if (dto.recordId != 0L) idMap[dto.recordId] = newId
+
+            // Filed after saving rather than through the ingest path, which knows nothing about
+            // events — it exists to accept what a watch sends, and a watch has no idea what set it
+            // was at.
+            dto.eventName?.let { name ->
+                eventIdsByName[name]?.let { eventId ->
+                    repository.assignRecordsToEvent(listOf(newId), eventId)
+                }
+            }
             imported++
         }
 
@@ -102,6 +133,8 @@ suspend fun restoreBackup(
             watchesCreated = watchesCreated,
             recordsImported = imported,
             recordsSkipped = backup.records.size - imported,
+            eventsCreated = eventsCreated,
+            groupsCreated = groupsCreated,
             analysesRestored = analysesRestored,
             settingsRestored = settingsRestored
         )

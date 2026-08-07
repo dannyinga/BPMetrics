@@ -157,10 +157,12 @@ interface BpmRecordDao {
         RecordTagCrossRef::class,
         WatchEntity::class,
         PersonEntity::class,
+        EventEntity::class,
+        EventGroupEntity::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -168,6 +170,8 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun tagDao(): TagDao
     abstract fun watchDao(): WatchDao
     abstract fun personDao(): PersonDao
+    abstract fun eventDao(): EventDao
+    abstract fun eventGroupDao(): EventGroupDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
 
     companion object {
@@ -175,7 +179,7 @@ abstract class LibraryDatabase : RoomDatabase() {
         private const val DB_NAME = "bpmetrics_db"
 
         /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 11
+        private const val CURRENT_VERSION = 12
 
         private const val MAX_BACKUPS = 5
 
@@ -583,6 +587,45 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from schema version 11 to 12: events and event groups.
+         *
+         * The `CREATE TABLE` statements are copied verbatim from the generated `12.json`, which is
+         * the only reliable way to write one of these. Note `createdAt INTEGER NOT NULL` with **no
+         * `DEFAULT`**: the entity's `createdAt: Long = 0L` is a Kotlin constructor default, not a
+         * SQL one, and adding `DEFAULT 0` here produces a column Room rejects on every upgraded
+         * device while a fresh install works perfectly. That exact mistake has now been made three
+         * times in this project.
+         *
+         * Nothing is backfilled. Existing recordings start unfiled, which is the correct state —
+         * they were made before anyone said what they were part of.
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `event_groups` (" +
+                        "`groupId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`notes` TEXT NOT NULL DEFAULT '', " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `events` (" +
+                        "`eventId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`groupId` INTEGER DEFAULT NULL, " +
+                        "`notes` TEXT NOT NULL DEFAULT '', " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
+
+                if (!columnExists(db, "bpm_records", "eventId")) {
+                    db.execSQL("ALTER TABLE bpm_records ADD COLUMN eventId INTEGER DEFAULT NULL")
+                }
+
+                android.util.Log.i(TAG, "MIGRATION_11_12: Recordings can belong to events")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -637,7 +680,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_7_8,
                         MIGRATION_8_9,
                         MIGRATION_9_10,
-                        MIGRATION_10_11
+                        MIGRATION_10_11,
+                        MIGRATION_11_12
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

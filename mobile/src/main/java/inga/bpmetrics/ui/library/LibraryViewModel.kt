@@ -173,6 +173,8 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                     categories = categories,
                     savedAnalyses = repository.getSavedAnalysesForBackup(),
                     settings = repository.getSettingsForBackup()
+                    , events = repository.getAllEvents().first()
+                    , eventGroups = repository.getAllEventGroups().first()
                 )
             )
         }

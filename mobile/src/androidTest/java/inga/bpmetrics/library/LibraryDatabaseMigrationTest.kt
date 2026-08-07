@@ -39,7 +39,8 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_7_8,
             LibraryDatabase.MIGRATION_8_9,
             LibraryDatabase.MIGRATION_9_10,
-            LibraryDatabase.MIGRATION_10_11
+            LibraryDatabase.MIGRATION_10_11,
+            LibraryDatabase.MIGRATION_11_12
         )
     }
 
@@ -208,7 +209,7 @@ class LibraryDatabaseMigrationTest {
      * Running the whole chain is what a user upgrading from an older install actually experiences.
      */
     @Test
-    fun migrate5To11_runsTheWholeChain() {
+    fun migrate5To12_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 5).apply {
             execSQL(
                 """
@@ -221,7 +222,7 @@ class LibraryDatabaseMigrationTest {
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 12, true, *ALL_MIGRATIONS)
 
         db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -246,7 +247,7 @@ class LibraryDatabaseMigrationTest {
             "(4, 'Nobody', '', 4000, 4000, 5000, 1000, NULL, 70.0, NULL, 'Watch C', '')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 12, true, *ALL_MIGRATIONS)
 
         // One profile per distinct name — the two Kyle recordings share a person, not one each.
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
@@ -294,11 +295,51 @@ class LibraryDatabaseMigrationTest {
     fun migrate10To11_handlesALibraryWithNoWearers() {
         helper.createDatabase(TEST_DB, 5).close()
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 12, true, *ALL_MIGRATIONS)
 
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals(0, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * The check that catches the mistake this project keeps making.
+     *
+     * `runMigrationsAndValidate` compares the migrated schema against `12.json` column by column,
+     * including default values. An earlier attempt at this migration wrote
+     * `createdAt INTEGER NOT NULL DEFAULT 0` while the entity declares no SQL default — a database
+     * that opens perfectly on a fresh install and refuses to open for everyone upgrading.
+     */
+    @Test
+    fun migrate11To12_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 12, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Existing recordings arrive unfiled, which is the correct state — they were made before
+     * anyone said what they were part of.
+     */
+    @Test
+    fun migrate11To12_leavesExistingRecordingsUnfiled() {
+        seedVersion5With(
+            "(1, 'Before events existed', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
+        )
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 12, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT eventId FROM bpm_records WHERE recordId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue("an existing recording belongs to no event", cursor.isNull(0))
+        }
+        // The tables exist and start empty; nothing is invented on the user's behalf.
+        listOf("events", "event_groups").forEach { table ->
+            db.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("$table should start empty", 0, cursor.getInt(0))
+            }
         }
         db.close()
     }

@@ -10,6 +10,8 @@ import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
+import inga.bpmetrics.library.EventEntity
+import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
 import inga.bpmetrics.ui.settings.PreferenceSnapshot
@@ -41,19 +43,45 @@ data class LibraryBackup(
     val watches: List<WatchDto> = emptyList(),
     val records: List<BpmRecordJsonDto> = emptyList(),
     val savedAnalyses: List<SavedAnalysisDto> = emptyList(),
-    val settings: List<PreferenceSnapshot> = emptyList()
+    val settings: List<PreferenceSnapshot> = emptyList(),
+    val eventGroups: List<EventGroupDto> = emptyList(),
+    val events: List<EventDto> = emptyList()
 ) {
     companion object {
         /**
          * 1: records, data points, tags, people, watches.
          * 2: saved analyses and app settings, and a record's original id so analyses can be
          *    re-pointed at the right recordings after import reassigns them.
+         * 3: events and event groups.
          *
-         * Export presets are not here because they do not exist yet. When they do, this becomes 3.
+         * Added here the moment events existed, rather than once they had a screen. A backup that
+         * silently stops being complete is the failure this format keeps having to be rescued from.
+         *
+         * Export presets are still absent because they still do not exist.
          */
-        const val FORMAT_VERSION = 2
+        const val FORMAT_VERSION = 3
     }
 }
+
+/**
+ * An event, keyed by name rather than id.
+ *
+ * Ids are reassigned on import, so a record says which event it belonged to by *name* and the
+ * restore rebuilds the links. Two events sharing a name will merge on restore, which is a fair
+ * reading of what the user meant by naming them the same thing.
+ */
+data class EventDto(
+    val name: String,
+    val groupName: String? = null,
+    val notes: String = "",
+    val createdAt: Long = 0L
+)
+
+data class EventGroupDto(
+    val name: String,
+    val notes: String = "",
+    val createdAt: Long = 0L
+)
 
 /**
  * A saved analysis and the snapshot rows it froze.
@@ -115,6 +143,8 @@ data class BpmRecordJsonDto(
     val wearerName: String? = null,
     /** Which watch, by its stable identifier rather than its current name. */
     val watchId: String? = null,
+    /** Which event this was part of, by name — events are renumbered on import. */
+    val eventName: String? = null,
     val date: Long = 0L,
     val startTime: Long,
     val endTime: Long,
@@ -147,10 +177,28 @@ object JsonExporter {
         watches: List<WatchEntity> = emptyList(),
         categories: List<CategoryEntity> = emptyList(),
         savedAnalyses: List<SavedAnalysisDto> = emptyList(),
-        settings: List<PreferenceSnapshot> = emptyList()
+        settings: List<PreferenceSnapshot> = emptyList(),
+        events: List<EventEntity> = emptyList(),
+        eventGroups: List<EventGroupEntity> = emptyList()
     ): String {
         val categoryNames = categories.associate { it.categoryId to it.name }
         val peopleById = people.associateBy { it.personId }
+        val eventsById = events.associateBy { it.eventId }
+        val groupNames = eventGroups.associate { it.groupId to it.name }
+
+        // Only the events these recordings belong to, and only the groups those events sit in.
+        val usedEvents = records
+            .mapNotNull { it.metadata.eventId }
+            .distinct()
+            .mapNotNull { eventsById[it] }
+        val usedEventDtos = usedEvents.map { event ->
+            EventDto(event.name, event.groupId?.let { groupNames[it] }, event.notes, event.createdAt)
+        }
+        val usedGroupDtos = usedEvents
+            .mapNotNull { it.groupId }
+            .distinct()
+            .mapNotNull { id -> eventGroups.firstOrNull { it.groupId == id } }
+            .map { EventGroupDto(it.name, it.notes, it.createdAt) }
 
         val usedPeople = records
             .mapNotNull { it.metadata.personId }
@@ -173,6 +221,7 @@ object JsonExporter {
                 wearerName = record.metadata.personId?.let { peopleById[it]?.name }
                     ?: record.metadata.wearerName.takeIf { it.isNotBlank() },
                 watchId = record.metadata.watchId,
+                eventName = record.metadata.eventId?.let { eventsById[it]?.name },
                 date = record.metadata.date,
                 startTime = record.metadata.startTime,
                 endTime = record.metadata.endTime,
@@ -193,6 +242,8 @@ object JsonExporter {
                 records = dtos,
                 savedAnalyses = savedAnalyses,
                 settings = settings
+                , eventGroups = usedGroupDtos
+                , events = usedEventDtos
             )
         )
     }
