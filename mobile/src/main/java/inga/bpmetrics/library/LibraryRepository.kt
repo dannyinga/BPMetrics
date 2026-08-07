@@ -30,7 +30,16 @@ import java.util.Locale
  */
 class LibraryRepository(
     context: Context,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    /**
+     * The database to work against. Defaults to the real one, so no production call site changes.
+     *
+     * Injectable because [init] starts collecting from the DAOs immediately: a test that swapped
+     * the DAO fields by reflection afterwards would have its writes go to one database while
+     * [records] kept reading the collector wired up at construction — which is exactly what the
+     * instrumented tests were doing, silently, for as long as they existed.
+     */
+    private val database: LibraryDatabase = LibraryDatabase.getInstance(context)
 ) {
 
     // A flow that emits true when a record is being saved, and false otherwise.
@@ -49,7 +58,6 @@ class LibraryRepository(
 
     private val tag = "LibraryRepository"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val database = LibraryDatabase.getInstance(context)
     private val recordDao = database.bpmRecordDao()
     private val tagDao = database.tagDao()
     private val watchDao = database.watchDao()

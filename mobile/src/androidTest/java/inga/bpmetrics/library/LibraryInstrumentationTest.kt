@@ -34,34 +34,15 @@ class LibraryInstrumentationTest {
     fun createDb() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         db = Room.inMemoryDatabaseBuilder(context, LibraryDatabase::class.java).build()
-        
-        // We override the DB access in the repository for the test
-        repository = LibraryRepository(context, settingsRepository)
-            // Note: In a production test, you'd use a Testing-specific LibraryRepository 
-            // that accepts a Database instance via constructor.
-        
-        // Point every one of the repository's DAOs at the in-memory database.
-        //
-        // Listed together on purpose. Three of these used to be swapped and the rest left pointing
-        // at the real on-disk database, so a save that touched an un-swapped DAO silently wrote
-        // somewhere else — invisible until saving a record started consulting the people table and
-        // these tests began failing for no apparent reason.
-        //
-        // Any new DAO on LibraryRepository has to be added here too.
-        replaceField("database", db)
-        replaceField("recordDao", db.bpmRecordDao())
-        replaceField("tagDao", db.tagDao())
-        replaceField("watchDao", db.watchDao())
-        replaceField("personDao", db.personDao())
-        replaceField("savedAnalysisDao", db.savedAnalysisDao())
-    }
 
-    /** Overwrites one of the repository's private fields, which is how the test swaps in its own DB. */
-    private fun replaceField(name: String, value: Any) {
-        LibraryRepository::class.java.getDeclaredField(name).apply {
-            isAccessible = true
-            set(repository, value)
-        }
+        // Handed the database rather than having its fields swapped afterwards.
+        //
+        // The reflection this replaces could never have worked: the repository starts collecting
+        // from its DAOs in `init`, so by the time a test overwrote the fields, `records` was
+        // already wired to the real on-disk database. Writes went to the in-memory one and reads
+        // came from the real one, which is why these tests failed with a bare assertion and why
+        // they saw each other's data.
+        repository = LibraryRepository(context, settingsRepository, db)
     }
 
     @After
