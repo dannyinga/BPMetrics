@@ -4,12 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.library.LibraryRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -47,6 +49,19 @@ sealed interface ExportSource {
 }
 
 /**
+ * One clip and the curves that will go on it.
+ *
+ * The unit of a batch export. Selecting a group lists every clip filmed during any of its events;
+ * each ticked one becomes its own job, with its own overlay. "One export per event" cannot say
+ * that — an event is a concert, and during it you filmed six things.
+ */
+data class ClipSelection(
+    val clip: VideoExporter.VideoClip,
+    val recordIds: Set<Long>,
+    val selected: Boolean
+)
+
+/**
  * Drives the export utility.
  *
  * Holds the step and the source rather than the export settings themselves — those still live in
@@ -73,6 +88,14 @@ class ExportUtilityViewModel(
 
     private val _source = MutableStateFlow<ExportSource>(ExportSource.None)
     val source: StateFlow<ExportSource> = _source.asStateFlow()
+
+    /**
+     * A name the caller supplied, overriding whatever the source would be called.
+     *
+     * Declared here because [sourceLabel] reads it, and a property cannot be read before it is
+     * initialised.
+     */
+    private val labelOverride = MutableStateFlow<String?>(null)
 
     /**
      * The recordings the chosen source resolves to.
@@ -108,9 +131,10 @@ class ExportUtilityViewModel(
     val sourceLabel: StateFlow<String> = combine(
         _source,
         repository.getAllEvents(),
-        repository.getAllEventGroups()
-    ) { source, events, groups ->
-        when (source) {
+        repository.getAllEventGroups(),
+        labelOverride
+    ) { source, events, groups, override ->
+        override ?: when (source) {
             is ExportSource.None -> ""
             is ExportSource.Recordings ->
                 "${source.recordIds.size} recording${if (source.recordIds.size == 1) "" else "s"}"
@@ -123,6 +147,85 @@ class ExportUtilityViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
     private val savedAnalysisName = MutableStateFlow("")
+
+
+    // --- Step 2: which clips, and whose curves go on each ---
+
+    private val _clips = MutableStateFlow<List<ClipSelection>>(emptyList())
+    val clips: StateFlow<List<ClipSelection>> = _clips.asStateFlow()
+
+    private val _loadingClips = MutableStateFlow(false)
+    val loadingClips: StateFlow<Boolean> = _loadingClips.asStateFlow()
+
+    /**
+     * Finds the clips filmed while the source was being recorded.
+     *
+     * Called when step 2 is reached rather than when the source changes: it hits the MediaStore,
+     * and doing that on every tap in step 1 would query for sources the user is only browsing past.
+     */
+    fun loadClips(found: List<VideoExporter.VideoClip>) {
+        val sourceRecords = records.value
+        _clips.value = found.map { clip ->
+            ClipSelection(
+                clip = clip,
+                // Whoever was recording while *this clip* was filming. Defaulting to the event's
+                // whole cast would offer a curve for someone whose watch had already stopped.
+                recordIds = sourceRecords.filter { clip.overlaps(it) }
+                    .map { it.metadata.recordId }
+                    .toSet(),
+                // Ticked by default, because having found the clips the likely answer is "all of
+                // them" and unticking is cheaper than ticking six.
+                selected = true
+            )
+        }
+        _loadingClips.value = false
+    }
+
+    fun setLoadingClips() {
+        _loadingClips.value = true
+    }
+
+    fun toggleClip(uri: android.net.Uri) {
+        _clips.value = _clips.value.map {
+            if (it.clip.uri == uri) it.copy(selected = !it.selected) else it
+        }
+    }
+
+    /** Adds or removes one person's recording from a single clip's overlay. */
+    fun toggleRecordOnClip(uri: android.net.Uri, recordId: Long) {
+        _clips.value = _clips.value.map { selection ->
+            if (selection.clip.uri != uri) return@map selection
+            selection.copy(
+                recordIds = if (recordId in selection.recordIds) {
+                    selection.recordIds - recordId
+                } else {
+                    selection.recordIds + recordId
+                }
+            )
+        }
+    }
+
+    /**
+     * The jobs this export will queue.
+     *
+     * One per ticked clip, each carrying its own clip and its own recordings — the unit is the
+     * video, not the event. A clip with nobody on it is dropped: it would render the background
+     * back out with an empty graph over it.
+     */
+    val pendingJobs: StateFlow<List<ClipSelection>> = _clips
+        .map { list -> list.filter { it.selected && it.recordIds.isNotEmpty() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * True when the source has no video behind it at all.
+     *
+     * Not an error. `VideoExporter` renders against a solid background when no overlay is given,
+     * which is the right output for a session nobody filmed — so the step says so and moves on
+     * rather than blocking.
+     */
+    val hasNoClips: StateFlow<Boolean> = combine(_clips, _loadingClips) { clips, loading ->
+        !loading && clips.isEmpty()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /** Whether the current step's question has been answered well enough to move on. */
     val canAdvance: StateFlow<Boolean> = combine(_step, records) { step, records ->
@@ -161,11 +264,24 @@ class ExportUtilityViewModel(
      * and making them walk through step 1 to say something they have just said would be a
      * regression on a flow that is currently two taps.
      */
-    fun startAt(source: ExportSource, step: ExportStep = ExportStep.LOOK) {
+    fun startAt(
+        source: ExportSource,
+        step: ExportStep = ExportStep.LOOK,
+        /**
+         * What to call it, when the caller knows better than the source does.
+         *
+         * A saved analysis exported from its own screen arrives as a set of recordings, which
+         * would otherwise be labelled "4 recordings" and lose the name that was the point of
+         * saving it.
+         */
+        label: String? = null
+    ) {
         setSource(source)
+        labelOverride.value = label
         _step.value = step
         if (step.ordinal > _furthestStep.value.ordinal) _furthestStep.value = step
     }
+
 
     private fun loadSavedAnalysis(analysisId: Long) {
         viewModelScope.launch {

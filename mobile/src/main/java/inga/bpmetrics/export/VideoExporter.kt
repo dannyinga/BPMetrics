@@ -451,6 +451,29 @@ object VideoExporter {
     /**
      * Queries the MediaStore for videos that overlap with the heart rate record.
      */
+    /**
+     * A video on the phone that was filmed while something was being recorded.
+     *
+     * An event is a concert; during it you might have filmed six clips. Each is its own export
+     * with its own overlay, so a clip has to carry when it was filmed and for how long — "one
+     * export per event" cannot express that, and a bare uri cannot either.
+     */
+    data class VideoClip(
+        val uri: Uri,
+        val startedAtMs: Long,
+        val durationMs: Long,
+        val displayName: String
+    ) {
+        val endedAtMs: Long get() = startedAtMs + durationMs
+
+        /** Whether a recording was running at any point while this was filming. */
+        fun overlaps(record: BpmRecord): Boolean {
+            val recordStart = record.metadata.startTime
+            val recordEnd = recordStart + record.metadata.durationMs
+            return recordStart <= endedAtMs && recordEnd >= startedAtMs
+        }
+    }
+
     fun getOverlappingVideos(context: Context, record: BpmRecord): List<Uri> =
         getOverlappingVideos(context, listOf(record))
 
@@ -460,16 +483,28 @@ object VideoExporter {
      * A multi-record export spans from the earliest session to the latest, so a video worth
      * suggesting may overlap only one of them — searching a single record's window would miss it.
      */
-    fun getOverlappingVideos(context: Context, records: List<BpmRecord>): List<Uri> {
+    fun getOverlappingVideos(context: Context, records: List<BpmRecord>): List<Uri> =
+        getOverlappingClips(context, records).map { it.uri }
+
+    /**
+     * The same query, keeping what it already reads.
+     *
+     * The projection has always asked for `DATE_TAKEN` and `DURATION` and then thrown both away,
+     * returning bare uris. Per-clip work needs them: which people to offer on a clip depends on who
+     * was recording during *that clip's* few minutes, not during the whole event, and a clip filmed
+     * after someone's watch stopped must not offer their curve.
+     */
+    fun getOverlappingClips(context: Context, records: List<BpmRecord>): List<VideoClip> {
         if (records.isEmpty()) return emptyList()
 
-        val uris = mutableListOf<Uri>()
+        val clips = mutableListOf<VideoClip>()
         val recStart = records.minOf { it.metadata.startTime }
         val recEnd = records.maxOf { it.metadata.startTime + it.metadata.durationMs }
         val projection = arrayOf(
             android.provider.MediaStore.Video.Media._ID,
             android.provider.MediaStore.Video.Media.DATE_TAKEN,
-            android.provider.MediaStore.Video.Media.DURATION
+            android.provider.MediaStore.Video.Media.DURATION,
+            android.provider.MediaStore.Video.Media.DISPLAY_NAME
         )
         val selection = "${android.provider.MediaStore.Video.Media.DATE_TAKEN} <= ? AND ${android.provider.MediaStore.Video.Media.DATE_TAKEN} >= ?"
         val selectionArgs = arrayOf((recEnd + 60000).toString(), (recStart - 60000).toString())
@@ -480,12 +515,27 @@ object VideoExporter {
                 "${android.provider.MediaStore.Video.Media.DATE_TAKEN} DESC"
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media._ID)
+                val takenCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DATE_TAKEN)
+                val durationCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DURATION)
+                val nameCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DISPLAY_NAME)
                 while (cursor.moveToNext()) {
-                    uris.add(android.content.ContentUris.withAppendedId(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cursor.getLong(idCol)))
+                    clips.add(
+                        VideoClip(
+                            uri = android.content.ContentUris.withAppendedId(
+                                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                                cursor.getLong(idCol)
+                            ),
+                            // DATE_TAKEN is when recording started, so it lines up with a heart
+                            // rate session's own start without adjustment.
+                            startedAtMs = cursor.getLong(takenCol),
+                            durationMs = cursor.getLong(durationCol),
+                            displayName = cursor.getString(nameCol).orEmpty()
+                        )
+                    )
                 }
             }
         } catch (e: Exception) { Log.e(TAG, "Error querying overlapping videos", e) }
-        return uris
+        return clips
     }
 
     fun hasVideoPermissions(context: Context): Boolean {

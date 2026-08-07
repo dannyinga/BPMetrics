@@ -30,6 +30,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +40,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import inga.bpmetrics.BPMetricsApp
+import inga.bpmetrics.export.BpmExportService
+import inga.bpmetrics.export.VideoExporter
+import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The export utility: four steps, each answering one question.
@@ -61,6 +72,37 @@ fun ExportUtilityScreen(
     val canAdvance by viewModel.canAdvance.collectAsStateWithLifecycle()
     val sourceLabel by viewModel.sourceLabel.collectAsStateWithLifecycle()
     val records by viewModel.records.collectAsStateWithLifecycle()
+    val source by viewModel.source.collectAsStateWithLifecycle()
+    val clips by viewModel.clips.collectAsStateWithLifecycle()
+    val loadingClips by viewModel.loadingClips.collectAsStateWithLifecycle()
+    val hasNoClips by viewModel.hasNoClips.collectAsStateWithLifecycle()
+    val pendingJobs by viewModel.pendingJobs.collectAsStateWithLifecycle()
+    var showSettings by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val repository = remember(context) {
+        (context.applicationContext as BPMetricsApp).libraryRepository
+    }
+    val events by remember { repository.getAllEvents() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val groups by remember { repository.getAllEventGroups() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val people by remember { repository.getAllPeople() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val peopleById = remember(people) { people.associateBy { it.personId } }
+    val allRecords by repository.records.collectAsStateWithLifecycle()
+
+    // Clips are looked up when step 2 is reached, not when the source changes. This hits the
+    // MediaStore, and querying on every tap in step 1 would search for sources the user is only
+    // browsing past.
+    LaunchedEffect(step, records) {
+        if (step != ExportStep.CONTENTS || records.isEmpty()) return@LaunchedEffect
+        viewModel.setLoadingClips()
+        val found = withContext(Dispatchers.IO) {
+            VideoExporter.getOverlappingClips(context, records)
+        }
+        viewModel.loadClips(found)
+    }
 
     // Back walks the steps rather than leaving, which is what a staged flow implies. Leaving from
     // step 1 is the drawer's job.
@@ -120,28 +162,145 @@ fun ExportUtilityScreen(
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (step) {
-                ExportStep.SOURCE -> StepPlaceholder(
-                    step,
-                    "Pick recordings, an event, a group, or a saved analysis. This decides which " +
-                        "video clips are on offer."
+                ExportStep.SOURCE -> SourceStep(
+                    events = events,
+                    groups = groups,
+                    recordings = allRecords,
+                    peopleById = peopleById,
+                    selected = source,
+                    onSelect = { viewModel.setSource(it) }
                 )
 
-                ExportStep.CONTENTS -> StepPlaceholder(
-                    step,
-                    "Every clip overlapping the source, with whoever was recording while it was " +
-                        "filming. Each ticked clip becomes its own export."
+                ExportStep.CONTENTS -> ContentsStep(
+                    clips = clips,
+                    records = records,
+                    peopleById = peopleById,
+                    loading = loadingClips,
+                    hasNoClips = hasNoClips,
+                    onToggleClip = { viewModel.toggleClip(it) },
+                    onToggleRecord = { uri, id -> viewModel.toggleRecordOnClip(uri, id) }
                 )
 
-                ExportStep.LOOK -> StepPlaceholder(
-                    step,
-                    "Canvas, graph placement, background and overlay — with a preview you can " +
-                        "scrub to any frame."
+                ExportStep.LOOK -> LookStep(
+                    records = records,
+                    jobCount = pendingJobs.size,
+                    onConfigure = { showSettings = true }
                 )
 
                 // Already built, already good. Folded in here rather than kept as a separate
                 // drawer entry, because the queue is where an export ends up and nowhere else.
                 ExportStep.MAKE -> RenderQueueContent()
             }
+        }
+    }
+
+    // The settings still come from the existing dialog rather than living in step 3 — see the
+    // EXP-1.4 note. It stays the single place a VideoExportConfig is built, so batching cannot
+    // drift from what a one-off export produces.
+    if (showSettings && records.isNotEmpty()) {
+        VideoExportDialog(
+            record = records.first(),
+            records = records,
+            graphTitle = sourceLabel.takeIf { it.isNotBlank() },
+            onDismiss = { showSettings = false },
+            onExport = { config, _ ->
+                queueOneJobPerClip(context, config, pendingJobs, records, sourceLabel)
+                showSettings = false
+                viewModel.next()
+            }
+        )
+    }
+}
+
+/**
+ * Turns one set of settings into one job per ticked clip.
+ *
+ * The video is the unit: each job carries its own clip and only the recordings that were running
+ * while that clip was filming. The appearance is shared, which is the whole point of configuring
+ * once and exporting six — a preset in everything but name, until Sprint 3 gives it one.
+ *
+ * With no clips at all, a single job still goes out. `VideoExporter` renders against a solid
+ * background when no overlay is given, and a session nobody filmed is still worth exporting.
+ */
+private fun queueOneJobPerClip(
+    context: android.content.Context,
+    config: VideoExporter.VideoExportConfig,
+    jobs: List<ClipSelection>,
+    allRecords: List<inga.bpmetrics.library.BpmRecord>,
+    label: String
+) {
+    val name = label.ifBlank { "Export" }
+
+    if (jobs.isEmpty()) {
+        // The config is passed through untouched, overlay and all. Entering at step 3 from an
+        // existing entry point skips clip selection entirely, and the dialog's own video picker is
+        // then the only thing that chose an overlay — overriding it here would silently throw away
+        // the video the user just picked.
+        BpmExportService.startExport(
+            context,
+            allRecords.first().metadata.recordId,
+            name,
+            config.copy(records = allRecords),
+            null
+        )
+        return
+    }
+
+    jobs.forEach { job ->
+        val forThisClip = allRecords.filter { it.metadata.recordId in job.recordIds }
+        if (forThisClip.isEmpty()) return@forEach
+
+        BpmExportService.startExport(
+            context,
+            forThisClip.first().metadata.recordId,
+            // Named by clip time, so a queue of six is readable rather than six identical rows.
+            "$name · ${getTimeString(job.clip.startedAtMs)}",
+            config.copy(
+                overlayVideoUri = job.clip.uri,
+                records = forThisClip
+            ),
+            null
+        )
+    }
+}
+
+/**
+ * Step 3 for now: a summary and a way into the existing settings dialog.
+ *
+ * The sections, the preview and the presets land in Sprints 3 and 4. What matters here is that the
+ * flow reaches a real export — the batching is done, and it is the settings that are still to move.
+ */
+@Composable
+private fun LookStep(
+    records: List<inga.bpmetrics.library.BpmRecord>,
+    jobCount: Int,
+    onConfigure: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            when {
+                records.isEmpty() -> "Nothing to export"
+                jobCount == 0 -> "1 export, on a plain background"
+                jobCount == 1 -> "1 export"
+                else -> "$jobCount exports, one per clip"
+            },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Canvas, graph placement, background and overlay. Settings apply to every export in " +
+                "this batch.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(20.dp))
+        Button(onClick = onConfigure, enabled = records.isNotEmpty()) {
+            Text(if (jobCount > 1) "Configure and queue $jobCount" else "Configure and queue")
         }
     }
 }
