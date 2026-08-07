@@ -40,18 +40,28 @@ class LibraryInstrumentationTest {
             // Note: In a production test, you'd use a Testing-specific LibraryRepository 
             // that accepts a Database instance via constructor.
         
-        // Manual setup of the repository internal state to use our in-memory DB
-        val repoField = LibraryRepository::class.java.getDeclaredField("database")
-        repoField.isAccessible = true
-        repoField.set(repository, db)
-        
-        val recordDaoField = LibraryRepository::class.java.getDeclaredField("recordDao")
-        recordDaoField.isAccessible = true
-        recordDaoField.set(repository, db.bpmRecordDao())
-        
-        val tagDaoField = LibraryRepository::class.java.getDeclaredField("tagDao")
-        tagDaoField.isAccessible = true
-        tagDaoField.set(repository, db.tagDao())
+        // Point every one of the repository's DAOs at the in-memory database.
+        //
+        // Listed together on purpose. Three of these used to be swapped and the rest left pointing
+        // at the real on-disk database, so a save that touched an un-swapped DAO silently wrote
+        // somewhere else — invisible until saving a record started consulting the people table and
+        // these tests began failing for no apparent reason.
+        //
+        // Any new DAO on LibraryRepository has to be added here too.
+        replaceField("database", db)
+        replaceField("recordDao", db.bpmRecordDao())
+        replaceField("tagDao", db.tagDao())
+        replaceField("watchDao", db.watchDao())
+        replaceField("personDao", db.personDao())
+        replaceField("savedAnalysisDao", db.savedAnalysisDao())
+    }
+
+    /** Overwrites one of the repository's private fields, which is how the test swaps in its own DB. */
+    private fun replaceField(name: String, value: Any) {
+        LibraryRepository::class.java.getDeclaredField(name).apply {
+            isAccessible = true
+            set(repository, value)
+        }
     }
 
     @After

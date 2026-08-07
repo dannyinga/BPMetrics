@@ -40,21 +40,21 @@ class DataClientListenerTest {
         unmockkAll()
     }
 
+    /**
+     * The sweep itself moved to [DataClientProcessor] so the manifest-registered service could run
+     * it too — a record that arrives while the app is closed is exactly the case that needs it. So
+     * this now checks that the listener *asks for* a sweep, rather than reaching into the data
+     * layer itself; who reads the data layer is the processor's business.
+     */
     @Test
     fun testOnStartAddsListenerAndSweeps() = runBlocking {
         val mockOwner = mockk<LifecycleOwner>()
-        val mockTask = mockk<Task<DataItemBuffer>>()
-        val mockBuffer = mockk<DataItemBuffer>(relaxed = true)
-        
-        every { mockDataClient.dataItems } returns mockTask
-        coEvery { mockTask.await() } returns mockBuffer
-        every { mockBuffer.iterator() } returns mutableListOf<DataItem>().iterator()
+        coEvery { mockProcessor.sweepExistingRecords() } returns Unit
 
         listener.onStart(mockOwner)
 
         verify { mockDataClient.addListener(listener) }
-        coVerify { mockDataClient.dataItems }
-        verify { mockBuffer.release() }
+        coVerify { mockProcessor.sweepExistingRecords() }
     }
 
     @Test

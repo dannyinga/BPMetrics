@@ -81,7 +81,7 @@ class DataClientProcessorTest {
 
         processor.processDataItem(mockItem)
 
-        coVerify { mockRepository.saveWatchRecordToLibrary(any()) }
+        coVerify { mockRepository.saveWatchRecordToLibrary(any(), any(), any(), any()) }
         coVerify { mockDataClient.deleteDataItems(uri) }
     }
 
@@ -101,7 +101,7 @@ class DataClientProcessorTest {
         processor.processDataItem(mockItem)
 
         // Deletion and Repository should only have been called once
-        coVerify(exactly = 1) { mockRepository.saveWatchRecordToLibrary(any()) }
+        coVerify(exactly = 1) { mockRepository.saveWatchRecordToLibrary(any(), any(), any(), any()) }
         coVerify(exactly = 1) { mockDataClient.deleteDataItems(uri) }
     }
 
@@ -113,7 +113,7 @@ class DataClientProcessorTest {
 
         processor.processDataItem(mockItem)
 
-        coVerify(exactly = 0) { mockRepository.saveWatchRecordToLibrary(any()) }
+        coVerify(exactly = 0) { mockRepository.saveWatchRecordToLibrary(any(), any(), any(), any()) }
     }
 
     @Test
@@ -131,6 +131,6 @@ class DataClientProcessorTest {
 
         processor.processDataItem(mockItem)
 
-        coVerify(exactly = 0) { mockRepository.saveWatchRecordToLibrary(any()) }
+        coVerify(exactly = 0) { mockRepository.saveWatchRecordToLibrary(any(), any(), any(), any()) }
     }
 }
