@@ -91,6 +91,18 @@ class SettingsRepository(context: Context) {
 
         /** Whether the old per-screen export defaults have been folded into a preset. */
         val EXPORT_DEFAULTS_MIGRATED = booleanPreferencesKey("export_defaults_migrated")
+
+        /**
+         * Which revision of the shipped preset list this install has been offered.
+         *
+         * Seeding only runs against an empty table, so every install that already has presets
+         * would never see a built-in added later. Held as a revision rather than by comparing
+         * names, because a name check cannot tell "never had it" from "deleted it on purpose" —
+         * and resurrecting a preset someone deleted on every launch makes it undeletable.
+         */
+        val BUILT_IN_PRESET_REVISION = androidx.datastore.preferences.core.intPreferencesKey(
+            "built_in_preset_revision"
+        )
     }
 
     /**
@@ -362,6 +374,14 @@ class SettingsRepository(context: Context) {
 
     suspend fun markExportDefaultsMigrated() {
         dataStore.edit { it[PreferencesKeys.EXPORT_DEFAULTS_MIGRATED] = true }
+    }
+
+    /** The newest revision of the shipped preset list this install has been offered. */
+    suspend fun builtInPresetRevision(): Int =
+        dataStore.data.first()[PreferencesKeys.BUILT_IN_PRESET_REVISION] ?: 0
+
+    suspend fun setBuiltInPresetRevision(revision: Int) {
+        dataStore.edit { it[PreferencesKeys.BUILT_IN_PRESET_REVISION] = revision }
     }
 
     companion object {

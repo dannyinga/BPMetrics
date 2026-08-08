@@ -76,7 +76,26 @@ data class ExportPreset(
      * phone that filmed, not of one clip.
      */
     val syncOffsetMs: Long = 0L,
-    val timeZoneId: String = java.time.ZoneId.systemDefault().id
+    val timeZoneId: String = java.time.ZoneId.systemDefault().id,
+
+    // Identity
+    /**
+     * Whether to sign the export.
+     *
+     * Off, and staying off through development: an unfinished app putting its name on someone's
+     * footage is asking them to publish a version of the mark that is about to change. It exists
+     * now so the renderers, the preset editor and the preview all learn about it together, rather
+     * than being retrofitted later against three surfaces that have moved on.
+     */
+    val showWordmark: Boolean = false,
+    val wordmarkCorner: WordmarkCorner = WordmarkCorner.BOTTOM_RIGHT,
+    /**
+     * How present the mark is, 0..100.
+     *
+     * Defaulted well below full. A credit, not a watermark — the footage and the curve are the
+     * subject, and a mark competing with them is one someone will crop out.
+     */
+    val wordmarkOpacity: Int = 55
 ) {
     fun toJson(): String = BpmGson.instance.toJson(this)
 
@@ -138,7 +157,11 @@ data class ExportPreset(
             graphLeft = if (degenerate) shipped.graphLeft else graphLeft.coerceIn(0f, 1f),
             graphTop = if (degenerate) shipped.graphTop else graphTop.coerceIn(0f, 1f),
             graphRight = if (degenerate) shipped.graphRight else graphRight.coerceIn(0f, 1f),
-            graphBottom = if (degenerate) shipped.graphBottom else graphBottom.coerceIn(0f, 1f)
+            graphBottom = if (degenerate) shipped.graphBottom else graphBottom.coerceIn(0f, 1f),
+            // Gson leaves an absent enum as null, and the type says it cannot be — every preset
+            // written before the wordmark existed arrives that way.
+            wordmarkCorner = wordmarkCorner ?: shipped.wordmarkCorner,
+            wordmarkOpacity = wordmarkOpacity.coerceIn(0, 100)
         )
     }
 
@@ -166,6 +189,9 @@ data class ExportPreset(
                 headerXPercent = headerXPercent,
                 futureOpacity = futureOpacity,
                 timeZoneId = timeZoneId,
+                showWordmark = showWordmark,
+                wordmarkCorner = wordmarkCorner,
+                wordmarkOpacity = wordmarkOpacity,
                 // Always clock-aligned. A recording happened at a particular time, and placing it
                 // at an arbitrary point in a video was never right — it only ever looked right when
                 // the recording happened to start when filming did.
@@ -192,11 +218,12 @@ data class ExportPreset(
          * silently ignoring fields it does not understand would produce an export that looks
          * nothing like the one it was shared from.
          *
-         * 2 covers graph framing, the sync offset and match-source frame rate, and the removal of
+         * 3 adds the wordmark. 2 covers graph framing, the sync offset and match-source frame rate,
+         * and the removal of
          * the axes toggle. Files written at 1 still load: the check is one-directional, so raising
          * this only stops *older* builds reading what they cannot render.
          */
-        const val CURRENT_VERSION = 2
+        const val CURRENT_VERSION = 3
 
         /**
          * Graph framings that shipped as the default in some earlier build.
@@ -265,14 +292,63 @@ data class ExportPreset(
         /**
          * The presets the app ships with.
          *
-         * Three shapes rather than three looks: landscape, story and square. What a preset is
-         * mostly for is the canvas, and having to type 1080×1920 to post something is the friction
-         * this removes.
+         * The first three are shapes rather than looks: landscape, story and square. What a preset
+         * is mostly for is the canvas, and having to type 1080×1920 to post something is the
+         * friction this removes.
+         *
+         * The last two are looks, and are the first presets here that differ in anything but size.
+         * They exist because the shape presets all draw the same full panel in the same place, and
+         * someone posting a clip has no starting point that is *quiet* — the whole apparatus of
+         * grid, panel and header on top of footage that is the actual subject. Both are still
+         * built from the app's own colours; what changes is how much of the frame they claim.
          */
+        /**
+         * Bumped whenever a preset is added to [BUILT_IN].
+         *
+         * An install that already has presets never runs the seed, so without this the two looks
+         * added here would only ever reach a fresh install. Compared against what the install has
+         * been offered, and offered exactly once — see `LibraryRepository.offerNewBuiltInPresets`.
+         */
+        const val BUILT_IN_REVISION = 2
+
         val BUILT_IN: List<ExportPreset> = listOf(
             ExportPreset(name = "Landscape 1080p", width = 1920, height = 1080),
             ExportPreset(name = "Story 9:16", width = 1080, height = 1920),
-            ExportPreset(name = "Square 1:1", width = 1080, height = 1080)
+            ExportPreset(name = "Square 1:1", width = 1080, height = 1080),
+
+            // A story with the graph as a caption rather than a panel. No background behind the
+            // curve at all, no grid, and a band across the lower third — above where a platform
+            // puts its own caption and buttons, which is why the framing is not simply centred.
+            ExportPreset(
+                name = "Story · minimal",
+                width = 1080,
+                height = 1920,
+                backgroundOpacity = 0,
+                showGrid = false,
+                showTitle = false,
+                graphLeft = 0.08f,
+                graphTop = 0.60f,
+                graphRight = 0.92f,
+                graphBottom = 0.78f,
+                // A shorter window than the 30s default. On a nine-second clip a half-minute
+                // window is nearly flat; ten seconds gives the curve something to do.
+                windowSizeMs = 10_000L
+            ),
+
+            // The landscape counterpart: a wide, low band along the bottom, panel kept but dimmed
+            // so the curve reads over bright footage without boxing off a quarter of the frame.
+            ExportPreset(
+                name = "Landscape · lower third",
+                width = 1920,
+                height = 1080,
+                backgroundOpacity = 35,
+                showGrid = false,
+                graphLeft = 0.06f,
+                graphTop = 0.68f,
+                graphRight = 0.94f,
+                graphBottom = 0.93f,
+                windowSizeMs = 20_000L
+            )
         )
     }
 }

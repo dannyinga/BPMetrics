@@ -232,3 +232,21 @@ object ExportUtils {
         return dateString.toLongOrNull()
     }
 }
+
+/**
+ * Clears a paint back to the state every export draw starts from.
+ *
+ * `Paint.reset()` drops the font feature settings along with everything else, and these renderers
+ * reset the same paint object twenty-odd times per frame. Numbers drawn without tabular figures use
+ * proportional digits, which are different widths — so the live stats pill visibly changed size as
+ * a reading crossed from 99 to 100, and the clock twitched on every tick. On a still that is merely
+ * untidy; on thirty frames a second it is the most distracting thing on screen.
+ *
+ * Tabular figures only change the advance width of digits, so applying this to every export paint
+ * rather than picking out the numeric ones costs nothing and cannot be forgotten at a new draw site.
+ */
+fun android.graphics.Paint.resetForExport() {
+    reset()
+    isAntiAlias = true
+    fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals
+}

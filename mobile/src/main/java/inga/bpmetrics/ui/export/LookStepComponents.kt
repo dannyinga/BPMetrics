@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
 import inga.bpmetrics.export.ExportPreset
 import inga.bpmetrics.export.ImageExporter
+import inga.bpmetrics.export.WordmarkCorner
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.ui.components.ExpandableSection
@@ -692,6 +693,41 @@ fun LookSections(
                         OutlinedButton(onClick = onClearOverlay) { Text("Remove") }
                     }
                 }
+            }
+        }
+
+        // Above the video-only cut-off: a still is signed the same way a video is.
+        SettingsSection("Signature", "A small credit linking the export back to the app") {
+            SwitchRow("Show wordmark", preset.showWordmark) {
+                onChange(preset.copy(showWordmark = it))
+            }
+            if (preset.showWordmark) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Corner",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(6.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    WordmarkCorner.entries.forEach { corner ->
+                        FilterChip(
+                            selected = preset.wordmarkCorner == corner,
+                            onClick = { onChange(preset.copy(wordmarkCorner = corner)) },
+                            label = { Text(corner.label) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                SliderRow(
+                    label = "Wordmark opacity",
+                    value = preset.wordmarkOpacity / 100f,
+                    onValue = { onChange(preset.copy(wordmarkOpacity = (it * 100).toInt())) }
+                )
             }
         }
 

@@ -825,7 +825,10 @@ class ExportUtilityViewModel(
             labelsColor = preset.labelsColor,
             gridColor = preset.gridColor,
             backgroundOpacity = preset.backgroundOpacity,
-            timeZoneId = preset.timeZoneId
+            timeZoneId = preset.timeZoneId,
+            showWordmark = preset.showWordmark,
+            wordmarkCorner = preset.wordmarkCorner,
+            wordmarkOpacity = preset.wordmarkOpacity
         )
     }
 

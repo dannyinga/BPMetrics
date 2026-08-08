@@ -167,11 +167,14 @@ object VideoExporter {
             isInputImage = inputMimeType?.startsWith("image/") == true ||
                     mediaUri.path?.lowercase()?.let { it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".png") } == true
         } else {
-            val blackBitmap = createBitmap(128, 128, Bitmap.Config.ARGB_8888).apply {
-                eraseColor(android.graphics.Color.BLACK)
+            // What a video with no footage behind it is drawn on. The app's surface rather than
+            // black, so an export with nothing filmed looks like it came from this app instead of
+            // from a default.
+            val backdrop = createBitmap(128, 128, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(inga.bpmetrics.ui.theme.BpmPalette.SURFACE)
             }
-            val tempImageFile = File(context.cacheDir, "black_bg.png")
-            FileOutputStream(tempImageFile).use { blackBitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            val tempImageFile = File(context.cacheDir, "export_backdrop.png")
+            FileOutputStream(tempImageFile).use { backdrop.compress(Bitmap.CompressFormat.PNG, 100, it) }
             mediaUri = Uri.fromFile(tempImageFile)
             inputMimeType = MimeTypes.IMAGE_PNG
             isInputImage = true

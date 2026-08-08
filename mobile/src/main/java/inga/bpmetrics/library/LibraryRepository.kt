@@ -108,8 +108,9 @@ class LibraryRepository(
         scope.launch {
             try {
                 seedBuiltInPresetsIfEmpty()
-                // After seeding, because a fresh install writes the current framing and has
-                // nothing to bring forward — this is for the installs that already had presets.
+                // Both of these are for installs that already had presets; a fresh install was
+                // just seeded with the current list at the current framing and needs neither.
+                offerNewBuiltInPresets()
                 refreshSupersededPresetFraming()
                 rescueLegacyExportDefaults()
             } catch (e: Exception) {
@@ -692,6 +693,50 @@ class LibraryRepository(
             )
         }
         Log.i(tag, "Seeded ${inga.bpmetrics.export.ExportPreset.BUILT_IN.size} built-in presets")
+        settingsRepository.setBuiltInPresetRevision(
+            inga.bpmetrics.export.ExportPreset.BUILT_IN_REVISION
+        )
+    }
+
+    /**
+     * Gives an existing install the built-in presets added since it was seeded.
+     *
+     * Seeding runs only against an empty table, so every install that already has presets would
+     * otherwise never see a new one — the shipped list would be a fresh-install-only feature.
+     *
+     * Offered once each, tracked by revision rather than by checking which names are missing. A
+     * name check cannot tell "never had this one" from "deleted it on purpose", so it would put a
+     * deleted preset back on every launch and leave no way to be rid of it.
+     */
+    suspend fun offerNewBuiltInPresets() {
+        val shipped = inga.bpmetrics.export.ExportPreset.BUILT_IN_REVISION
+        val seen = settingsRepository.builtInPresetRevision()
+        if (seen >= shipped) return
+
+        // Nothing at all yet: that is the seeder's job, and it sets the revision itself.
+        if (presetDao.count() == 0) return
+
+        val existing = presetDao.getAll().map { it.name }.toSet()
+        var added = 0
+        inga.bpmetrics.export.ExportPreset.BUILT_IN
+            .filter { it.name !in existing }
+            .forEach { preset ->
+                presetDao.insert(
+                    ExportPresetEntity(
+                        name = preset.name,
+                        configJson = preset.toJson(),
+                        // Never the default. Someone already has one chosen, and quietly moving
+                        // what a new export starts from is not a thing an upgrade should do.
+                        isDefault = false,
+                        isBuiltIn = true,
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+                added++
+            }
+
+        settingsRepository.setBuiltInPresetRevision(shipped)
+        if (added > 0) Log.i(tag, "Added $added new built-in preset(s)")
     }
 
     /**

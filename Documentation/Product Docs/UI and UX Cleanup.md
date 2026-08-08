@@ -1,6 +1,6 @@
 # UI and UX Cleanup
 
-**Status:** Sprints 1–4 landed; 5–7 outstanding
+**Status:** Sprints 1–5 landed; 6–7 outstanding
 **Sprints:** 7
 **Depends on:** Export Utility and Settings Hardening (the surfaces have stopped moving)
 
@@ -241,7 +241,7 @@ This is mechanical, large, and best done in one sweep rather than trickled.
 |---|---|
 | **UX-5.1** | Rendered video and timeline image adopt the shared zone ramp and surface colour by default. |
 | **UX-5.2** | Metric text in exports uses tabular figures, so the live-stats pill stops resizing as digits change. |
-| **UX-5.3** | Optional wordmark in an export, stored on `ExportPreset` with position and opacity. Ships off, and stays off through development — see §7.3. Sized and weighted as a credit rather than a watermark: the footage and the curve are the subject. |
+| **UX-5.3** | Optional wordmark in an export, stored on `ExportPreset` with corner and opacity. Placed in a corner of the *graph*, not the frame — a mark in the corner of a video sits where nobody looks, and the graph is what the export was made to show. Ships off, and stays off through development — see §7.3. Sized and weighted as a credit rather than a watermark: the footage and the curve are the subject. |
 | **UX-5.4** | Ship two more built-in presets designed against the new palette: one for stories, one for a landscape post. |
 
 **Verify:** export the same recording with each built-in preset and look at all of them together.

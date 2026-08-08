@@ -62,7 +62,12 @@ object ImageExporter {
          * named analysis passes its name here — "Subtronics 2026" rather than the generic label
          * every multi-watch export would otherwise carry. Null keeps that default.
          */
-        val graphTitle: String? = null
+        val graphTitle: String? = null,
+
+        /** See [ExportPreset.showWordmark]. Off by default; the preset carries the choice. */
+        val showWordmark: Boolean = false,
+        val wordmarkCorner: WordmarkCorner = WordmarkCorner.BOTTOM_RIGHT,
+        val wordmarkOpacity: Int = 55
     )
 
     /**
@@ -177,7 +182,7 @@ object ImageExporter {
         val viewport = calculateViewport(currentTimeMs, windowSizeMs, config, record)
 
         // 4. Draw Background with Rounded Corners
-        val paint = Paint().apply { isAntiAlias = true }
+        val paint = Paint().apply { isAntiAlias = true; fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals }
         drawContainer(canvas, dims, config, paint)
 
         // 5. Draw Grid and Axes (Clipped to Graph Area)
@@ -194,7 +199,43 @@ object ImageExporter {
             drawStatsHUD(canvas, dims, ranges, viewport, record, config, paint)
         }
 
+        drawWordmark(canvas, dims, config, paint)
+
         canvas.restore() // Final restore from drawContainer's save
+    }
+
+    /**
+     * Signs the graph panel, not the frame.
+     *
+     * In the corner of the panel rather than the corner of the canvas, because the panel is what
+     * anyone looking at the export is already looking at — a mark in the corner of the video is in
+     * the part of the picture nobody reads. Drawn before the container's restore, so the panel's
+     * rounded clip holds it: it cannot spill onto the footage however the preset is framed.
+     *
+     * Inside the panel's padding rather than over the plot, so it sits beside the curve instead of
+     * across it. Which corner is busiest depends on the preset — the title occupies the top and the
+     * time labels the bottom — which is why the corner is a setting rather than a decision made
+     * here.
+     */
+    private fun drawWordmark(
+        canvas: Canvas,
+        dims: RenderingDimensions,
+        config: ImageExportConfig,
+        paint: Paint
+    ) {
+        if (!config.showWordmark) return
+        Wordmark.draw(
+            canvas = canvas,
+            bounds = dims.outerRect,
+            corner = config.wordmarkCorner,
+            opacityPercent = config.wordmarkOpacity,
+            color = config.labelsColor,
+            // The panel's own scale, not the canvas's. A preset that shrinks the graph to a quarter
+            // of the frame should get a mark a quarter the size — one scaled off the canvas would
+            // sit in a small panel looking like a headline.
+            scale = dims.scaleFactor,
+            paint = paint
+        )
     }
 
     private fun drawContainer(canvas: Canvas, dims: RenderingDimensions, config: ImageExportConfig, paint: Paint) {
@@ -205,11 +246,14 @@ object ImageExporter {
         canvas.save()
         canvas.clipPath(outerClipPath)
 
-        if (canvas.isOpaque) canvas.drawColor(android.graphics.Color.BLACK)
+        // The app's surface, not black. This only shows on an opaque canvas — a video overlay is
+        // transparent and keeps the footage — but where it does show, a still exported from
+        // BPMetrics should be the same near-black the app itself is, rather than a flat #000 that
+        // belongs to no palette.
+        if (canvas.isOpaque) canvas.drawColor(inga.bpmetrics.ui.theme.BpmPalette.SURFACE)
         val bgAlpha = (config.backgroundOpacity * 255 / 100).coerceIn(0, 255)
         if (bgAlpha > 0) {
-            paint.reset()
-            paint.isAntiAlias = true
+            paint.resetForExport()
             paint.color = inga.bpmetrics.ui.theme.BpmPalette.SURFACE
             paint.alpha = bgAlpha
             canvas.drawRect(dims.outerRect, paint)
@@ -224,14 +268,13 @@ object ImageExporter {
             if (y !in dims.graphTop..dims.graphBottom) continue
 
             if (config.showGrid) {
-                paint.reset()
+                paint.resetForExport()
                 paint.color = config.gridColor
                 paint.strokeWidth = 2f
                 canvas.drawLine(dims.graphLeft, y, dims.graphRight, y, paint)
             }
             if (config.showLabels) {
-                paint.reset()
-                paint.isAntiAlias = true
+                paint.resetForExport()
                 paint.color = config.labelsColor
                 paint.textSize = 28f * dims.scaleFactor
                 paint.textAlign = Paint.Align.RIGHT
@@ -240,8 +283,7 @@ object ImageExporter {
         }
 
         if (config.showTitle) {
-            paint.reset()
-            paint.isAntiAlias = true
+            paint.resetForExport()
             paint.color = config.labelsColor
             paint.textSize = 48f * dims.scaleFactor
             paint.textAlign = Paint.Align.CENTER
@@ -424,7 +466,7 @@ object ImageExporter {
         firstPointX: Float,
         lastPointX: Float
     ) {
-        val paint = Paint().apply { isAntiAlias = true }
+        val paint = Paint().apply { isAntiAlias = true; fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals }
 
         // --- 1. DEFINE HORIZONTAL ALPHA MASKS ---
         val pastAlphaMask = LinearGradient(
@@ -574,8 +616,7 @@ object ImageExporter {
 
         val pulseScale = pulseScaleFor(currentBpm, viewport.playhead)
 
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.style = Paint.Style.FILL
 
         // Outer Glow
@@ -587,7 +628,9 @@ object ImageExporter {
         paint.color = headColor
         canvas.drawCircle(headX, headY, 6f * dims.scaleFactor, paint)
 
-        // Inner Spark
+        // Inner Spark. Left white deliberately where the surrounding text is not: this is a
+        // specular highlight on the head of the curve, not a label, and tinting it to the theme
+        // would flatten the one thing on the graph that is meant to look lit.
         paint.color = android.graphics.Color.WHITE
         canvas.drawCircle(headX, headY, 2.5f * dims.scaleFactor, paint)
     }
@@ -602,7 +645,7 @@ object ImageExporter {
         paint: Paint
     ) {
         val currentBpm = getInterpolatedBpm(record.dataPoints, viewport.playhead)
-        val hudContentColor = if (currentBpm != null) getBpmColor(currentBpm, ranges, config) else android.graphics.Color.GRAY
+        val hudContentColor = if (currentBpm != null) getBpmColor(currentBpm, ranges, config) else config.labelsColor
 
         // UPDATED: Center the pill near the right edge of the graph
         val pillMargin = 80f * dims.scaleFactor
@@ -611,8 +654,7 @@ object ImageExporter {
 
         // 3. Setup BPM Text
         val bpmText = currentBpm?.roundToInt()?.toString() ?: "--"
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.isFakeBoldText = true
         paint.textSize = 72f * dims.scaleFactor
 
@@ -672,8 +714,7 @@ object ImageExporter {
         drawHeart(canvas, hCenterX, hCenterY, (heartSize / 2f) * pulseScale, paint)
 
         // 8. Draw BPM Digits
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.color = hudContentColor
         paint.textSize = 72f * dims.scaleFactor
         paint.isFakeBoldText = true
@@ -778,13 +819,13 @@ object ImageExporter {
 
     private fun getBpmColor(bpm: Double, ranges: BpmRanges, config: ImageExportConfig): Int {
         val fraction = ((bpm - ranges.uiMin) / ranges.uiRange).coerceIn(0.0, 1.0).toFloat()
-        val hsvStart = FloatArray(3); val hsvEnd = FloatArray(3)
-        android.graphics.Color.colorToHSV(config.lowBpmColor, hsvStart)
-        android.graphics.Color.colorToHSV(config.highBpmColor, hsvEnd)
-        var sH = hsvStart[0]; var eH = hsvEnd[0]
-        if (eH < sH) eH += 360f
-        return android.graphics.Color.HSVToColor(floatArrayOf((sH + (eH - sH) * fraction) % 360f,
-            hsvStart[1] + (hsvEnd[1] - hsvStart[1]) * fraction, hsvStart[2] + (hsvEnd[2] - hsvStart[2]) * fraction))
+        // The same walk the on-screen chart uses, against this preset's endpoints — which default
+        // to the app's own low and high.
+        return inga.bpmetrics.ui.theme.BpmRamp.blend(
+            config.lowBpmColor,
+            config.highBpmColor,
+            fraction
+        )
     }
 
     // The multi-watch palette used to live here, as pairs of which only the first was ever read,
@@ -914,7 +955,7 @@ object ImageExporter {
 
         val primaryRecord = processedRecords.first()
         val dims = RenderingDimensions(canvas, graphRect, config)
-        val paint = Paint().apply { isAntiAlias = true }
+        val paint = Paint().apply { isAntiAlias = true; fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals }
 
         val allPoints = processedRecords.flatMap { it.dataPoints }
         if (allPoints.isEmpty()) return
@@ -980,6 +1021,9 @@ object ImageExporter {
         } else {
             drawMultiLegend(canvas, dims, processedRecords, config, paint)
         }
+
+        drawWordmark(canvas, dims, config, paint)
+
         canvas.restore()
     }
 
@@ -1037,8 +1081,7 @@ object ImageExporter {
         val padV = rowHeight * 0.14f
         val cornerRadius = rowHeight * 0.24f
 
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.isFakeBoldText = true
         paint.textSize = digitSize
         // Reserve the width of the widest plausible reading so pills share one width.
@@ -1079,8 +1122,7 @@ object ImageExporter {
             val rowTop = blockTop + slots[index] * slotPitch
             val rect = RectF(pillLeft, rowTop, pillRight, rowTop + rowHeight)
 
-            paint.reset()
-            paint.isAntiAlias = true
+            paint.resetForExport()
             // Denser than the single-record HUD: these sit over whatever the video is showing,
             // and a busy frame behind thin digits is what made them hard to read.
             paint.color = 0xD9000000.toInt()
@@ -1097,7 +1139,7 @@ object ImageExporter {
             val centerY = rect.centerY()
 
             paint.style = Paint.Style.FILL
-            paint.color = if (bpm != null) recordColor else android.graphics.Color.GRAY
+            paint.color = if (bpm != null) recordColor else config.labelsColor
             drawHeart(
                 canvas,
                 contentLeft + heartSize / 2f,
@@ -1118,7 +1160,7 @@ object ImageExporter {
 
             paint.textSize = labelSize
             paint.isFakeBoldText = true
-            paint.color = android.graphics.Color.WHITE
+            paint.color = config.labelsColor
             paint.textAlign = Paint.Align.LEFT
             canvas.drawText(
                 labels[index],
@@ -1133,8 +1175,7 @@ object ImageExporter {
         // above, so what is drawn matches what the pills made room for.
         val timeTop = blockTop + records.size * slotPitch
         val timeRect = RectF(pillLeft, timeTop, pillRight, timeTop + timeRowHeight)
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.color = 0xD9000000.toInt()
         canvas.drawRoundRect(timeRect, cornerRadius, cornerRadius, paint)
 
@@ -1144,7 +1185,7 @@ object ImageExporter {
         // Sized to the time pill rather than to the wearer rows, which change with how many
         // people are in the session — the clock should not shrink because a fifth watch joined.
         val timeTextSize = timeRowHeight * 0.30f
-        paint.color = android.graphics.Color.WHITE
+        paint.color = config.labelsColor
         paint.textSize = timeTextSize
         paint.isFakeBoldText = true
         paint.textAlign = Paint.Align.CENTER
@@ -1239,13 +1280,12 @@ object ImageExporter {
             val wearerLabel = wearerLabelOf(record)
             val color = colorForRecord(record, index, config)
 
-            paint.reset()
-            paint.isAntiAlias = true
+            paint.resetForExport()
             paint.color = color
             paint.style = Paint.Style.FILL
             canvas.drawCircle(legendLeft + 10f * dims.scaleFactor, legendTop + 12f * dims.scaleFactor, 8f * dims.scaleFactor, paint)
 
-            paint.color = android.graphics.Color.WHITE
+            paint.color = config.labelsColor
             paint.textSize = 20f * dims.scaleFactor
             paint.isFakeBoldText = true
             canvas.drawText(wearerLabel, legendLeft + 28f * dims.scaleFactor, legendTop + 18f * dims.scaleFactor, paint)
