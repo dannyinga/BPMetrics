@@ -55,10 +55,10 @@ object TimelineImageExporter {
         val showGrid: Boolean = true,
         val showLabels: Boolean = true,
         val showStats: Boolean = true,
-        val lowBpmColor: Int = 0xFF42A5F5.toInt(),
-        val highBpmColor: Int = 0xFFF44336.toInt(),
-        val labelsColor: Int = 0xFFFFFFFF.toInt(),
-        val gridColor: Int = 0x33CCCCCC,
+        val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
+        val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
+        val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
+        val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
         val backgroundOpacity: Int = 100,
         val timeZoneId: String = ZoneId.systemDefault().id
     ) {
@@ -92,7 +92,7 @@ object TimelineImageExporter {
         if (bgAlpha > 0) {
             paint.reset()
             paint.isAntiAlias = true
-            paint.color = 0xFF121212.toInt()
+            paint.color = inga.bpmetrics.ui.theme.BpmPalette.SURFACE
             paint.alpha = bgAlpha
             canvas.drawRoundRect(
                 RectF(0f, 0f, spec.width.toFloat(), spec.height.toFloat()),

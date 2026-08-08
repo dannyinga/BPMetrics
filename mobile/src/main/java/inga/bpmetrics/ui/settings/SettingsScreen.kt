@@ -117,28 +117,14 @@ fun SettingsScreen(
 
 @Composable
 private fun AppearanceSection(viewModel: SettingsViewModel) {
-    val theme by viewModel.themeMode.collectAsStateWithLifecycle()
     val dynamic by viewModel.dynamicColour.collectAsStateWithLifecycle()
     val use24 by viewModel.use24Hour.collectAsStateWithLifecycle()
     val dateFormat by viewModel.dateFormat.collectAsStateWithLifecycle()
 
-    SettingsGroup("Appearance", "Theme, colour and how times are written") {
-        Label("Theme")
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            ThemeMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = theme == mode,
-                    onClick = { viewModel.setThemeMode(mode) },
-                    label = { Text(mode.label) }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
+    SettingsGroup("Appearance", "Colour, and how times are written") {
+        // No theme choice: the app is dark, deliberately. The charts, the export panel and the
+        // metric ramp are designed against it, and offering light and system when only one of the
+        // three is supported is worse than not offering the choice.
         SwitchRow(
             "Wallpaper colours",
             // Android 12 is where the platform gained this. Below it the toggle would be a

@@ -68,9 +68,6 @@ class SettingsRepository(context: Context) {
 
         // --- Appearance ---
 
-        /** SYSTEM, LIGHT or DARK. Stored as a name so a new option does not shift the others. */
-        val THEME_MODE = stringPreferencesKey("theme_mode")
-
         /** Whether to take colours from the wallpaper, where the platform offers them. */
         val DYNAMIC_COLOUR = booleanPreferencesKey("dynamic_colour")
 
@@ -248,24 +245,14 @@ class SettingsRepository(context: Context) {
 
     // --- Appearance ---
 
-    val themeMode: Flow<ThemeMode> = dataStore.data.map { prefs ->
-        prefs[PreferencesKeys.THEME_MODE]
-            ?.let { name -> ThemeMode.entries.firstOrNull { it.name == name } }
-            ?: ThemeMode.SYSTEM
-    }
-
-    suspend fun setThemeMode(mode: ThemeMode) {
-        dataStore.edit { it[PreferencesKeys.THEME_MODE] = mode.name }
-    }
-
     /**
      * Whether to take colours from the wallpaper.
      *
-     * On by default, which is what the app already did — unconditionally, with no way to turn it
-     * off. The default preserves how it looks today; the setting is the part that is new.
+     * Off by default. It used to be on, unconditionally and with no way to change it, which meant
+     * the app had no appearance of its own on any phone new enough to support wallpaper colours.
      */
     val dynamicColour: Flow<Boolean> =
-        dataStore.data.map { it[PreferencesKeys.DYNAMIC_COLOUR] ?: true }
+        dataStore.data.map { it[PreferencesKeys.DYNAMIC_COLOUR] ?: false }
 
     suspend fun setDynamicColour(enabled: Boolean) {
         dataStore.edit { it[PreferencesKeys.DYNAMIC_COLOUR] = enabled }
@@ -381,13 +368,6 @@ class SettingsRepository(context: Context) {
         const val DEFAULT_RESTING_BPM = 60
         const val DEFAULT_MAX_BPM = 190
     }
-}
-
-/** Which colour scheme to use, regardless of what the system is doing. */
-enum class ThemeMode(val label: String) {
-    SYSTEM("Follow system"),
-    LIGHT("Light"),
-    DARK("Dark")
 }
 
 /** The date formats on offer, as patterns so adding one is a single line. */

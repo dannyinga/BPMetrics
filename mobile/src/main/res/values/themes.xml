@@ -1,9 +1,19 @@
 <resources>
-    <style name="Theme.BPMetrics" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+        Dark, because the app is dark and does not offer a choice. The window background matches
+        the Compose surface so there is no flash of white between the splash and the first frame.
+    -->
+    <style name="Theme.BPMetrics" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bpm_surface</item>
+    </style>
 
     <style name="Theme.App.Starting" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/bpm_accent</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <!--
+            The surface rather than the teal. A teal splash followed by a dark app was two
+            different colours a third of a second apart; the icon carries the teal instead.
+        -->
+        <item name="windowSplashScreenBackground">@color/bpm_surface</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_icon</item>
         <item name="postSplashScreenTheme">@style/Theme.BPMetrics</item>
     </style>
 </resources>

@@ -43,11 +43,11 @@ object ImageExporter {
         val endTimeMs: Long = 0L,
         val backgroundOpacity: Int = 100,
         val showLabels: Boolean = true,
-        val labelsColor: Int = 0xFFFFFFFF.toInt(),
+        val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
         val showGrid: Boolean = true,
-        val gridColor: Int = 0x33CCCCCC,
-        val lowBpmColor: Int = 0xFF42A5F5.toInt(),
-        val highBpmColor: Int = 0xFFF44336.toInt(),
+        val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
+        val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
+        val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
         val showTitle: Boolean = true,
         val showCurrentStats: Boolean = true,
         val headerXPercent: Float = 0.85f,
@@ -210,7 +210,7 @@ object ImageExporter {
         if (bgAlpha > 0) {
             paint.reset()
             paint.isAntiAlias = true
-            paint.color = 0xFF121212.toInt()
+            paint.color = inga.bpmetrics.ui.theme.BpmPalette.SURFACE
             paint.alpha = bgAlpha
             canvas.drawRect(dims.outerRect, paint)
         }

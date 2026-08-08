@@ -56,7 +56,7 @@ fun ConcurrentChart(
 ) {
     if (analysis.isEmpty) return
 
-    val gridColor = Color(0x33CCCCCC)
+    val gridColor = inga.bpmetrics.ui.theme.ChartGrid
     val intensityColor = MaterialTheme.colorScheme.primary
     val scrubColor = MaterialTheme.colorScheme.onSurface
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant

@@ -27,11 +27,19 @@ data class ExportPreset(
 
     // Graph
     val showLabels: Boolean = true,
-    val labelsColor: Int = 0xFFFFFFFF.toInt(),
+    val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
     val showGrid: Boolean = true,
-    val gridColor: Int = 0x33CCCCCC,
-    val lowBpmColor: Int = 0xFF42A5F5.toInt(),
-    val highBpmColor: Int = 0xFFF44336.toInt(),
+    val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
+    /**
+     * The ends of the ramp a curve is drawn along.
+     *
+     * Kept on the preset because they are part of a saved look and someone may want a different
+     * one — but the *defaults* are the app's own metric colours, so a new preset matches the charts
+     * it was made from. A colour meaning "peak" has to mean peak in the picture as well as on the
+     * screen. See `ui/theme/Color.kt`.
+     */
+    val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
+    val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
     val showTitle: Boolean = true,
     val showCurrentStats: Boolean = true,
     val headerXPercent: Float = 0.85f,

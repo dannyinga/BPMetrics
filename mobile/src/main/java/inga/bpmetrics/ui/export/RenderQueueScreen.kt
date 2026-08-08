@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import inga.bpmetrics.ui.theme.BpmAccent
+import inga.bpmetrics.ui.theme.BpmSuccess
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
 
@@ -201,7 +202,7 @@ fun RenderStatsPanel(
                 StatItem(label = "Total", value = total.toString(), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 StatItem(label = "Active", value = active.toString(), color = BpmAccent)
                 StatItem(label = "Queued", value = queued.toString(), color = BpmLow)
-                StatItem(label = "Completed", value = completed.toString(), color = Color(0xFF4CAF50))
+                StatItem(label = "Completed", value = completed.toString(), color = BpmSuccess)
                 if (failed > 0) {
                     StatItem(label = "Inactive", value = failed.toString(), color = BpmHigh)
                 }
@@ -258,7 +259,7 @@ fun RenderJobCard(
         targetValue = when (job.status) {
             RenderStatus.RENDERING -> BpmAccent.copy(alpha = 0.8f)
             RenderStatus.QUEUED -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-            RenderStatus.COMPLETED -> Color(0xFF4CAF50).copy(alpha = 0.4f)
+            RenderStatus.COMPLETED -> BpmSuccess.copy(alpha = 0.4f)
             RenderStatus.FAILED -> BpmHigh.copy(alpha = 0.4f)
             RenderStatus.CANCELLED -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
         },
@@ -291,7 +292,7 @@ fun RenderJobCard(
                             when (job.status) {
                                 RenderStatus.RENDERING -> BpmAccent.copy(alpha = 0.15f)
                                 RenderStatus.QUEUED -> BpmLow.copy(alpha = 0.1f)
-                                RenderStatus.COMPLETED -> Color(0xFF4CAF50).copy(alpha = 0.15f)
+                                RenderStatus.COMPLETED -> BpmSuccess.copy(alpha = 0.15f)
                                 RenderStatus.FAILED -> BpmHigh.copy(alpha = 0.15f)
                                 RenderStatus.CANCELLED -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
                             }
@@ -310,7 +311,7 @@ fun RenderJobCard(
                         tint = when (job.status) {
                             RenderStatus.RENDERING -> BpmAccent
                             RenderStatus.QUEUED -> BpmLow
-                            RenderStatus.COMPLETED -> Color(0xFF4CAF50)
+                            RenderStatus.COMPLETED -> BpmSuccess
                             RenderStatus.FAILED -> BpmHigh
                             RenderStatus.CANCELLED -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         },
@@ -403,7 +404,7 @@ fun RenderJobCard(
                                 Icon(
                                     imageVector = Icons.Default.PlayArrow,
                                     contentDescription = "Play Video",
-                                    tint = Color(0xFF4CAF50)
+                                    tint = BpmSuccess
                                 )
                             }
                             IconButton(onClick = {

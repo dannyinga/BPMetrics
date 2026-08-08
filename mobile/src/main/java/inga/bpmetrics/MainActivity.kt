@@ -4,7 +4,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -65,12 +64,11 @@ class MainActivity : ComponentActivity() {
         val settings = (application as BPMetricsApp).settingsRepository
 
         setContent {
-            // Collected at the root, because a theme is not something one screen has. Defaults
-            // match what the app did before the setting existed, so nothing changes for anyone who
-            // never opens Settings.
-            val themeMode by settings.themeMode
-                .collectAsState(initial = inga.bpmetrics.ui.settings.ThemeMode.SYSTEM)
-            val dynamicColour by settings.dynamicColour.collectAsState(initial = true)
+            // Collected at the root, because a theme is not something one screen has.
+            //
+            // No light mode and no theme choice: the charts, the export panel and the metric ramp
+            // are all designed against dark, and a half-supported light theme is worse than none.
+            val dynamicColour by settings.dynamicColour.collectAsState(initial = false)
 
             // Date and time formats are pushed into the formatter rather than passed down: they
             // are read by renderers and helpers that have no business knowing about DataStore.
@@ -82,14 +80,7 @@ class MainActivity : ComponentActivity() {
                 StringFormatHelpers.datePattern = datePattern
             }
 
-            BPMetricsTheme(
-                darkTheme = when (themeMode) {
-                    inga.bpmetrics.ui.settings.ThemeMode.LIGHT -> false
-                    inga.bpmetrics.ui.settings.ThemeMode.DARK -> true
-                    inga.bpmetrics.ui.settings.ThemeMode.SYSTEM -> isSystemInDarkTheme()
-                },
-                dynamicColor = dynamicColour
-            ) {
+            BPMetricsTheme(dynamicColor = dynamicColour) {
                 BPMetricsNavHost(libraryRepository)
             }
         }
