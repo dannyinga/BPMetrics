@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.foundation.clickable
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
@@ -48,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import inga.bpmetrics.export.CsvExporter
+import inga.bpmetrics.ui.graph.TimeUtils
 import inga.bpmetrics.library.displayName
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
 import inga.bpmetrics.ui.analysis.ConcurrentChart
@@ -671,13 +674,16 @@ private fun ordinal(n: Int): String {
 /**
  * Cutting a shorter recording out of a longer one.
  *
- * A dialog rather than the screen this used to live on. The screen existed to hold an interactive
- * graph, and the recording page already has one — so all that was left was this, and a longer way
- * back to where you started.
+ * A dialog rather than the screen this used to live on: that screen existed to hold an interactive
+ * graph, and the recording page already has one.
  *
- * The range is typed rather than dragged. Dragging a selection is how you find roughly the right
- * span; typing is how you say the one you meant, and the reason to split a recording is almost
- * always that you know where the set began.
+ * Laid out down the page with full-size fields. The first version reused the graph screen's zoom
+ * controls, which put two fields side by side with 10sp labels inside an already-narrow dialog —
+ * legible on a wide screen with a mouse, and unusable on a phone with a thumb.
+ *
+ * The range is typed rather than dragged. Dragging is how you find roughly the right span; typing
+ * is how you say the one you meant, and the reason to split is almost always that you know when
+ * the set began.
  */
 @Composable
 private fun SplitRecordDialog(
@@ -686,47 +692,113 @@ private fun SplitRecordDialog(
     onSplit: (startMs: Long, endMs: Long) -> Unit
 ) {
     val durationMs = record.metadata.durationMs
-    var startMs by remember { mutableStateOf(0L) }
-    var endMs by remember { mutableStateOf(durationMs) }
+    var startText by remember { mutableStateOf(TimeUtils.formatMs(0L)) }
+    var endText by remember { mutableStateOf(TimeUtils.formatMs(durationMs)) }
+    var useClock by remember { mutableStateOf(false) }
 
-    androidx.compose.material3.AlertDialog(
+    fun parse(text: String): Long? = if (useClock) {
+        TimeUtils.parseClockTimeToRelativeMs(text, record.metadata.startTime)
+    } else {
+        TimeUtils.parseToMs(text)
+    }
+
+    val startMs = parse(startText)
+    val endMs = parse(endText)
+    val valid = startMs != null && endMs != null && endMs > startMs &&
+        startMs >= 0L && endMs <= durationMs
+    val kept = if (valid) record.dataPoints.count { it.timestamp in startMs!!..endMs!! } else 0
+
+    AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Split this recording") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "The new recording keeps this one's tags. The original is left alone.",
+                    "Makes a new recording from part of this one. The original is left alone, and " +
+                        "the copy keeps its tags.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Enter times as", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.width(8.dp))
+                    // Two ways to say the same instant. Elapsed is what the graph shows; clock is
+                    // what someone remembers about when a set started.
+                    androidx.compose.material3.FilterChip(
+                        selected = !useClock,
+                        onClick = {
+                            if (useClock) {
+                                startText = TimeUtils.formatMs(startMs ?: 0L)
+                                endText = TimeUtils.formatMs(endMs ?: durationMs)
+                            }
+                            useClock = false
+                        },
+                        label = { Text("Elapsed") }
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    androidx.compose.material3.FilterChip(
+                        selected = useClock,
+                        onClick = {
+                            if (!useClock) {
+                                val base = record.metadata.startTime
+                                startText = TimeUtils.formatClockTime(base + (startMs ?: 0L))
+                                endText = TimeUtils.formatClockTime(base + (endMs ?: durationMs))
+                            }
+                            useClock = true
+                        },
+                        label = { Text("Clock") }
+                    )
+                }
+
                 Spacer(Modifier.height(12.dp))
-                inga.bpmetrics.ui.graph.GraphManualControls(
-                    initialStart = inga.bpmetrics.ui.graph.TimeUtils.formatMs(startMs),
-                    initialEnd = inga.bpmetrics.ui.graph.TimeUtils.formatMs(endMs),
-                    labelPrefix = "Split",
-                    baseEpochMs = record.metadata.startTime,
-                    onApply = { s, e ->
-                        // Ordered and clamped here rather than trusted: the fields accept anything
-                        // typeable, and a range that runs backwards would silently select nothing.
-                        startMs = minOf(s, e).coerceIn(0L, durationMs)
-                        endMs = maxOf(s, e).coerceIn(0L, durationMs)
-                    }
+                OutlinedTextField(
+                    value = startText,
+                    onValueChange = { startText = it },
+                    label = { Text("From") },
+                    singleLine = true,
+                    isError = startMs == null,
+                    modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = endText,
+                    onValueChange = { endText = it },
+                    label = { Text("To") },
+                    singleLine = true,
+                    isError = endMs == null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(10.dp))
                 Text(
-                    "Selected: ${inga.bpmetrics.ui.graph.TimeUtils.formatMs(startMs)} – " +
-                        inga.bpmetrics.ui.graph.TimeUtils.formatMs(endMs),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold
+                    // Says what the split will actually contain before it happens, rather than
+                    // leaving someone to find out from the library that they cut an empty range.
+                    when {
+                        startMs == null || endMs == null ->
+                            "Times read like ${if (useClock) "21:04:00" else "00:12:30"}."
+                        !valid -> "The end has to come after the start, and within this recording."
+                        kept == 0 -> "Nothing was recorded in that range."
+                        else -> "$kept reading${if (kept == 1) "" else "s"}, " +
+                            shortDuration(endMs - startMs)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (valid && kept > 0) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    }
                 )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSplit(startMs, endMs) },
-                enabled = endMs > startMs
-            ) { Text("Create record") }
+                onClick = { onSplit(startMs!!, endMs!!) },
+                enabled = valid && kept > 0
+            ) { Text("Create recording") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
+

@@ -111,6 +111,7 @@ class LibraryRepository(
                 // After seeding, because a fresh install writes the current framing and has
                 // nothing to bring forward — this is for the installs that already had presets.
                 refreshSupersededPresetFraming()
+                rescueLegacyExportDefaults()
             } catch (e: Exception) {
                 Log.e(tag, "Could not seed the built-in export presets", e)
             }
@@ -493,6 +494,52 @@ class LibraryRepository(
     suspend fun setEventGroupNotes(groupId: Long, notes: String) =
         eventGroupDao.updateNotes(groupId, notes)
 
+    /**
+     * Joins several recordings of one person into a single one.
+     *
+     * The merged recording is written *before* anything is deleted. The other order means a
+     * failure halfway leaves someone with neither the parts nor the whole.
+     *
+     * Tags from every part are carried across, so nothing a recording was marked with is lost by
+     * joining it to another. Event membership comes from the earliest part, which is the one whose
+     * start the merged recording takes.
+     *
+     * @return the new record's id, or null when the recordings could not honestly be joined.
+     */
+    suspend fun mergeRecords(records: List<BpmRecord>, deleteOriginals: Boolean): Long? {
+        if (!RecordMerge.canMerge(records)) {
+            Log.w(tag, "Refused to merge ${records.size} recording(s)")
+            return null
+        }
+        val merged = RecordMerge.combine(records) ?: return null
+        val ordered = records.sortedBy { it.metadata.startTime }
+        val first = ordered.first()
+
+        val newId = saveWatchRecordToLibrary(
+            inga.bpmetrics.core.BpmWatchRecord(
+                date = java.sql.Date(merged.startTime),
+                dataPoints = merged.points.map {
+                    inga.bpmetrics.core.BpmDataPoint(it.timestampMs, it.bpm)
+                },
+                startTime = merged.startTime,
+                endTime = merged.endTime
+            ),
+            first.metadata.title.ifBlank { "Merged recording" }
+        )
+
+        records.flatMap { it.tags }.distinctBy { it.tagId }.forEach { tag ->
+            addTagToRecord(newId, tag.tagId)
+        }
+        updateRecordDeviceAndWearer(newId, first.metadata.deviceId, first.metadata.personId)
+        first.metadata.eventId?.let { assignRecordsToEvent(listOf(newId), it) }
+
+        if (deleteOriginals) {
+            records.forEach { deleteRecordWithId(it.metadata.recordId) }
+        }
+        Log.i(tag, "Merged ${records.size} recordings into $newId")
+        return newId
+    }
+
     /** Removes a collection and releases what it held. Its events and children survive. */
     suspend fun deleteEventGroup(groupId: Long) {
         eventGroupDao.ungroupEvents(groupId)
@@ -607,6 +654,9 @@ class LibraryRepository(
 
     suspend fun setLibraryViewMode(mode: String) = settingsRepository.setLibraryViewMode(mode)
 
+    /** The sort the library should open on, or null to keep the built-in order. */
+    suspend fun getDefaultSort(): String? = settingsRepository.defaultSort.first()
+
     /** Recordings the user has permanently waved off as an event suggestion. */
     val dismissedSuggestionRecords: Flow<Set<Long>> = settingsRepository.dismissedSuggestionRecords
 
@@ -642,6 +692,29 @@ class LibraryRepository(
             )
         }
         Log.i(tag, "Seeded ${inga.bpmetrics.export.ExportPreset.BUILT_IN.size} built-in presets")
+    }
+
+    /**
+     * Saves the old settings-screen export defaults as a preset, once.
+     *
+     * Presets replaced those defaults and the settings screen no longer shows them — but someone
+     * who had spent time getting them right should not simply find them gone. They become a preset
+     * named so its origin is obvious, and only then are the old keys left behind.
+     *
+     * Does nothing when the defaults were never touched: a preset identical to the shipped one is
+     * clutter, not rescue.
+     */
+    private suspend fun rescueLegacyExportDefaults() {
+        val preset = settingsRepository.legacyExportDefaultsAsPreset() ?: return
+        presetDao.insert(
+            ExportPresetEntity(
+                name = preset.name,
+                configJson = preset.toJson(),
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        settingsRepository.markExportDefaultsMigrated()
+        Log.i(tag, "Kept the old export defaults as a preset")
     }
 
     /**
@@ -809,6 +882,20 @@ class LibraryRepository(
     fun getAllPeople(): Flow<List<PersonEntity>> = personDao.getAllPeopleFlow()
 
     suspend fun getPerson(personId: Long): PersonEntity? = personDao.getPerson(personId)
+
+    /**
+     * Sets someone's own resting and maximum rate, or clears them back to the app-wide figures.
+     *
+     * Ordered here rather than trusted from the caller: a resting rate above a maximum would make
+     * every zone percentage negative, and the two fields are far enough apart on screen to get
+     * them the wrong way round.
+     */
+    suspend fun setPersonZones(personId: Long, restingBpm: Int?, maxBpm: Int?) {
+        val low = restingBpm?.coerceIn(30, 120)
+        val high = maxBpm?.coerceIn(120, 230)
+        val ordered = if (low != null && high != null && low >= high) high - 1 else low
+        personDao.updateZones(personId, ordered, high)
+    }
 
     /**
      * Creates a profile, giving it a colour that differs from the ones already in use.

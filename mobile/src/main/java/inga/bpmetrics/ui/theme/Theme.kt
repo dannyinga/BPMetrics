@@ -39,12 +39,19 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun BPMetricsTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
+    /**
+     * Wallpaper colours, where the platform offers them.
+     *
+     * Previously true with no way to change it — and taken unconditionally, so on Android 11 and
+     * below `dynamicDarkColorScheme` was being called on a platform that has no such thing. Now a
+     * setting, and gated on the version that actually supports it.
+     */
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
+    val supportsDynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     val colorScheme = when {
-      dynamicColor -> {
+      dynamicColor && supportsDynamic -> {
         val context = LocalContext.current
         if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
       }

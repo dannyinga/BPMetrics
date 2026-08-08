@@ -109,6 +109,31 @@ fun AboutScreen(onOpenDrawer: () -> Unit) {
             Spacer(Modifier.height(16.dp))
 
             Text(
+                "Something wrong?",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                // Lives here rather than in Settings, where it briefly also existed: two places
+                // claiming to be the version number is how the two come to disagree.
+                "Diagnostics gather recent logs and what the app is using on disk. Read it before " +
+                    "sending — logs can carry recording titles and people's names.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedButton(
+                onClick = {
+                    inga.bpmetrics.ui.settings.shareDiagnostics(context, versionName)
+                }
+            ) {
+                Text("Share diagnostics")
+            }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            Text(
                 "Copyright © 2025 Danny Inga. All rights reserved.",
                 style = MaterialTheme.typography.bodySmall
             )

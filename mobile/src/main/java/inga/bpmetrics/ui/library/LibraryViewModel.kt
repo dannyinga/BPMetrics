@@ -18,6 +18,7 @@ import inga.bpmetrics.library.suggestEvents
 import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.library.RecordMerge
 import inga.bpmetrics.library.WatchEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -110,6 +111,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             val saved = repository.getLibraryViewMode()
             _viewMode.value = LibraryViewMode.entries.firstOrNull { it.name == saved }
                 ?: LibraryViewMode.RECORDINGS
+
+            // Read once, for the same reason as the view mode: this is where the user left off,
+            // not a live value. Collecting it would re-sort the list under their hands every time
+            // the preference emitted.
+            repository.getDefaultSort()
+                ?.let { name -> SortOption.entries.firstOrNull { it.name == name } }
+                ?.let { _sortOption.value = it }
         }
     }
 
@@ -407,6 +415,37 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /**
      * Deletes all selected records.
      */
+    /**
+     * Joins the current selection into one recording.
+     *
+     * Here rather than on a recording's own page, where it briefly lived: merging is inherently
+     * about *several* recordings, and asking one of them to nominate the others meant a picker
+     * that duplicated the multi-select the library already has.
+     *
+     * @param onDone called with what happened, since a refusal has a reason worth reading.
+     */
+    fun mergeSelectedRecords(deleteOriginals: Boolean, onDone: (String) -> Unit) {
+        val chosen = repository.records.value.filter { it.metadata.recordId in _selectedRecordIds.value }
+        val refusal = RecordMerge.refusal(chosen)
+        if (refusal != null) {
+            onDone(refusal)
+            return
+        }
+        viewModelScope.launch {
+            val merged = repository.mergeRecords(chosen, deleteOriginals)
+            clearSelection()
+            onDone(
+                if (merged == null) {
+                    "Could not merge those recordings."
+                } else if (deleteOriginals) {
+                    "Merged ${chosen.size} recordings."
+                } else {
+                    "Merged ${chosen.size} recordings; the originals were kept."
+                }
+            )
+        }
+    }
+
     fun deleteSelectedRecords() {
         val idsToDelete = _selectedRecordIds.value
         viewModelScope.launch {

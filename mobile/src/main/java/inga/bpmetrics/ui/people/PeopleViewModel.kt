@@ -61,10 +61,11 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
         }
     }
 
-    fun save(personId: Long, name: String, colorArgb: Int) {
+    fun save(personId: Long, name: String, colorArgb: Int, restingBpm: Int?, maxBpm: Int?) {
         viewModelScope.launch {
             repository.renamePerson(personId, name)
             repository.setPersonColor(personId, colorArgb)
+            repository.setPersonZones(personId, restingBpm, maxBpm)
             _message.value = "Saved."
         }
     }

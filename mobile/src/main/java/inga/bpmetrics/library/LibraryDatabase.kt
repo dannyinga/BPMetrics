@@ -166,7 +166,7 @@ interface BpmRecordDao {
         ExportPresetEntity::class,
         RenderJobEntity::class
     ],
-    version = 17,
+    version = 18,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -185,7 +185,7 @@ abstract class LibraryDatabase : RoomDatabase() {
         private const val DB_NAME = "bpmetrics_db"
 
         /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 17
+        private const val CURRENT_VERSION = 18
 
         private const val MAX_BACKUPS = 5
 
@@ -801,6 +801,25 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * A person's own resting and maximum rate.
+         *
+         * Both nullable with `DEFAULT NULL`, matching the entity exactly — null means "use the
+         * app-wide figure", which is a different thing from zero and has to stay distinguishable
+         * from it. Everyone who already exists keeps inheriting the default, which is what they
+         * were doing before this column existed.
+         *
+         * SQL copied from the generated `18.json`.
+         */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `people` ADD COLUMN `restingBpm` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `people` ADD COLUMN `maxBpm` INTEGER DEFAULT NULL")
+
+                android.util.Log.i(TAG, "MIGRATION_17_18: Per-person heart rate zones")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -861,7 +880,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_13_14,
                         MIGRATION_14_15,
                         MIGRATION_15_16,
-                        MIGRATION_16_17
+                        MIGRATION_16_17,
+                        MIGRATION_17_18
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

@@ -38,6 +38,15 @@ interface PersonDao {
     @Query("UPDATE people SET name = :name WHERE personId = :personId")
     suspend fun updateName(personId: Long, name: String)
 
+    /**
+     * This person's own resting and maximum rate, or null to inherit the app-wide figures.
+     *
+     * Written together because they describe one thing — the range zones are measured across — and
+     * setting one without the other invites a resting rate above a maximum.
+     */
+    @Query("UPDATE people SET restingBpm = :restingBpm, maxBpm = :maxBpm WHERE personId = :personId")
+    suspend fun updateZones(personId: Long, restingBpm: Int?, maxBpm: Int?)
+
     @Query("UPDATE people SET colorArgb = :colorArgb WHERE personId = :personId")
     suspend fun updateColor(personId: Long, colorArgb: Int)
 

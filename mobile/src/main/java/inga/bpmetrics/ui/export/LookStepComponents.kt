@@ -519,11 +519,22 @@ fun LookSections(
     framing: GraphPlacement,
     onFramingChange: (GraphPlacement) -> Unit,
     isImage: Boolean = false,
+    /** False where the graph frame cannot be dragged, so the hint offers the chips instead. */
+    hasPreview: Boolean = true,
+    /**
+     * Whether to offer switching to a different preset.
+     *
+     * False in the Settings editor, where the preset *is* the subject and a control for swapping
+     * it out would only be a way to lose your work.
+     */
+    showPresetBar: Boolean = true,
     presetBar: @Composable () -> Unit = {}
 ) {
     Column(Modifier.fillMaxWidth()) {
-        SettingsSection("Presets", "Saved looks to apply, update or share") {
-            presetBar()
+        if (showPresetBar) {
+            SettingsSection("Presets", "Saved looks to apply, update or share") {
+                presetBar()
+            }
         }
 
         SettingsSection("Canvas", "The shape and size of the finished video") {
@@ -580,7 +591,11 @@ fun LookSections(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "Drag the outline on the preview, or start from one of these.",
+                    if (hasPreview) {
+                        "Drag the outline on the preview, or start from one of these."
+                    } else {
+                        "Pick a starting arrangement. Fine-tune it against footage in the export."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

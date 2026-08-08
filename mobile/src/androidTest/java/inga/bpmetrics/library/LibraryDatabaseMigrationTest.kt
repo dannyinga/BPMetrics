@@ -45,7 +45,8 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_13_14,
             LibraryDatabase.MIGRATION_14_15,
             LibraryDatabase.MIGRATION_15_16,
-            LibraryDatabase.MIGRATION_16_17
+            LibraryDatabase.MIGRATION_16_17,
+            LibraryDatabase.MIGRATION_17_18
         )
     }
 
@@ -620,6 +621,40 @@ class LibraryDatabaseMigrationTest {
         db.query("SELECT parentGroupId FROM event_groups WHERE groupId = 2").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals(1L, cursor.getLong(0))
+        }
+        db.close()
+    }
+
+    /** The schema check for per-person heart rate figures. */
+    @Test
+    fun migrate17To18_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 18, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Existing people keep inheriting the app-wide figures.
+     *
+     * Null means "use the default", which is a different thing from zero and has to stay
+     * distinguishable from it — a person migrated to 0 bpm resting would make every zone
+     * percentage they appear in wrong, quietly.
+     */
+    @Test
+    fun migrate17To18_leavesExistingPeopleOnTheDefaults() {
+        helper.createDatabase(TEST_DB, 5).close()
+        var db = helper.runMigrationsAndValidate(TEST_DB, 17, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "INSERT INTO people (personId, name, colorArgb, createdAt) VALUES (1, 'Kyle', -1, 0)"
+        )
+        db.close()
+
+        db = helper.runMigrationsAndValidate(TEST_DB, 18, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT name, restingBpm, maxBpm FROM people WHERE personId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Kyle", cursor.getString(0))
+            assertTrue("resting must be absent, not zero", cursor.isNull(1))
+            assertTrue("maximum must be absent, not zero", cursor.isNull(2))
         }
         db.close()
     }

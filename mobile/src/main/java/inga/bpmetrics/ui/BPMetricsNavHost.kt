@@ -53,7 +53,6 @@ import inga.bpmetrics.ui.export.ExportSource
 import inga.bpmetrics.ui.export.ExportStep
 import inga.bpmetrics.ui.export.ExportUtilityScreen
 import inga.bpmetrics.ui.export.ExportUtilityViewModel
-import inga.bpmetrics.ui.incoming.IncomingScreen
 import inga.bpmetrics.ui.people.PeopleScreen
 import inga.bpmetrics.ui.watches.WatchesScreen
 import kotlinx.coroutines.launch
@@ -322,10 +321,6 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 PeopleScreen(onOpenDrawer = openDrawer)
             }
 
-            composable(Routes.INCOMING) {
-                IncomingScreen(onOpenDrawer = openDrawer)
-            }
-
             composable(Routes.ANALYSIS_CONCURRENT) {
                 val allRecords by repository.records.collectAsState()
                 val watches by libraryViewModel.availableWatches.collectAsState()
@@ -434,10 +429,11 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 val settingsViewModel: SettingsViewModel = viewModel(
                     factory = SettingsViewModel.Factory(repository, settingsRepository)
                 )
+                // No onLeave: nothing is staged any more, so leaving cannot lose anything and
+                // the screen has nothing to ask about on the way out.
                 SettingsScreen(
                     viewModel = settingsViewModel,
-                    onOpenDrawer = openDrawer,
-                    onLeave = { navController.navigateToSection(AppDestination.LIBRARY) }
+                    onOpenDrawer = openDrawer
                 )
             }
 
@@ -522,7 +518,6 @@ object Routes {
     const val WATCHES = "watches"
     const val PEOPLE = "people"
     const val ABOUT = "about"
-    const val INCOMING = "incoming"
 
     /** A live analysis of the Library's current filter, which can be saved. */
     const val ANALYSIS_LIVE = "analysis_live"

@@ -4,6 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import inga.bpmetrics.ui.util.StringFormatHelpers
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import inga.bpmetrics.export.BpmExportService
 import inga.bpmetrics.ui.BPMetricsNavHost
@@ -57,9 +62,34 @@ class MainActivity : ComponentActivity() {
         // Set up the modern Android edge-to-edge UI
         enableEdgeToEdge()
         
-        // Load the library screen with navigation
+        val settings = (application as BPMetricsApp).settingsRepository
+
         setContent {
-            BPMetricsTheme {
+            // Collected at the root, because a theme is not something one screen has. Defaults
+            // match what the app did before the setting existed, so nothing changes for anyone who
+            // never opens Settings.
+            val themeMode by settings.themeMode
+                .collectAsState(initial = inga.bpmetrics.ui.settings.ThemeMode.SYSTEM)
+            val dynamicColour by settings.dynamicColour.collectAsState(initial = true)
+
+            // Date and time formats are pushed into the formatter rather than passed down: they
+            // are read by renderers and helpers that have no business knowing about DataStore.
+            val use24Hour by settings.use24Hour.collectAsState(initial = false)
+            val datePattern by settings.dateFormat
+                .collectAsState(initial = inga.bpmetrics.ui.settings.DateFormats.DEFAULT)
+            LaunchedEffect(use24Hour, datePattern) {
+                StringFormatHelpers.use24Hour = use24Hour
+                StringFormatHelpers.datePattern = datePattern
+            }
+
+            BPMetricsTheme(
+                darkTheme = when (themeMode) {
+                    inga.bpmetrics.ui.settings.ThemeMode.LIGHT -> false
+                    inga.bpmetrics.ui.settings.ThemeMode.DARK -> true
+                    inga.bpmetrics.ui.settings.ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                },
+                dynamicColor = dynamicColour
+            ) {
                 BPMetricsNavHost(libraryRepository)
             }
         }

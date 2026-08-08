@@ -58,7 +58,6 @@ enum class AppDestination(
     ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.AutoMirrored.Filled.Sort),
     EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary),
     RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Render queue", Icons.Default.Movie),
-    INCOMING(inga.bpmetrics.ui.Routes.INCOMING, "Incoming", Icons.Default.CloudDownload),
     PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People),
     WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch),
     TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell),
@@ -76,7 +75,9 @@ enum class AppDestination(
  *
  * @param currentRoute The route currently displayed, used to highlight the active section.
  * @param activeRenderCount Number of queued or rendering jobs; shown as a badge on Render Queue.
- * @param incomingCount Number of records still arriving from watches; badged on Incoming.
+ * @param incomingCount Number of records still arriving from watches; badged on Settings, which
+ * is where Sync now lives. Without it, a transfer in flight would be invisible until someone
+ * happened to open that section.
  * @param onNavigate Invoked with the chosen destination. The caller is responsible for closing
  * the drawer and performing the navigation.
  */
@@ -109,7 +110,7 @@ fun AppDrawerContent(
                         val count = when (destination) {
                             // On the queue itself, which is the section it describes.
                             AppDestination.RENDER_QUEUE -> activeRenderCount
-                            AppDestination.INCOMING -> incomingCount
+                            AppDestination.SETTINGS -> incomingCount
                             else -> 0
                         }
                         if (count > 0) ActivityBadge(count)

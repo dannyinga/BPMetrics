@@ -1,5 +1,6 @@
 package inga.bpmetrics.library
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -27,8 +28,21 @@ data class PersonEntity(
     @PrimaryKey(autoGenerate = true) val personId: Long = 0,
     val name: String,
     val colorArgb: Int,
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+    /**
+     * This person's own resting rate, or null to use the app-wide figure.
+     *
+     * On the person rather than in Settings because it *is* a fact about a person: a runner's
+     * resting rate and a stranger's are different numbers, and a single app-wide value would make
+     * time-in-zone say something false about whichever of them it did not describe. Settings holds
+     * the fallback for anyone who has not given one.
+     */
+    @ColumnInfo(defaultValue = "NULL") val restingBpm: Int? = null,
+    @ColumnInfo(defaultValue = "NULL") val maxBpm: Int? = null
 ) {
     /** How to refer to this person when their name has somehow been left blank. */
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Unnamed person"
+
+    /** Whether this person has figures of their own, rather than inheriting the defaults. */
+    val hasOwnZones: Boolean get() = restingBpm != null || maxBpm != null
 }

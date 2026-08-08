@@ -46,61 +46,28 @@ import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
  * Syncing is otherwise invisible — recordings simply appear in the library some time later, with
  * no way to tell whether more are still coming. After an event with several watches that is
  * exactly the question.
+ *
+ * This used to be a section of its own in the drawer. It is now a block inside the Sync settings,
+ * beside the manual check and the retry interval: a list that is empty almost all of the time does
+ * not earn a permanent place in the navigation, and the question it answers is the one the rest of
+ * that section is already about.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun IncomingScreen(onOpenDrawer: () -> Unit) {
+fun IncomingList(modifier: Modifier = Modifier) {
     val incoming by IncomingRecordManager.incoming.collectAsState()
-    val hasFinished = incoming.any { !it.status.isActive }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Incoming") },
-                navigationIcon = {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
-                    }
-                },
-                actions = {
-                    if (hasFinished) {
-                        IconButton(onClick = { IncomingRecordManager.clearFinished() }) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = "Clear finished")
-                        }
-                    }
-                }
-            )
+    if (incoming.isEmpty()) return
+
+    Column(modifier.fillMaxWidth()) {
+        incoming.forEach { record ->
+            IncomingCard(record)
+            Spacer(Modifier.height(8.dp))
         }
-    ) { padding ->
-        if (incoming.isEmpty()) {
-            Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(32.dp)
-                ) {
-                    Text(
-                        "Nothing arriving",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Recordings appear here as they transfer from your watches. A watch holds " +
-                            "onto its recordings until this phone confirms it has them, so nothing " +
-                            "is lost while you are apart.",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.padding(padding).fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        if (incoming.any { !it.status.isActive }) {
+            androidx.compose.material3.TextButton(
+                onClick = { IncomingRecordManager.clearFinished() }
             ) {
-                items(incoming, key = { it.id }) { record ->
-                    IncomingCard(record)
-                }
+                Text("Clear finished")
             }
         }
     }

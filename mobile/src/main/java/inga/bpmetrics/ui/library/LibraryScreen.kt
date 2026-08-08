@@ -86,6 +86,10 @@ import inga.bpmetrics.datasync.isActive
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderStatus
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.displayName
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 
 /**
  * The main record library screen, displaying a list of BPM records with sorting and filtering options.
@@ -143,6 +147,11 @@ fun LibraryScreen(
     var showFilterDialog by remember { mutableStateOf(false) }
     var showBulkDeleteDialog by remember { mutableStateOf(false) }
     var showBulkTagDialog by remember { mutableStateOf(false) }
+    var showMergeDialog by remember { mutableStateOf(false) }
+
+    // Needed outside the top bar too, by the merge dialog. Derived rather than held, so it can
+    // never describe a selection that has since changed.
+    val selectedRecordsForBulk = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
     var showBulkWearerDialog by remember { mutableStateOf(false) }
 
 
@@ -374,6 +383,19 @@ fun LibraryScreen(
                                 onClick = {
                                     showSelectionMenu = false
                                     onExportSelection(selectedRecords, ExportKind.VIDEO)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Merge into one") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Timeline, contentDescription = null)
+                                },
+                                // Two or more of one person. The menu says why when it cannot,
+                                // rather than offering an item that silently does nothing.
+                                enabled = selectedRecords.size > 1,
+                                onClick = {
+                                    showSelectionMenu = false
+                                    showMergeDialog = true
                                 }
                             )
                             DropdownMenuItem(
@@ -723,6 +745,20 @@ fun LibraryScreen(
         )
     }
 
+
+    if (showMergeDialog) {
+        MergeSelectionDialog(
+            records = selectedRecordsForBulk,
+            people = peopleById,
+            onDismiss = { showMergeDialog = false },
+            onMerge = { deleteOriginals ->
+                viewModel.mergeSelectedRecords(deleteOriginals) { message ->
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
+                showMergeDialog = false
+            }
+        )
+    }
 
     if (showBulkTagDialog) {
         val categories by viewModel.repository.getAllCategories().collectAsState(initial = emptyList())
@@ -1183,3 +1219,119 @@ private fun SectionHeader(title: String, count: String) {
 
 // Extension to capitalize first letter since String.capitalize() is deprecated
 fun String.capitalize() = replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+
+/**
+ * Joining a selection of recordings into one.
+ *
+ * Lives here rather than on a recording's own page, where it briefly did: merging is inherently
+ * about *several* recordings, and asking one of them to nominate the others meant building a picker
+ * that duplicated the multi-select the library already has.
+ *
+ * The dialog's job is to say what will happen before it does. Merging is not reversible once the
+ * originals are gone, and the two ways to get it wrong — joining different people, or joining two
+ * sets an hour apart without meaning to — are both invisible afterwards.
+ */
+@Composable
+private fun MergeSelectionDialog(
+    records: List<BpmRecord>,
+    people: Map<Long, inga.bpmetrics.library.PersonEntity>,
+    onDismiss: () -> Unit,
+    onMerge: (deleteOriginals: Boolean) -> Unit
+) {
+    var deleteOriginals by remember { mutableStateOf(true) }
+
+    val refusal = inga.bpmetrics.library.RecordMerge.refusal(records)
+    val ordered = records.sortedBy { it.metadata.startTime }
+    val personName = ordered.firstOrNull()?.metadata?.personId?.let { people[it]?.displayName }
+    val gapMs = if (refusal == null) inga.bpmetrics.library.RecordMerge.gapMs(records) else 0L
+    val span = if (ordered.isEmpty()) 0L else {
+        ordered.maxOf { it.metadata.startTime + it.metadata.durationMs } -
+            ordered.minOf { it.metadata.startTime }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Merge ${records.size} recordings") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (refusal != null) {
+                    Text(refusal, style = MaterialTheme.typography.bodyMedium)
+                    return@Column
+                }
+
+                Text(
+                    "Joins these into one recording of ${personName ?: "this person"}, in clock " +
+                        "order. The gaps between them are kept, so the timeline stays true.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+
+                ordered.forEach { record ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                record.displayName(personName),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "${getTimeString(record.metadata.startTime)} · " +
+                                    inga.bpmetrics.ui.analysis.shortDuration(record.metadata.durationMs),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "The result spans ${inga.bpmetrics.ui.analysis.shortDuration(span)}.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (gapMs > 60_000L) {
+                    // Joining two sets an hour apart is a legitimate thing to want and also an
+                    // easy mistake. Said before the merge rather than discovered after it.
+                    Text(
+                        "${inga.bpmetrics.ui.analysis.shortDuration(gapMs)} of that has no " +
+                            "readings — the time between them.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(
+                        checked = deleteOriginals,
+                        onCheckedChange = { deleteOriginals = it }
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("Delete the originals", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(
+                    // The merged copy is written before anything is removed, so a failure halfway
+                    // cannot leave someone with neither.
+                    if (deleteOriginals) {
+                        "The merged recording is saved before anything is deleted."
+                    } else {
+                        "You will have both the parts and the merged copy."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onMerge(deleteOriginals) },
+                enabled = refusal == null
+            ) { Text("Merge") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
