@@ -40,10 +40,23 @@ class ConcurrentViewWindow(
         }
 
     /**
+     * The narrowest window this recording can be zoomed to.
+     *
+     * Ten seconds normally: past that the curves are wider apart than the data is dense, and the
+     * chart shows interpolation rather than measurements.
+     *
+     * But never wider than the recording itself. A two-second recording has a full span of 2,000ms,
+     * and asking for a floor of 10,000 against a ceiling of 2,000 is an inverted range — which
+     * `coerceIn` does not clamp, it throws. Pinching such a chart crashed the screen. A recording
+     * shorter than the floor simply cannot be zoomed into, which is the correct behaviour and what
+     * the equal bounds now produce.
+     */
+    private val minSpan get() = MIN_SPAN_MS.coerceAtMost(fullSpan)
+
+    /**
      * Zooms about [focusX], so whatever is under the fingers stays under the fingers.
      *
-     * Bounded below at ten seconds: past that the curves are wider apart than the data is dense,
-     * and the chart shows interpolation rather than measurements.
+     * Bounded below by [minSpan].
      */
     fun zoomBy(factor: Float, focusX: Float, width: Float) {
         if (width <= 0f || factor <= 0f) return
@@ -51,7 +64,7 @@ class ConcurrentViewWindow(
         val focusRatio = (focusX / width).coerceIn(0f, 1f)
         val focusTime = startMs + (focusRatio * spanMs).toLong()
 
-        val newSpan = (spanMs / factor).toLong().coerceIn(MIN_SPAN_MS, fullSpan)
+        val newSpan = (spanMs / factor).toLong().coerceIn(minSpan, fullSpan)
         var newStart = focusTime - (focusRatio * newSpan).toLong()
         var newEnd = newStart + newSpan
 
