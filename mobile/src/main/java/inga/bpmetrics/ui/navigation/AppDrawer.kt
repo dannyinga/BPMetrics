@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -21,7 +22,11 @@ import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Watch
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -49,24 +54,78 @@ import inga.bpmetrics.ui.theme.BpmHigh
 enum class AppDestination(
     val route: String,
     val label: String,
-    val icon: ImageVector
+    val icon: ImageVector,
+    /**
+     * Whether this is somewhere you *work*, rather than somewhere you go to set something up.
+     *
+     * The split is the whole point of the navigation. Four working destinations sit in a bar and
+     * are always one tap away; the rest are visited occasionally and deliberately, and live behind
+     * the menu. Nine drawer items with no grouping was the signal that they needed it.
+     */
+    val isPrimary: Boolean
 ) {
     // Ordered by what a session actually does: look at recordings, analyse them, export the
-    // result. The management screens follow, and Settings and About sit at the bottom where every
-    // other Android app puts them.
-    LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks),
-    ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.AutoMirrored.Filled.Sort),
-    EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary),
-    RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Render queue", Icons.Default.Movie),
-    PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People),
-    WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch),
-    TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell),
-    SETTINGS(inga.bpmetrics.ui.Routes.SETTINGS, "Settings", Icons.Default.Settings),
-    ABOUT(inga.bpmetrics.ui.Routes.ABOUT, "About", Icons.Default.Info);
+    // result, watch it render.
+    LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks, true),
+    ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.AutoMirrored.Filled.Sort, true),
+    EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary, true),
+    RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Queue", Icons.Default.Movie, true),
+
+    // The management screens, and then Settings and About where every other Android app puts them.
+    PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People, false),
+    WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch, false),
+    TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell, false),
+    SETTINGS(inga.bpmetrics.ui.Routes.SETTINGS, "Settings", Icons.Default.Settings, false),
+    ABOUT(inga.bpmetrics.ui.Routes.ABOUT, "About", Icons.Default.Info, false);
 
     companion object {
+        /** The four in the navigation bar, in order. */
+        val primary: List<AppDestination> get() = entries.filter { it.isPrimary }
+
+        /** Everything behind the menu. */
+        val secondary: List<AppDestination> get() = entries.filter { !it.isPrimary }
+
         /** The destination matching [route], or null if it is a detail screen. */
         fun fromRoute(route: String?): AppDestination? = entries.firstOrNull { it.route == route }
+    }
+}
+
+/**
+ * The four places you work, always one tap away.
+ *
+ * A bar rather than a drawer because Android's convention for three to five top-level destinations
+ * is a bar, and because Queue in particular needs reaching while something is rendering — which is
+ * exactly when someone is least inclined to go hunting through a menu for it.
+ */
+@Composable
+fun AppNavigationBar(
+    currentRoute: String?,
+    activeRenderCount: Int,
+    onNavigate: (AppDestination) -> Unit
+) {
+    NavigationBar {
+        AppDestination.primary.forEach { destination ->
+            NavigationBarItem(
+                selected = destination.route == currentRoute,
+                onClick = { onNavigate(destination) },
+                icon = {
+                    if (destination == AppDestination.RENDER_QUEUE && activeRenderCount > 0) {
+                        BadgedBox(
+                            badge = {
+                                Badge {
+                                    Text(activeRenderCount.toString())
+                                }
+                            }
+                        ) {
+                            Icon(destination.icon, contentDescription = null)
+                        }
+                    } else {
+                        Icon(destination.icon, contentDescription = null)
+                    }
+                },
+                label = { Text(destination.label) }
+            )
+        }
     }
 }
 
@@ -88,7 +147,10 @@ fun AppDrawerContent(
     incomingCount: Int,
     onNavigate: (AppDestination) -> Unit
 ) {
-    ModalDrawerSheet {
+    // Narrower than the default 360dp. The sheet holds five items now that the working sections
+    // moved to the bar, and a full-width panel for a short list reads as though something is
+    // missing from it.
+    ModalDrawerSheet(modifier = Modifier.width(268.dp)) {
         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
             Spacer(Modifier.height(24.dp))
             Text(
@@ -98,21 +160,21 @@ fun AppDrawerContent(
             )
             Spacer(Modifier.height(24.dp))
 
-            // About is separated from the working sections: it is reference material, not a place
-            // the user works.
-            val sections = AppDestination.entries.filter { it != AppDestination.ABOUT }
+            // Only the management screens. The four you work in are in the navigation bar, and
+            // listing them here too would be two ways to reach the same place, one of which is
+            // always the wrong one to have used.
+            //
+            // About is separated below: it is reference material, not somewhere you work.
+            val sections = AppDestination.secondary.filter { it != AppDestination.ABOUT }
 
             sections.forEach { destination ->
                 NavigationDrawerItem(
                     label = { Text(destination.label) },
                     icon = { Icon(destination.icon, contentDescription = null) },
                     badge = {
-                        val count = when (destination) {
-                            // On the queue itself, which is the section it describes.
-                            AppDestination.RENDER_QUEUE -> activeRenderCount
-                            AppDestination.SETTINGS -> incomingCount
-                            else -> 0
-                        }
+                        // Sync lives in Settings now, so a transfer in flight is badged there —
+                        // otherwise it would be invisible until someone happened to look.
+                        val count = if (destination == AppDestination.SETTINGS) incomingCount else 0
                         if (count > 0) ActivityBadge(count)
                     },
                     selected = destination.route == currentRoute,

@@ -1199,7 +1199,9 @@ class ExportUtilityViewModel(
      */
     fun startAt(
         source: ExportSource,
-        step: ExportStep = ExportStep.LOOK,
+        // Contents, not Look: an entry point answers step 1 and nothing more. Landing on step 3
+        // would accept defaults for a question the user was never asked.
+        step: ExportStep = ExportStep.CONTENTS,
         /**
          * What to call it, when the caller knows better than the source does.
          *
