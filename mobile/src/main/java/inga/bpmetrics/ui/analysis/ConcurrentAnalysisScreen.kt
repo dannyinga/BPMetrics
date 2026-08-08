@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Save
@@ -283,10 +285,11 @@ private fun ReadoutLegend(analysis: ConcurrentAnalysis, at: Long?) {
                         // Which watch, so identical hardware or a repeated name still resolves to
                         // one person's curve.
                         series.watchLabel?.let { watch ->
-                            Text(
+                            inga.bpmetrics.ui.components.BpmIconLabel(
+                                icon = Icons.Default.Watch,
                                 text = watch,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                tone = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
                             )
                         }
                     }

@@ -29,9 +29,11 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import inga.bpmetrics.library.EventSuggestion
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FilterAltOff
 import androidx.compose.material.icons.filled.SelectAll
@@ -65,6 +67,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -141,7 +144,20 @@ fun LibraryScreen(
     val categoriesForBackup by remember { viewModel.repository.getAllCategories() }
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
-    val isSelectionMode = selectedRecordIds.isNotEmpty()
+    // Selection used to be reachable only by pressing and holding a tile, which is a gesture with
+    // nothing on screen to suggest it exists — the app was telling people about it in a hint card,
+    // which is what a UI does when it has run out of ways to show something. The app bar button
+    // arms the mode with nothing selected yet, so the gesture is now the shortcut rather than the
+    // only door.
+    var selectionArmed by rememberSaveable { mutableStateOf(false) }
+    val isSelectionMode = selectedRecordIds.isNotEmpty() || selectionArmed
+
+    // One way out, so no exit can clear the selection and leave the mode armed behind it — which
+    // would look like the screen ignoring the close button.
+    val exitSelection = {
+        selectionArmed = false
+        viewModel.clearSelection()
+    }
 
     var showSortMenu by remember { mutableStateOf(false) }
     var showSelectionMenu by remember { mutableStateOf(false) }
@@ -185,7 +201,7 @@ fun LibraryScreen(
 
     if (isSelectionMode) {
         BackHandler {
-            viewModel.clearSelection()
+            exitSelection()
         }
     }
 
@@ -295,9 +311,22 @@ fun LibraryScreen(
         topBar = {
             if (isSelectionMode) {
                 TopAppBar(
-                    title = { Text("${selectedRecordIds.size} Selected", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+                    title = {
+                        Text(
+                            // "0 Selected" is a strange thing for a screen to announce when the
+                            // mode was just armed and nothing has been tapped yet. Say what to do
+                            // instead, and switch to the count once there is one.
+                            if (selectedRecordIds.isEmpty()) {
+                                "Select recordings"
+                            } else {
+                                "${selectedRecordIds.size} selected"
+                            },
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
                     navigationIcon = {
-                        IconButton(onClick = { viewModel.clearSelection() }) {
+                        IconButton(onClick = { exitSelection() }) {
                             Icon(Icons.Default.Close, contentDescription = "Clear Selection")
                         }
                     },
@@ -414,7 +443,7 @@ fun LibraryScreen(
                                     showSelectionMenu = false
                                     recordsToExport = selectedRecords
                                     chooseFolderLauncher.launch(null)
-                                    viewModel.clearSelection()
+                                    exitSelection()
                                 }
                             )
                             DropdownMenuItem(
@@ -428,7 +457,7 @@ fun LibraryScreen(
                                         java.util.Locale.US
                                     ).format(java.util.Date())
                                     saveBackupLauncher.launch("BPMetrics_Backup_$stamp.bpmjson")
-                                    viewModel.clearSelection()
+                                    exitSelection()
                                 }
                             )
                             DropdownMenuItem(
@@ -445,7 +474,7 @@ fun LibraryScreen(
                                         watches = watches,
                                         categories = categoriesForBackup
                                     )
-                                    viewModel.clearSelection()
+                                    exitSelection()
                                 }
                             )
 
@@ -498,15 +527,96 @@ fun LibraryScreen(
                         }
                     },
                     actions = {
-                        // Import CSV / JSON button
-                        IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
-                            Icon(Icons.Default.FileDownload, contentDescription = "Import Record(s)")
-                        }
-                        // Show Clear Filters button only when a filter is active
-                        if (filterState != LibraryViewModel.FilterState()) {
-                            IconButton(onClick = { viewModel.clearFilters() }) {
-                                Icon(Icons.Default.FilterAltOff, contentDescription = "Clear All Filters")
+                        // Sorting and filtering live here rather than in a row of their own.
+                        // The list had four bands of chrome above the first recording — app bar,
+                        // view switcher, a sort/filter row, and section header — on a screen whose
+                        // entire job is showing a list. This is the row that had to go, and the
+                        // app bar is where every other list app puts these.
+                        if (viewMode == LibraryViewMode.RECORDINGS) {
+                            Box {
+                                IconButton(onClick = { showSortMenu = true }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.Sort,
+                                        contentDescription = "Sort recordings"
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showSortMenu,
+                                    onDismissRequest = { showSortMenu = false }
+                                ) {
+                                    LibraryViewModel.SortOption.entries.forEach { option ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    option.name.replace("_", " ").lowercase()
+                                                        .replaceFirstChar { it.uppercase() }
+                                                )
+                                            },
+                                            trailingIcon = {
+                                                if (option == currentSort) {
+                                                    Icon(
+                                                        Icons.Default.Check,
+                                                        contentDescription = null
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                viewModel.setSortOption(option)
+                                                showSortMenu = false
+                                            }
+                                        )
+                                    }
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text("Reverse order") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.SwapVert, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            viewModel.toggleReverse()
+                                            showSortMenu = false
+                                        }
+                                    )
+                                }
                             }
+
+                            val filtered = filterState != LibraryViewModel.FilterState()
+                            IconButton(onClick = { showFilterDialog = true }) {
+                                Icon(
+                                    // The icon carries the state, so an active filter is visible
+                                    // without a row explaining it.
+                                    // The same icon either way, tinted when active. FilterAltOff is a
+                                    // crossed-out glyph, which reads as "filtering is unavailable"
+                                    // rather than "no filter set", and it all but vanished against
+                                    // the dark bar.
+                                    Icons.Default.FilterAlt,
+                                    contentDescription = if (filtered) {
+                                        "Filters active — edit them"
+                                    } else {
+                                        "Filter recordings"
+                                    },
+                                    tint = if (filtered) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                            }
+                        }
+
+                        if (viewMode == LibraryViewMode.RECORDINGS) {
+                            IconButton(onClick = { selectionArmed = true }) {
+                                Icon(
+                                    Icons.Default.Checklist,
+                                    contentDescription = "Select recordings"
+                                )
+                            }
+                        }
+
+                        IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                            // Opening a file, not downloading one. FileDownload reads as "fetch
+                            // from somewhere", which is the opposite of what this does.
+                            Icon(Icons.Default.FileOpen, contentDescription = "Import recordings")
                         }
                     }
                 )
@@ -522,8 +632,8 @@ fun LibraryScreen(
                     )
                 ) {
                     Text(
-                        "Press and hold recordings that were made at the same time, then choose " +
-                            "Analyse together.",
+                        "Tap Select in the bar above — or press and hold a recording — to pick the " +
+                            "ones made at the same time, then choose Analyse together.",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(12.dp)
                     )
@@ -552,59 +662,6 @@ fun LibraryScreen(
                 }
             }
 
-            if (viewMode == LibraryViewMode.RECORDINGS) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    OutlinedButton(
-                        onClick = { showSortMenu = true }, 
-                        shape = MaterialTheme.shapes.extraLarge,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Sort, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(currentSort.name.replace("_", " ").lowercase().capitalize())
-                    }
-                    
-                    DropdownMenu(
-                        expanded = showSortMenu, 
-                        onDismissRequest = { showSortMenu = false }
-                    ) {
-                        LibraryViewModel.SortOption.entries.forEach { option ->
-                            DropdownMenuItem(
-                                text = { Text(option.name.replace("_", " ").lowercase().capitalize()) },
-                                onClick = {
-                                    viewModel.setSortOption(option)
-                                    showSortMenu = false
-                                }
-                            )
-                        }
-                    }
-                }
-
-                IconButton(
-                    onClick = { viewModel.toggleReverse() },
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(Icons.Default.SwapVert, contentDescription = "Reverse Order")
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        showFilterDialog = true
-                    },
-                    shape = MaterialTheme.shapes.extraLarge,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Default.FilterAlt, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Filter")
-                }
-            }
-            }
 
             // A tile, wherever one appears — in the flat list, inside an event, or under a
             // suggestion. Selection and navigation behave the same in all three, which is what

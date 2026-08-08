@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -52,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import inga.bpmetrics.BPMetricsApp
 import inga.bpmetrics.export.BpmExportService
 import inga.bpmetrics.export.ExportPreset
+import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import kotlinx.coroutines.Dispatchers
@@ -261,6 +263,33 @@ fun ExportUtilityScreen(
                     navigationIcon = {
                         IconButton(onClick = onOpenDrawer) {
                             Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
+                        }
+                    },
+                    actions = {
+                        // The queue lives here rather than in a tab of its own. It is where an
+                        // export *ends up*, so it belongs beside the flow that makes one — and a
+                        // top-level destination that is empty most of the time was spending a
+                        // quarter of the navigation bar on a screen nobody opens deliberately.
+                        val queued by RenderQueueManager.queue.collectAsStateWithLifecycle()
+                        val active = queued.count {
+                            it.status == inga.bpmetrics.export.RenderStatus.QUEUED ||
+                                it.status == inga.bpmetrics.export.RenderStatus.RENDERING
+                        }
+                        IconButton(onClick = onOpenQueue) {
+                            if (active > 0) {
+                                androidx.compose.material3.BadgedBox(
+                                    badge = {
+                                        androidx.compose.material3.Badge { Text("$active") }
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Movie,
+                                        contentDescription = "Render queue, $active in progress"
+                                    )
+                                }
+                            } else {
+                                Icon(Icons.Default.Movie, contentDescription = "Render queue")
+                            }
                         }
                     }
                 )

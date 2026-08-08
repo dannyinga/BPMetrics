@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -28,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -104,6 +107,9 @@ fun BpmRecordTile(
     }
 }
 
+/** How many tag chips a tile shows before it stops and counts the rest. */
+private const val TILE_TAG_LIMIT = 3
+
 /** The tile's contents, split out so the colour stripe can sit alongside them. */
 @Composable
 private fun TileBody(
@@ -123,24 +129,32 @@ private fun TileBody(
                         // RecordNameFormatter. A user's own title always wins.
                         text = record.displayName(wearer?.displayName, watchName),
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        // Two lines, then ellipsis. Titles are free text and some of them are a
+                        // sentence; unbounded, one of those grew the tile to four lines and broke
+                        // the even rhythm that makes a long list scannable in the first place.
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     // The live profile name wins over the frozen one, so a correction shows up
                     // here; the frozen name remains for recordings with no profile behind them.
                     val wearerLabel = wearer?.displayName
                         ?: record.metadata.wearerName.takeIf { it.isNotBlank() }
-                    val deviceBadge = buildString {
-                        // No emoji: they render differently on every OEM font, do not tint with the
-                        // theme, and are read out literally by a screen reader.
-                        if (wearerLabel != null) append("$wearerLabel · ")
-                        append(record.watchLabel(watchName))
+                    // Who wore it and what they wore, each with its own marker. Icons rather
+                    // than the emoji these used to be: same cue, but they tint with the theme and
+                    // look the same on every phone.
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        wearerLabel?.let {
+                            inga.bpmetrics.ui.components.BpmIconLabel(Icons.Default.Person, it)
+                        }
+                        inga.bpmetrics.ui.components.BpmIconLabel(
+                            Icons.Default.Watch,
+                            record.watchLabel(watchName)
+                        )
                     }
-                    Text(
-                        text = deviceBadge,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                        fontWeight = FontWeight.SemiBold
-                    )
                     Text(
                         text = getDurationString(record.metadata.durationMs),
                         style = MaterialTheme.typography.bodySmall,
@@ -174,7 +188,10 @@ private fun TileBody(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    record.tags.forEach { tag ->
+                    // Three, then a count. Tags are cheap to add and someone with a tagging habit
+                    // had tiles where the chips were taller than everything above them — at which
+                    // point the tile is a tag list that happens to mention a heart rate.
+                    record.tags.take(TILE_TAG_LIMIT).forEach { tag ->
                         Surface(
                             shape = MaterialTheme.shapes.small,
                             color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
@@ -185,9 +202,21 @@ private fun TileBody(
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
+                    }
+                    val hidden = record.tags.size - TILE_TAG_LIMIT
+                    if (hidden > 0) {
+                        Text(
+                            text = "+$hidden",
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

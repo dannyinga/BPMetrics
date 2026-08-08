@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -461,7 +462,10 @@ private fun SettingsGroup(
     subtitle: String,
     content: @Composable () -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    // Collapsed on open, and saveable so that a rotation — or a trip into the preset editor and
+    // back — does not silently close the section someone was working in. Keyed by title because
+    // the sections are siblings in one Column and would otherwise share a slot.
+    var expanded by rememberSaveable(title) { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),

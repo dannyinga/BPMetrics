@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -115,8 +116,16 @@ fun ExportPreview(
             // Height-capped rather than purely aspect-driven. A 9:16 canvas filling the width is
             // nearly twice as tall as it is wide, which pushed every setting off the bottom of the
             // screen — a preview with nothing visible to judge against is not doing its job.
+            //
+            // The cap is a share of the screen rather than a flat 240dp. That number was measured
+            // on a tall phone, where it leaves plenty below it; on a short one the same 240dp is a
+            // third of everything there is, and the settings it is meant to be previewed against go
+            // back off the bottom. A third of the screen is the same *proportion* everywhere, and
+            // the floor keeps it from shrinking to something not worth looking at.
             val safeAspect = aspect.coerceIn(0.4f, 2.5f)
-            val previewHeight = minOf(maxWidth / safeAspect, 240.dp)
+            val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+            val cap = (screenHeight * 0.32f).coerceIn(140.dp, 260.dp)
+            val previewHeight = minOf(maxWidth / safeAspect, cap)
 
             Box(
                 modifier = Modifier

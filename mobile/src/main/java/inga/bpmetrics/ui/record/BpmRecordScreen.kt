@@ -13,16 +13,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.TextButton
@@ -62,6 +66,9 @@ import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.tags.EffectiveTagChip
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.components.BpmCard
+import inga.bpmetrics.ui.components.BpmSectionHeader
+import inga.bpmetrics.ui.components.BpmSpacing
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.components.PersonPicker
 import androidx.compose.material.icons.filled.Done
@@ -198,7 +205,26 @@ fun BpmRecordScreen(
                     onOpenGroup = onOpenGroup
                 )
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
+
+                // The chart comes first. It used to sit below the description, the tags and the
+                // metadata, which meant the one thing the page exists to show was the one thing
+                // you had to scroll to reach.
+                //
+                // The event page's chart at one lane, rather than the static preview that used to
+                // sit here. Same code, so this scrubs and zooms exactly as that one does — there
+                // were two chart implementations and only one of them could.
+                if (!analysis.isEmpty) {
+                    RecordChartSection(
+                        analysis = analysis,
+                        scrubbedMs = scrubbedMs,
+                        onScrub = { scrubbedMs = it },
+                        onExportImage = onExportImage,
+                        onExportVideo = onExportVideo,
+                        onSplit = { showSplitDialog = true }
+                    )
+                    Spacer(Modifier.height(BpmSpacing.Large))
+                }
 
                 // Display low, avg, and max BPM metrics.
                 BpmTrio(
@@ -209,7 +235,16 @@ fun BpmRecordScreen(
                     fontSize = 24.sp
                 )
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(BpmSpacing.Large))
+
+                if (!analysis.isEmpty) {
+                    BpmSectionHeader("Insights")
+                    RecordInsightsSection(
+                        insights = insights,
+                        onSelectMoment = { scrubbedMs = it }
+                    )
+                    Spacer(Modifier.height(BpmSpacing.Large))
+                }
 
                 // Device & Wearer Metadata Card
                 if (isEditing) {
@@ -251,22 +286,27 @@ fun BpmRecordScreen(
                         val wearerLabel = r.metadata.personId?.let { id ->
                             people.firstOrNull { it.personId == id }?.displayName
                         } ?: r.metadata.wearerName.takeIf { it.isNotBlank() }
-                        val deviceBadge = buildString {
-                            if (wearerLabel != null) append("$wearerLabel · ")
-                            append(r.watchLabel(watchName))
+                        wearerLabel?.let {
+                            inga.bpmetrics.ui.components.BpmIconLabel(
+                                icon = Icons.Default.Person,
+                                text = it,
+                                tone = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Spacer(Modifier.width(12.dp))
                         }
-                        Text(
-                            text = deviceBadge,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
+                        inga.bpmetrics.ui.components.BpmIconLabel(
+                            icon = Icons.Default.Watch,
+                            text = r.watchLabel(watchName),
+                            tone = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.titleSmall
                         )
                     }
                     Spacer(Modifier.height(16.dp))
                 }
                 
-                Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
-                    Text("Description", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                BpmCard(title = "Details") {
+                    Text("Description", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     if (isEditing) {
                         OutlinedTextField(
                             value = editedDescription,
@@ -281,7 +321,7 @@ fun BpmRecordScreen(
                     Spacer(Modifier.height(16.dp))
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Tags", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Tags", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         IconButton(onClick = { showTagDialog = true }) {
                             Icon(Icons.Default.Add, contentDescription = "Add Tag")
                         }
@@ -311,34 +351,25 @@ fun BpmRecordScreen(
                         }
                     }
                 }
-                Spacer(Modifier.height(24.dp))
 
-                // The event page's chart at one lane, rather than the static preview that used to
-                // sit here. Same code, so this scrubs and zooms exactly as that one does — there
-                // were two chart implementations and only one of them could.
-                if (!analysis.isEmpty) {
-                    RecordChartSection(
-                        analysis = analysis,
-                        scrubbedMs = scrubbedMs,
-                        onScrub = { scrubbedMs = it },
-                        onExportImage = onExportImage,
-                        onExportVideo = onExportVideo,
-                        onSplit = { showSplitDialog = true }
-                    )
+                Spacer(Modifier.height(BpmSpacing.Large))
 
-                    Spacer(Modifier.height(20.dp))
-
-                    RecordInsightsSection(
-                        insights = insights,
-                        onSelectMoment = { scrubbedMs = it }
-                    )
-                }
-                
-                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.End) {
-                    IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                // Deleting is the one thing on this page that cannot be undone, so it is named
+                // rather than left as a bare red glyph floating at the end of the scroll.
+                BpmCard(title = "Danger zone") {
+                    TextButton(
+                        onClick = { showDeleteConfirm = true },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(BpmSpacing.Small))
+                        Text("Delete this recording")
                     }
                 }
+
+                Spacer(Modifier.height(BpmSpacing.XLarge))
             }
         }
 

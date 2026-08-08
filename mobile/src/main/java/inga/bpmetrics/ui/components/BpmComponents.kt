@@ -86,6 +86,85 @@ fun BpmEmptyState(
 }
 
 /**
+ * One group of related things on a long screen.
+ *
+ * The recording page was chart, insights, zones, description, tags, metadata and actions in a
+ * single unbroken scroll, with only a heading and a gap to say where one thing ended and the next
+ * began. At that length a gap is not a boundary — it reads as more of the same. A card is.
+ */
+@Composable
+fun BpmCard(
+    modifier: Modifier = Modifier,
+    title: String? = null,
+    action: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit
+) {
+    androidx.compose.material3.Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
+        )
+    ) {
+        Column(Modifier.padding(BpmSpacing.Large)) {
+            if (title != null || action != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    title?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    action?.invoke()
+                }
+                Spacer(Modifier.height(BpmSpacing.Small))
+            }
+            content()
+        }
+    }
+}
+
+/**
+ * A small icon and its text, inline.
+ *
+ * These markers used to be emoji — `⌚`, `👤` — which was the right *idea* and the wrong glyph:
+ * they render differently on every OEM font, do not tint with the theme, do not scale with the
+ * text beside them, and a screen reader announces them literally. As Material symbols they read
+ * the same everywhere, take the colour of the line they sit on, and stay silent to a screen reader
+ * that is already reading the words.
+ */
+@Composable
+fun BpmIconLabel(
+    icon: ImageVector,
+    text: String,
+    modifier: Modifier = Modifier,
+    tone: Color? = null,
+    style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.labelSmall
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            icon,
+            // Silent: the text beside it says the same thing, and announcing both makes a screen
+            // reader repeat itself on every row of a list.
+            contentDescription = null,
+            modifier = Modifier.size(13.dp),
+            tint = tone ?: MaterialTheme.colorScheme.tertiary
+        )
+        Spacer(Modifier.size(4.dp))
+        Text(
+            text,
+            style = style,
+            color = tone ?: MaterialTheme.colorScheme.tertiary,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+/**
  * A section of a list with nothing in it, where the rest of the list has something.
  *
  * Distinct from [BpmEmptyState] and deliberately so: that one owns the screen and is centred in it,

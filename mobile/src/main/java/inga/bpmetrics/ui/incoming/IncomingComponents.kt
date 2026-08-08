@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.filled.Watch
 import inga.bpmetrics.datasync.IncomingRecord
 import inga.bpmetrics.datasync.IncomingRecordManager
 import inga.bpmetrics.datasync.IncomingStatus
@@ -84,10 +85,11 @@ private fun IncomingCard(record: IncomingRecord) {
             Spacer(Modifier.size(16.dp))
 
             Column(Modifier.fillMaxWidth()) {
-                Text(
+                inga.bpmetrics.ui.components.BpmIconLabel(
+                    icon = Icons.Default.Watch,
                     text = record.label,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
+                    tone = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.titleSmall
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(

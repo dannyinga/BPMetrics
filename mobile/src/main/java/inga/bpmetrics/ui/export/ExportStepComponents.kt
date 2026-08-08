@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -307,65 +308,74 @@ fun ContentsStep(
 
     val recordsById = remember(records) { records.associateBy { it.metadata.recordId } }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            val ticked = clips.count { it.selected }
-            // Anything with nobody recording during it can never be ticked, so it must not count
-            // toward "all selected" — otherwise the button would never settle on "Deselect all".
-            val selectable = clips.count { it.recordIds.isNotEmpty() }
+    val ticked = clips.count { it.selected }
+    // Anything with nobody recording during it can never be ticked, so it must not count
+    // toward "all selected" — otherwise the button would never settle on "Deselect all".
+    val selectable = clips.count { it.recordIds.isNotEmpty() }
 
-            Column(Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        if (ticked == 0) {
-                            "Choose which clips to export"
-                        } else {
-                            "$ticked of ${clips.size} clip${if (clips.size == 1) "" else "s"} · " +
-                                "one export each"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.fillMaxSize()) {
+        // Outside the list rather than the first item in it. A day of filming is forty-odd clips,
+        // and as an item this scrolled away after the first two — taking with it the running count
+        // of what is ticked and the only way to clear the lot. Both are needed most at the bottom
+        // of a long list, which is precisely where they used to be unavailable.
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (ticked == 0) {
+                        "Choose which clips to export"
+                    } else {
+                        "$ticked of ${clips.size} clip${if (clips.size == 1) "" else "s"} · " +
+                            "one export each"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = onToggleOrder) {
+                    Icon(
+                        Icons.Default.SwapVert,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
                     )
-                    TextButton(onClick = onToggleOrder) {
-                        Icon(
-                            Icons.Default.SwapVert,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (oldestFirst) "Oldest first" else "Newest first")
-                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (oldestFirst) "Oldest first" else "Newest first")
                 }
-                if (selectable > 1) {
-                    TextButton(
-                        onClick = { onSelectAll(ticked < selectable) },
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Text(if (ticked < selectable) "Select all" else "Deselect all")
-                    }
+            }
+            if (selectable > 1) {
+                TextButton(
+                    onClick = { onSelectAll(ticked < selectable) },
+                    contentPadding = PaddingValues(horizontal = 4.dp)
+                ) {
+                    Text(if (ticked < selectable) "Select all" else "Deselect all")
                 }
             }
         }
+        HorizontalDivider()
 
-        items(clips, key = { it.clip.uri.toString() }) { selection ->
-            ClipCard(
-                selection = selection,
-                // Only people who were actually recording during this clip. Offering the rest
-                // would let someone tick a curve that has no data for the footage.
-                candidates = records.filter { selection.clip.overlaps(it) },
-                recordsById = recordsById,
-                peopleById = peopleById,
-                onToggleClip = { onToggleClip(selection.clip.uri) },
-                onToggleRecord = { onToggleRecord(selection.clip.uri, it) }
-            )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(clips, key = { it.clip.uri.toString() }) { selection ->
+                ClipCard(
+                    selection = selection,
+                    // Only people who were actually recording during this clip. Offering the rest
+                    // would let someone tick a curve that has no data for the footage.
+                    candidates = records.filter { selection.clip.overlaps(it) },
+                    recordsById = recordsById,
+                    peopleById = peopleById,
+                    onToggleClip = { onToggleClip(selection.clip.uri) },
+                    onToggleRecord = { onToggleRecord(selection.clip.uri, it) }
+                )
+            }
         }
     }
 }

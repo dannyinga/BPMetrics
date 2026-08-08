@@ -12,7 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Movie
@@ -67,9 +67,15 @@ enum class AppDestination(
     // Ordered by what a session actually does: look at recordings, analyse them, export the
     // result, watch it render.
     LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks, true),
-    ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.AutoMirrored.Filled.Sort, true),
+    // Insights rather than Sort: Sort is what the Library's sort control uses, and two places
+    // meaning different things with one glyph is worse than either choice on its own.
+    ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.Default.Insights, true),
     EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary, true),
-    RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Queue", Icons.Default.Movie, true),
+
+    // The render queue is not here: it folded into the Export screen's header, where an export
+    // ends up. A top-level destination that is empty most of the time was spending a quarter of
+    // the bar on a screen nobody opens deliberately.
+    RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Render queue", Icons.Default.Movie, false),
 
     // The management screens, and then Settings and About where every other Android app puts them.
     PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People, false),
@@ -174,7 +180,13 @@ fun AppDrawerContent(
                     badge = {
                         // Sync lives in Settings now, so a transfer in flight is badged there —
                         // otherwise it would be invisible until someone happened to look.
-                        val count = if (destination == AppDestination.SETTINGS) incomingCount else 0
+                        val count = when (destination) {
+                            // The queue is behind the menu now, so its badge follows it there.
+                            AppDestination.RENDER_QUEUE -> activeRenderCount
+                            // Sync lives in Settings, so a transfer in flight is badged there.
+                            AppDestination.SETTINGS -> incomingCount
+                            else -> 0
+                        }
                         if (count > 0) ActivityBadge(count)
                     },
                     selected = destination.route == currentRoute,

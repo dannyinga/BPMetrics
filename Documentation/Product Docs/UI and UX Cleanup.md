@@ -1,7 +1,7 @@
 # UI and UX Cleanup
 
-**Status:** design, not yet started
-**Sprints:** 6
+**Status:** Sprints 1–4 landed; 5–7 outstanding
+**Sprints:** 7
 **Depends on:** Export Utility and Settings Hardening (the surfaces have stopped moving)
 
 ---
@@ -248,14 +248,78 @@ This is mechanical, large, and best done in one sweep rather than trickled.
 
 ---
 
-### Sprint 6 — Strings and polish
+### Sprint 6 — Cover images
+
+A library is currently read. Every tile carries a name, a time and a duration, and telling one
+evening from another means reading all three on every row. A picture does that work at a glance,
+which is what every photo-adjacent app relies on and what a list of heart rate recordings has no
+way to do today.
+
+#### The image belongs to the event, not the recording
+
+This is the whole design. Putting a cover on each recording would make "give everything from that
+night the same picture" a bulk operation, repeated every time a recording arrives late from a
+watch. Putting it on the **event** means recordings inherit it by virtue of being together, which
+is the thing that already makes them a set.
+
+So it follows the same shape as tags:
+
+```
+Collection  (Coachella)        ← a cover here …
+└── Collection  (Day 1)        ← … overridden here …
+    └── Event  (Subtronics)    ← … and here
+        └── Recording          ← shows the nearest one above it
+```
+
+Nearest wins, nothing is written downward, and a recording filed into an event picks up its cover
+immediately with nothing to clean up — exactly as `EffectiveTagsResolver` already does for tags.
+A per-recording override exists for the one that deserves its own picture, and is the exception.
+
+#### Three decisions worth stating
+
+**A copy, not a reference.** A `MediaStore` URI can have its permission revoked, and the photo
+behind it can be deleted from the gallery — either of which would leave holes in the library with
+nothing to be done about them. Covers are downscaled to about 512px on the long edge and written
+into app storage. A few kilobytes each, and the Storage section already exists to show what they
+add up to and to clear them.
+
+**Crop stored as fractions.** The same reasoning as the export graph placement: a tile is wide, a
+grid thumbnail is square, and a header is wider still. Fractions survive all three; pixels survive
+none of them. The crop UI is the drag-corners overlay the export flow already has.
+
+**Contrast is the hard part, and it decides whether this looks designed.** These tiles carry a
+title, a time, a duration, a person and tags. Over a bright photo all of that becomes unreadable,
+and the usual fix — a flat dark overlay — makes every cover look muddy and defeats the point of
+having one. What is needed is a gradient scrim anchored to the text rather than the tile, so the
+photo stays bright where nothing is written on it. If that cannot be made to work over a light,
+busy photo, the honest answer is to put the cover in a leading thumbnail instead of behind the
+whole tile — a smaller change with none of the risk.
+
+#### Tickets
 
 | Ticket | Work |
 |---|---|
-| **UX-6.1** | Move every user-facing literal into `strings.xml`, with plurals where counts appear. |
-| **UX-6.2** | Reconcile the wording that the move exposes. One word per concept: *collection*, *event*, *recording*, *person*, *watch*. |
-| **UX-6.3** | Motion pass: shared-element or fade transitions between library and detail, and a consistent expand animation. |
-| **UX-6.4** | Loading states. Skeletons where a list is coming, spinners only where nothing can be shown. |
+| **UX-6.1** | `coverPath` and a crop rect on `EventEntity` and `EventGroupEntity`, plus an optional override on `BpmRecordEntity`. One migration. Fractions for the crop; nullable everywhere, meaning "inherit". |
+| **UX-6.2** | `CoverResolver` — the nearest cover above a recording, walking event then collection then its parents. Pure and tested, mirroring `EffectiveTagsResolver`, including the cycle guard `CollectionTree` already needs. |
+| **UX-6.3** | Import: pick from the gallery, downscale, write to `files/covers/`, take no persistable permission because nothing is kept pointing at the original. Delete the file when its owner is deleted. |
+| **UX-6.4** | Crop UI, reusing the export flow's corner-drag overlay. Preview against a real tile at real size, not an abstract box. |
+| **UX-6.5** | Tile rendering with the gradient scrim, and a contrast check against a deliberately bright, busy photo. This is the ticket that decides whether the feature ships as a background or as a thumbnail. |
+| **UX-6.6** | Set a cover from an event page, a collection page, and from library multi-select — the last of which sets it on the event those recordings share, and says so rather than silently doing something else if they do not share one. |
+| **UX-6.7** | Storage: covers appear in the breakdown, with a way to clear them all. |
+
+**Verify:** a library of twenty recordings across four events, covers on two of them. The two should
+be identifiable without reading a word, and the other two should not look broken for lacking one.
+
+---
+
+### Sprint 7 — Strings and polish
+
+| Ticket | Work |
+|---|---|
+| **UX-7.1** | Move every user-facing literal into `strings.xml`, with plurals where counts appear. |
+| **UX-7.2** | Reconcile the wording that the move exposes. One word per concept: *collection*, *event*, *recording*, *person*, *watch*. |
+| **UX-7.3** | Motion pass: shared-element or fade transitions between library and detail, and a consistent expand animation. |
+| **UX-7.4** | Loading states. Skeletons where a list is coming, spinners only where nothing can be shown. |
 
 **Verify:** read every string in the file in order. It should sound like one person wrote it.
 
