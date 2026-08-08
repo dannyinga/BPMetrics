@@ -130,8 +130,10 @@ private fun TileBody(
                     val wearerLabel = wearer?.displayName
                         ?: record.metadata.wearerName.takeIf { it.isNotBlank() }
                     val deviceBadge = buildString {
-                        if (wearerLabel != null) append("👤 $wearerLabel  •  ")
-                        append("⌚ ${record.watchLabel(watchName)}")
+                        // No emoji: they render differently on every OEM font, do not tint with the
+                        // theme, and are read out literally by a screen reader.
+                        if (wearerLabel != null) append("$wearerLabel · ")
+                        append(record.watchLabel(watchName))
                     }
                     Text(
                         text = deviceBadge,

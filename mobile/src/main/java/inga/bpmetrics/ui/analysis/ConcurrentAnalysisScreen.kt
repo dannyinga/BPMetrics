@@ -284,7 +284,7 @@ private fun ReadoutLegend(analysis: ConcurrentAnalysis, at: Long?) {
                         // one person's curve.
                         series.watchLabel?.let { watch ->
                             Text(
-                                text = "⌚ $watch",
+                                text = watch,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

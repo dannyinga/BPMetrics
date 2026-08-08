@@ -190,7 +190,7 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
                     Spacer(Modifier.width(6.dp))
                 }
                 Text(
-                    text = row.wearer?.let { "Worn by ${it.displayName}" } ?: "👤 No wearer set",
+                    text = row.wearer?.let { "Worn by ${it.displayName}" } ?: "No wearer set",
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (row.wearer != null) {
                         MaterialTheme.colorScheme.primary

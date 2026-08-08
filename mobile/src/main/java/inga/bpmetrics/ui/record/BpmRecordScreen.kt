@@ -126,7 +126,11 @@ fun BpmRecordScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
                     title = {
                         Column {
                             if (isEditing) {
@@ -248,8 +252,8 @@ fun BpmRecordScreen(
                             people.firstOrNull { it.personId == id }?.displayName
                         } ?: r.metadata.wearerName.takeIf { it.isNotBlank() }
                         val deviceBadge = buildString {
-                            if (wearerLabel != null) append("👤 $wearerLabel  •  ")
-                            append("⌚ ${r.watchLabel(watchName)}")
+                            if (wearerLabel != null) append("$wearerLabel · ")
+                            append(r.watchLabel(watchName))
                         }
                         Text(
                             text = deviceBadge,

@@ -533,45 +533,19 @@ fun RenderJobCard(
     }
 }
 
+
+/**
+ * Nothing rendering.
+ *
+ * Says where renders come from rather than only that there are none — an empty screen that just
+ * apologises leaves someone guessing what they were supposed to have done.
+ */
 @Composable
 fun EmptyQueueState() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(32.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.1f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.HourglassEmpty,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
-                    modifier = Modifier.size(40.dp)
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "No rendering tasks",
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Add videos to render from any recording detailed view.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                modifier = Modifier.alpha(0.7f)
-            )
-        }
-    }
+    inga.bpmetrics.ui.components.BpmEmptyState(
+        icon = Icons.Default.HourglassEmpty,
+        title = "Nothing rendering",
+        body = "Videos you queue from the export utility appear here, and carry on rendering " +
+            "while you use the rest of the app."
+    )
 }

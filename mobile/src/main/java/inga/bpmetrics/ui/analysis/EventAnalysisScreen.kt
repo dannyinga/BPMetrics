@@ -541,7 +541,7 @@ private fun PersonReadout(
                         )
                         series.watchLabel?.let { watch ->
                             Text(
-                                text = "⌚ $watch",
+                                text = watch,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

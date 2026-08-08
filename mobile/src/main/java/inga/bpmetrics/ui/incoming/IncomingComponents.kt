@@ -85,7 +85,7 @@ private fun IncomingCard(record: IncomingRecord) {
 
             Column(Modifier.fillMaxWidth()) {
                 Text(
-                    text = "⌚ ${record.label}",
+                    text = record.label,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )

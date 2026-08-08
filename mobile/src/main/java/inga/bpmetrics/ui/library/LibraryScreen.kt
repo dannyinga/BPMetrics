@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Folder
@@ -1053,7 +1054,7 @@ private fun EventsList(
 
         if (events.isEmpty() && unfiled.isEmpty()) {
             item {
-                EmptySection(
+                inga.bpmetrics.ui.components.BpmEmptySection(
                     "No events yet",
                     "An event is one occasion — a set, a session, an evening. Recordings filed " +
                         "under one are analysed together, one lane per person."
@@ -1061,7 +1062,7 @@ private fun EventsList(
             }
         } else if (events.isEmpty()) {
             item {
-                EmptySection(
+                inga.bpmetrics.ui.components.BpmEmptySection(
                     "No events yet",
                     "Press and hold recordings below, then choose Add to event — or take one of " +
                         "the suggestions above."
@@ -1136,7 +1137,7 @@ private fun GroupsList(
 
         if (groups.isEmpty() && ungrouped.isEmpty()) {
             item {
-                EmptySection(
+                inga.bpmetrics.ui.components.BpmEmptySection(
                     "No collections yet",
                     "A collection gathers events that belong together — a festival, a day of " +
                         "one, a tour. Create some events first, then gather them."
@@ -1144,7 +1145,7 @@ private fun GroupsList(
             }
         } else if (groups.isEmpty()) {
             item {
-                EmptySection(
+                inga.bpmetrics.ui.components.BpmEmptySection(
                     "No collections yet",
                     "Tag a collection once and every recording under it inherits it, however " +
                         "deeply nested. Use the overflow " +
@@ -1155,21 +1156,14 @@ private fun GroupsList(
     }
 }
 
-/** A section with nothing in it, saying what would put something there. */
-@Composable
-private fun EmptySection(title: String, message: String) {
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            message,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-/** The whole-screen version, for a Recordings list with nothing in it. */
+// EmptySection moved to ui/components as BpmEmptySection: three screens were writing their own,
+// and an empty state is exactly the kind of thing that should read the same everywhere.
+/**
+ * The whole-screen version, for a list with nothing in it at all.
+ *
+ * Wraps the shared component with the Library icon, so the wording is the only thing this screen
+ * still decides.
+ */
 @Composable
 private fun EmptyLibrary(
     title: String,
@@ -1177,24 +1171,13 @@ private fun EmptyLibrary(
     action: String?,
     onAction: () -> Unit
 ) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            modifier = Modifier.padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            action?.let {
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onAction) { Text(it) }
-            }
-        }
-    }
+    inga.bpmetrics.ui.components.BpmEmptyState(
+        icon = Icons.AutoMirrored.Filled.LibraryBooks,
+        title = title,
+        body = message,
+        actionLabel = action,
+        onAction = onAction.takeIf { action != null }
+    )
 }
 
 @Composable
