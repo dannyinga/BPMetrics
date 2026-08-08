@@ -64,12 +64,14 @@ enum class AppDestination(
      */
     val isPrimary: Boolean
 ) {
-    // Ordered by what a session actually does: look at recordings, analyse them, export the
-    // result, watch it render.
-    LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks, true),
+    // The bar is drawn in declaration order, so this list is the layout. Library sits in the
+    // middle: it is the one opened most, and the middle of a bottom bar is the easiest place on
+    // the screen to reach with a thumb.
+    //
     // Insights rather than Sort: Sort is what the Library's sort control uses, and two places
     // meaning different things with one glyph is worse than either choice on its own.
     ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.Default.Insights, true),
+    LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks, true),
     EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary, true),
 
     // The render queue is in neither the bar nor the menu. It folded into the Export screen's

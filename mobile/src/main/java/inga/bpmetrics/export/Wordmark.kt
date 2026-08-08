@@ -4,6 +4,44 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 
+/**
+ * Which side of the graph the live readouts stack down.
+ *
+ * Only the two top corners: the pills stack downward from wherever they start, so a bottom corner
+ * would either grow off the frame or have to stack upward, which puts the fastest wearer at the
+ * bottom and reverses the meaning of the column.
+ */
+enum class PillCorner(val label: String) {
+    // Declared left-then-right because the chips are laid out in this order, and a control offering
+    // "Right" on the left of "Left" is asking to be misread. Gson stores an enum by name, so the
+    // order here is presentation only and no saved preset is affected by changing it.
+    TOP_LEFT("Left"),
+    TOP_RIGHT("Right")
+}
+
+/**
+ * What the graph says about when it is.
+ *
+ * A setting rather than a consequence of how many people are on the frame. It used to appear only
+ * on multi-wearer exports, for no better reason than that it was written inside the multi-wearer
+ * HUD — so a solo export, the commonest kind, had no time on it at all.
+ */
+enum class ClockMode(val label: String) {
+    NONE("Off"),
+
+    /** Wall clock. What lets an export be matched against footage, a set list, or a memory. */
+    CLOCK("Time of day"),
+
+    /**
+     * How far into the session the playhead is.
+     *
+     * Measured from when the *earliest* recording on the frame began, which is well defined however
+     * many people are on it — unlike "time into the recording", which with five wearers who started
+     * five minutes apart is five different numbers.
+     */
+    ELAPSED("Time into session")
+}
+
 /** Which corner of the canvas an export signs itself in. */
 enum class WordmarkCorner(val label: String) {
     TOP_LEFT("Top left"),

@@ -15,7 +15,19 @@ data class Cover(
     val cropLeft: Float = 0f,
     val cropTop: Float = 0f,
     val cropRight: Float = 1f,
-    val cropBottom: Float = 1f
+    val cropBottom: Float = 1f,
+    /**
+     * How far to soften the picture behind the writing, 0..1.
+     *
+     * For covers that are themselves made of type. An event flyer is the obvious and common case —
+     * a headliner in ninety-point letters and a support list underneath — and no amount of
+     * protecting *our* text fixes that, because the problem is not contrast, it is two sets of
+     * words competing in one space. Blurring dissolves the flyer's type while keeping its colour
+     * and composition, which is what identifies the night at a glance anyway.
+     *
+     * Zero, and therefore off, for the ordinary case: a photograph of a crowd needs none of this.
+     */
+    val blur: Float = 0f
 ) {
     val cropWidth: Float get() = cropRight - cropLeft
     val cropHeight: Float get() = cropBottom - cropTop
@@ -33,18 +45,27 @@ data class Cover(
             left: Float?,
             top: Float?,
             right: Float?,
-            bottom: Float?
+            bottom: Float?,
+            blur: Float? = null
         ): Cover? {
             val name = path?.takeIf { it.isNotBlank() } ?: return null
+            val softness = (blur ?: 0f).coerceIn(0f, 1f)
             val l = left ?: 0f
             val t = top ?: 0f
             val r = right ?: 1f
             val b = bottom ?: 1f
             val degenerate = (r - l) < 0.01f || (b - t) < 0.01f
             return if (degenerate) {
-                Cover(name)
+                Cover(name, blur = softness)
             } else {
-                Cover(name, l.coerceIn(0f, 1f), t.coerceIn(0f, 1f), r.coerceIn(0f, 1f), b.coerceIn(0f, 1f))
+                Cover(
+                    name,
+                    l.coerceIn(0f, 1f),
+                    t.coerceIn(0f, 1f),
+                    r.coerceIn(0f, 1f),
+                    b.coerceIn(0f, 1f),
+                    softness
+                )
             }
         }
     }

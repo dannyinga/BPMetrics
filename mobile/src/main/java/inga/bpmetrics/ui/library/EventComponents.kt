@@ -42,6 +42,7 @@ import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.ui.components.PersonSwatch
 import inga.bpmetrics.ui.components.PersonAvatar
+import inga.bpmetrics.ui.components.overCover
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
@@ -120,7 +121,7 @@ fun PersonFaces(people: List<PersonEntity>, max: Int = 5, size: Dp = 26.dp) {
  * way of the readings below.
  */
 @Composable
-private fun CardCounts(recordCount: Int, eventCount: Int?) {
+private fun CardCounts(recordCount: Int, eventCount: Int?, hasCover: Boolean) {
     Text(
         buildString {
             eventCount?.let {
@@ -129,8 +130,8 @@ private fun CardCounts(recordCount: Int, eventCount: Int?) {
             }
             append(countLabel(recordCount, "recording"))
         },
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.labelMedium.overCover(hasCover),
+        color = if (hasCover) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
     )
@@ -148,15 +149,15 @@ private fun CardCounts(recordCount: Int, eventCount: Int?) {
  * A line to themselves costs nothing: there was room under the faces the whole time.
  */
 @Composable
-private fun CardVitals(peakBpm: Int?, avgBpm: Int?) {
+private fun CardVitals(peakBpm: Int?, avgBpm: Int?, hasCover: Boolean) {
     if (peakBpm == null && avgBpm == null) return
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(18.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        peakBpm?.let { StatPair("Peak", it, inga.bpmetrics.ui.theme.BpmHigh) }
-        avgBpm?.let { StatPair("Avg", it, inga.bpmetrics.ui.theme.BpmAvg) }
+        peakBpm?.let { StatPair("Peak", it, inga.bpmetrics.ui.theme.BpmHigh, hasCover) }
+        avgBpm?.let { StatPair("Avg", it, inga.bpmetrics.ui.theme.BpmAvg, hasCover) }
     }
 }
 
@@ -168,19 +169,19 @@ private fun CardVitals(peakBpm: Int?, avgBpm: Int?) {
  * and a column of cards does not jitter as it scrolls.
  */
 @Composable
-private fun StatPair(label: String, value: Int, tone: Color) {
+private fun StatPair(label: String, value: Int, tone: Color, hasCover: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            style = MaterialTheme.typography.labelSmall.overCover(hasCover),
+            color = if (hasCover) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.width(5.dp))
         Text(
             value.toString(),
             style = MaterialTheme.typography.titleSmall.copy(
                 fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals
-            ),
+            ).overCover(hasCover),
             fontWeight = FontWeight.Bold,
             color = tone
         )
@@ -260,7 +261,7 @@ fun EventCard(
                     // distinguishes this card from the one above it.
                     Text(
                         summary.event.displayName,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleMedium.overCover(cover != null),
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -272,8 +273,9 @@ fun EventCard(
                             append(formatSpan(summary.span))
                             groupName?.let { append("  ·  $it") }
                         },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall.overCover(cover != null),
+                        color = if (cover != null) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
@@ -287,12 +289,12 @@ fun EventCard(
                             PersonFaces(summary.people)
                             Spacer(Modifier.width(12.dp))
                         }
-                        CardCounts(summary.recordCount, eventCount = null)
+                        CardCounts(summary.recordCount, eventCount = null, hasCover = cover != null)
                     }
 
                     if (summary.peakBpm != null || summary.avgBpm != null) {
                         Spacer(Modifier.height(6.dp))
-                        CardVitals(summary.peakBpm, summary.avgBpm)
+                        CardVitals(summary.peakBpm, summary.avgBpm, hasCover = cover != null)
                     }
                 }
 
@@ -385,13 +387,14 @@ fun GroupCard(
                 Column(Modifier.weight(1f)) {
                     Text(
                         summary.group.displayName,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleMedium.overCover(cover != null),
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         formatSpan(summary.span),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = MaterialTheme.typography.bodySmall.overCover(cover != null),
+                        color = if (cover != null) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     // Nested collections named on their own line when there are any, because that
                     // is what explains the shape of everything after it: a festival of two days
@@ -411,12 +414,12 @@ fun GroupCard(
                             PersonFaces(summary.people)
                             Spacer(Modifier.width(12.dp))
                         }
-                        CardCounts(summary.recordCount, summary.eventCount)
+                        CardCounts(summary.recordCount, summary.eventCount, hasCover = cover != null)
                     }
 
                     if (summary.peakBpm != null || summary.avgBpm != null) {
                         Spacer(Modifier.height(6.dp))
-                        CardVitals(summary.peakBpm, summary.avgBpm)
+                        CardVitals(summary.peakBpm, summary.avgBpm, hasCover = cover != null)
                     }
                 }
 

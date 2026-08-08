@@ -42,6 +42,7 @@ import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDurationString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.components.overCover
 import inga.bpmetrics.ui.theme.BpmAvg
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
@@ -117,7 +118,7 @@ fun BpmRecordTile(
                             .background(Color(person.colorArgb))
                     )
                 }
-                TileBody(record, watchName, wearer)
+                    TileBody(record, watchName, wearer, hasCover = cover != null)
             }
         }
     }
@@ -142,7 +143,9 @@ private const val TILE_TAG_LIMIT = 3
 private fun TileBody(
     record: BpmRecord,
     watchName: String?,
-    wearer: PersonEntity?
+    wearer: PersonEntity?,
+    /** Whether a photograph is behind this, so the writing can be given a halo to sit in. */
+    hasCover: Boolean = false
 ) {
     Column(modifier = Modifier.padding(12.dp)) {
             Row(
@@ -160,7 +163,7 @@ private fun TileBody(
                         // Never a bare "Untitled 4" where a wearer is known — see
                         // RecordNameFormatter. A user's own title always wins.
                         text = record.displayName(wearer?.displayName, watchName),
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleMedium.overCover(hasCover),
                         fontWeight = FontWeight.Bold,
                         // One line now that the tile is spare. Two lines of a long title pushed the
                         // rest of the row down and broke the even rhythm that makes a long list
@@ -178,8 +181,14 @@ private fun TileBody(
                             append(" · ")
                             append(getDurationString(record.metadata.durationMs))
                         },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall.overCover(hasCover),
+                        // Brighter over a picture. onSurfaceVariant is a deliberately quiet grey
+                        // against a flat surface and simply disappears against a photograph.
+                        color = if (hasCover) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -199,7 +208,8 @@ private fun TileBody(
             BpmTrio(
                 low = record.minDataPoint?.bpm?.toInt() ?: 0,
                 avg = record.metadata.avg?.toInt() ?: 0,
-                max = record.maxDataPoint?.bpm?.toInt() ?: 0
+                max = record.maxDataPoint?.bpm?.toInt() ?: 0,
+                hasCover = hasCover
             )
 
             if (record.tags.isNotEmpty()) {
@@ -260,7 +270,9 @@ fun BpmTrio(
     onLowClick: (() -> Unit)? = null,
     onMaxClick: (() -> Unit)? = null,
     iconSize: Dp = 16.dp,
-    fontSize: TextUnit = 14.sp
+    fontSize: TextUnit = 14.sp,
+    /** Whether these sit on a photograph, so the figures get the same halo the title does. */
+    hasCover: Boolean = false
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -273,6 +285,7 @@ fun BpmTrio(
             label = "Low", 
             iconSize = iconSize, 
             fontSize = fontSize,
+            hasCover = hasCover,
             onClick = onLowClick
         )
         
@@ -284,8 +297,9 @@ fun BpmTrio(
             value = avg, 
             color = BpmAvg, 
             label = "Avg", 
-            iconSize = iconSize, 
-            fontSize = fontSize
+            iconSize = iconSize,
+            fontSize = fontSize,
+            hasCover = hasCover
         )
 
         if (onLowClick == null && onMaxClick == null) {
@@ -298,6 +312,7 @@ fun BpmTrio(
             label = "Max", 
             iconSize = iconSize, 
             fontSize = fontSize,
+            hasCover = hasCover,
             onClick = onMaxClick
         )
     }
@@ -310,7 +325,9 @@ private fun BpmMetric(
     label: String,
     iconSize: Dp,
     fontSize: TextUnit,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    /** See BpmTrio. */
+    hasCover: Boolean = false
 ) {
     if (onClick != null) {
         Surface(
@@ -334,7 +351,7 @@ private fun BpmMetric(
                 Column(horizontalAlignment = Alignment.Start) {
                     Text(
                         text = value.toString(),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize).overCover(hasCover),
                         fontWeight = FontWeight.Bold,
                         color = color
                     )
@@ -361,7 +378,7 @@ private fun BpmMetric(
             Spacer(Modifier.width(4.dp))
             Text(
                 text = value.toString(),
-                style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize),
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize).overCover(hasCover),
                 fontWeight = FontWeight.Bold,
                 color = color
             )

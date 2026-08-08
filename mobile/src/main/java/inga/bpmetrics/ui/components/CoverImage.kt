@@ -11,13 +11,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.Cover
 import inga.bpmetrics.library.CoverStore
 import inga.bpmetrics.ui.theme.BpmPalette
@@ -32,7 +37,7 @@ import kotlinx.coroutines.withContext
  * recordings, which is the entire point of putting the picture on the event.
  */
 private object CoverCache {
-    private val cache = object : LruCache<String, ImageBitmap>(12) {}
+    private val cache = object : LruCache<String, ImageBitmap>(16) {}
 
     suspend fun load(context: Context, name: String): ImageBitmap? {
         cache.get(name)?.let { return it }
@@ -53,6 +58,14 @@ private object CoverCache {
         cache.evictAll()
     }
 }
+
+/**
+ * The strongest blur the slider can ask for.
+ *
+ * Enough, at the top, to reduce a page of type to bands of colour — which is the whole point for a
+ * flyer. Any further and every cover looks the same, which is the failure a cover exists to fix.
+ */
+private val MAX_BLUR = 26.dp
 
 /** Drops a cover from the cache, so replacing one is visible immediately rather than next launch. */
 fun invalidateCover(name: String?) {
@@ -82,6 +95,34 @@ fun rememberCoverSize(path: String?): androidx.compose.ui.unit.IntSize? {
     }
     return size
 }
+
+/**
+ * The shadow text wears when it sits on a photograph.
+ *
+ * This is the honest answer to "the writing is hard to read", and it is a better one than more
+ * scrim. A scrim dims the *whole tile* to protect the fraction of it that has words on — which is
+ * how every cover ends up looking like the same grey rectangle, the exact failure the picture was
+ * meant to fix. A shadow is per-glyph: it darkens the two pixels around each letter and leaves the
+ * rest of the photograph at full strength.
+ *
+ * Offset barely at all, blurred generously. What is wanted is a halo, not a drop shadow — the point
+ * is a dark edge on every side of the letterform, so it holds against a bright sky above and a dark
+ * jacket below, which a directional shadow does not.
+ */
+val CoverTextShadow: Shadow = Shadow(
+    color = Color(BpmPalette.SURFACE).copy(alpha = 0.95f),
+    offset = androidx.compose.ui.geometry.Offset(0f, 1f),
+    blurRadius = 7f
+)
+
+/**
+ * This style, protected if it is going to be drawn over a picture.
+ *
+ * A no-op when there is no cover, so a call site can ask for it unconditionally rather than
+ * branching — and so a tile with no picture keeps the flat, clean text it has always had.
+ */
+fun TextStyle.overCover(hasCover: Boolean): TextStyle =
+    if (hasCover) copy(shadow = CoverTextShadow) else this
 
 /**
  * How hard the scrim works.
@@ -138,7 +179,30 @@ fun CoverBackground(
             //
             // matchParentSize sits out the size negotiation and takes the Box's final size, which
             // is what a background layer actually wants.
-            Canvas(Modifier.matchParentSize()) {
+            // A real Gaussian, via RenderEffect, rather than the shrink-and-upscale this used to
+            // do. That was a box blur got for free from the scaler, and at the strengths a flyer
+            // needs it stopped looking blurred and started looking pixellated — because that is
+            // exactly what it was, a 12-pixel-wide image stretched over a tile.
+            //
+            // `BlurredEdgeTreatment.Rectangle` clamps at the boundary instead of sampling the
+            // nothing outside it; unbounded leaves a transparent fade all the way round, which on
+            // a tile reads as a vignette nobody asked for.
+            //
+            // Per frame rather than cached, which is the cost of doing it properly. Cheap here:
+            // this is hardware, a handful of tiles are on screen at once, and the covers behind
+            // them are capped at 512px.
+            val blurRadius = (cover.blur.coerceIn(0f, 1f) * MAX_BLUR.value).dp
+            Canvas(
+                Modifier
+                    .matchParentSize()
+                    .then(
+                        if (blurRadius > 0.5.dp) {
+                            Modifier.blur(blurRadius, BlurredEdgeTreatment.Rectangle)
+                        } else {
+                            Modifier
+                        }
+                    )
+            ) {
                 val srcLeft = (cover.cropLeft * bitmap.width)
                 val srcTop = (cover.cropTop * bitmap.height)
                 val srcWidth = (cover.cropWidth * bitmap.width).coerceAtLeast(1f)
@@ -206,20 +270,22 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawScrim(scrim: Co
             // grey. With the tile down to an avatar, a title, one line of when, and the readings,
             // the right-hand third can be left almost clear — and that is the part of a photo
             // anyone actually sees.
+            // Lighter again now that every piece of writing carries its own halo — see
+            // [CoverTextShadow]. The scrim's job has changed: it no longer has to make the text
+            // legible on its own, only to keep the tile from looking like a photograph with words
+            // dropped on it. A third of the picture is now at nearly full strength.
             drawRect(
                 brush = Brush.horizontalGradient(
-                    0f to surface.copy(alpha = 0.80f),
-                    0.62f to surface.copy(alpha = 0.46f),
-                    1f to surface.copy(alpha = 0.12f)
+                    0f to surface.copy(alpha = 0.62f),
+                    0.60f to surface.copy(alpha = 0.30f),
+                    1f to surface.copy(alpha = 0.06f)
                 )
             )
-            // A floor under the readings, which sit low and left and are the one thing on the tile
-            // that has to be readable over a bright sky.
             drawRect(
                 brush = Brush.verticalGradient(
                     0f to Color.Transparent,
-                    0.55f to surface.copy(alpha = 0.06f),
-                    1f to surface.copy(alpha = 0.34f)
+                    0.55f to Color.Transparent,
+                    1f to surface.copy(alpha = 0.22f)
                 )
             )
         }

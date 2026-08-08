@@ -158,7 +158,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 21
+internal const val LIBRARY_DB_VERSION = 22
 
 @Database(
     entities = [
@@ -905,6 +905,30 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * How much to soften a cover behind the writing.
+         *
+         * For covers that are themselves made of type. An event flyer carries a headliner in
+         * enormous letters and a support list under it, and a tile drawn over one is two sets of
+         * words fighting for the same space — a different problem from contrast, and not one that
+         * protecting *our* text can fix. Blurring dissolves the flyer's type while keeping its
+         * colour and composition, which is what identifies the night at a glance anyway.
+         *
+         * `REAL DEFAULT NULL`, matching the entities. Null is none, which is what every existing
+         * cover has and what a photograph of a crowd should keep.
+         *
+         * SQL copied from the generated `22.json`.
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf("events", "event_groups", "bpm_records").forEach { table ->
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `coverBlur` REAL DEFAULT NULL")
+                }
+
+                android.util.Log.i(TAG, "MIGRATION_21_22: A cover can be softened behind the text")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -969,7 +993,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_17_18,
                         MIGRATION_18_19,
                         MIGRATION_19_20,
-                        MIGRATION_20_21
+                        MIGRATION_20_21,
+                        MIGRATION_21_22
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

@@ -38,14 +38,16 @@ data class EventEntity(
     @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null
+    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
+    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
 ) {
     /** How to refer to this event when it has somehow been left unnamed. */
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled event"
 
     /** This event's own cover, or null if it has none of its own to offer. */
     val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
     )
 }
 
@@ -84,13 +86,15 @@ data class EventGroupEntity(
     @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null
+    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
+    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
 ) {
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled collection"
 
     /** This collection's own cover, or null if it has none of its own to offer. */
     val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
     )
 }
 

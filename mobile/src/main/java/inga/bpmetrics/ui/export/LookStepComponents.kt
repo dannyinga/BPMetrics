@@ -15,13 +15,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -61,6 +68,7 @@ import androidx.core.graphics.createBitmap
 import inga.bpmetrics.export.ExportPreset
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.export.WordmarkCorner
+import inga.bpmetrics.export.PillCorner
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.ui.components.ExpandableSection
@@ -97,20 +105,83 @@ fun ExportPreview(
     val context = LocalContext.current
     val aspect = preset.width.toFloat() / preset.height.toFloat().coerceAtLeast(1f)
 
+    // Saveable so a rotation, or a trip into the photo picker, does not reopen a preview someone
+    // deliberately folded away to get at the settings underneath.
+    var expanded by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
+    var fullScreen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+
     // Re-rendered whenever anything it depends on changes, off the main thread because it decodes
     // a video frame and draws every visible data point. Placement is a key too, so the rendered
     // graph follows the box — the box itself is drawn by the widget, so dragging stays responsive
     // while the frame catches up.
+    //
+    // Not while it is hidden. Every setting touched re-renders this, and half the reason to fold it
+    // away is to stop that happening behind a slider being dragged — a preview nobody can see has
+    // no business decoding a video frame. Nor while the full-screen copy is up, which would have
+    // two renders racing for the same answer.
+    val visible = expanded && !fullScreen
     val frame by produceState<Bitmap?>(
         initialValue = null,
-        records, preset, overlay, at, colours, photos, title, clip, placement
+        visible, records, preset, overlay, at, colours, photos, title, clip, placement
     ) {
+        if (!visible) return@produceState
         value = withContext(Dispatchers.Default) {
             renderPreviewFrame(context, records, preset, clip, overlay, colours, photos, title, at, placement)
         }
     }
 
+    if (fullScreen) {
+        FullScreenPreview(
+            records = records,
+            preset = preset,
+            clip = clip,
+            overlay = overlay,
+            colours = colours,
+            photos = photos,
+            title = title,
+            at = at,
+            onScrub = onScrub,
+            placement = placement,
+            onPlacementChange = onPlacementChange,
+            onDismiss = { fullScreen = false }
+        )
+    }
+
     Column(modifier) {
+        // The preview is sticky and takes a third of a short screen. That is right while framing
+        // something and wrong while reading down a list of settings, so it folds — and the row
+        // stays, because a preview with no way back is worse than one always in the way.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = { expanded = !expanded }) {
+                androidx.compose.material3.Icon(
+                    if (expanded) {
+                        androidx.compose.material.icons.Icons.Default.ExpandLess
+                    } else {
+                        androidx.compose.material.icons.Icons.Default.ExpandMore
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(if (expanded) "Hide preview" else "Show preview")
+            }
+
+            if (expanded) {
+                androidx.compose.material3.IconButton(onClick = { fullScreen = true }) {
+                    androidx.compose.material3.Icon(
+                        androidx.compose.material.icons.Icons.Default.Fullscreen,
+                        contentDescription = "Open the preview full screen"
+                    )
+                }
+            }
+        }
+
+        if (!expanded) return@Column
+
         BoxWithConstraints(
             modifier = Modifier.fillMaxWidth(),
             contentAlignment = Alignment.Center
@@ -164,6 +235,138 @@ fun ExportPreview(
             onScrub = onScrub,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+/**
+ * The same frame, filling the screen.
+ *
+ * Exists because the preview is a few hundred dp of a canvas that is 1920 across, and the things
+ * most worth checking on it — a wearer's name in a pill, an axis label, the wordmark — are small
+ * text that simply cannot be read at that size. Judging them by squinting at a thumbnail is how a
+ * setting gets called fine and then turns out not to be.
+ *
+ * Re-rendered at a higher resolution rather than scaling the small frame up: enlarging the thumbnail
+ * would enlarge its softness too, and the whole reason for opening this is to look closely.
+ *
+ * The framing handles are here too, and this is the better place for them. Dragging a corner in a
+ * preview a few hundred dp wide moves the graph in steps of about a percent of the canvas per pixel
+ * of finger; at full size the same drag is fine adjustment. The small preview is for judging where
+ * the graph sits against the whole frame, and this is for settling exactly where its edges land.
+ */
+@Composable
+private fun FullScreenPreview(
+    records: List<BpmRecord>,
+    preset: ExportPreset,
+    clip: VideoExporter.VideoClip?,
+    overlay: Uri?,
+    colours: Map<Long, Int>,
+    photos: Map<Long, android.graphics.Bitmap>,
+    title: String?,
+    at: Float,
+    onScrub: (Float) -> Unit,
+    placement: GraphPlacement,
+    onPlacementChange: (GraphPlacement) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val aspect = preset.width.toFloat() / preset.height.toFloat().coerceAtLeast(1f)
+
+    val frame by produceState<Bitmap?>(
+        initialValue = null,
+        records, preset, overlay, at, colours, photos, title, clip, placement
+    ) {
+        value = withContext(Dispatchers.Default) {
+            renderPreviewFrame(
+                context, records, preset, clip, overlay, colours, photos, title, at, placement,
+                // Capped rather than the export's full width: a 4K preset would decode a 4K frame
+                // per scrub, and no phone screen can show the difference.
+                renderWidth = preset.width.coerceAtMost(1920)
+            )
+        }
+    }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(androidx.compose.ui.graphics.Color.Black)
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                BoxWithConstraints(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Fitted to the space, not stretched across the width. Forcing full width means
+                    // the height follows from the aspect and can exceed the screen — which in
+                    // landscape it does, so the frame filled the display edge to edge and the
+                    // controls had nowhere to go but on top of it. Constraining by whichever axis
+                    // runs out first leaves black bars on the other, which is where they belong.
+                    val safeAspect = aspect.coerceIn(0.4f, 2.5f)
+                    val boxAspect = maxWidth / maxHeight
+                    val sizing = if (safeAspect > boxAspect) {
+                        Modifier.fillMaxWidth()
+                    } else {
+                        Modifier.fillMaxHeight()
+                    }
+
+                    Box(
+                        sizing
+                            .aspectRatio(safeAspect)
+                            .clip(MaterialTheme.shapes.medium)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        frame?.let {
+                            Image(
+                                bitmap = it.asImageBitmap(),
+                                contentDescription = "Export preview, full screen",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                        } ?: CircularProgressIndicator()
+
+                        // Inside the frame's own box, not the screen's, so the fractions the
+                        // overlay works in map onto the rectangle the renderer drew. Anchored to
+                        // the screen, a drag would move the graph somewhere other than the finger.
+                        GraphFramingOverlay(
+                            placement = placement,
+                            onChange = onPlacementChange,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+
+                // Below the picture, in space of its own. It was floating over the bottom of the
+                // frame, which is exactly where a graph framed as a lower third sits — so the one
+                // control that lets you find a frame worth judging was covering the thing being
+                // judged. Nothing is gained by overlapping it: the room it takes comes out of the
+                // letterbox, not out of the picture.
+                ScrubTimeline(
+                    at = at,
+                    durationMs = clip?.durationMs ?: 0L,
+                    onScrub = onScrub,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 8.dp, bottom = 16.dp)
+                )
+            }
+
+            androidx.compose.material3.IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+            ) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Default.Close,
+                    contentDescription = "Close",
+                    tint = androidx.compose.ui.graphics.Color.White
+                )
+            }
+        }
     }
 }
 
@@ -429,13 +632,22 @@ private fun renderPreviewFrame(
     photos: Map<Long, android.graphics.Bitmap> = emptyMap(),
     title: String?,
     at: Float,
-    placement: GraphPlacement
+    placement: GraphPlacement,
+    /**
+     * How wide to render.
+     *
+     * A preview is a few hundred dp on screen, so rendering at the export.s own resolution would
+     * decode a 4K frame to show it at 300dp. Full screen is the case that needs more: the point of
+     * opening it is to read text that was too small, and enlarging the small render would enlarge
+     * its blur along with it.
+     */
+    renderWidth: Int = 720
 ): Bitmap? {
     if (records.isEmpty()) return null
 
     // Rendered small. A preview is a few hundred pixels wide on screen and rendering it at the
     // export's own resolution would decode a 4K frame to show it at 300dp.
-    val previewWidth = 720
+    val previewWidth = renderWidth
     val previewHeight = (previewWidth / (preset.width.toFloat() / preset.height)).toInt()
         .coerceAtLeast(1)
 
@@ -540,6 +752,15 @@ fun LookSections(
      * False in the Settings editor, where the preset *is* the subject and a control for swapping
      * it out would only be a way to lose your work.
      */
+    /**
+     * The heading drawn on the export, and a way to change it.
+     *
+     * Null where there is nothing to name — the preset editor in Settings previews a made-up
+     * subject, so a title field there would be editing a caption for a recording that does not
+     * exist.
+     */
+    title: String? = null,
+    onTitleChange: ((String) -> Unit)? = null,
     showPresetBar: Boolean = true,
     presetBar: @Composable () -> Unit = {}
 ) {
@@ -636,12 +857,56 @@ fun LookSections(
                         Text("Center down", style = MaterialTheme.typography.labelSmall)
                     }
                 }
+
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Size",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    // What it is for, since "size" alone does not say that it holds the shape.
+                    "Keeps the shape and the position. Get the framing right once, then make it " +
+                        "as large or small as you want.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                // Absolute, not a nudge: the value *is* how wide the graph is, so the slider always
+                // reads where the graph actually is. A relative control would have to snap back to
+                // the middle after every drag, and could not answer "how big is it now" at all.
+                SliderRow(
+                    label = "Width of the frame",
+                    value = framing.width,
+                    onValue = { onFramingChange(framing.scaledTo(it)) }
+                )
+
                 Spacer(Modifier.height(12.dp))
             }
 
             SwitchRow("Labels", preset.showLabels) { onChange(preset.copy(showLabels = it)) }
             SwitchRow("Grid", preset.showGrid) { onChange(preset.copy(showGrid = it)) }
             SwitchRow("Title", preset.showTitle) { onChange(preset.copy(showTitle = it)) }
+
+            // Only where there is something to name, and only when it will be drawn — a field
+            // editing text that the switch above has just turned off is a control over nothing.
+            if (onTitleChange != null && preset.showTitle) {
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = title.orEmpty(),
+                    onValueChange = onTitleChange,
+                    label = { Text("Heading") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    // The default is the source's own name, so an empty field is not "no title".
+                    "Leave blank to use the name of what is being exported.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+            }
             SwitchRow(
                 // The same field means different things either side of this: a running readout on
                 // a video, and everyone's summary for the whole span on a still. Both are "the
@@ -699,6 +964,75 @@ fun LookSections(
             }
         }
 
+        // Video only: a still has no playhead, so there is no live reading for a pill to show.
+        if (!isImage) {
+            SettingsSection("Readouts", "The live pill for each person, over the footage") {
+                Text(
+                    // The reason this is a setting rather than one fixed design. Both answers are
+                    // right, for different exports.
+                    "Two people on a story clip can carry faces and names. Six on a landscape " +
+                        "shot cannot — the column would take a third of the frame.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+
+                SwitchRow("Photo", preset.pillShowPhoto) {
+                    onChange(preset.copy(pillShowPhoto = it))
+                }
+                SwitchRow("Name", preset.pillShowName) {
+                    onChange(preset.copy(pillShowName = it))
+                }
+                SwitchRow("Reading in their colour", preset.pillBpmInPersonColor) {
+                    onChange(preset.copy(pillBpmInPersonColor = it))
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Text("Side", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    // Worth saying, because the reason is not visible from the setting: the
+                    // playhead sits in the middle, so the right of the graph is what has not
+                    // happened yet — and is drawn faded, which is why the readouts sit there.
+                    "Right sits over the faded part of the graph. The clock takes the other side.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PillCorner.entries.forEach { corner ->
+                        FilterChip(
+                            selected = preset.pillCorner == corner,
+                            onClick = { onChange(preset.copy(pillCorner = corner)) },
+                            label = { Text(corner.label) }
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                // Multipliers on what the renderer works out for the graph, so no combination of
+                // these can produce pills that do not fit.
+                ScaleRow("Pill size", preset.pillScale) {
+                    onChange(preset.copy(pillScale = it))
+                }
+                if (preset.pillShowPhoto) {
+                    ScaleRow("Photo size", preset.pillPhotoScale) {
+                        onChange(preset.copy(pillPhotoScale = it))
+                    }
+                }
+                ScaleRow("Reading size", preset.pillBpmScale) {
+                    onChange(preset.copy(pillBpmScale = it))
+                }
+                if (preset.pillShowName) {
+                    ScaleRow("Name size", preset.pillNameScale) {
+                        onChange(preset.copy(pillNameScale = it))
+                    }
+                }
+            }
+        }
+
         // Above the video-only cut-off: a still is signed the same way a video is.
         SettingsSection("Signature", "A small credit linking the export back to the app") {
             SwitchRow("Show wordmark", preset.showWordmark) {
@@ -746,6 +1080,40 @@ fun LookSections(
                 modifier = Modifier.fillMaxWidth(),
                 onValue = { onChange(preset.copy(windowSizeMs = it * 1000L)) }
             )
+            Text(
+                // What the number actually buys, which is not obvious from "visible window": the
+                // playhead is centred, so half of it is what you can see coming.
+                "The playhead sits in the middle, so this shows " +
+                    "${(preset.windowSizeMs / 2000).toInt()} seconds of what is coming.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Clock",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "Drawn in the header beside the title, where it costs no room on the graph.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                inga.bpmetrics.export.ClockMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = preset.clockMode == mode,
+                        onClick = { onChange(preset.copy(clockMode = mode)) },
+                        label = { Text(mode.label) }
+                    )
+                }
+            }
             Spacer(Modifier.height(12.dp))
             Text(
                 "Frame rate",
@@ -864,6 +1232,49 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
+
+/**
+ * A size multiplier, shown as a percentage of what the renderer would pick on its own.
+ *
+ * Separate from [SliderRow] because that one is bounded 0..1 and means "how much of a maximum".
+ * This means "how much larger or smaller than the automatic size", so its range straddles 100% and
+ * the middle of the track is the default rather than half of it. Sharing one component would have
+ * meant a slider whose centre meant something different depending on which row it was.
+ */
+@Composable
+private fun ScaleRow(label: String, value: Float, onValue: (Float) -> Unit) {
+    Column(Modifier.padding(vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            TextButton(
+                onClick = { onValue(1f) },
+                enabled = kotlin.math.abs(value - 1f) > 0.01f
+            ) { Text("Reset") }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Slider(
+                value = value.coerceIn(SCALE_MIN, SCALE_MAX),
+                onValueChange = onValue,
+                valueRange = SCALE_MIN..SCALE_MAX,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            TypedValueField(
+                text = kotlin.math.round(value * 100).toInt().toString(),
+                suffix = "%",
+                onCommit = { typed ->
+                    typed.toIntOrNull()?.let {
+                        onValue((it / 100f).coerceIn(SCALE_MIN, SCALE_MAX))
+                    }
+                }
+            )
+        }
+    }
+}
+
+/** The bounds a size multiplier may take, matching what `ExportPreset.sanitised` enforces. */
+private const val SCALE_MIN = 0.5f
+private const val SCALE_MAX = 2f
 
 /**
  * A percentage, settable by dragging or by typing.

@@ -216,6 +216,34 @@ data class GraphPlacement(
     /** Writes this framing into a preset, so saving one carries what is on screen. */
     fun into(preset: ExportPreset): ExportPreset = preset.withFraming(left, top, right, bottom)
 
+    /**
+     * The same shape, resized to [newWidth] of the canvas, held on its own centre.
+     *
+     * One control for the whole rectangle. Getting a graph to the right shape by dragging four
+     * corners and then wanting it smaller meant redoing all four, in step, without letting the
+     * proportions drift — which is not a thing fingers are good at. This keeps the aspect exactly
+     * and moves only the size.
+     *
+     * About the centre rather than the top-left, because a graph placed as a lower third is *there*
+     * on purpose: shrinking it from a corner would walk it out of the band it was put in.
+     */
+    fun scaledTo(newWidth: Float): GraphPlacement {
+        val aspect = (height / width.coerceAtLeast(0.0001f)).coerceAtLeast(0.0001f)
+
+        // Bounded by both edges. A tall graph on a wide canvas runs out of room at the top and
+        // bottom while its width still has plenty, so the height has to be able to veto the width —
+        // otherwise the shape silently changes at the very end of the slider's travel, which is
+        // precisely what this control exists not to do.
+        val w = minOf(newWidth, 1f / aspect).coerceIn(MIN_SIZE, 1f)
+        val h = (w * aspect).coerceIn(MIN_SIZE, 1f)
+
+        val centreX = (left + right) / 2f
+        val centreY = (top + bottom) / 2f
+        val x = (centreX - w / 2f).coerceIn(0f, 1f - w)
+        val y = (centreY - h / 2f).coerceIn(0f, 1f - h)
+        return GraphPlacement(x, y, x + w, y + h)
+    }
+
     /** Resizes from the top-left, sliding back into frame if the new size would overflow. */
     fun withSize(newWidth: Float, newHeight: Float): GraphPlacement {
         val w = newWidth.coerceIn(MIN_SIZE, 1f)
@@ -521,7 +549,22 @@ class ExportUtilityViewModel(
      * simply where they left off. The default wins when there is one, because it was an explicit
      * decision and the other is a side effect.
      */
+    /**
+     * Whether the stored preset has already been loaded into this session.
+     *
+     * The caller is a `LaunchedEffect(Unit)`, and `Unit` does not mean "once" — it means once per
+     * *composition*, and rotating the phone throws the composition away and builds a new one. So
+     * every rotation re-ran this and overwrote the working preset with what was on disk: switch
+     * names on, turn the phone, and the setting is back off with nothing to say why.
+     *
+     * Held here rather than fixed at the call site because this view model outliving the screen is
+     * exactly what makes the edits worth keeping, and it is the only thing that knows they exist.
+     */
+    private var presetRestored = false
+
     fun restorePreset() {
+        if (presetRestored) return
+        presetRestored = true
         viewModelScope.launch {
             val default = repository.getDefaultExportPreset()
             if (default != null) {

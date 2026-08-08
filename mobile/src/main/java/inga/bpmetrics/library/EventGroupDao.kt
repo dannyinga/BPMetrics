@@ -43,7 +43,7 @@ interface EventGroupDao {
     /** See `EventDao.updateCover`. Null across the board means inherit from the parent collection. */
     @Query(
         "UPDATE event_groups SET coverPath = :path, coverCropLeft = :left, coverCropTop = :top, " +
-            "coverCropRight = :right, coverCropBottom = :bottom WHERE groupId = :groupId"
+            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur WHERE groupId = :groupId"
     )
     suspend fun updateCover(
         groupId: Long,
@@ -51,7 +51,8 @@ interface EventGroupDao {
         left: Float?,
         top: Float?,
         right: Float?,
-        bottom: Float?
+        bottom: Float?,
+        blur: Float?
     )
 
     @Query("SELECT coverPath FROM event_groups WHERE groupId = :groupId")

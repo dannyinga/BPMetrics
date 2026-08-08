@@ -722,10 +722,18 @@ private fun PresetEditorDialog(
     onDismiss: () -> Unit,
     onSave: (String, inga.bpmetrics.export.ExportPreset) -> Unit
 ) {
-    var draft by remember { mutableStateOf(initial) }
-    var name by remember { mutableStateOf(initial.name) }
-    var showSeveral by remember { mutableStateOf(false) }
-    var scrubAt by remember { mutableStateOf(0.45f) }
+    // Saveable, not remembered. A plain `remember` is discarded when the activity is recreated, and
+    // a rotation does exactly that — so every unsaved edit in this dialog vanished the moment the
+    // phone was turned, with the dialog still open and looking untouched. Nothing warns you; the
+    // sliders simply read what they read before you started.
+    //
+    // The preset goes through its JSON, which is what it is stored as anyway, so this cannot drift
+    // from what saving would write. Wrapped in a Saver rather than made Parcelable for that reason:
+    // a second serialisation of the same type is a second thing to keep in step.
+    var draft by rememberSaveable(stateSaver = ExportPresetSaver) { mutableStateOf(initial) }
+    var name by rememberSaveable { mutableStateOf(initial.name) }
+    var showSeveral by rememberSaveable { mutableStateOf(false) }
+    var scrubAt by rememberSaveable { mutableStateOf(0.45f) }
 
     val subject = if (showSeveral) severalPeople else onePerson
 
@@ -833,3 +841,22 @@ private fun PresetEditorDialog(
         }
     }
 }
+
+/**
+ * Keeps a preset across an activity being recreated.
+ *
+ * Through its own JSON, which is how a preset is stored anyway — so what survives a rotation and
+ * what would have been saved to the database are produced by the same code. A `Parcelable` would be
+ * a second serialisation of the same type and a second thing to remember to update when a field is
+ * added; this one cannot fall behind, because `toJson` is already the thing that must not.
+ *
+ * A payload that fails to read back gives null, and `rememberSaveable` then falls through to the
+ * initial value — the same state the dialog would have had before any of this existed.
+ */
+private val ExportPresetSaver = androidx.compose.runtime.saveable.Saver<
+    inga.bpmetrics.export.ExportPreset,
+    String
+>(
+    save = { it.toJson() },
+    restore = { inga.bpmetrics.export.ExportPreset.fromJson(it) }
+)

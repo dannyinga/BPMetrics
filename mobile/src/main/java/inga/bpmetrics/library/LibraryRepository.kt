@@ -459,10 +459,11 @@ class LibraryRepository(
         val t = cover?.cropTop
         val r = cover?.cropRight
         val b = cover?.cropBottom
+        val blur = cover?.blur
         when (owner) {
-            is CoverOwner.Event -> eventDao.updateCover(owner.eventId, p, l, t, r, b)
-            is CoverOwner.Collection -> eventGroupDao.updateCover(owner.groupId, p, l, t, r, b)
-            is CoverOwner.Recording -> eventDao.updateRecordCover(owner.recordId, p, l, t, r, b)
+            is CoverOwner.Event -> eventDao.updateCover(owner.eventId, p, l, t, r, b, blur)
+            is CoverOwner.Collection -> eventGroupDao.updateCover(owner.groupId, p, l, t, r, b, blur)
+            is CoverOwner.Recording -> eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur)
         }
     }
 
@@ -587,11 +588,11 @@ class LibraryRepository(
     /** Removes every stored cover and the rows pointing at them. */
     suspend fun clearAllCovers(context: android.content.Context): Int {
         eventDao.getAllEventsFlow().first().forEach {
-            if (it.coverPath != null) eventDao.updateCover(it.eventId, null, null, null, null, null)
+            if (it.coverPath != null) eventDao.updateCover(it.eventId, null, null, null, null, null, null)
         }
         eventGroupDao.getAllGroups().forEach {
             if (it.coverPath != null) {
-                eventGroupDao.updateCover(it.groupId, null, null, null, null, null)
+                eventGroupDao.updateCover(it.groupId, null, null, null, null, null, null)
             }
         }
         val removed = CoverStore.clearAll(context)

@@ -336,6 +336,101 @@ class ExportPresetTest {
     }
 
     @Test
+    fun `a pill shows everything by default`() {
+        val shipped = ExportPreset()
+
+        assertTrue(shipped.pillShowPhoto)
+        assertTrue(shipped.pillShowName)
+        assertTrue(shipped.pillBpmInPersonColor)
+        assertEquals(1f, shipped.pillScale, 0.0001f)
+        assertEquals(PillCorner.TOP_RIGHT, shipped.pillCorner)
+    }
+
+    @Test
+    fun `a pill scale of zero is repaired rather than rendered`() {
+        // Zero is not a small pill, it is an absent one — and zero is exactly what a payload
+        // written before these fields existed would carry if Gson ever stopped finding the no-arg
+        // constructor. See the note on the Gson trap above.
+        val shipped = ExportPreset()
+
+        assertEquals(shipped.pillScale, ExportPreset(pillScale = 0f).sanitised().pillScale, 0.0001f)
+        assertEquals(
+            shipped.pillPhotoScale,
+            ExportPreset(pillPhotoScale = 0f).sanitised().pillPhotoScale,
+            0.0001f
+        )
+        assertEquals(
+            shipped.pillBpmScale,
+            ExportPreset(pillBpmScale = 0f).sanitised().pillBpmScale,
+            0.0001f
+        )
+    }
+
+    @Test
+    fun `a deliberate pill scale is kept, and an absurd one is bounded`() {
+        assertEquals(0.7f, ExportPreset(pillScale = 0.7f).sanitised().pillScale, 0.0001f)
+        assertEquals(2f, ExportPreset(pillScale = 40f).sanitised().pillScale, 0.0001f)
+        assertEquals(0.5f, ExportPreset(pillScale = 0.2f).sanitised().pillScale, 0.0001f)
+    }
+
+    @Test
+    fun `readout settings survive being saved and read back`() {
+        val tuned = ExportPreset(
+            name = "Six wearers",
+            pillShowPhoto = false,
+            pillShowName = true,
+            pillBpmInPersonColor = false,
+            pillScale = 0.8f,
+            pillPhotoScale = 1.4f,
+            pillBpmScale = 1.2f,
+            pillCorner = PillCorner.TOP_RIGHT
+        )
+
+        assertEquals(tuned, ExportPreset.fromJson(tuned.toJson()))
+    }
+
+    @Test
+    fun `readout settings reach the render config`() {
+        // A setting that stops at the preset is one that appears to save and then does nothing,
+        // which has happened in this file before.
+        val tuned = ExportPreset(
+            pillShowPhoto = false,
+            pillShowName = false,
+            pillBpmInPersonColor = false,
+            pillScale = 0.75f,
+            pillCorner = PillCorner.TOP_RIGHT
+        )
+
+        val applied = tuned.applyTo(
+            VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig())
+        ).imageConfig
+
+        assertFalse(applied.pillShowPhoto)
+        assertFalse(applied.pillShowName)
+        assertFalse(applied.pillBpmInPersonColor)
+        assertEquals(0.75f, applied.pillScale, 0.0001f)
+        assertEquals(PillCorner.TOP_RIGHT, applied.pillCorner)
+    }
+
+    @Test
+    fun `a preset written before the readouts existed comes back with a real corner`() {
+        // The enum-arrives-null trap again, on a second field.
+        val older = """
+            {"version":3,"name":"Older","width":1920,"height":1080,
+             "graphLeft":0.25,"graphTop":0.58,"graphRight":0.75,"graphBottom":0.91,
+             "showLabels":true,"showGrid":true,"showTitle":true,"showCurrentStats":true,
+             "backgroundOpacity":100,"windowSizeMs":30000,"frameRate":30,"timeZoneId":"UTC"}
+        """.trimIndent()
+
+        val restored = ExportPreset.fromJson(older)!!
+
+        assertNotNull(restored.pillCorner)
+        assertEquals(ExportPreset().pillCorner, restored.pillCorner)
+        // And a usable size rather than a zero that would render nothing.
+        assertTrue(restored.pillScale > 0f)
+    }
+
+    @Test
     fun `the wordmark ships off`() {
         // Deliberate, and stated in the product doc: an unfinished app putting its name on
         // someone's footage asks them to publish a mark that is about to change.

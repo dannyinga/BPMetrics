@@ -405,7 +405,9 @@ fun ExportUtilityScreen(
                     previewOverlay = pendingJobs.firstOrNull()?.clip?.uri ?: manualOverlay,
                     previewColours = recordColours,
                     previewPhotos = recordPhotos,
-                    previewTitle = sourceLabel.takeIf { it.isNotBlank() },
+                    graphTitle = imageTitle ?: sourceLabel,
+                    onGraphTitleChange = { viewModel.setImageTitle(it) },
+                    previewTitle = (imageTitle ?: sourceLabel).takeIf { it.isNotBlank() },
                     previewAt = previewAt,
                     onScrub = { viewModel.scrubPreview(it) },
                     framing = currentFraming,
@@ -492,7 +494,7 @@ fun ExportUtilityScreen(
                                 colours = recordColours,
                                 photos = recordPhotos,
                                 manualOverlay = manualOverlay,
-                                label = sourceLabel
+                                label = imageTitle?.takeIf { it.isNotBlank() } ?: sourceLabel
                             )
                         }
                     )
@@ -666,6 +668,8 @@ private fun LookStep(
     previewOverlay: Uri?,
     previewColours: Map<Long, Int>,
     previewPhotos: Map<Long, android.graphics.Bitmap>,
+    graphTitle: String,
+    onGraphTitleChange: (String) -> Unit,
     previewTitle: String?,
     previewAt: Float,
     onScrub: (Float) -> Unit,
@@ -767,6 +771,8 @@ private fun LookStep(
             LookSections(
                 preset = preset,
                 onChange = onPresetChange,
+                title = graphTitle,
+                onTitleChange = onGraphTitleChange,
                 overlay = overlay,
                 onPickOverlay = onPickOverlay,
                 onClearOverlay = onClearOverlay,

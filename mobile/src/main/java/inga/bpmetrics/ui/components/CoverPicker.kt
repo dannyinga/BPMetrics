@@ -188,6 +188,37 @@ fun CoverCropDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
+                // Only where writing will sit on it. A person's photograph is drawn in a circle
+                // with nothing over it, so softening it would be softening it for no reason.
+                if (shape != CoverCropShape.CIRCLE) {
+                    Spacer(Modifier.height(BpmSpacing.Medium))
+                    Text(
+                        "Soften",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    )
+                    Text(
+                        // The case this exists for, named — because it is not obvious that a
+                        // setting called "soften" is the answer to "my cover is a poster".
+                        "For a cover that is itself made of type — an event flyer, a poster. " +
+                            "Blurring keeps its colour and lets the writing above it be read.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(BpmSpacing.Tiny))
+                    androidx.compose.material3.Slider(
+                        value = crop.blur,
+                        onValueChange = { crop = crop.copy(blur = it) },
+                        // Continuous. It was stepped because each strength used to be a separately
+                        // decoded bitmap and a free-running slider would have rebuilt one per pixel
+                        // of travel. The blur is a render effect now, so there is nothing to
+                        // rebuild and nothing to snap to — and finding the point where a flyer's
+                        // type dissolves but its artwork survives is exactly the kind of judgement
+                        // that wants a smooth control.
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 Spacer(Modifier.height(BpmSpacing.Small))
                 Row(horizontalArrangement = Arrangement.spacedBy(BpmSpacing.Small)) {
                     TextButton(

@@ -64,7 +64,7 @@ interface EventDao {
      */
     @Query(
         "UPDATE events SET coverPath = :path, coverCropLeft = :left, coverCropTop = :top, " +
-            "coverCropRight = :right, coverCropBottom = :bottom WHERE eventId = :eventId"
+            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur WHERE eventId = :eventId"
     )
     suspend fun updateCover(
         eventId: Long,
@@ -72,7 +72,8 @@ interface EventDao {
         left: Float?,
         top: Float?,
         right: Float?,
-        bottom: Float?
+        bottom: Float?,
+        blur: Float?
     )
 
     @Query("SELECT coverPath FROM events WHERE eventId = :eventId")
@@ -140,7 +141,7 @@ interface EventDao {
      */
     @Query(
         "UPDATE bpm_records SET coverPath = :path, coverCropLeft = :left, coverCropTop = :top, " +
-            "coverCropRight = :right, coverCropBottom = :bottom WHERE recordId = :recordId"
+            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur WHERE recordId = :recordId"
     )
     suspend fun updateRecordCover(
         recordId: Long,
@@ -148,7 +149,8 @@ interface EventDao {
         left: Float?,
         top: Float?,
         right: Float?,
-        bottom: Float?
+        bottom: Float?,
+        blur: Float?
     )
 
     @Query("SELECT coverPath FROM bpm_records WHERE recordId = :recordId")

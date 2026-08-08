@@ -78,6 +78,59 @@ data class ExportPreset(
     val syncOffsetMs: Long = 0L,
     val timeZoneId: String = java.time.ZoneId.systemDefault().id,
 
+    // Live readouts
+    /**
+     * What each wearer's pill carries, and how large it is.
+     *
+     * A preset rather than a fixed design because the right answer genuinely changes with the
+     * export. A story clip of two people wants faces and names and room to read them; a landscape
+     * shot of six wants the numbers and nothing else, because six named pills is a third of the
+     * frame. Both of those were the *same* argument being had every time the pill was touched, and
+     * a setting is what ends it.
+     */
+    val pillShowPhoto: Boolean = true,
+    val pillShowName: Boolean = true,
+    /**
+     * Whether the reading takes the wearer's colour.
+     *
+     * On, because the number is the largest thing on the pill and colouring it is the strongest
+     * available tie back to the curve it belongs to. Off leaves it in the label colour, which reads
+     * more calmly when several pills sit close together.
+     */
+    val pillBpmInPersonColor: Boolean = true,
+    /**
+     * Overall pill size, as a multiplier on what the renderer works out for the graph.
+     *
+     * The renderer already sizes pills to the space and the number of wearers; this scales that
+     * result rather than replacing it, so a preset cannot produce pills that do not fit.
+     */
+    val pillScale: Float = 1f,
+    /** The face's size within the pill, as a multiplier. Independent of the text beside it. */
+    val pillPhotoScale: Float = 1f,
+    /** The reading's size within the pill, as a multiplier. */
+    val pillBpmScale: Float = 1f,
+    /** The name's size within the pill, as a multiplier. */
+    val pillNameScale: Float = 1f,
+    /**
+     * Where the readouts sit. The clock takes the opposite side of the same edge.
+     *
+     * Right by default, over the faded half of the graph.
+     *
+     * The playhead is centred and everything past it is drawn at `futureOpacity`, so the right of
+     * the plot is already deliberately quiet — which makes it the cheapest place on the frame to
+     * put something opaque. The solid, full-strength past stays clear.
+     */
+    val pillCorner: PillCorner = PillCorner.TOP_RIGHT,
+
+    /**
+     * Whether the graph says when it is, and how.
+     *
+     * A setting, and one that belongs with the other time settings. It used to appear only on
+     * multi-wearer exports — not by decision, but because it was written inside the multi-wearer
+     * HUD — so a solo export, the commonest kind there is, carried no time at all.
+     */
+    val clockMode: ClockMode = ClockMode.CLOCK,
+
     // Identity
     /**
      * Whether to sign the export.
@@ -161,7 +214,20 @@ data class ExportPreset(
             // Gson leaves an absent enum as null, and the type says it cannot be — every preset
             // written before the wordmark existed arrives that way.
             wordmarkCorner = wordmarkCorner ?: shipped.wordmarkCorner,
-            wordmarkOpacity = wordmarkOpacity.coerceIn(0, 100)
+            wordmarkOpacity = wordmarkOpacity.coerceIn(0, 100),
+            pillCorner = pillCorner ?: shipped.pillCorner,
+            clockMode = clockMode ?: shipped.clockMode,
+            // A scale of zero is not a small pill, it is an absent one — and zero is exactly what a
+            // preset written before these existed would arrive with if Gson ever stops finding the
+            // no-arg constructor. Bounded rather than defaulted, because a deliberate 0.6 and an
+            // absent 0 both need to end up somewhere sane.
+            pillScale = pillScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f) ?: shipped.pillScale,
+            pillPhotoScale = pillPhotoScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f)
+                ?: shipped.pillPhotoScale,
+            pillBpmScale = pillBpmScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f)
+                ?: shipped.pillBpmScale,
+            pillNameScale = pillNameScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f)
+                ?: shipped.pillNameScale
         )
     }
 
@@ -189,6 +255,15 @@ data class ExportPreset(
                 headerXPercent = headerXPercent,
                 futureOpacity = futureOpacity,
                 timeZoneId = timeZoneId,
+                pillShowPhoto = pillShowPhoto,
+                pillShowName = pillShowName,
+                pillBpmInPersonColor = pillBpmInPersonColor,
+                pillScale = pillScale,
+                pillPhotoScale = pillPhotoScale,
+                pillBpmScale = pillBpmScale,
+                pillNameScale = pillNameScale,
+                pillCorner = pillCorner,
+                clockMode = clockMode,
                 showWordmark = showWordmark,
                 wordmarkCorner = wordmarkCorner,
                 wordmarkOpacity = wordmarkOpacity,
@@ -218,12 +293,15 @@ data class ExportPreset(
          * silently ignoring fields it does not understand would produce an export that looks
          * nothing like the one it was shared from.
          *
-         * 3 adds the wordmark. 2 covers graph framing, the sync offset and match-source frame rate,
-         * and the removal of
-         * the axes toggle. Files written at 1 still load: the check is one-directional, so raising
-         * this only stops *older* builds reading what they cannot render.
+         * 4 adds the live readout settings: what a pill carries and how large it is.
+         * 3 adds the wordmark.
+         * 2 covers graph framing, the sync offset, match-source frame rate, and the removal of the
+         * axes toggle.
+         *
+         * Files written at 1 still load: the check is one-directional, so raising this only stops
+         * *older* builds reading what they cannot render.
          */
-        const val CURRENT_VERSION = 3
+        const val CURRENT_VERSION = 4
 
         /**
          * Graph framings that shipped as the default in some earlier build.

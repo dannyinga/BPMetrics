@@ -49,7 +49,8 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_17_18,
             LibraryDatabase.MIGRATION_18_19,
             LibraryDatabase.MIGRATION_19_20,
-            LibraryDatabase.MIGRATION_20_21
+            LibraryDatabase.MIGRATION_20_21,
+            LibraryDatabase.MIGRATION_21_22
         )
     }
 

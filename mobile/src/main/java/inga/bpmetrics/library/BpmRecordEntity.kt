@@ -87,12 +87,14 @@ data class BpmRecordEntity (
     @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null
+    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
+    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
     ) {
 
     /** This recording's own cover, if it was given one. */
     val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
     )
 
 
