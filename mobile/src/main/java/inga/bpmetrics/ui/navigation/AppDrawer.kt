@@ -72,9 +72,10 @@ enum class AppDestination(
     ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.Default.Insights, true),
     EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary, true),
 
-    // The render queue is not here: it folded into the Export screen's header, where an export
-    // ends up. A top-level destination that is empty most of the time was spending a quarter of
-    // the bar on a screen nobody opens deliberately.
+    // The render queue is in neither the bar nor the menu. It folded into the Export screen's
+    // header, which is where an export ends up and therefore where anyone goes looking for it —
+    // and a second door to it in the menu made the menu a mixture of places you work and places
+    // you configure. Still a destination, because Export navigates to it; just not listed.
     RENDER_QUEUE(inga.bpmetrics.ui.Routes.RENDER_QUEUE, "Render queue", Icons.Default.Movie, false),
 
     // The management screens, and then Settings and About where every other Android app puts them.
@@ -115,7 +116,10 @@ fun AppNavigationBar(
                 selected = destination.route == currentRoute,
                 onClick = { onNavigate(destination) },
                 icon = {
-                    if (destination == AppDestination.RENDER_QUEUE && activeRenderCount > 0) {
+                    // Badged on Export, not on the queue. The queue is not in this bar — it is in
+                    // Export's header — so this is where a render in flight has to show, or it is
+                    // invisible until someone happens to open the screen it is running under.
+                    if (destination == AppDestination.EXPORT && activeRenderCount > 0) {
                         BadgedBox(
                             badge = {
                                 Badge {
@@ -166,12 +170,15 @@ fun AppDrawerContent(
             )
             Spacer(Modifier.height(24.dp))
 
-            // Only the management screens. The four you work in are in the navigation bar, and
-            // listing them here too would be two ways to reach the same place, one of which is
-            // always the wrong one to have used.
+            // Only the things you set up: people, watches, tags, settings. The places you *work*
+            // are in the navigation bar, and the render queue is reached from the Export screen it
+            // belongs to — listing either here would be a second door to the same place, and the
+            // menu would stop being one kind of thing.
             //
-            // About is separated below: it is reference material, not somewhere you work.
-            val sections = AppDestination.secondary.filter { it != AppDestination.ABOUT }
+            // About is separated below: it is reference material, not somewhere you configure.
+            val sections = AppDestination.secondary.filter {
+                it != AppDestination.ABOUT && it != AppDestination.RENDER_QUEUE
+            }
 
             sections.forEach { destination ->
                 NavigationDrawerItem(
@@ -180,13 +187,10 @@ fun AppDrawerContent(
                     badge = {
                         // Sync lives in Settings now, so a transfer in flight is badged there —
                         // otherwise it would be invisible until someone happened to look.
-                        val count = when (destination) {
-                            // The queue is behind the menu now, so its badge follows it there.
-                            AppDestination.RENDER_QUEUE -> activeRenderCount
-                            // Sync lives in Settings, so a transfer in flight is badged there.
-                            AppDestination.SETTINGS -> incomingCount
-                            else -> 0
-                        }
+                        // Sync lives in Settings, so a transfer in flight is badged there.
+                        // Nothing badges the render queue here any more — it is not in this menu,
+                        // and Export shows its own count in the header where the queue now lives.
+                        val count = if (destination == AppDestination.SETTINGS) incomingCount else 0
                         if (count > 0) ActivityBadge(count)
                     },
                     selected = destination.route == currentRoute,

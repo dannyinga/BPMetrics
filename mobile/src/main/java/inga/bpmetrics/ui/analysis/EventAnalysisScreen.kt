@@ -110,6 +110,37 @@ fun EventAnalysisScreen(
     var showTagDialog by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<BpmRecord?>(null) }
 
+    var framingCover by remember { mutableStateOf(false) }
+    val pickCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
+        viewModel.setCover(context, uri) { ok ->
+            if (ok) {
+                framingCover = true
+            } else {
+                android.widget.Toast
+                    .makeText(context, "That image could not be read", android.widget.Toast.LENGTH_LONG)
+                    .show()
+            }
+        }
+    }
+
+    state.event?.ownCover?.takeIf { framingCover }?.let { cover ->
+        inga.bpmetrics.ui.components.CoverCropDialog(
+            cover = cover,
+            title = "Frame ${state.event?.displayName.orEmpty()}",
+            previewContent = {
+                Text(
+                    state.event?.displayName.orEmpty(),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            },
+            onDismiss = { framingCover = false },
+            onConfirm = { viewModel.setCoverCrop(it); framingCover = false },
+            onRemove = { viewModel.clearCover(context); framingCover = false }
+        )
+    }
+
     val analysis = state.analysis
     val viewWindow = rememberConcurrentViewWindow(analysis)
 
@@ -155,6 +186,34 @@ fun EventAnalysisScreen(
                             leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                             onClick = { showMenu = false; showRename = true }
                         )
+                        // Set here, the picture reaches every recording in this event — including
+                        // ones that arrive from a watch afterwards, which is the whole reason a
+                        // cover belongs to the event rather than to each recording.
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (state.event?.coverPath == null) "Set cover…" else "Change cover…"
+                                )
+                            },
+                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                            onClick = { showMenu = false; pickCover() }
+                        )
+                        if (state.event?.coverPath != null) {
+                            DropdownMenuItem(
+                                text = { Text("Reframe cover") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Edit, contentDescription = null)
+                                },
+                                onClick = { showMenu = false; framingCover = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Remove cover") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Delete, contentDescription = null)
+                                },
+                                onClick = { showMenu = false; viewModel.clearCover(context) }
+                            )
+                        }
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = {

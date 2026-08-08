@@ -50,6 +50,10 @@ import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.ui.components.ColorPicker
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.components.PersonSwatch
+import inga.bpmetrics.ui.components.PersonAvatar
+import inga.bpmetrics.ui.components.rememberCoverPicker
+import inga.bpmetrics.ui.components.CoverCropDialog
+import inga.bpmetrics.ui.components.CoverCropShape
 
 /**
  * The people who wear the watches.
@@ -73,6 +77,10 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
 
     var editing by remember { mutableStateOf<PersonEntity?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+
+    // Reset whenever the dialog moves to a different person, or reframing one photograph would
+    // open straight onto the next.
+    var framingPhoto by remember(editing?.personId) { mutableStateOf(false) }
 
     LaunchedEffect(uiState.people.size) { viewModel.refreshCounts() }
 
@@ -115,10 +123,57 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
         }
     }
 
-    editing?.let { person ->
+    editing?.let { snapshot ->
+        // The live row, not the one captured when the dialog opened. A photo applies immediately,
+        // and reading the snapshot would leave the avatar showing the initial until the dialog was
+        // closed and reopened — which looks exactly like the photo not having saved.
+        val person = uiState.people
+            .firstOrNull { it.person.personId == snapshot.personId }
+            ?.person
+            ?: snapshot
+
+        // Declared here rather than inside the dialog so the launcher survives the dialog's own
+        // recompositions — a picker registered inside a dialog that closes while the gallery is
+        // open comes back to nothing to deliver its result to.
+        val pickPhoto = rememberCoverPicker { uri ->
+            viewModel.setPhoto(context, person.personId, uri) { ok ->
+                if (ok) {
+                    // Straight into framing, while the choice is fresh. A photograph that lands
+                    // showing the wrong person's shoulder and has to be hunted down to fix is worse
+                    // than one extra step now.
+                    framingPhoto = true
+                } else {
+                    Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        person.ownPhoto?.takeIf { framingPhoto }?.let { photo ->
+            CoverCropDialog(
+                cover = photo,
+                shape = CoverCropShape.CIRCLE,
+                title = "Frame ${person.displayName}",
+                hint = "Drag to move the photo, or a corner to zoom. Only what is inside the " +
+                    "circle is kept.",
+                previewContent = {},
+                onDismiss = { framingPhoto = false },
+                onConfirm = {
+                    viewModel.setPhotoCrop(person.personId, it)
+                    framingPhoto = false
+                },
+                onRemove = {
+                    viewModel.clearPhoto(context, person.personId)
+                    framingPhoto = false
+                }
+            )
+        }
+
         PersonEditDialog(
             person = person,
             recordCount = uiState.people.firstOrNull { it.person.personId == person.personId }?.recordCount ?: 0,
+            pickPhoto = pickPhoto,
+            onFramePhoto = { framingPhoto = true },
+            onRemovePhoto = { viewModel.clearPhoto(context, person.personId) },
             onDismiss = { editing = null },
             onSave = { name, color, resting, max ->
                 viewModel.save(person.personId, name, color, resting, max)
@@ -176,7 +231,9 @@ private fun PersonCard(row: PersonRow, onClick: () -> Unit) {
             modifier = Modifier.padding(16.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            PersonSwatch(row.person.colorArgb, size = 28)
+            // The avatar rather than a bare swatch: it is the same circle in the same colour when
+            // there is no photograph, and their face when there is.
+            PersonAvatar(person = row.person, size = 40.dp)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -202,6 +259,10 @@ private fun PersonCard(row: PersonRow, onClick: () -> Unit) {
 private fun PersonEditDialog(
     person: PersonEntity,
     recordCount: Int,
+    /** Opens the gallery. Applies straight away — see the note beside the avatar. */
+    pickPhoto: () -> Unit,
+    onFramePhoto: () -> Unit,
+    onRemovePhoto: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (String, Int, Int?, Int?) -> Unit,
     onDelete: () -> Unit
@@ -217,6 +278,36 @@ private fun PersonEditDialog(
         title = { Text("Edit person") },
         text = {
             Column {
+                // Their photograph, alongside the name it belongs to. Saved as soon as it is
+                // chosen rather than waiting for the dialog's Save: the file is already copied by
+                // then, and a Cancel that leaves an orphaned image on disk is worse than a photo
+                // that applies immediately.
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    PersonAvatar(person = person.copy(name = name, colorArgb = color), size = 56.dp)
+                    Column {
+                        TextButton(onClick = pickPhoto) {
+                            Text(if (person.photoPath == null) "Add a photo" else "Change photo")
+                        }
+                        if (person.photoPath != null) {
+                            TextButton(onClick = onFramePhoto) { Text("Reframe") }
+                            TextButton(onClick = onRemovePhoto) { Text("Remove photo") }
+                        } else {
+                            Text(
+                                // Not an apology for a missing photo. The colour is how a wearer
+                                // is identified on every chart in the app already.
+                                "Their colour and initial otherwise.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 12.dp)
+                            )
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },

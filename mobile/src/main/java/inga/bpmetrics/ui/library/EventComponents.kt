@@ -41,6 +41,12 @@ import inga.bpmetrics.library.EventSuggestion
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.ui.components.PersonSwatch
+import inga.bpmetrics.ui.components.PersonAvatar
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -63,6 +69,121 @@ fun PersonDots(people: List<PersonEntity>, max: Int = 6) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+/**
+ * Who was there, as faces.
+ *
+ * Dots said *how many* and nothing else: six identical circles in six colours, and knowing which
+ * colour is whose is something you either remember or you do not. A face answers "who" without
+ * being read, which is the entire job of a card in a list.
+ *
+ * Overlapped slightly, as a group of people is drawn everywhere else. Someone with no photograph
+ * still appears — their colour and initial — so a group is never partly missing.
+ */
+@Composable
+fun PersonFaces(people: List<PersonEntity>, max: Int = 5, size: Dp = 26.dp) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy((-size / 4)),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        people.take(max).forEach { person ->
+            Box(
+                Modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    // A ring in the card's own colour, so overlapping faces stay separate rather
+                    // than merging into one shape.
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(1.5.dp)
+            ) {
+                PersonAvatar(person = person, size = size - 3.dp)
+            }
+        }
+        if (people.size > max) {
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "+${people.size - max}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * How much there is: events and recordings, as plain text beside the faces.
+ *
+ * Small and quiet on purpose. This is the least interesting thing on the card — it says how big the
+ * night was, not what happened during it — so it shares a line with the faces and stays out of the
+ * way of the readings below.
+ */
+@Composable
+private fun CardCounts(recordCount: Int, eventCount: Int?) {
+    Text(
+        buildString {
+            eventCount?.let {
+                append(countLabel(it, "event"))
+                append("  ·  ")
+            }
+            append(countLabel(recordCount, "recording"))
+        },
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+    )
+}
+
+/**
+ * The readings, on a line of their own.
+ *
+ * They shared a row with the faces and the counts, and at four items across that row the numbers
+ * ran into their own labels and the whole line wrapped into a mess. They are also the most
+ * interesting thing on the card — the one figure a heart rate app can show that no other app could
+ * — so crowding them at the end of a row of counts had them last in line for space *and* last in
+ * line for attention.
+ *
+ * A line to themselves costs nothing: there was room under the faces the whole time.
+ */
+@Composable
+private fun CardVitals(peakBpm: Int?, avgBpm: Int?) {
+    if (peakBpm == null && avgBpm == null) return
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        peakBpm?.let { StatPair("Peak", it, inga.bpmetrics.ui.theme.BpmHigh) }
+        avgBpm?.let { StatPair("Avg", it, inga.bpmetrics.ui.theme.BpmAvg) }
+    }
+}
+
+/**
+ * A reading and what it is a reading of.
+ *
+ * Label first and small, then the number — so a row of these lines up on its labels and the figures
+ * carry. Tabular figures, as everywhere else numbers appear, so 98 and 188 occupy the same width
+ * and a column of cards does not jitter as it scrolls.
+ */
+@Composable
+private fun StatPair(label: String, value: Int, tone: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            value.toString(),
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals
+            ),
+            fontWeight = FontWeight.Bold,
+            color = tone
+        )
     }
 }
 
@@ -114,10 +235,19 @@ fun EventCard(
     onRename: () -> Unit,
     onMoveToGroup: () -> Unit,
     onDelete: () -> Unit,
+    /** Its own picture or the one it inherits, resolved by the caller. */
+    cover: inga.bpmetrics.library.Cover? = null,
     content: @Composable () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
+            // Behind the header only, not the expanded list underneath. A picture behind a list of
+            // nested rows competes with every one of them; behind the name it identifies the card.
+            inga.bpmetrics.ui.components.CoverBackground(
+                cover = cover,
+                modifier = Modifier.fillMaxWidth(),
+                scrim = inga.bpmetrics.ui.components.CoverScrim.TILE
+            ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -126,31 +256,43 @@ fun EventCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
+                    // What. The name first and alone, so the eye lands on the thing that
+                    // distinguishes this card from the one above it.
                     Text(
                         summary.event.displayName,
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
+                    // When, and where it sits — one line rather than a date line and a separate
+                    // collection line saying half a fact each.
                     Text(
-                        formatSpan(summary.span),
+                        buildString {
+                            append(formatSpan(summary.span))
+                            groupName?.let { append("  ·  $it") }
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.height(6.dp))
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // Who, and how hard. Faces rather than dots, and the peak rather than only a
+                    // count — a number nobody can get from a filename.
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            countLabel(summary.recordCount, "recording"),
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                        groupName?.let {
-                            Text(
-                                "  ·  $it",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        if (summary.people.isNotEmpty()) {
+                            PersonFaces(summary.people)
+                            Spacer(Modifier.width(12.dp))
                         }
-                        Spacer(Modifier.width(10.dp))
-                        PersonDots(summary.people)
+                        CardCounts(summary.recordCount, eventCount = null)
+                    }
+
+                    if (summary.peakBpm != null || summary.avgBpm != null) {
+                        Spacer(Modifier.height(6.dp))
+                        CardVitals(summary.peakBpm, summary.avgBpm)
                     }
                 }
 
@@ -166,6 +308,7 @@ fun EventCard(
                     onDelete = onDelete,
                     deleteLabel = "Delete event"
                 )
+            }
             }
 
             if (expanded) {
@@ -206,6 +349,12 @@ fun GroupCard(
     onDelete: () -> Unit,
     /** Files this collection inside another. Null at the depth cap, where it cannot go deeper. */
     onMoveToCollection: (() -> Unit)? = null,
+    /** Sets this collection's cover, which everything nested under it inherits. */
+    onSetCover: (() -> Unit)? = null,
+    onFrameCover: (() -> Unit)? = null,
+    onRemoveCover: (() -> Unit)? = null,
+    /** Its own picture or the one it inherits from a parent, resolved by the caller. */
+    cover: inga.bpmetrics.library.Cover? = null,
     /** How deep this sits, so the tree reads as a tree rather than a flat list. */
     depth: Int = 1,
     content: @Composable () -> Unit
@@ -221,6 +370,11 @@ fun GroupCard(
         )
     ) {
         Column {
+            inga.bpmetrics.ui.components.CoverBackground(
+                cover = cover,
+                modifier = Modifier.fillMaxWidth(),
+                scrim = inga.bpmetrics.ui.components.CoverScrim.TILE
+            ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -239,42 +393,55 @@ fun GroupCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Nested collections named on their own line when there are any, because that
+                    // is what explains the shape of everything after it: a festival of two days
+                    // reads differently from six loose events.
+                    if (summary.nestedCollectionCount > 0) {
                         Text(
-                            buildString {
-                                // Named first when there are any, because it is what explains the
-                                // shape of everything after it: "2 collections · 6 events" reads
-                                // as a festival of two days, and "6 events" alone does not.
-                                if (summary.nestedCollectionCount > 0) {
-                                    append(
-                                        countLabel(summary.nestedCollectionCount, "collection")
-                                    )
-                                    append(" · ")
-                                }
-                                append(countLabel(summary.eventCount, "event"))
-                                append(" · ")
-                                append(countLabel(summary.recordCount, "recording"))
-                            },
-                            style = MaterialTheme.typography.labelMedium
+                            countLabel(summary.nestedCollectionCount, "collection") + " inside",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.width(10.dp))
-                        PersonDots(summary.people)
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (summary.people.isNotEmpty()) {
+                            PersonFaces(summary.people)
+                            Spacer(Modifier.width(12.dp))
+                        }
+                        CardCounts(summary.recordCount, summary.eventCount)
+                    }
+
+                    if (summary.peakBpm != null || summary.avgBpm != null) {
+                        Spacer(Modifier.height(6.dp))
+                        CardVitals(summary.peakBpm, summary.avgBpm)
                     }
                 }
 
                 IconButton(onClick = onToggleExpand) {
                     Icon(
                         if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (expanded) "Collapse" else "Show events"
+                        // "Contents", not "events": this now reveals the collections nested inside
+                        // as well, which is the whole point of collapsing one.
+                        contentDescription = if (expanded) "Collapse" else "Show contents"
                     )
                 }
                 EventOverflow(
                     onRename = onRename,
                     onMoveToGroup = onMoveToCollection,
                     onDelete = onDelete,
-                    deleteLabel = "Delete collection"
+                    deleteLabel = "Delete collection",
+                    onSetCover = onSetCover,
+                    onFrameCover = onFrameCover,
+                    onRemoveCover = onRemoveCover,
+                    // Its own, not an inherited one. "Remove cover" on a collection showing its
+                    // parent's picture would appear to do nothing, because the parent's would still
+                    // resolve — the menu offers only what this collection can actually change.
+                    hasCover = summary.group.coverPath != null
                 )
+            }
             }
 
             if (expanded) {
@@ -312,7 +479,17 @@ private fun EventOverflow(
     onRename: () -> Unit,
     onMoveToGroup: (() -> Unit)?,
     onDelete: () -> Unit,
-    deleteLabel: String
+    deleteLabel: String,
+    /**
+     * Sets the picture for this event or collection, and so for everything under it.
+     *
+     * Optional rather than always present: this menu is shared, and a card with nowhere to put a
+     * cover should not offer to set one.
+     */
+    onSetCover: (() -> Unit)? = null,
+    onFrameCover: (() -> Unit)? = null,
+    onRemoveCover: (() -> Unit)? = null,
+    hasCover: Boolean = false
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -329,6 +506,26 @@ private fun EventOverflow(
                     text = { Text("Move…") },
                     onClick = { open = false; move() }
                 )
+            }
+            onSetCover?.let { set ->
+                DropdownMenuItem(
+                    text = { Text(if (hasCover) "Change cover…" else "Set cover…") },
+                    onClick = { open = false; set() }
+                )
+            }
+            if (hasCover) {
+                onFrameCover?.let { frame ->
+                    DropdownMenuItem(
+                        text = { Text("Reframe cover") },
+                        onClick = { open = false; frame() }
+                    )
+                }
+                onRemoveCover?.let { remove ->
+                    DropdownMenuItem(
+                        text = { Text("Remove cover") },
+                        onClick = { open = false; remove() }
+                    )
+                }
             }
             HorizontalDivider()
             DropdownMenuItem(

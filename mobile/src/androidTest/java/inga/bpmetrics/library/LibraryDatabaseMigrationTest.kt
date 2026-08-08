@@ -46,7 +46,10 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_14_15,
             LibraryDatabase.MIGRATION_15_16,
             LibraryDatabase.MIGRATION_16_17,
-            LibraryDatabase.MIGRATION_17_18
+            LibraryDatabase.MIGRATION_17_18,
+            LibraryDatabase.MIGRATION_18_19,
+            LibraryDatabase.MIGRATION_19_20,
+            LibraryDatabase.MIGRATION_20_21
         )
     }
 
@@ -655,6 +658,106 @@ class LibraryDatabaseMigrationTest {
             assertEquals("Kyle", cursor.getString(0))
             assertTrue("resting must be absent, not zero", cursor.isNull(1))
             assertTrue("maximum must be absent, not zero", cursor.isNull(2))
+        }
+        db.close()
+    }
+
+    /** The schema check for cover images. */
+    @Test
+    fun migrate18To19_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 19, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Everything that already exists comes through with no cover set.
+     *
+     * Null is not "no cover" on an event or a collection — it means *inherit*, and a migration that
+     * wrote an empty string instead would make every existing event look like one whose cover had
+     * been deliberately cleared, permanently blocking inheritance from the collection above it.
+     */
+    @Test
+    fun migrate18To19_leavesEverythingInheriting() {
+        helper.createDatabase(TEST_DB, 5).close()
+        var db = helper.runMigrationsAndValidate(TEST_DB, 18, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "INSERT INTO event_groups (groupId, name, notes, createdAt, parentGroupId) " +
+                "VALUES (1, 'Coachella', '', 1700000000000, NULL)"
+        )
+        db.execSQL(
+            "INSERT INTO events (eventId, name, groupId, notes, createdAt) " +
+                "VALUES (1, 'Subtronics', 1, '', 1700000000000)"
+        )
+        db.close()
+
+        db = helper.runMigrationsAndValidate(TEST_DB, 19, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT coverPath, coverCropLeft FROM events WHERE eventId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue("an existing event must inherit, not be cleared", cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+        }
+        db.query("SELECT coverPath FROM event_groups WHERE groupId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue("an existing collection must inherit, not be cleared", cursor.isNull(0))
+        }
+        db.close()
+    }
+
+    /**
+     * The crop survives as fractions rather than being rounded to whole numbers.
+     *
+     * REAL, not INTEGER. A crop stored as integers collapses to 0 and 1, which is not a crop — and
+     * the failure is silent: the cover still draws, just never framed the way it was set.
+     */
+    @Test
+    fun migrate18To19_storesTheCropAsFractions() {
+        helper.createDatabase(TEST_DB, 5).close()
+        var db = helper.runMigrationsAndValidate(TEST_DB, 18, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "INSERT INTO events (eventId, name, groupId, notes, createdAt) " +
+                "VALUES (1, 'Subtronics', NULL, '', 1700000000000)"
+        )
+        db.close()
+
+        db = helper.runMigrationsAndValidate(TEST_DB, 19, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "UPDATE events SET coverPath = 'cover_1.jpg', " +
+                "coverCropLeft = 0.125, coverCropTop = 0.25, " +
+                "coverCropRight = 0.875, coverCropBottom = 0.75 WHERE eventId = 1"
+        )
+
+        db.query(
+            "SELECT coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom " +
+                "FROM events WHERE eventId = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("cover_1.jpg", cursor.getString(0))
+            assertEquals(0.125, cursor.getDouble(1), 0.0001)
+            assertEquals(0.25, cursor.getDouble(2), 0.0001)
+            assertEquals(0.875, cursor.getDouble(3), 0.0001)
+            assertEquals(0.75, cursor.getDouble(4), 0.0001)
+        }
+        db.close()
+    }
+
+    /** A recording can carry its own cover, overriding whatever its event would give it. */
+    @Test
+    fun migrate18To19_letsOneRecordingOverrideItsEvent() {
+        seedVersion5With(
+            "(1, 'Set', '', 1700000000000, 1700000000000, 1700000060000, 60000, NULL, 90.0, NULL, 'Pixel Watch 2', 'Kyle')"
+        )
+        val db = helper.runMigrationsAndValidate(TEST_DB, 19, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT coverPath FROM bpm_records WHERE recordId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue("a migrated recording must inherit its event's cover", cursor.isNull(0))
+        }
+
+        db.execSQL("UPDATE bpm_records SET coverPath = 'own.jpg' WHERE recordId = 1")
+        db.query("SELECT coverPath FROM bpm_records WHERE recordId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("own.jpg", cursor.getString(0))
         }
         db.close()
     }

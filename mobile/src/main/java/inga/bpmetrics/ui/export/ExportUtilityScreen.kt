@@ -149,6 +149,24 @@ fun ExportUtilityScreen(
         }.toMap()
     }
 
+    // Their faces for the pills, decoded once here rather than per frame. A render draws these
+    // thirty times a second and the picture never changes; reading and cropping a file on each of
+    // those is the difference between a two-minute render and a ten-minute one.
+    //
+    // Keyed by recording so the renderer needs to know nothing about people. Absent where someone
+    // has no photograph, and the pill falls back to their colour and initial — the same fallback
+    // the library uses, so a person looks the same in an export as they do on screen.
+    val recordPhotos = remember(records, peopleById) {
+        records.mapNotNull { record ->
+            val photo = record.metadata.personId
+                ?.let { peopleById[it] }
+                ?.ownPhoto
+                ?: return@mapNotNull null
+            inga.bpmetrics.library.CoverStore.decodeCropped(context, photo)
+                ?.let { record.metadata.recordId to it }
+        }.toMap()
+    }
+
     // What the estimate falls back to when there are no clips: the span of the recordings
     // themselves, which is what an unbacked export renders.
     val fallbackDurationMs = remember(records) {
@@ -386,6 +404,7 @@ fun ExportUtilityScreen(
                     // batch will look like. A preview of nothing would be useless with a batch.
                     previewOverlay = pendingJobs.firstOrNull()?.clip?.uri ?: manualOverlay,
                     previewColours = recordColours,
+                    previewPhotos = recordPhotos,
                     previewTitle = sourceLabel.takeIf { it.isNotBlank() },
                     previewAt = previewAt,
                     onScrub = { viewModel.scrubPreview(it) },
@@ -471,6 +490,7 @@ fun ExportUtilityScreen(
                                 jobs = pendingJobs,
                                 allRecords = records,
                                 colours = recordColours,
+                                photos = recordPhotos,
                                 manualOverlay = manualOverlay,
                                 label = sourceLabel
                             )
@@ -499,6 +519,7 @@ private fun queueBatch(
     jobs: List<ClipSelection>,
     allRecords: List<inga.bpmetrics.library.BpmRecord>,
     colours: Map<Long, Int>,
+    photos: Map<Long, android.graphics.Bitmap>,
     manualOverlay: Uri?,
     label: String
 ) {
@@ -514,7 +535,7 @@ private fun queueBatch(
             context,
             allRecords.first().metadata.recordId,
             name,
-            viewModel.buildConfig(allRecords, manualOverlay, colours, name),
+            viewModel.buildConfig(allRecords, manualOverlay, colours, photos, name),
             null,
             presetName = presetName,
             sourceLabel = name
@@ -535,6 +556,7 @@ private fun queueBatch(
                 forRecords = forThisClip,
                 overlay = job.clip.uri,
                 colours = colours,
+                photos = photos,
                 title = name,
                 clip = job.clip,
                 placement = job.graph
@@ -643,6 +665,7 @@ private fun LookStep(
     onPresetChange: (ExportPreset) -> Unit,
     previewOverlay: Uri?,
     previewColours: Map<Long, Int>,
+    previewPhotos: Map<Long, android.graphics.Bitmap>,
     previewTitle: String?,
     previewAt: Float,
     onScrub: (Float) -> Unit,
@@ -707,6 +730,7 @@ private fun LookStep(
                     },
                     overlay = previewing?.clip?.uri ?: previewOverlay,
                     colours = previewColours,
+                    photos = previewPhotos,
                     title = previewTitle,
                     at = previewing?.scrubAt ?: previewAt,
                     onScrub = { at ->

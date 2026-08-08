@@ -54,6 +54,17 @@ object ImageExporter {
         val futureOpacity: Float = 0.65f,
         val timeZoneId: String = java.time.ZoneId.systemDefault().id,
         val customRecordColors: Map<Long, Int> = emptyMap(),
+        /**
+         * The wearer's photograph for each recording, already cropped, keyed by record id.
+         *
+         * Decoded by the caller rather than here: this runs once per frame, and reading a file off
+         * disk thirty times a second for a picture that never changes is the kind of thing that
+         * turns a two-minute render into a ten-minute one.
+         *
+         * Absent is the ordinary case, and the pill falls back to the wearer's colour and initial —
+         * the same fallback the avatar uses everywhere in the app.
+         */
+        val recordPhotos: Map<Long, Bitmap> = emptyMap(),
         val alignByElapsedTime: Boolean = true,
         /**
          * Heading drawn on the graph.
@@ -217,6 +228,109 @@ object ImageExporter {
      * time labels the bottom — which is why the corner is a setting rather than a decision made
      * here.
      */
+    /**
+     * The wearer's face in a pill, or their colour and initial where there is no photograph.
+     *
+     * The same fallback the app's own avatar uses, deliberately: someone with no picture should
+     * look on an export exactly as they do in the library, and a pill that simply omits the circle
+     * would make the column ragged as soon as one person in a group had a photo and another did
+     * not.
+     *
+     * Centre-cropped into the circle. The stored photograph is already framed — a crop rectangle in
+     * fractions, applied when the caller decoded it — so what arrives here is the part that was
+     * chosen, and all this does is fit it to a circle without stretching a face.
+     */
+    private fun drawPillAvatar(
+        canvas: Canvas,
+        photo: Bitmap?,
+        initial: String,
+        colorArgb: Int,
+        centerX: Float,
+        centerY: Float,
+        size: Float,
+        /**
+         * How far into a beat, 0 at rest and 1 at the snap — from [BeatPhase.envelope].
+         *
+         * Zero rather than one for "no beat": this is an amount of pulse, not a scale factor. The
+         * two were briefly the same parameter and the resting ring came out permanently enlarged.
+         */
+        pulse: Float = 0f,
+        paint: Paint
+    ) {
+        val radius = size / 2f
+        // Only the ring moves, never the face. Scaling a photograph every frame makes it shimmer as
+        // it resamples, and a head that grows and shrinks reads as a fault rather than a heartbeat.
+        // At rest the ring hugs the picture; on a beat it steps outward and falls back.
+        val ringRadius = radius * (1f + PULSE_DEPTH * pulse.coerceIn(0f, 1f))
+
+        if (photo != null && !photo.isRecycled && photo.width > 0 && photo.height > 0) {
+            canvas.save()
+            val circle = Path().apply {
+                addCircle(centerX, centerY, radius, Path.Direction.CW)
+            }
+            canvas.clipPath(circle)
+
+            // The largest square of the photograph, centred — anything else puts a face in a circle
+            // squashed one way or the other.
+            val edge = minOf(photo.width, photo.height)
+            val src = android.graphics.Rect(
+                (photo.width - edge) / 2,
+                (photo.height - edge) / 2,
+                (photo.width - edge) / 2 + edge,
+                (photo.height - edge) / 2 + edge
+            )
+            val dst = RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius)
+
+            paint.resetForExport()
+            paint.isFilterBitmap = true
+            canvas.drawBitmap(photo, src, dst, paint)
+            canvas.restore()
+
+            // A ring in their colour, tying the face to the curve it belongs to — and beating,
+            // which is what the heart beside it used to do before the pill was narrowed.
+            paint.resetForExport()
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = size * 0.08f
+            paint.color = colorArgb
+            canvas.drawCircle(centerX, centerY, ringRadius - paint.strokeWidth / 2f, paint)
+            paint.style = Paint.Style.FILL
+            return
+        }
+
+        paint.resetForExport()
+        paint.color = colorArgb
+        canvas.drawCircle(centerX, centerY, ringRadius, paint)
+
+        if (initial.isNotEmpty()) {
+            paint.color = readableOn(colorArgb)
+            paint.textSize = size * 0.58f
+            paint.isFakeBoldText = true
+            paint.textAlign = Paint.Align.CENTER
+            val metrics = paint.fontMetrics
+            canvas.drawText(
+                initial,
+                centerX,
+                centerY + (abs(metrics.ascent) - metrics.descent) / 2f,
+                paint
+            )
+            paint.textAlign = Paint.Align.LEFT
+        }
+    }
+
+    /**
+     * Black or white, whichever can be read on [background].
+     *
+     * People choose their own colours and some of them choose yellow. The same luminance test the
+     * app's avatar uses, so an initial that is legible on screen is legible in the export.
+     */
+    private fun readableOn(background: Int): Int {
+        val r = ((background shr 16) and 0xFF) / 255f
+        val g = ((background shr 8) and 0xFF) / 255f
+        val b = (background and 0xFF) / 255f
+        val luminance = 0.299f * r + 0.587f * g + 0.114f * b
+        return if (luminance > 0.6f) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+    }
+
     private fun drawWordmark(
         canvas: Canvas,
         dims: RenderingDimensions,
@@ -541,6 +655,14 @@ object ImageExporter {
      *
      * Returns 1.0 (no pulse) when there is no reading, so a paused or finished session shows a
      * still heart rather than one stuck mid-beat.
+     *
+     * **Only correct while the rate is steady**, which is why [BeatPhase] exists. Frequency is
+     * multiplied by absolute time here, so the phase is `t × bpm` — and when bpm changes, the whole
+     * waveform jumps. Ten minutes in, a tick from 140 to 141 moves the argument by some ten full
+     * cycles, which lands the beat somewhere unrelated to where it was on the previous frame.
+     *
+     * Kept for the single-record HUD, whose heart is small and whose glitch nobody has reported;
+     * the multi-wearer pills use the integrated phase instead.
      */
     private fun pulseScaleFor(bpm: Double?, playheadMs: Double): Float {
         if (bpm == null || bpm <= 0.0) return 1.0f
@@ -548,6 +670,9 @@ object ImageExporter {
         val phase = (sin((playheadMs / 1000.0) * 2.0 * Math.PI * beatsPerSecond) * 0.5 + 0.5).toFloat()
         return 1.0f + (0.12f * phase)
     }
+
+    /** How far a pill's ring steps out at the top of a beat, as a share of its radius. */
+    private const val PULSE_DEPTH = 0.11f
 
     /**
      * Draws a heart of [radius] centred near ([centerX], [centerY]) using the paint's current color.
@@ -1061,8 +1186,11 @@ object ImageExporter {
         // gets large readable numbers instead of the same cramped rows as a six-wearer one. The
         // ceiling stops a single pill becoming a slab; the floor keeps a crowded session legible
         // even if the column then runs slightly past the graph.
-        val timeRowHeight = 96f * scale
-        val available = (dims.graphBottom - dims.graphTop) - (edgeMargin * 2) - timeRowHeight
+        //
+        // Nothing is reserved at the bottom any more. The clock used to hang off the end of this
+        // column and took a row's worth of height out of it; now it sits in the opposite corner and
+        // the pills have the full run.
+        val available = (dims.graphBottom - dims.graphTop) - (edgeMargin * 2)
 
         // Height is also bounded by width. Everything inside a pill scales with its row height,
         // so on a tall narrow graph the heart and digits would eat the whole pill and leave the
@@ -1074,34 +1202,38 @@ object ImageExporter {
 
         // Everything else follows the row height, so the proportions hold at any size.
         val digitSize = rowHeight * 0.50f
-        val labelSize = rowHeight * 0.25f
-        val heartSize = rowHeight * 0.42f
-        val gap = rowHeight * 0.14f
+        val gap = rowHeight * 0.16f
         val padH = rowHeight * 0.22f
-        val padV = rowHeight * 0.14f
         val cornerRadius = rowHeight * 0.24f
 
         paint.resetForExport()
         paint.isFakeBoldText = true
         paint.textSize = digitSize
-        // Reserve the width of the widest plausible reading so pills share one width.
+        // Reserve the width of the widest plausible reading so pills share one width. Without it a
+        // wearer crossing from 99 to 100 would widen their pill mid-render and break the column.
         val digitWidth = paint.measureText("888")
         val digitMetrics = paint.fontMetrics
         val digitBaselineOffset = (abs(digitMetrics.ascent) - digitMetrics.descent) / 2f
 
-        paint.isFakeBoldText = false
-        paint.textSize = labelSize
-        val labelMetrics = paint.fontMetrics
-        val labelBaselineOffset = (abs(labelMetrics.ascent) - labelMetrics.descent) / 2f
+        // A face and a number, and nothing else.
+        //
+        // The pill used to carry a pulsing heart, the reading, a face and the wearer's name. Three
+        // of those say the same thing twice: the face already answers "whose", and on a heart rate
+        // overlay a number beside a face is not ambiguous enough to need a heart explaining it. All
+        // that redundancy cost width, and width on a pill is taken directly out of the footage it
+        // sits on — six wearers had the HUD claiming a third of the frame.
+        //
+        // What identity is left is carried by the avatar: their photograph, or their colour and
+        // initial, ringed in the colour their curve is drawn in. The pulse moved onto that ring, so
+        // the liveliness survives the heart being gone.
+        //
+        // The trade, stated plainly: two people with no photograph whose names begin with the same
+        // letter show the same initial, and are told apart by colour alone — exactly as their
+        // curves already are.
+        val avatarSize = rowHeight * 0.62f
 
-        // Never let a long wearer name — or a fallback to a long record title — grow the pills
-        // across the graph. Half the plot width is the most the HUD may claim.
-        val maxLabelWidth = ((dims.graphRight - dims.graphLeft) * 0.5f) -
-                (padH * 2 + heartSize + gap + digitWidth + gap)
-        val labels = records.map { ellipsize(wearerLabelOf(it), maxLabelWidth, paint) }
-        val labelWidth = labels.maxOf { paint.measureText(it) }
-
-        val contentWidth = heartSize + gap + digitWidth + gap + labelWidth
+        val labels = records.map { wearerLabelOf(it) }
+        val contentWidth = avatarSize + gap + digitWidth
         val pillWidth = contentWidth + padH * 2
 
         val pillRight = minOf(dims.graphRight, dims.drawAreaRight - edgeMargin)
@@ -1138,73 +1270,102 @@ object ImageExporter {
             val contentLeft = pillLeft + padH
             val centerY = rect.centerY()
 
-            paint.style = Paint.Style.FILL
-            paint.color = if (bpm != null) recordColor else config.labelsColor
-            drawHeart(
-                canvas,
-                contentLeft + heartSize / 2f,
-                centerY - heartSize * 0.25f,
-                (heartSize / 2f) * pulseScaleFor(bpm, viewport.playhead),
-                paint
+            // Their face, carrying the pulse the heart used to.
+            drawPillAvatar(
+                canvas = canvas,
+                photo = config.recordPhotos[record.metadata.recordId],
+                initial = labels[index].trim().firstOrNull()?.uppercase() ?: "",
+                colorArgb = recordColor,
+                centerX = contentLeft + avatarSize / 2f,
+                centerY = centerY,
+                size = avatarSize,
+                // Integrated phase, against this wearer's own rate at this instant — so six rings
+                // beat independently and each one keeps time with the number beside it.
+                pulse = if (bpm == null) {
+                    0f
+                } else {
+                    BeatPhase.envelope(
+                        BeatPhase.phaseAt(record, timelineOriginMs + viewport.playhead.toLong())
+                    )
+                },
+                paint = paint
             )
 
+            paint.resetForExport()
+            paint.color = if (bpm != null) config.labelsColor else config.labelsColor
             paint.textSize = digitSize
             paint.isFakeBoldText = true
             paint.textAlign = Paint.Align.RIGHT
             canvas.drawText(
                 bpm?.roundToInt()?.toString() ?: "--",
-                contentLeft + heartSize + gap + digitWidth,
+                contentLeft + avatarSize + gap + digitWidth,
                 centerY + digitBaselineOffset,
-                paint
-            )
-
-            paint.textSize = labelSize
-            paint.isFakeBoldText = true
-            paint.color = config.labelsColor
-            paint.textAlign = Paint.Align.LEFT
-            canvas.drawText(
-                labels[index],
-                contentLeft + heartSize + gap + digitWidth + gap,
-                centerY + labelBaselineOffset,
                 paint
             )
         }
 
-        // Anchored to the number of wearers rather than to wherever the loop finished, so the
-        // clock holds still while the pills above it trade places. Uses the height reserved
-        // above, so what is drawn matches what the pills made room for.
-        val timeTop = blockTop + records.size * slotPitch
-        val timeRect = RectF(pillLeft, timeTop, pillRight, timeTop + timeRowHeight)
-        paint.resetForExport()
-        paint.color = 0xD9000000.toInt()
-        canvas.drawRoundRect(timeRect, cornerRadius, cornerRadius, paint)
+        drawSessionClock(canvas, dims, viewport, config, timelineOriginMs, paint)
+    }
 
-        val elapsedMs = viewport.playhead.toLong().coerceAtLeast(0L)
-        val absTime = timelineOriginMs + viewport.playhead.toLong()
-
-        // Sized to the time pill rather than to the wearer rows, which change with how many
-        // people are in the session — the clock should not shrink because a fifth watch joined.
-        val timeTextSize = timeRowHeight * 0.30f
-        paint.color = config.labelsColor
-        paint.textSize = timeTextSize
-        paint.isFakeBoldText = true
-        paint.textAlign = Paint.Align.CENTER
-
-        // Two lines centred as a block, so the pair sits in the middle whatever the pill height.
-        val lineGap = timeTextSize * 0.30f
-        val firstBaseline = timeRect.centerY() - lineGap / 2f
-        canvas.drawText(
-            StringFormatHelpers.getTimeString(absTime, java.time.ZoneId.of(config.timeZoneId)),
-            timeRect.centerX(),
-            firstBaseline,
-            paint
+    /**
+     * The wall clock, pinned to the top-left of the graph.
+     *
+     * **Static, and in a corner.** It used to hang off the bottom of the pill column, which meant
+     * its position was a function of how many watches were in the session — a five-wearer export
+     * put the clock somewhere a four-wearer export did not, and adding a watch moved it. A fixed
+     * corner is a fixed corner.
+     *
+     * Top-left specifically: the pills are top-right, so this is the one corner guaranteed free of
+     * them however many there are, and it is where the eye starts. The bottom edge belongs to the
+     * time axis.
+     *
+     * **Clock time only.** The elapsed line said how far into *the recording* the playhead was,
+     * which is a coherent thing to say about one watch and an incoherent one about several: five
+     * people started at five different moments, so there is no single elapsed time — the number
+     * shown was the first record's, presented as though it belonged to the session. The wall clock
+     * is the only reading that means the same thing to everyone on the frame, and it is also what
+     * lets someone match the export against footage or a set list.
+     */
+    private fun drawSessionClock(
+        canvas: Canvas,
+        dims: RenderingDimensions,
+        viewport: Viewport,
+        config: ImageExportConfig,
+        timelineOriginMs: Long,
+        paint: Paint
+    ) {
+        val scale = dims.scaleFactor
+        val margin = 20f * scale
+        val text = StringFormatHelpers.getTimeString(
+            timelineOriginMs + viewport.playhead.toLong(),
+            java.time.ZoneId.of(config.timeZoneId)
         )
-        paint.isFakeBoldText = false
-        paint.color = 0xCCFFFFFF.toInt()
+
+        paint.resetForExport()
+        paint.isFakeBoldText = true
+        paint.textSize = 34f * scale
+        val metrics = paint.fontMetrics
+        val textWidth = paint.measureText(text)
+
+        val padH = 18f * scale
+        val padV = 10f * scale
+        val height = (abs(metrics.ascent) + metrics.descent) + padV * 2
+        val rect = RectF(
+            dims.graphLeft + margin,
+            dims.graphTop + margin,
+            dims.graphLeft + margin + textWidth + padH * 2,
+            dims.graphTop + margin + height
+        )
+
+        paint.color = 0xD9000000.toInt()
+        canvas.drawRoundRect(rect, height * 0.3f, height * 0.3f, paint)
+
+        paint.color = config.labelsColor
+        paint.textAlign = Paint.Align.LEFT
         canvas.drawText(
-            StringFormatHelpers.getDurationString(elapsedMs),
-            timeRect.centerX(),
-            firstBaseline + timeTextSize + lineGap,
+            text,
+            rect.left + padH,
+            rect.centerY() + (abs(metrics.ascent) - metrics.descent) / 2f,
             paint
         )
     }

@@ -148,6 +148,18 @@ interface BpmRecordDao {
     suspend fun deleteAllDataPoints()
 }
 
+/**
+ * The schema version, in one place.
+ *
+ * There were two: the `@Database` annotation and a `CURRENT_VERSION` constant below it, commented
+ * "must match the version above". It did not match — the annotation had moved on and the constant
+ * had been left at 18. That constant decides whether a backup is taken before a migration runs, so
+ * the one upgrade most in need of a safety net was the one that skipped it, silently.
+ *
+ * A file-level constant because an annotation argument cannot reference the class it annotates.
+ */
+internal const val LIBRARY_DB_VERSION = 21
+
 @Database(
     entities = [
         BpmRecordEntity::class,
@@ -166,7 +178,7 @@ interface BpmRecordDao {
         ExportPresetEntity::class,
         RenderJobEntity::class
     ],
-    version = 18,
+    version = LIBRARY_DB_VERSION,
     exportSchema = true
 )
 abstract class LibraryDatabase : RoomDatabase() {
@@ -184,8 +196,8 @@ abstract class LibraryDatabase : RoomDatabase() {
         private const val TAG = "LibraryDatabase"
         private const val DB_NAME = "bpmetrics_db"
 
-        /** Must match the @Database version above; used to spot a pending migration. */
-        private const val CURRENT_VERSION = 18
+        /** The version the app expects, used to spot a pending migration. See [LIBRARY_DB_VERSION]. */
+        private const val CURRENT_VERSION = LIBRARY_DB_VERSION
 
         private const val MAX_BACKUPS = 5
 
@@ -820,6 +832,79 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * A picture for an event, a collection, or one recording.
+         *
+         * All nullable with `DEFAULT NULL`, matching the entities exactly. Null is not "no cover"
+         * on an event or a collection — it means *inherit*, which is a different thing and has to
+         * stay distinguishable from a cover deliberately cleared. Everything that already exists
+         * comes through with nothing set, which is what it had before these columns existed.
+         *
+         * The crop is REAL because it is stored as fractions of the source image rather than
+         * pixels, so it survives being drawn into a wide tile, a square thumbnail and a page
+         * header. Getting that wrong is not a crash, it is a cover that reframes itself depending
+         * on where it is shown.
+         *
+         * SQL copied from the generated `19.json`.
+         */
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf("events", "event_groups", "bpm_records").forEach { table ->
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `coverPath` TEXT DEFAULT NULL")
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `coverCropLeft` REAL DEFAULT NULL")
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `coverCropTop` REAL DEFAULT NULL")
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `coverCropRight` REAL DEFAULT NULL")
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `coverCropBottom` REAL DEFAULT NULL")
+                }
+
+                android.util.Log.i(TAG, "MIGRATION_18_19: Events, collections and recordings can carry a cover")
+            }
+        }
+
+        /**
+         * A photograph for a person.
+         *
+         * `TEXT DEFAULT NULL`, matching the entity. Null falls back to their colour and initial,
+         * which is what everyone has now and what anyone who never adds a photo keeps.
+         *
+         * A separate migration from 18→19 rather than folded into it, even though neither has
+         * shipped. Folding is only safe if nothing has ever opened a version 19 database, and being
+         * *fairly sure* of that is not the standard this chain is held to — an extra ALTER costs a
+         * line, and getting it wrong costs someone their library.
+         *
+         * SQL copied from the generated `20.json`.
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `people` ADD COLUMN `photoPath` TEXT DEFAULT NULL")
+
+                android.util.Log.i(TAG, "MIGRATION_19_20: People can have a photograph")
+            }
+        }
+
+        /**
+         * How a person's photograph is framed.
+         *
+         * `REAL DEFAULT NULL`, matching the entity, and fractions rather than pixels for the same
+         * reason a cover's crop is: the same face is drawn into a 34dp circle on a tile and a 56dp
+         * one in the editor, and fractions are what survives both.
+         *
+         * Anyone who already added a photo comes through with no crop, which means the whole
+         * picture — exactly what they had.
+         *
+         * SQL copied from the generated `21.json`.
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `people` ADD COLUMN `photoCropLeft` REAL DEFAULT NULL")
+                db.execSQL("ALTER TABLE `people` ADD COLUMN `photoCropTop` REAL DEFAULT NULL")
+                db.execSQL("ALTER TABLE `people` ADD COLUMN `photoCropRight` REAL DEFAULT NULL")
+                db.execSQL("ALTER TABLE `people` ADD COLUMN `photoCropBottom` REAL DEFAULT NULL")
+
+                android.util.Log.i(TAG, "MIGRATION_20_21: A person's photograph can be framed")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -881,7 +966,10 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_14_15,
                         MIGRATION_15_16,
                         MIGRATION_16_17,
-                        MIGRATION_17_18
+                        MIGRATION_17_18,
+                        MIGRATION_18_19,
+                        MIGRATION_19_20,
+                        MIGRATION_20_21
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

@@ -73,6 +73,14 @@ fun BpmRecordTile(
      * recordings made before profiles existed, which fall back to the name they were stamped with.
      */
     wearer: PersonEntity? = null,
+    /**
+     * The picture that stands for this recording, resolved by the caller.
+     *
+     * Usually its event's or a collection's rather than its own — see `CoverResolver`. Null is the
+     * ordinary case and must stay ordinary: a library where two evenings have covers and the rest
+     * do not should look like a library, not like one with holes in it.
+     */
+    cover: inga.bpmetrics.library.Cover? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
@@ -93,16 +101,24 @@ fun BpmRecordTile(
         // the two never have to compete for the same outline.
         border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
     ) {
-        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            wearer?.let { person ->
-                Box(
-                    modifier = Modifier
-                        .width(6.dp)
-                        .fillMaxHeight()
-                        .background(Color(person.colorArgb))
-                )
+        // The cover sits behind the whole row rather than behind the body, so the wearer's colour
+        // stripe stays a solid edge against it instead of becoming another thing washed by the
+        // photo. Selection tinting is the Card's, and lands on top of both.
+        inga.bpmetrics.ui.components.CoverBackground(
+            cover = cover,
+            scrim = inga.bpmetrics.ui.components.CoverScrim.TILE
+        ) {
+            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                wearer?.let { person ->
+                    Box(
+                        modifier = Modifier
+                            .width(6.dp)
+                            .fillMaxHeight()
+                            .background(Color(person.colorArgb))
+                    )
+                }
+                TileBody(record, watchName, wearer)
             }
-            TileBody(record, watchName, wearer)
         }
     }
 }
@@ -110,7 +126,18 @@ fun BpmRecordTile(
 /** How many tag chips a tile shows before it stops and counts the rest. */
 private const val TILE_TAG_LIMIT = 3
 
-/** The tile's contents, split out so the colour stripe can sit alongside them. */
+/**
+ * The tile's contents, split out so the colour stripe can sit alongside them.
+ *
+ * Deliberately spare. This carried a title, a person, a watch, a duration, a date, a time, three
+ * readings and three tags — eleven pieces of writing over the picture that is meant to say which
+ * evening this was at a glance. A scrim strong enough to keep all of that legible turns every cover
+ * into the same grey rectangle, which is the failure the cover was supposed to fix.
+ *
+ * So: the avatar and the title, then one line of when and how long, then the readings. The watch
+ * appears only when there is no person to name, which is exactly when it is the thing identifying
+ * the recording; otherwise it is on the detail page, one tap away.
+ */
 @Composable
 private fun TileBody(
     record: BpmRecord,
@@ -120,9 +147,14 @@ private fun TileBody(
     Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // Their face, or their colour and initial. Says who at a glance without spending a
+                // line of the tile on their name — and it is the same colour their curve is drawn
+                // in everywhere else, so the association is already learned.
+                inga.bpmetrics.ui.components.PersonAvatar(person = wearer, size = 34.dp)
+
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         // Never a bare "Untitled 4" where a wearer is known — see
@@ -130,46 +162,35 @@ private fun TileBody(
                         text = record.displayName(wearer?.displayName, watchName),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        // Two lines, then ellipsis. Titles are free text and some of them are a
-                        // sentence; unbounded, one of those grew the tile to four lines and broke
-                        // the even rhythm that makes a long list scannable in the first place.
-                        maxLines = 2,
+                        // One line now that the tile is spare. Two lines of a long title pushed the
+                        // rest of the row down and broke the even rhythm that makes a long list
+                        // scannable — which is the same rhythm the covers depend on.
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    // The live profile name wins over the frozen one, so a correction shows up
-                    // here; the frozen name remains for recordings with no profile behind them.
-                    val wearerLabel = wearer?.displayName
-                        ?: record.metadata.wearerName.takeIf { it.isNotBlank() }
-                    // Who wore it and what they wore, each with its own marker. Icons rather
-                    // than the emoji these used to be: same cue, but they tint with the theme and
-                    // look the same on every phone.
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        wearerLabel?.let {
-                            inga.bpmetrics.ui.components.BpmIconLabel(Icons.Default.Person, it)
-                        }
+                    // When and how long, on one line. Three separate lines for date, time and
+                    // duration said no more than this does and cost two thirds of the tile.
+                    Text(
+                        text = buildString {
+                            append(getDateString(record.metadata.date))
+                            append(" · ")
+                            append(getTimeString(record.metadata.startTime))
+                            append(" · ")
+                            append(getDurationString(record.metadata.durationMs))
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    // Only when nobody is named. With a person on the tile the watch is a detail;
+                    // without one it is the only thing saying which recording this is.
+                    if (wearer == null && record.metadata.wearerName.isBlank()) {
                         inga.bpmetrics.ui.components.BpmIconLabel(
                             Icons.Default.Watch,
                             record.watchLabel(watchName)
                         )
                     }
-                    Text(
-                        text = getDurationString(record.metadata.durationMs),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = getDateString(record.metadata.date),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = getTimeString(record.metadata.startTime),
-                        style = MaterialTheme.typography.bodySmall
-                    )
                 }
             }
 

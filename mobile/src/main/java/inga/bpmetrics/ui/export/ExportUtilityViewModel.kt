@@ -661,6 +661,8 @@ class ExportUtilityViewModel(
         forRecords: List<BpmRecord>,
         overlay: android.net.Uri?,
         colours: Map<Long, Int>,
+        /** Wearers' faces for the pills, already decoded and cropped. See `recordPhotos`. */
+        photos: Map<Long, android.graphics.Bitmap>,
         title: String?,
         /** The clip this is drawn over, when there is one. Decides the sync and the crop. */
         clip: VideoExporter.VideoClip? = null,
@@ -681,6 +683,7 @@ class ExportUtilityViewModel(
                 startTimeMs = startMs,
                 endTimeMs = endMs.coerceAtLeast(startMs + 1000L),
                 customRecordColors = colours,
+                recordPhotos = photos,
                 graphTitle = title,
                 alignByElapsedTime = false
             ),

@@ -88,6 +88,7 @@ fun ExportPreview(
     onPlacementChange: (GraphPlacement) -> Unit,
     overlay: Uri?,
     colours: Map<Long, Int>,
+    photos: Map<Long, android.graphics.Bitmap> = emptyMap(),
     title: String?,
     at: Float,
     onScrub: (Float) -> Unit,
@@ -102,10 +103,10 @@ fun ExportPreview(
     // while the frame catches up.
     val frame by produceState<Bitmap?>(
         initialValue = null,
-        records, preset, overlay, at, colours, title, clip, placement
+        records, preset, overlay, at, colours, photos, title, clip, placement
     ) {
         value = withContext(Dispatchers.Default) {
-            renderPreviewFrame(context, records, preset, clip, overlay, colours, title, at, placement)
+            renderPreviewFrame(context, records, preset, clip, overlay, colours, photos, title, at, placement)
         }
     }
 
@@ -425,6 +426,7 @@ private fun renderPreviewFrame(
     clip: VideoExporter.VideoClip?,
     overlay: Uri?,
     colours: Map<Long, Int>,
+    photos: Map<Long, android.graphics.Bitmap> = emptyMap(),
     title: String?,
     at: Float,
     placement: GraphPlacement
@@ -462,6 +464,7 @@ private fun renderPreviewFrame(
                 startTimeMs = windowStartMs,
                 endTimeMs = windowEndMs.coerceAtLeast(windowStartMs + 1000L),
                 customRecordColors = colours,
+                recordPhotos = photos,
                 graphTitle = title,
                 alignByElapsedTime = false
             ),

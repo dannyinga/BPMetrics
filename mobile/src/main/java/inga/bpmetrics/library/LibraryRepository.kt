@@ -431,6 +431,175 @@ class LibraryRepository(
 
     suspend fun setEventNotes(eventId: Long, notes: String) = eventDao.updateNotes(eventId, notes)
 
+    // --- Cover images ---
+
+    /**
+     * Where a cover can be put.
+     *
+     * One type rather than three near-identical methods, because everything around setting a cover
+     * — importing the file, deleting the one it replaces, invalidating the cache — is the same
+     * whichever of the three it lands on, and three copies of that is three chances to forget the
+     * delete and leak a file.
+     */
+    sealed interface CoverOwner {
+        data class Event(val eventId: Long) : CoverOwner
+        data class Collection(val groupId: Long) : CoverOwner
+        data class Recording(val recordId: Long) : CoverOwner
+    }
+
+    private suspend fun currentCoverPath(owner: CoverOwner): String? = when (owner) {
+        is CoverOwner.Event -> eventDao.coverPathOf(owner.eventId)
+        is CoverOwner.Collection -> eventGroupDao.coverPathOf(owner.groupId)
+        is CoverOwner.Recording -> eventDao.recordCoverPathOf(owner.recordId)
+    }
+
+    private suspend fun writeCover(owner: CoverOwner, cover: Cover?) {
+        val p = cover?.path
+        val l = cover?.cropLeft
+        val t = cover?.cropTop
+        val r = cover?.cropRight
+        val b = cover?.cropBottom
+        when (owner) {
+            is CoverOwner.Event -> eventDao.updateCover(owner.eventId, p, l, t, r, b)
+            is CoverOwner.Collection -> eventGroupDao.updateCover(owner.groupId, p, l, t, r, b)
+            is CoverOwner.Recording -> eventDao.updateRecordCover(owner.recordId, p, l, t, r, b)
+        }
+    }
+
+    /**
+     * Copies [source] into app storage and hangs it on [owner].
+     *
+     * The file the cover replaces is deleted here rather than left behind. Nothing else knows a
+     * cover has been superseded, so a caller that forgot would leak a file per change with no way
+     * to find it again — the row that named it is already gone.
+     *
+     * @return true if the image could be read and stored.
+     */
+    suspend fun setCover(
+        context: android.content.Context,
+        owner: CoverOwner,
+        source: android.net.Uri,
+        nameHint: String
+    ): Boolean {
+        val id = when (owner) {
+            is CoverOwner.Event -> owner.eventId
+            is CoverOwner.Collection -> owner.groupId
+            is CoverOwner.Recording -> owner.recordId
+        }
+        val previous = currentCoverPath(owner)
+        val stored = CoverStore.importFrom(context, source, nameHint, id) ?: return false
+
+        writeCover(owner, Cover(stored))
+
+        // Only after the new one is safely written. Deleting first would leave the owner pointing
+        // at nothing if the import failed halfway.
+        if (previous != stored) {
+            CoverStore.delete(context, previous)
+            inga.bpmetrics.ui.components.invalidateCover(previous)
+        }
+        Log.i(tag, "Cover set on $owner")
+        return true
+    }
+
+    /**
+     * Gives a person a photograph, replacing whatever they had.
+     *
+     * The same import machinery as a cover — copied, downscaled, the old file deleted — differing
+     * only in which directory it lands in. See [CoverStore.Kind].
+     */
+    suspend fun setPersonPhoto(
+        context: android.content.Context,
+        personId: Long,
+        source: android.net.Uri,
+        nameHint: String
+    ): Boolean {
+        val previous = personDao.getPerson(personId)?.photoPath
+        val stored = CoverStore.importFrom(
+            context, source, nameHint, personId, CoverStore.Kind.PERSON
+        ) ?: return false
+
+        // A new picture starts unframed. Keeping the old crop would show whichever part of the
+        // previous photograph the fractions happened to describe, which on a differently shaped
+        // image is somewhere arbitrary.
+        personDao.updatePhoto(personId, stored, null, null, null, null)
+        if (previous != stored) {
+            CoverStore.delete(context, previous)
+            inga.bpmetrics.ui.components.invalidateCover(previous)
+        }
+        return true
+    }
+
+    /** Re-frames the photograph a person already has, leaving the file alone. */
+    suspend fun setPersonPhotoCrop(personId: Long, photo: Cover) {
+        personDao.updatePhoto(
+            personId,
+            photo.path,
+            photo.cropLeft,
+            photo.cropTop,
+            photo.cropRight,
+            photo.cropBottom
+        )
+        inga.bpmetrics.ui.components.invalidateCover(photo.path)
+    }
+
+    /** Takes a person's photograph off, back to their colour and initial. */
+    suspend fun clearPersonPhoto(context: android.content.Context, personId: Long) {
+        val previous = personDao.getPerson(personId)?.photoPath
+        personDao.updatePhoto(personId, null, null, null, null, null)
+        CoverStore.delete(context, previous)
+        inga.bpmetrics.ui.components.invalidateCover(previous)
+    }
+
+    /** Re-frames the cover already on [owner], leaving the file alone. */
+    suspend fun setCoverCrop(owner: CoverOwner, cover: Cover) {
+        writeCover(owner, cover)
+        inga.bpmetrics.ui.components.invalidateCover(cover.path)
+    }
+
+    /**
+     * Takes the cover off [owner] and deletes its file.
+     *
+     * On an event or a collection this restores inheritance rather than meaning "no picture" — the
+     * one above it applies again, which is the point of storing null rather than an empty string.
+     */
+    suspend fun clearCover(context: android.content.Context, owner: CoverOwner) {
+        val previous = currentCoverPath(owner)
+        writeCover(owner, null)
+        CoverStore.delete(context, previous)
+        inga.bpmetrics.ui.components.invalidateCover(previous)
+    }
+
+    /**
+     * The one event a set of recordings share, or null if they do not share one.
+     *
+     * Used by library multi-select, which puts a cover on the event rather than on each recording —
+     * so it has to be able to say *which* event, and to refuse rather than guess when the selection
+     * spans several. Unfiled recordings count as not sharing: null is not an event.
+     */
+    suspend fun sharedEventOf(recordIds: List<Long>): Long? {
+        if (recordIds.isEmpty()) return null
+        // A single unfiled recording means they do not all share an event, however many of the
+        // others agree. Asked separately because Room cannot return the null that says so.
+        if (eventDao.unfiledCountAmong(recordIds) > 0) return null
+        return eventDao.distinctEventIdsFor(recordIds).singleOrNull()
+    }
+
+    /** Removes every stored cover and the rows pointing at them. */
+    suspend fun clearAllCovers(context: android.content.Context): Int {
+        eventDao.getAllEventsFlow().first().forEach {
+            if (it.coverPath != null) eventDao.updateCover(it.eventId, null, null, null, null, null)
+        }
+        eventGroupDao.getAllGroups().forEach {
+            if (it.coverPath != null) {
+                eventGroupDao.updateCover(it.groupId, null, null, null, null, null)
+            }
+        }
+        val removed = CoverStore.clearAll(context)
+        inga.bpmetrics.ui.components.invalidateAllCovers()
+        Log.i(tag, "Cleared $removed cover image(s)")
+        return removed
+    }
+
     suspend fun setEventGroup(eventId: Long, groupId: Long?) = eventDao.setGroup(eventId, groupId)
 
     /**

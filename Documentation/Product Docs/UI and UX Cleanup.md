@@ -1,6 +1,6 @@
 # UI and UX Cleanup
 
-**Status:** Sprints 1–5 landed; 6–7 outstanding
+**Status:** Sprints 1–6 landed; 7 outstanding
 **Sprints:** 7
 **Depends on:** Export Utility and Settings Hardening (the surfaces have stopped moving)
 
@@ -306,6 +306,8 @@ whole tile — a smaller change with none of the risk.
 | **UX-6.5** | Tile rendering with the gradient scrim, and a contrast check against a deliberately bright, busy photo. This is the ticket that decides whether the feature ships as a background or as a thumbnail. |
 | **UX-6.6** | Set a cover from an event page, a collection page, and from library multi-select — the last of which sets it on the event those recordings share, and says so rather than silently doing something else if they do not share one. |
 | **UX-6.7** | Storage: covers appear in the breakdown, with a way to clear them all. |
+
+**Landed:** all seven tickets, plus person photographs (not originally scoped — the same store, entity column and avatar fallback). Covers can be set on a collection, an event, a library multi-selection, or one recording on its own, including a recording in no event at all.
 
 **Verify:** a library of twenty recordings across four events, covers on two of them. The two should
 be identifiable without reading a word, and the other two should not look broken for lacking one.
