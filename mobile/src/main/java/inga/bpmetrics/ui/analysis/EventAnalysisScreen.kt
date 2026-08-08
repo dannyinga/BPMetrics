@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -92,7 +93,8 @@ fun EventAnalysisScreen(
     onBack: () -> Unit,
     onOpenRecord: (Long) -> Unit,
     onOpenGroup: (Long) -> Unit,
-    onExportVideo: (List<BpmRecord>, String?) -> Unit
+    onExportVideo: (List<BpmRecord>, String?) -> Unit,
+    onExportImage: (List<BpmRecord>, String?) -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val isolatedId by viewModel.isolatedId.collectAsStateWithLifecycle()
@@ -131,6 +133,11 @@ fun EventAnalysisScreen(
                 },
                 actions = {
                     if (state.records.isNotEmpty()) {
+                        IconButton(
+                            onClick = { onExportImage(state.records, state.event?.displayName) }
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = "Export as image")
+                        }
                         IconButton(
                             onClick = { onExportVideo(state.records, state.event?.displayName) }
                         ) {

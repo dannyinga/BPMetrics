@@ -376,10 +376,16 @@ class AnalysisViewModel(
                         repository.getAllEvents(),
                         ::Library
                     ),
-                    repository.effectiveTags
-                ) { library, tags ->
+                    repository.effectiveTags,
+                    repository.getAllEventGroups()
+                ) { library, tags, groups ->
+                    // The whole subtree, not just this collection's own events. Analysing
+                    // "Coachella" has to mean the festival, its days, and every set inside them —
+                    // otherwise a collection that holds only other collections analyses to nothing.
+                    val inScope = inga.bpmetrics.library.CollectionTree
+                        .descendantsOf(groups, groupId)
                     val ids = library.events
-                        .filter { it.groupId == groupId }
+                        .filter { it.groupId in inScope }
                         .map { it.eventId }
                         .toSet()
                     AnalysisRecord.from(
@@ -396,9 +402,11 @@ class AnalysisViewModel(
                     repository.getAllEventGroups(),
                     repository.getAllEvents()
                 ) { groups, events ->
+                    val inScope = inga.bpmetrics.library.CollectionTree
+                        .descendantsOf(groups, groupId)
                     groups.firstOrNull { it.groupId == groupId }
                         ?.let { group ->
-                            AnalysisScope.Group(group, events.count { it.groupId == groupId })
+                            AnalysisScope.Group(group, events.count { it.groupId in inScope })
                         }
                         ?: AnalysisScope.Unknown
                 }

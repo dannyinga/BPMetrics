@@ -79,6 +79,10 @@ class LibraryRepository(
     private val eventDao = database.eventDao()
     private val eventGroupDao = database.eventGroupDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
+    private val presetDao = database.exportPresetDao()
+
+    /** Backs the render queue, so a batch outlives the process that queued it. */
+    val renderJobStore = inga.bpmetrics.export.RenderJobStore(database.renderJobDao())
 
     init {
         startRecordFlowFromDB()
@@ -94,6 +98,26 @@ class LibraryRepository(
      *
      * Marked done only on success, so a failure retries next launch rather than stranding them.
      */
+    /**
+     * Writes the built-in presets on first launch, off the main thread.
+     *
+     * Same reasoning as [convertConcurrentAnalysesOnce]: constructing a repository should not write
+     * to the database, so this is called from the application object rather than from `init`.
+     */
+    fun seedBuiltInPresetsOnce() {
+        scope.launch {
+            try {
+                seedBuiltInPresetsIfEmpty()
+                // After seeding, because a fresh install writes the current framing and has
+                // nothing to bring forward — this is for the installs that already had presets.
+                refreshSupersededPresetFraming()
+                rescueLegacyExportDefaults()
+            } catch (e: Exception) {
+                Log.e(tag, "Could not seed the built-in export presets", e)
+            }
+        }
+    }
+
     fun convertConcurrentAnalysesOnce() {
         scope.launch {
             try {
@@ -470,12 +494,85 @@ class LibraryRepository(
     suspend fun setEventGroupNotes(groupId: Long, notes: String) =
         eventGroupDao.updateNotes(groupId, notes)
 
-    /** Removes a group and releases its events. The events, and their recordings, survive. */
+    /**
+     * Joins several recordings of one person into a single one.
+     *
+     * The merged recording is written *before* anything is deleted. The other order means a
+     * failure halfway leaves someone with neither the parts nor the whole.
+     *
+     * Tags from every part are carried across, so nothing a recording was marked with is lost by
+     * joining it to another. Event membership comes from the earliest part, which is the one whose
+     * start the merged recording takes.
+     *
+     * @return the new record's id, or null when the recordings could not honestly be joined.
+     */
+    suspend fun mergeRecords(records: List<BpmRecord>, deleteOriginals: Boolean): Long? {
+        if (!RecordMerge.canMerge(records)) {
+            Log.w(tag, "Refused to merge ${records.size} recording(s)")
+            return null
+        }
+        val merged = RecordMerge.combine(records) ?: return null
+        val ordered = records.sortedBy { it.metadata.startTime }
+        val first = ordered.first()
+
+        val newId = saveWatchRecordToLibrary(
+            inga.bpmetrics.core.BpmWatchRecord(
+                date = java.sql.Date(merged.startTime),
+                dataPoints = merged.points.map {
+                    inga.bpmetrics.core.BpmDataPoint(it.timestampMs, it.bpm)
+                },
+                startTime = merged.startTime,
+                endTime = merged.endTime
+            ),
+            first.metadata.title.ifBlank { "Merged recording" }
+        )
+
+        records.flatMap { it.tags }.distinctBy { it.tagId }.forEach { tag ->
+            addTagToRecord(newId, tag.tagId)
+        }
+        updateRecordDeviceAndWearer(newId, first.metadata.deviceId, first.metadata.personId)
+        first.metadata.eventId?.let { assignRecordsToEvent(listOf(newId), it) }
+
+        if (deleteOriginals) {
+            records.forEach { deleteRecordWithId(it.metadata.recordId) }
+        }
+        Log.i(tag, "Merged ${records.size} recordings into $newId")
+        return newId
+    }
+
+    /** Removes a collection and releases what it held. Its events and children survive. */
     suspend fun deleteEventGroup(groupId: Long) {
         eventGroupDao.ungroupEvents(groupId)
+        eventGroupDao.orphanChildren(groupId)
         eventGroupDao.deleteGroup(groupId)
-        Log.d(tag, "Deleted group $groupId; its events are ungrouped, not removed")
+        Log.d(tag, "Deleted collection $groupId; its events and children are released, not removed")
     }
+
+    /**
+     * Files one collection inside another.
+     *
+     * @return false when the move would make a collection its own ancestor, or nest deeper than
+     *   [CollectionTree.MAX_DEPTH]. Both are refused here rather than in the UI: a cycle makes
+     *   every walk of the tree non-terminating, and no screen should be the only thing standing
+     *   between the database and an infinite loop.
+     */
+    suspend fun setEventGroupParent(groupId: Long, parentGroupId: Long?): Boolean {
+        val all = eventGroupDao.getAllGroups()
+        if (!CollectionTree.canReparent(all, groupId, parentGroupId)) {
+            Log.w(tag, "Refused to file collection $groupId under $parentGroupId")
+            return false
+        }
+        eventGroupDao.setParent(groupId, parentGroupId)
+        return true
+    }
+
+    /**
+     * A collection and everything nested inside it, itself included.
+     *
+     * What "analyse Coachella" resolves to: the festival, its days, and every event in any of them.
+     */
+    suspend fun descendantGroupIds(groupId: Long): Set<Long> =
+        CollectionTree.descendantsOf(eventGroupDao.getAllGroups(), groupId)
 
     /** Every saved analysis with its frozen rows, for a backup to carry. */
     suspend fun getSavedAnalysesForBackup(): List<inga.bpmetrics.export.SavedAnalysisDto> =
@@ -557,8 +654,108 @@ class LibraryRepository(
 
     suspend fun setLibraryViewMode(mode: String) = settingsRepository.setLibraryViewMode(mode)
 
+    /** The sort the library should open on, or null to keep the built-in order. */
+    suspend fun getDefaultSort(): String? = settingsRepository.defaultSort.first()
+
     /** Recordings the user has permanently waved off as an event suggestion. */
     val dismissedSuggestionRecords: Flow<Set<Long>> = settingsRepository.dismissedSuggestionRecords
+
+    // --- Export presets ---
+
+    fun getExportPresets(): Flow<List<ExportPresetEntity>> = presetDao.getAllFlow()
+
+    suspend fun getExportPreset(presetId: Long): ExportPresetEntity? = presetDao.getPreset(presetId)
+
+    suspend fun getDefaultExportPreset(): ExportPresetEntity? = presetDao.getDefault()
+
+    /**
+     * Writes the built-in presets, once.
+     *
+     * Seeded here rather than in the migration so a fresh install and an upgrade take the identical
+     * path — otherwise what ships is defined twice, in Kotlin and in SQL, and the two drift. Keyed
+     * on the table being empty rather than a flag: a user who deletes every preset gets them back,
+     * which is better than an empty list they cannot repopulate.
+     */
+    suspend fun seedBuiltInPresetsIfEmpty() {
+        if (presetDao.count() > 0) return
+        inga.bpmetrics.export.ExportPreset.BUILT_IN.forEachIndexed { index, preset ->
+            presetDao.insert(
+                ExportPresetEntity(
+                    name = preset.name,
+                    configJson = preset.toJson(),
+                    // The first is default so a new export has something selected rather than
+                    // starting from nothing.
+                    isDefault = index == 0,
+                    isBuiltIn = true,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+        }
+        Log.i(tag, "Seeded ${inga.bpmetrics.export.ExportPreset.BUILT_IN.size} built-in presets")
+    }
+
+    /**
+     * Saves the old settings-screen export defaults as a preset, once.
+     *
+     * Presets replaced those defaults and the settings screen no longer shows them — but someone
+     * who had spent time getting them right should not simply find them gone. They become a preset
+     * named so its origin is obvious, and only then are the old keys left behind.
+     *
+     * Does nothing when the defaults were never touched: a preset identical to the shipped one is
+     * clutter, not rescue.
+     */
+    private suspend fun rescueLegacyExportDefaults() {
+        val preset = settingsRepository.legacyExportDefaultsAsPreset() ?: return
+        presetDao.insert(
+            ExportPresetEntity(
+                name = preset.name,
+                configJson = preset.toJson(),
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        settingsRepository.markExportDefaultsMigrated()
+        Log.i(tag, "Kept the old export defaults as a preset")
+    }
+
+    /**
+     * Brings presets still carrying an old shipped framing up to the current one.
+     *
+     * Seeding only runs on an empty table, so an install from before the default changed keeps
+     * drawing the graph where that build put it — and because a preset reapplies itself on every
+     * export, dragging the frame fixes the clip in hand and nothing after it. Only framing nobody
+     * chose is touched; a preset dragged even slightly off a shipped default is left alone.
+     */
+    suspend fun refreshSupersededPresetFraming() {
+        var updated = 0
+        presetDao.getAll().forEach { entity ->
+            val preset = inga.bpmetrics.export.ExportPreset.fromJson(entity.configJson)
+                ?: return@forEach
+            if (!preset.hasSupersededFraming()) return@forEach
+            presetDao.updateConfig(entity.presetId, preset.withDefaultFraming().toJson())
+            updated++
+        }
+        if (updated > 0) Log.i(tag, "Moved $updated preset(s) onto the current graph framing")
+    }
+
+    suspend fun saveExportPreset(name: String, configJson: String): Long =
+        presetDao.insert(
+            ExportPresetEntity(
+                name = name.trim(),
+                configJson = configJson,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+
+    suspend fun updateExportPreset(presetId: Long, name: String, configJson: String) =
+        presetDao.update(presetId, name.trim(), configJson)
+
+    /** At most one default, enforced by clearing the rest first rather than by a constraint. */
+    suspend fun setDefaultExportPreset(presetId: Long) {
+        presetDao.clearDefault()
+        presetDao.markDefault(presetId)
+    }
+
+    suspend fun deleteExportPreset(presetId: Long) = presetDao.delete(presetId)
 
     suspend fun dismissSuggestionRecords(recordIds: Set<Long>) =
         settingsRepository.dismissSuggestionRecords(recordIds)
@@ -685,6 +882,20 @@ class LibraryRepository(
     fun getAllPeople(): Flow<List<PersonEntity>> = personDao.getAllPeopleFlow()
 
     suspend fun getPerson(personId: Long): PersonEntity? = personDao.getPerson(personId)
+
+    /**
+     * Sets someone's own resting and maximum rate, or clears them back to the app-wide figures.
+     *
+     * Ordered here rather than trusted from the caller: a resting rate above a maximum would make
+     * every zone percentage negative, and the two fields are far enough apart on screen to get
+     * them the wrong way round.
+     */
+    suspend fun setPersonZones(personId: Long, restingBpm: Int?, maxBpm: Int?) {
+        val low = restingBpm?.coerceIn(30, 120)
+        val high = maxBpm?.coerceIn(120, 230)
+        val ordered = if (low != null && high != null && low >= high) high - 1 else low
+        personDao.updateZones(personId, ordered, high)
+    }
 
     /**
      * Creates a profile, giving it a colour that differs from the ones already in use.
@@ -1078,13 +1289,17 @@ class LibraryRepository(
         records,
         tagDao.getAllEventTagsFlow(),
         tagDao.getAllGroupTagsFlow(),
-        eventDao.getAllEventsFlow()
-    ) { library, eventTags, groupTags, events ->
+        eventDao.getAllEventsFlow(),
+        eventGroupDao.getAllGroupsFlow()
+    ) { library, eventTags, groupTags, events, groups ->
         EffectiveTagsResolver.resolveAll(
             records = library,
             eventTags = EffectiveTagsResolver.index(eventTags),
             groupTags = EffectiveTagsResolver.index(groupTags),
-            groupIdByEvent = events.associate { it.eventId to it.groupId }
+            groupIdByEvent = events.associate { it.eventId to it.groupId },
+            // Collections nest, so inheritance climbs the whole chain: a tag on a festival reaches
+            // the recordings inside its days without being applied to each of them.
+            parentByGroup = groups.associate { it.groupId to it.parentGroupId }
         )
     }
 

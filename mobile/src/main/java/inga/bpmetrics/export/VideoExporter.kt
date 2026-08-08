@@ -63,12 +63,28 @@ object VideoExporter {
         val imageConfig: ImageExporter.ImageExportConfig,
         val windowSizeMs: Long = 30000L,
         val frameRate: Int = 30,
+        /**
+         * Take the frame rate from the footage instead of [frameRate].
+         *
+         * Resolved per clip at render time rather than once for the batch, because a set of clips
+         * off one phone can still mix 30 and 60 — a slow-motion shot among ordinary ones is the
+         * usual way. Re-encoding 60fps footage to 30 throws away half the frames it was filmed for.
+         */
+        val matchSourceFrameRate: Boolean = false,
         val overlayBitRate: Int = 8000000,
         val regularBitRate: Int = 2500000,
         val overlayVideoUri: Uri? = null,
         val graphRect: RectF = RectF(0f, 0f, 1f, 1f),
         val lockAspectRatio: Boolean = true,
         val syncOffsetMs: Long = 0L,
+        /**
+         * When [overlayVideoUri] started filming, if the caller already knows.
+         *
+         * The clip picker resolves this once, shows it, and cuts the preview against it. Passing it
+         * down means the render cannot reach a different answer than the preview did — the two
+         * working it out separately is precisely how they came to disagree.
+         */
+        val overlayStartedAtMs: Long? = null,
         val records: List<BpmRecord> = emptyList()
     )
 
@@ -110,7 +126,14 @@ object VideoExporter {
         // 2. Handle Background and Dynamic Bitrate based on output dimensions and fps
         val width = config.imageConfig.width
         val height = config.imageConfig.height
-        val fps = config.frameRate
+        // Matched to the footage when asked for, falling back to the stated rate when the file will
+        // not say — a clip whose metadata is unreadable is not a reason to refuse the export.
+        val fps = if (config.matchSourceFrameRate && config.overlayVideoUri != null) {
+            getVideoFrameRate(context, config.overlayVideoUri)?.coerceIn(1, 120)
+                ?: config.frameRate
+        } else {
+            config.frameRate
+        }
 
         // Scale target bitrate dynamically based on total pixels and frame rate:
         // Overlay video gets ~0.13 bits per pixel per frame (e.g. ~8 Mbps for 1080p @ 30fps)
@@ -168,7 +191,8 @@ object VideoExporter {
                         context,
                         mediaUri,
                         timelineOriginMs,
-                        config.syncOffsetMs
+                        config.syncOffsetMs,
+                        config.overlayStartedAtMs
                     )
                     val videoStartRelativeMs = alignment.first
                     val videoEndRelativeMs = alignment.second
@@ -226,7 +250,7 @@ object VideoExporter {
         
         // Add FrameDropEffect to ensure the output matches the requested frame rate
         // especially when the source video has a higher frame rate (e.g. 60 -> 30).
-        effectList.add(FrameDropEffect.createDefaultFrameDropEffect(config.frameRate.toFloat()))
+        effectList.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
         
         effectList.add(Presentation.createForWidthAndHeight(
             config.imageConfig.width,
@@ -311,34 +335,44 @@ object VideoExporter {
     }
 
     /**
-     * Estimates the video start time with high precision.
+     * When a video started filming, as best it can be established.
+     *
+     * Delegates the judgement to [VideoTiming], which corroborates the file's stamp against its
+     * modification time rather than guessing from the container. The old rule here — treat
+     * `DATE_TAKEN` as the last frame for MP4 and the first frame for QuickTime — disagreed with
+     * [getOverlappingClips], which has always read the same column as the first frame. Every MP4
+     * export was therefore placed one clip-duration away from where its own preview said it was.
      */
-    fun getVideoStartTime(context: Context, uri: Uri): Long? {
-        var isQuickTime = false
-        val mimeType = try { context.contentResolver.getType(uri) } catch (e: Exception) { null }
-        if (mimeType?.contains("video/quicktime") == true) isQuickTime = true
+    fun getVideoStartTime(context: Context, uri: Uri): Long? = resolveStamp(context, uri)?.startedAtMs
 
+    /**
+     * The full reading of a video's timing, including how much it is worth believing.
+     *
+     * Prefers MediaStore, which the scanner has already normalised, and falls back to the file's
+     * own metadata for a video handed over by a picker that MediaStore has no row for.
+     */
+    fun resolveStamp(context: Context, uri: Uri): VideoTiming.Stamp? {
         if (uri.scheme == "content") {
             val projection = arrayOf(
                 android.provider.MediaStore.Video.VideoColumns.DATE_TAKEN,
                 android.provider.MediaStore.Video.VideoColumns.DURATION,
-                android.provider.MediaStore.Video.VideoColumns.DISPLAY_NAME
+                android.provider.MediaStore.Video.VideoColumns.DATE_MODIFIED
             )
             try {
                 context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) {
-                        val dateTaken = cursor.getLong(0)
-                        val durationMs = cursor.getLong(1)
-                        val displayName = cursor.getString(2)
-                        if (!isQuickTime && displayName?.lowercase()?.endsWith(".mov") == true) isQuickTime = true
-                        if (dateTaken > 0) return if (isQuickTime) dateTaken else dateTaken - durationMs
+                        val stamp = VideoTiming.resolve(
+                            dateTakenMs = cursor.getLong(0),
+                            durationMs = cursor.getLong(1),
+                            // Seconds in MediaStore, milliseconds everywhere else here.
+                            dateModifiedMs = cursor.getLong(2) * 1000L
+                        )
+                        if (stamp != null) return stamp
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to query MediaStore for date_taken", e)
             }
-        } else if (uri.path?.lowercase()?.endsWith(".mov") == true) {
-            isQuickTime = true
         }
 
         val retriever = MediaMetadataRetriever()
@@ -351,12 +385,20 @@ object VideoExporter {
             for (format in formats) {
                 try {
                     val sdf = SimpleDateFormat(format, Locale.US)
-                    if (format.endsWith("'Z'")) sdf.timeZone = TimeZone.getTimeZone("UTC")
+                    // METADATA_KEY_DATE is defined as UTC whether or not the file spells the zone
+                    // out. Parsing the bare form in the device's own zone shifted every such video
+                    // by the local offset — the exact failure the zone correction exists to undo,
+                    // introduced here rather than by the phone that filmed it.
+                    if (!format.contains("zzz")) sdf.timeZone = TimeZone.getTimeZone("UTC")
                     creationTime = sdf.parse(dateStr)?.time
                     if (creationTime != null) break
                 } catch (e: Exception) {}
             }
-            if (isQuickTime) creationTime else creationTime?.let { it - durationMs }
+            creationTime?.let {
+                // No MediaStore row means no mtime to corroborate against, so this is the stamp at
+                // face value — which VideoTiming reports as assumed rather than measured.
+                VideoTiming.resolve(dateTakenMs = it, durationMs = durationMs, dateModifiedMs = 0L)
+            }
         } catch (e: Exception) { null } finally { retriever.release() }
     }
 
@@ -428,20 +470,28 @@ object VideoExporter {
         context: Context,
         videoUri: Uri,
         timelineOriginMs: Long,
-        globalSyncOffsetMs: Long
+        globalSyncOffsetMs: Long,
+        /** The resolved start, when a caller has already established one. */
+        knownStartMs: Long? = null
     ): Pair<Long, Long> {
         val sessionStartTs = timelineOriginMs
         val retriever = MediaMetadataRetriever()
         var videoDurationMs = 0L
-        var videoStartTs: Long? = null
         try {
             retriever.setDataSource(context, videoUri)
             videoDurationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            videoStartTs = getVideoStartTime(context, videoUri)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to retrieve video metadata for alignment", e)
         } finally { retriever.release() }
 
+        val videoStartTs = knownStartMs ?: getVideoStartTime(context, videoUri)
+        if (videoStartTs == null) {
+            // Nothing on the file says when it was filmed. Laying it against the start of the
+            // recording is the only thing left, and it is a guess: it is right only if filming
+            // began when the watch did. Logged loudly, because a silently guessed alignment looks
+            // exactly like a measured one that is wrong.
+            Log.w(TAG, "No capture time for $videoUri; assuming it began with the recording")
+        }
         val actualVideoStartTs = videoStartTs ?: sessionStartTs
         val alignedStart = (actualVideoStartTs - sessionStartTs) + globalSyncOffsetMs
         val alignedEnd = alignedStart + videoDurationMs
@@ -451,6 +501,60 @@ object VideoExporter {
     /**
      * Queries the MediaStore for videos that overlap with the heart rate record.
      */
+    /**
+     * A video on the phone that was filmed while something was being recorded.
+     *
+     * An event is a concert; during it you might have filmed six clips. Each is its own export
+     * with its own overlay, so a clip has to carry when it was filmed and for how long — "one
+     * export per event" cannot express that, and a bare uri cannot either.
+     */
+    data class VideoClip(
+        val uri: Uri,
+        val startedAtMs: Long,
+        val durationMs: Long,
+        val displayName: String,
+        /**
+         * How [startedAtMs] was arrived at.
+         *
+         * Carried so the export uses the number the picker showed rather than working it out
+         * again — the two drifting apart is what put every MP4 export a clip-length away from its
+         * own preview.
+         */
+        val basis: VideoTiming.Basis = VideoTiming.Basis.ASSUMED
+    ) {
+        val endedAtMs: Long get() = startedAtMs + durationMs
+
+        /** Whether a recording was running at any point while this was filming. */
+        fun overlaps(record: BpmRecord): Boolean {
+            val recordStart = record.metadata.startTime
+            val recordEnd = recordStart + record.metadata.durationMs
+            return recordStart <= endedAtMs && recordEnd >= startedAtMs
+        }
+
+        /**
+         * Where this clip sits on a shared recording timeline.
+         *
+         * The single answer for both the preview and the render. They worked it out separately
+         * before, which is why the sync offset moved the exported video and left the preview
+         * showing the old alignment — the preview's copy of the arithmetic simply did not have the
+         * offset in it. Two places computing the same number is how they come to disagree.
+         *
+         * @param syncOffsetMs nudges the clip along the timeline, so a positive value runs the
+         *   curves ahead of the footage.
+         */
+        fun windowOn(timeline: ImageExporter.Timeline, syncOffsetMs: Long): ClipWindow {
+            val start = (startedAtMs - timeline.originWallClockMs + syncOffsetMs)
+                .coerceAtLeast(0L)
+            return ClipWindow(start, (start + durationMs).coerceAtMost(timeline.durationMs))
+        }
+    }
+
+    /** A span of a recording timeline, in milliseconds from its origin. */
+    data class ClipWindow(val startMs: Long, val endMs: Long) {
+        /** Never zero: an export of no duration is a file nobody can play. */
+        val spanMs: Long get() = (endMs - startMs).coerceAtLeast(1L)
+    }
+
     fun getOverlappingVideos(context: Context, record: BpmRecord): List<Uri> =
         getOverlappingVideos(context, listOf(record))
 
@@ -460,19 +564,38 @@ object VideoExporter {
      * A multi-record export spans from the earliest session to the latest, so a video worth
      * suggesting may overlap only one of them — searching a single record's window would miss it.
      */
-    fun getOverlappingVideos(context: Context, records: List<BpmRecord>): List<Uri> {
+    fun getOverlappingVideos(context: Context, records: List<BpmRecord>): List<Uri> =
+        getOverlappingClips(context, records).map { it.uri }
+
+    /**
+     * The same query, keeping what it already reads.
+     *
+     * The projection has always asked for `DATE_TAKEN` and `DURATION` and then thrown both away,
+     * returning bare uris. Per-clip work needs them: which people to offer on a clip depends on who
+     * was recording during *that clip's* few minutes, not during the whole event, and a clip filmed
+     * after someone's watch stopped must not offer their curve.
+     */
+    fun getOverlappingClips(context: Context, records: List<BpmRecord>): List<VideoClip> {
         if (records.isEmpty()) return emptyList()
 
-        val uris = mutableListOf<Uri>()
+        val clips = mutableListOf<VideoClip>()
         val recStart = records.minOf { it.metadata.startTime }
         val recEnd = records.maxOf { it.metadata.startTime + it.metadata.durationMs }
         val projection = arrayOf(
             android.provider.MediaStore.Video.Media._ID,
             android.provider.MediaStore.Video.Media.DATE_TAKEN,
-            android.provider.MediaStore.Video.Media.DURATION
+            android.provider.MediaStore.Video.Media.DURATION,
+            android.provider.MediaStore.Video.Media.DISPLAY_NAME,
+            android.provider.MediaStore.Video.Media.DATE_MODIFIED
         )
+        // A coarse prefilter, deliberately far wider than the recordings themselves. The stamp on
+        // a row is not yet known to mean the start of filming — it may mark the end, or be a whole
+        // timezone out — so narrowing to the recording's own window here would drop exactly the
+        // clips that need correcting, before there is any chance to correct them. The precise
+        // overlap test happens below, once each stamp has been resolved.
+        val margin = 15 * 60 * 60_000L
         val selection = "${android.provider.MediaStore.Video.Media.DATE_TAKEN} <= ? AND ${android.provider.MediaStore.Video.Media.DATE_TAKEN} >= ?"
-        val selectionArgs = arrayOf((recEnd + 60000).toString(), (recStart - 60000).toString())
+        val selectionArgs = arrayOf((recEnd + margin).toString(), (recStart - margin).toString())
         try {
             context.contentResolver.query(
                 android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
@@ -480,12 +603,39 @@ object VideoExporter {
                 "${android.provider.MediaStore.Video.Media.DATE_TAKEN} DESC"
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media._ID)
+                val takenCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DATE_TAKEN)
+                val durationCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DURATION)
+                val nameCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DISPLAY_NAME)
+                val modifiedCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DATE_MODIFIED)
                 while (cursor.moveToNext()) {
-                    uris.add(android.content.ContentUris.withAppendedId(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cursor.getLong(idCol)))
+                    val durationMs = cursor.getLong(durationCol)
+                    val stamp = VideoTiming.resolve(
+                        dateTakenMs = cursor.getLong(takenCol),
+                        durationMs = durationMs,
+                        // MediaStore keeps this column in seconds; everything else here is millis.
+                        dateModifiedMs = cursor.getLong(modifiedCol) * 1000L
+                    ) ?: continue
+                    clips.add(
+                        VideoClip(
+                            uri = android.content.ContentUris.withAppendedId(
+                                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                                cursor.getLong(idCol)
+                            ),
+                            startedAtMs = stamp.startedAtMs,
+                            durationMs = durationMs,
+                            displayName = cursor.getString(nameCol).orEmpty(),
+                            basis = stamp.basis
+                        )
+                    )
                 }
             }
         } catch (e: Exception) { Log.e(TAG, "Error querying overlapping videos", e) }
-        return uris
+
+        // The real overlap test, now that every stamp means the same thing. Ascending, because a
+        // set of clips from one evening reads as the evening it was.
+        return clips
+            .filter { clip -> records.any { clip.overlaps(it) } }
+            .sortedBy { it.startedAtMs }
     }
 
     fun hasVideoPermissions(context: Context): Boolean {

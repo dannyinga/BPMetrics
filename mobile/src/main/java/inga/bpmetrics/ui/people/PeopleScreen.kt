@@ -120,8 +120,8 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
             person = person,
             recordCount = uiState.people.firstOrNull { it.person.personId == person.personId }?.recordCount ?: 0,
             onDismiss = { editing = null },
-            onSave = { name, color ->
-                viewModel.save(person.personId, name, color)
+            onSave = { name, color, resting, max ->
+                viewModel.save(person.personId, name, color, resting, max)
                 editing = null
             },
             onDelete = {
@@ -203,11 +203,13 @@ private fun PersonEditDialog(
     person: PersonEntity,
     recordCount: Int,
     onDismiss: () -> Unit,
-    onSave: (String, Int) -> Unit,
+    onSave: (String, Int, Int?, Int?) -> Unit,
     onDelete: () -> Unit
 ) {
     var name by remember(person.personId) { mutableStateOf(person.name) }
     var color by remember(person.personId) { mutableStateOf(person.colorArgb) }
+    var resting by remember(person.personId) { mutableStateOf(person.restingBpm) }
+    var max by remember(person.personId) { mutableStateOf(person.maxBpm) }
     var confirmDelete by remember(person.personId) { mutableStateOf(false) }
 
     AlertDialog(
@@ -234,12 +236,39 @@ private fun PersonEditDialog(
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                 )
                 ColorPicker(colorArgb = color, onColorChange = { color = it })
+
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Heart rate",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
+                Text(
+                    // Their own figures if given; the app-wide ones otherwise. A shared value
+                    // would make time-in-zone say something false about whoever it did not fit.
+                    "Leave blank to use the figures in Settings.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OptionalBpmField(
+                        value = resting,
+                        label = "Resting",
+                        modifier = Modifier.weight(1f)
+                    ) { resting = it }
+                    OptionalBpmField(
+                        value = max,
+                        label = "Maximum",
+                        modifier = Modifier.weight(1f)
+                    ) { max = it }
+                }
             }
         },
         confirmButton = {
             TextButton(
                 enabled = name.isNotBlank(),
-                onClick = { onSave(name, color) }
+                onClick = { onSave(name, color, resting, max) }
             ) { Text("Save") }
         },
         dismissButton = {
@@ -304,5 +333,38 @@ private fun PersonAddDialog(
             ) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+/**
+ * A heart rate that may simply not be given.
+ *
+ * Empty is a real answer here — it means "use the app-wide figure" — so the field commits null
+ * rather than refusing to be cleared. That distinction is the whole point of storing these as
+ * nullable: zero is a heart rate, and absence is not.
+ */
+@Composable
+private fun OptionalBpmField(
+    value: Int?,
+    label: String,
+    modifier: Modifier = Modifier,
+    onValue: (Int?) -> Unit
+) {
+    var text by remember(value) { mutableStateOf(value?.toString() ?: "") }
+
+    OutlinedTextField(
+        value = text,
+        onValueChange = { typed ->
+            val cleaned = typed.filter { it.isDigit() }.take(3)
+            text = cleaned
+            onValue(cleaned.toIntOrNull())
+        },
+        label = { Text(label) },
+        placeholder = { Text("Default") },
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+        ),
+        modifier = modifier
     )
 }

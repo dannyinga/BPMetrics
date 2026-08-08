@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
@@ -85,7 +86,9 @@ fun AnalysisScreen(
     /** Set when this was pushed on top of something, which gets a back arrow instead of a drawer. */
     onBack: (() -> Unit)? = null,
     title: String? = null,
-    onSave: ((name: String, records: List<AnalysisRecord>) -> Unit)? = null
+    onSave: ((name: String, records: List<AnalysisRecord>) -> Unit)? = null,
+    /** Opens the export utility as an image, scoped to whatever this screen is analysing. */
+    onExportImage: (() -> Unit)? = null
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
     var saveName by remember { mutableStateOf("") }
@@ -138,6 +141,14 @@ fun AnalysisScreen(
                         }
                     },
                     actions = {
+                        if (onExportImage != null && !uiState.isEmpty) {
+                            IconButton(onClick = onExportImage) {
+                                Icon(
+                                    Icons.Default.Image,
+                                    contentDescription = "Export as image"
+                                )
+                            }
+                        }
                         // A stored analysis is already frozen; only a live one can be captured.
                         if (onSave != null && !uiState.isEmpty && !uiState.isFrozen) {
                             IconButton(onClick = { showSaveDialog = true }) {
@@ -360,12 +371,12 @@ private fun GroupTags(tagging: ScopeTagging) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Tags", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             IconButton(onClick = { showDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Tag this group")
+                Icon(Icons.Default.Add, contentDescription = "Tag this collection")
             }
         }
         if (tags.isEmpty()) {
             Text(
-                "A tag here applies to every event in this group, and every recording in them.",
+                "A tag here applies to everything inside this collection, however deeply it is nested.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1017,7 +1028,7 @@ private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifie
         ) {
             Text(
                 when (uiState.scope) {
-                    is AnalysisScope.Group -> "Nothing in this group yet"
+                    is AnalysisScope.Group -> "Nothing in this collection yet"
                     is AnalysisScope.Saved -> "This analysis has no recordings"
                     else -> "Nothing matches this filter"
                 },
@@ -1028,7 +1039,7 @@ private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifie
             Text(
                 when (uiState.scope) {
                     is AnalysisScope.Group ->
-                        "Add events to this group, and file recordings into them, and their " +
+                        "Add events to this collection, and file recordings into them, and their " +
                             "numbers will appear here."
                     is AnalysisScope.Saved ->
                         "It was saved without any, or its recordings have since been deleted."

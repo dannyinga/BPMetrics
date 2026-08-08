@@ -18,6 +18,7 @@ import inga.bpmetrics.library.suggestEvents
 import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.library.RecordMerge
 import inga.bpmetrics.library.WatchEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -110,6 +111,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             val saved = repository.getLibraryViewMode()
             _viewMode.value = LibraryViewMode.entries.firstOrNull { it.name == saved }
                 ?: LibraryViewMode.RECORDINGS
+
+            // Read once, for the same reason as the view mode: this is where the user left off,
+            // not a live value. Collecting it would re-sort the list under their hands every time
+            // the preference emitted.
+            repository.getDefaultSort()
+                ?.let { name -> SortOption.entries.firstOrNull { it.name == name } }
+                ?.let { _sortOption.value = it }
         }
     }
 
@@ -151,7 +159,19 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         events
     ) { groups, summaries ->
         val byGroup = summaries.groupBy { it.event.groupId }
-        groups.map { group -> GroupSummary(group, byGroup[group.groupId].orEmpty()) }
+        groups.map { group ->
+            // The whole subtree, not just what this collection holds directly. A festival that
+            // holds nothing but days has no events of its own, and reporting that as "0 events,
+            // 0 recordings" describes the row rather than the thing the row stands for.
+            val subtree = inga.bpmetrics.library.CollectionTree.descendantsOf(groups, group.groupId)
+            GroupSummary(
+                group = group,
+                events = byGroup[group.groupId].orEmpty(),
+                allEvents = subtree.toList().flatMap { byGroup[it].orEmpty() },
+                // Itself excluded — a collection is not inside itself.
+                nestedCollectionCount = subtree.size - 1
+            )
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Events belonging to no group, shown alongside the groups so they are not lost. */
@@ -232,6 +252,18 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     fun createEventGroup(name: String) {
         viewModelScope.launch { repository.createEventGroup(name) }
+    }
+
+    /**
+     * Files one collection inside another.
+     *
+     * The repository refuses a move that would make a collection its own ancestor or nest past the
+     * cap, and logs when it does. Unreachable from here — the picker only offers legal targets —
+     * but the guard lives there rather than only in the UI, because a cycle does not throw, it
+     * hangs every walk of the tree, and no screen should be the last thing preventing that.
+     */
+    fun setCollectionParent(groupId: Long, parentGroupId: Long?) {
+        viewModelScope.launch { repository.setEventGroupParent(groupId, parentGroupId) }
     }
 
     fun renameEventGroup(groupId: Long, name: String) {
@@ -383,6 +415,37 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /**
      * Deletes all selected records.
      */
+    /**
+     * Joins the current selection into one recording.
+     *
+     * Here rather than on a recording's own page, where it briefly lived: merging is inherently
+     * about *several* recordings, and asking one of them to nominate the others meant a picker
+     * that duplicated the multi-select the library already has.
+     *
+     * @param onDone called with what happened, since a refusal has a reason worth reading.
+     */
+    fun mergeSelectedRecords(deleteOriginals: Boolean, onDone: (String) -> Unit) {
+        val chosen = repository.records.value.filter { it.metadata.recordId in _selectedRecordIds.value }
+        val refusal = RecordMerge.refusal(chosen)
+        if (refusal != null) {
+            onDone(refusal)
+            return
+        }
+        viewModelScope.launch {
+            val merged = repository.mergeRecords(chosen, deleteOriginals)
+            clearSelection()
+            onDone(
+                if (merged == null) {
+                    "Could not merge those recordings."
+                } else if (deleteOriginals) {
+                    "Merged ${chosen.size} recordings."
+                } else {
+                    "Merged ${chosen.size} recordings; the originals were kept."
+                }
+            )
+        }
+    }
+
     fun deleteSelectedRecords() {
         val idsToDelete = _selectedRecordIds.value
         viewModelScope.launch {
@@ -603,16 +666,29 @@ data class EventSummary(
     val span: TimeSpan? get() = records.spanOrNull()
 }
 
-/** A group described entirely by its events, so the two can never disagree. */
+/**
+ * A collection described entirely by what it contains, so the two can never disagree.
+ *
+ * Two lists, because a collection is now two different things depending on the question. [events]
+ * is what it holds *directly* — the rows to show when the card is expanded, since anything nested
+ * deeper appears as its own card. Everything else is counted over [allEvents], the whole subtree.
+ *
+ * Keeping only the direct list is what made a festival holding nothing but days report "0 events,
+ * 0 recordings": every count was true of the collection itself and false of what it represents.
+ */
 data class GroupSummary(
     val group: EventGroupEntity,
-    val events: List<EventSummary>
+    val events: List<EventSummary>,
+    /** Everything in the subtree, this collection's own events included. */
+    val allEvents: List<EventSummary> = events,
+    /** How many collections sit inside this one, at any depth. */
+    val nestedCollectionCount: Int = 0
 ) {
-    val eventCount: Int get() = events.size
-    val recordCount: Int get() = events.sumOf { it.recordCount }
-    val people: List<PersonEntity> get() = events.flatMap { it.people }.distinct()
+    val eventCount: Int get() = allEvents.size
+    val recordCount: Int get() = allEvents.sumOf { it.recordCount }
+    val people: List<PersonEntity> get() = allEvents.flatMap { it.people }.distinct()
     val span: TimeSpan?
-        get() = events.mapNotNull { it.span }.takeIf { it.isNotEmpty() }
+        get() = allEvents.mapNotNull { it.span }.takeIf { it.isNotEmpty() }
             ?.let { spans -> TimeSpan(spans.minOf { it.startMs }, spans.maxOf { it.endMs }) }
 }
 

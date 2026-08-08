@@ -47,6 +47,23 @@ interface EventGroupDao {
     @Query("UPDATE events SET groupId = NULL WHERE groupId = :groupId")
     suspend fun ungroupEvents(groupId: Long)
 
+    /** Every collection, unordered, for walking the tree. */
+    @Query("SELECT * FROM event_groups")
+    suspend fun getAllGroups(): List<EventGroupEntity>
+
+    @Query("UPDATE event_groups SET parentGroupId = :parentGroupId WHERE groupId = :groupId")
+    suspend fun setParent(groupId: Long, parentGroupId: Long?)
+
+    /**
+     * Lifts a deleted collection's children to the top rather than deleting them with it.
+     *
+     * Removing "Coachella" should not silently take both of its days and every event inside them.
+     * The same reasoning as [ungroupEvents], one level up — and the reason the parent column is
+     * not a foreign key with a cascade.
+     */
+    @Query("UPDATE event_groups SET parentGroupId = NULL WHERE parentGroupId = :groupId")
+    suspend fun orphanChildren(groupId: Long)
+
     @Query("SELECT COUNT(*) FROM events WHERE groupId = :groupId")
     suspend fun countEventsForGroup(groupId: Long): Int
 

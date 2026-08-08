@@ -35,7 +35,6 @@ class SettingsRepository(context: Context) {
         val IMG_WIDTH = stringPreferencesKey("img_width")
         val IMG_HEIGHT = stringPreferencesKey("img_height")
         val IMG_OPACITY = floatPreferencesKey("img_opacity")
-        val IMG_SHOW_AXES = booleanPreferencesKey("img_show_axes")
         val IMG_SHOW_LABELS = booleanPreferencesKey("img_show_labels")
         val IMG_SHOW_GRID = booleanPreferencesKey("img_show_grid")
         val IMG_SHOW_TITLE = booleanPreferencesKey("img_show_title")
@@ -46,7 +45,6 @@ class SettingsRepository(context: Context) {
         val VID_WINDOW_SIZE = stringPreferencesKey("vid_window_size")
         val VID_FRAME_RATE = stringPreferencesKey("vid_frame_rate")
         val VID_OPACITY = floatPreferencesKey("vid_opacity")
-        val VID_SHOW_AXES = booleanPreferencesKey("vid_show_axes")
         val VID_SHOW_LABELS = booleanPreferencesKey("vid_show_labels")
         val VID_SHOW_GRID = booleanPreferencesKey("vid_show_grid")
         val VID_SHOW_TITLE = booleanPreferencesKey("vid_show_title")
@@ -64,6 +62,38 @@ class SettingsRepository(context: Context) {
 
         /** Recordings the user has said, permanently, not to suggest an event for. */
         val DISMISSED_SUGGESTION_RECORDS = stringSetPreferencesKey("dismissed_suggestion_records")
+
+        /** The export appearance last used, for when no preset has been made default. */
+        val LAST_USED_EXPORT_PRESET = stringPreferencesKey("last_used_export_preset")
+
+        // --- Appearance ---
+
+        /** SYSTEM, LIGHT or DARK. Stored as a name so a new option does not shift the others. */
+        val THEME_MODE = stringPreferencesKey("theme_mode")
+
+        /** Whether to take colours from the wallpaper, where the platform offers them. */
+        val DYNAMIC_COLOUR = booleanPreferencesKey("dynamic_colour")
+
+        val USE_24_HOUR = booleanPreferencesKey("use_24_hour")
+
+        /** A `DateTimeFormatter` pattern. Stored rather than an enum so a new format is one line. */
+        val DATE_FORMAT = stringPreferencesKey("date_format")
+
+        // --- Library ---
+
+        val DEFAULT_SORT = stringPreferencesKey("default_sort")
+
+        // --- Heart rate ---
+
+        val RESTING_BPM = intPreferencesKey("resting_bpm")
+        val MAX_BPM = intPreferencesKey("max_bpm")
+
+        // --- Sync ---
+
+        val SYNC_RETRY_MINUTES = intPreferencesKey("sync_retry_minutes")
+
+        /** Whether the old per-screen export defaults have been folded into a preset. */
+        val EXPORT_DEFAULTS_MIGRATED = booleanPreferencesKey("export_defaults_migrated")
     }
 
     /**
@@ -108,6 +138,20 @@ class SettingsRepository(context: Context) {
                 .mapNotNull { it.toLongOrNull() }
                 .toSet()
         }
+
+    /**
+     * The export appearance last used, as a serialized preset.
+     *
+     * Distinct from a default preset: a default is something someone chose to pre-select, this is
+     * simply where they left off. The default wins when there is one, because it was a decision
+     * and this is a side effect.
+     */
+    suspend fun lastUsedExportPreset(): String? =
+        dataStore.data.first()[PreferencesKeys.LAST_USED_EXPORT_PRESET]
+
+    suspend fun setLastUsedExportPreset(json: String) {
+        dataStore.edit { it[PreferencesKeys.LAST_USED_EXPORT_PRESET] = json }
+    }
 
     suspend fun dismissSuggestionRecords(recordIds: Set<Long>) {
         dataStore.edit { prefs ->
@@ -189,88 +233,10 @@ class SettingsRepository(context: Context) {
         }
     }
 
-    // Image Settings
-    val imgWidth = dataStore.data.map { it[PreferencesKeys.IMG_WIDTH] ?: "1920" }
-    val imgHeight = dataStore.data.map { it[PreferencesKeys.IMG_HEIGHT] ?: "1080" }
-    val imgOpacity = dataStore.data.map { it[PreferencesKeys.IMG_OPACITY] ?: 100f }
-    val imgShowAxes = dataStore.data.map { it[PreferencesKeys.IMG_SHOW_AXES] ?: true }
-    val imgShowLabels = dataStore.data.map { it[PreferencesKeys.IMG_SHOW_LABELS] ?: true }
-    val imgShowGrid = dataStore.data.map { it[PreferencesKeys.IMG_SHOW_GRID] ?: true }
-    val imgShowTitle = dataStore.data.map { it[PreferencesKeys.IMG_SHOW_TITLE] ?: true }
-
-    // Refactored Image Defaults to use ImageExportConfig
-    suspend fun setImageDefaults(config: ImageExporter.ImageExportConfig) {
-        dataStore.edit { p ->
-            p[PreferencesKeys.IMG_WIDTH] = config.width.toString()
-            p[PreferencesKeys.IMG_HEIGHT] = config.height.toString()
-            p[PreferencesKeys.IMG_OPACITY] = config.backgroundOpacity.toFloat()
-            p[PreferencesKeys.IMG_SHOW_AXES] = config.showAxes
-            p[PreferencesKeys.IMG_SHOW_LABELS] = config.showLabels
-            p[PreferencesKeys.IMG_SHOW_GRID] = config.showGrid
-            p[PreferencesKeys.IMG_SHOW_TITLE] = config.showTitle
-        }
-    }
-
-    // Video Settings
-    val vidWidth = dataStore.data.map { it[PreferencesKeys.VID_WIDTH] ?: "1280" }
-    val vidHeight = dataStore.data.map { it[PreferencesKeys.VID_HEIGHT] ?: "720" }
-    val vidWindowSize = dataStore.data.map { it[PreferencesKeys.VID_WINDOW_SIZE] ?: "30" }
-    val vidFrameRate = dataStore.data.map { it[PreferencesKeys.VID_FRAME_RATE] ?: "30" }
-    val vidOpacity = dataStore.data.map { it[PreferencesKeys.VID_OPACITY] ?: 40f }
-    val vidShowAxes = dataStore.data.map { it[PreferencesKeys.VID_SHOW_AXES] ?: true }
-    val vidShowLabels = dataStore.data.map { it[PreferencesKeys.VID_SHOW_LABELS] ?: false }
-    val vidShowGrid = dataStore.data.map { it[PreferencesKeys.VID_SHOW_GRID] ?: false }
-    val vidShowTitle = dataStore.data.map { it[PreferencesKeys.VID_SHOW_TITLE] ?: false }
-    val vidShowStats = dataStore.data.map { it[PreferencesKeys.VID_SHOW_STATS] ?: true }
-    val vidLockAspect = dataStore.data.map { it[PreferencesKeys.VID_LOCK_ASPECT] ?: true }
-    val vidSyncOffset = dataStore.data.map { it[PreferencesKeys.VID_SYNC_OFFSET] ?: 0L }
-
-    suspend fun setVideoDefaults(config: VideoExporter.VideoExportConfig) {
-        dataStore.edit { p ->
-            // Resolution - Accessing fields from the nested imageConfig
-            p[PreferencesKeys.VID_WIDTH] = config.imageConfig.width.toString()
-            p[PreferencesKeys.VID_HEIGHT] = config.imageConfig.height.toString()
-
-            // Timing
-            p[PreferencesKeys.VID_WINDOW_SIZE] = (config.windowSizeMs / 1000).toString()
-            p[PreferencesKeys.VID_FRAME_RATE] = config.frameRate.toString()
-            
-            // NOTE: Global sync offset (VID_SYNC_OFFSET) is NOT saved here to avoid overwriting 
-            // the calibrated value from the settings screen with transient session values.
-
-            // Visuals - Accessing fields from the nested imageConfig
-            p[PreferencesKeys.VID_OPACITY] = config.imageConfig.backgroundOpacity.toFloat()
-            p[PreferencesKeys.VID_SHOW_AXES] = config.imageConfig.showAxes
-            p[PreferencesKeys.VID_SHOW_LABELS] = config.imageConfig.showLabels
-            p[PreferencesKeys.VID_SHOW_GRID] = config.imageConfig.showGrid
-            p[PreferencesKeys.VID_SHOW_TITLE] = config.imageConfig.showTitle
-            p[PreferencesKeys.VID_SHOW_STATS] = config.imageConfig.showCurrentStats
-            p[PreferencesKeys.VID_LOCK_ASPECT] = config.lockAspectRatio
-
-            // Overlay Placement (Stored as a CSV string)
-            p[PreferencesKeys.VID_GRAPH_RECT] = "${config.graphRect.left},${config.graphRect.top},${config.graphRect.right},${config.graphRect.bottom}"
-        }
-    }
-
-    /**
-     * Updates only the global sync offset.
-     */
-    suspend fun setGlobalSyncOffset(offsetMs: Long) {
-        dataStore.edit { it[PreferencesKeys.VID_SYNC_OFFSET] = offsetMs }
-    }
-
-    /**
-     * Helper to parse the stored CSV string back into a RectF for the UI
-     */
-    val vidGraphRect: Flow<android.graphics.RectF> = dataStore.data.map { preferences ->
-        val csv = preferences[PreferencesKeys.VID_GRAPH_RECT] ?: "0.0,0.0,1.0,1.0"
-        val parts = csv.split(",").mapNotNull { it.toFloatOrNull() }
-        if (parts.size == 4) {
-            android.graphics.RectF(parts[0], parts[1], parts[2], parts[3])
-        } else {
-            android.graphics.RectF(0f, 0f, 1f, 1f)
-        }
-    }
+    // The per-screen export defaults that used to live here are gone: presets replaced them, and
+    // the settings screen no longer offers them. Their *keys* survive in PreferencesKeys because
+    // `legacyExportDefaultsAsPreset` still reads them once, to rescue anything a user had set
+    // before rather than dropping it silently.
 
     val defaultTimeZone: Flow<String> = dataStore.data.map { preferences ->
         preferences[PreferencesKeys.DEFAULT_TIME_ZONE] ?: java.time.ZoneId.systemDefault().id
@@ -280,6 +246,161 @@ class SettingsRepository(context: Context) {
         dataStore.edit { it[PreferencesKeys.DEFAULT_TIME_ZONE] = timeZoneId }
     }
 
+    // --- Appearance ---
+
+    val themeMode: Flow<ThemeMode> = dataStore.data.map { prefs ->
+        prefs[PreferencesKeys.THEME_MODE]
+            ?.let { name -> ThemeMode.entries.firstOrNull { it.name == name } }
+            ?: ThemeMode.SYSTEM
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        dataStore.edit { it[PreferencesKeys.THEME_MODE] = mode.name }
+    }
+
+    /**
+     * Whether to take colours from the wallpaper.
+     *
+     * On by default, which is what the app already did — unconditionally, with no way to turn it
+     * off. The default preserves how it looks today; the setting is the part that is new.
+     */
+    val dynamicColour: Flow<Boolean> =
+        dataStore.data.map { it[PreferencesKeys.DYNAMIC_COLOUR] ?: true }
+
+    suspend fun setDynamicColour(enabled: Boolean) {
+        dataStore.edit { it[PreferencesKeys.DYNAMIC_COLOUR] = enabled }
+    }
+
+    val use24Hour: Flow<Boolean> =
+        dataStore.data.map { it[PreferencesKeys.USE_24_HOUR] ?: false }
+
+    suspend fun setUse24Hour(enabled: Boolean) {
+        dataStore.edit { it[PreferencesKeys.USE_24_HOUR] = enabled }
+    }
+
+    val dateFormat: Flow<String> =
+        dataStore.data.map { it[PreferencesKeys.DATE_FORMAT] ?: DateFormats.DEFAULT }
+
+    suspend fun setDateFormat(pattern: String) {
+        dataStore.edit { it[PreferencesKeys.DATE_FORMAT] = pattern }
+    }
+
+    // --- Library ---
+
+    val defaultSort: Flow<String?> = dataStore.data.map { it[PreferencesKeys.DEFAULT_SORT] }
+
+    suspend fun setDefaultSort(sort: String) {
+        dataStore.edit { it[PreferencesKeys.DEFAULT_SORT] = sort }
+    }
+
+    // --- Heart rate ---
+
+    /**
+     * The rate to treat as resting when nothing more specific is known.
+     *
+     * A fallback, not a fact: it belongs on the person, and this is what a person with no figure of
+     * their own is measured against. See `PersonEntity.restingBpm`.
+     */
+    val restingBpm: Flow<Int> =
+        dataStore.data.map { it[PreferencesKeys.RESTING_BPM] ?: DEFAULT_RESTING_BPM }
+
+    suspend fun setRestingBpm(bpm: Int) {
+        dataStore.edit { it[PreferencesKeys.RESTING_BPM] = bpm.coerceIn(30, 120) }
+    }
+
+    val maxBpm: Flow<Int> =
+        dataStore.data.map { it[PreferencesKeys.MAX_BPM] ?: DEFAULT_MAX_BPM }
+
+    suspend fun setMaxBpm(bpm: Int) {
+        dataStore.edit { it[PreferencesKeys.MAX_BPM] = bpm.coerceIn(120, 230) }
+    }
+
+    // --- Sync ---
+
+    val syncRetryMinutes: Flow<Int> =
+        dataStore.data.map { it[PreferencesKeys.SYNC_RETRY_MINUTES] ?: 15 }
+
+    suspend fun setSyncRetryMinutes(minutes: Int) {
+        dataStore.edit { it[PreferencesKeys.SYNC_RETRY_MINUTES] = minutes.coerceIn(1, 240) }
+    }
+
+    // --- Retiring the old export defaults ---
+
+    /**
+     * The export defaults the settings screen used to hold, as an [ExportPreset].
+     *
+     * Presets replaced these, but a user who had spent time on them should not simply find them
+     * gone — so they are folded into a preset once, named so it is obvious where it came from, and
+     * only then are the keys abandoned.
+     *
+     * @return the preset to save, or null when there is nothing worth carrying: either it has been
+     *   done already, or the user never changed a default in the first place.
+     */
+    suspend fun legacyExportDefaultsAsPreset(): inga.bpmetrics.export.ExportPreset? {
+        val prefs = dataStore.data.first()
+        if (prefs[PreferencesKeys.EXPORT_DEFAULTS_MIGRATED] == true) return null
+
+        // Only the keys that were actually written. Untouched defaults would produce a preset
+        // identical to the shipped one, which is clutter rather than rescue.
+        val touched = listOf(
+            PreferencesKeys.VID_WIDTH, PreferencesKeys.VID_HEIGHT,
+            PreferencesKeys.VID_WINDOW_SIZE, PreferencesKeys.VID_FRAME_RATE,
+            PreferencesKeys.VID_OPACITY, PreferencesKeys.VID_SHOW_LABELS,
+            PreferencesKeys.VID_SHOW_GRID, PreferencesKeys.VID_SHOW_TITLE,
+            PreferencesKeys.VID_SHOW_STATS, PreferencesKeys.VID_LOCK_ASPECT
+        ).any { it in prefs }
+        if (!touched) {
+            markExportDefaultsMigrated()
+            return null
+        }
+
+        val shipped = inga.bpmetrics.export.ExportPreset()
+        return shipped.copy(
+            name = "Previous defaults",
+            width = prefs[PreferencesKeys.VID_WIDTH]?.toIntOrNull() ?: shipped.width,
+            height = prefs[PreferencesKeys.VID_HEIGHT]?.toIntOrNull() ?: shipped.height,
+            windowSizeMs = prefs[PreferencesKeys.VID_WINDOW_SIZE]?.toLongOrNull()?.times(1000L)
+                ?: shipped.windowSizeMs,
+            frameRate = prefs[PreferencesKeys.VID_FRAME_RATE]?.toIntOrNull() ?: shipped.frameRate,
+            backgroundOpacity = prefs[PreferencesKeys.VID_OPACITY]?.toInt()
+                ?: shipped.backgroundOpacity,
+            showLabels = prefs[PreferencesKeys.VID_SHOW_LABELS] ?: shipped.showLabels,
+            showGrid = prefs[PreferencesKeys.VID_SHOW_GRID] ?: shipped.showGrid,
+            showTitle = prefs[PreferencesKeys.VID_SHOW_TITLE] ?: shipped.showTitle,
+            showCurrentStats = prefs[PreferencesKeys.VID_SHOW_STATS] ?: shipped.showCurrentStats,
+            lockAspectRatio = prefs[PreferencesKeys.VID_LOCK_ASPECT] ?: shipped.lockAspectRatio,
+            timeZoneId = prefs[PreferencesKeys.DEFAULT_TIME_ZONE] ?: shipped.timeZoneId
+        )
+    }
+
+    suspend fun markExportDefaultsMigrated() {
+        dataStore.edit { it[PreferencesKeys.EXPORT_DEFAULTS_MIGRATED] = true }
+    }
+
+    companion object {
+        const val DEFAULT_RESTING_BPM = 60
+        const val DEFAULT_MAX_BPM = 190
+    }
+}
+
+/** Which colour scheme to use, regardless of what the system is doing. */
+enum class ThemeMode(val label: String) {
+    SYSTEM("Follow system"),
+    LIGHT("Light"),
+    DARK("Dark")
+}
+
+/** The date formats on offer, as patterns so adding one is a single line. */
+object DateFormats {
+    const val DEFAULT = "MM/dd/yyyy"
+
+    val ALL: List<Pair<String, String>> = listOf(
+        "MM/dd/yyyy" to "03/14/2026",
+        "dd/MM/yyyy" to "14/03/2026",
+        "yyyy-MM-dd" to "2026-03-14",
+        "d MMM yyyy" to "14 Mar 2026",
+        "EEE d MMM" to "Sat 14 Mar"
+    )
 }
 
 /**

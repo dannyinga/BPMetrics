@@ -42,7 +42,11 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_10_11,
             LibraryDatabase.MIGRATION_11_12,
             LibraryDatabase.MIGRATION_12_13,
-            LibraryDatabase.MIGRATION_13_14
+            LibraryDatabase.MIGRATION_13_14,
+            LibraryDatabase.MIGRATION_14_15,
+            LibraryDatabase.MIGRATION_15_16,
+            LibraryDatabase.MIGRATION_16_17,
+            LibraryDatabase.MIGRATION_17_18
         )
     }
 
@@ -211,7 +215,7 @@ class LibraryDatabaseMigrationTest {
      * Running the whole chain is what a user upgrading from an older install actually experiences.
      */
     @Test
-    fun migrate5To14_runsTheWholeChain() {
+    fun migrate5To15_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 5).apply {
             execSQL(
                 """
@@ -224,7 +228,7 @@ class LibraryDatabaseMigrationTest {
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.query("SELECT wearerName, watchId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -249,7 +253,7 @@ class LibraryDatabaseMigrationTest {
             "(4, 'Nobody', '', 4000, 4000, 5000, 1000, NULL, 70.0, NULL, 'Watch C', '')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         // One profile per distinct name — the two Kyle recordings share a person, not one each.
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
@@ -297,7 +301,7 @@ class LibraryDatabaseMigrationTest {
     fun migrate10To11_handlesALibraryWithNoWearers() {
         helper.createDatabase(TEST_DB, 5).close()
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.query("SELECT COUNT(*) FROM people").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -317,7 +321,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate11To12_producesTheSchemaRoomExpects() {
         helper.createDatabase(TEST_DB, 5).close()
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS).close()
     }
 
     /**
@@ -330,7 +334,7 @@ class LibraryDatabaseMigrationTest {
             "(1, 'Before events existed', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.query("SELECT eventId FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -356,7 +360,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate12To13_producesTheSchemaRoomExpects() {
         helper.createDatabase(TEST_DB, 5).close()
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS).close()
     }
 
     /**
@@ -372,7 +376,7 @@ class LibraryDatabaseMigrationTest {
             "(1, 'Before tags cascaded', '', 1000, 1000, 2000, 1000, NULL, 80.0, NULL, 'Watch A', 'Kyle')"
         )
 
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         listOf("event_tag_cross_ref", "event_group_tag_cross_ref").forEach { table ->
             db.query("SELECT COUNT(*) FROM $table").use { cursor ->
@@ -396,7 +400,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun deletingAnEvent_removesItsTagLinksButKeepsTheTag() {
         helper.createDatabase(TEST_DB, 5).close()
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.execSQL("PRAGMA foreign_keys = ON")
         db.execSQL("INSERT INTO categories (categoryId, name) VALUES (1, 'Festivals')")
@@ -427,7 +431,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate13To14_producesTheSchemaRoomExpects() {
         helper.createDatabase(TEST_DB, 5).close()
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS).close()
     }
 
     /**
@@ -440,7 +444,7 @@ class LibraryDatabaseMigrationTest {
     @Test
     fun migrate13To14_keepsOldSnapshotsAndLeavesTheNewColumnsEmpty() {
         helper.createDatabase(TEST_DB, 5).close()
-        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *ALL_MIGRATIONS)
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
 
         db.execSQL(
             "INSERT INTO saved_analyses (analysisId, name, createdAt) VALUES (1, 'Coachella', 100)"
@@ -464,6 +468,193 @@ class LibraryDatabaseMigrationTest {
             assertTrue("no event id was ever recorded", cursor.isNull(3))
             assertEquals("", cursor.getString(4))
             assertEquals("", cursor.getString(5))
+        }
+        db.close()
+    }
+
+    /**
+     * The schema check for the presets table.
+     *
+     * Two boolean columns with SQL defaults, which is precisely the shape that has gone wrong here
+     * before — a `DEFAULT 0` written where the entity declares none, or the reverse, opens fine on
+     * a fresh install and refuses to open for everyone upgrading.
+     */
+    @Test
+    fun migrate14To15_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * The migration creates the table and nothing else.
+     *
+     * The built-in presets are seeded by the repository, not here, so that a fresh install and an
+     * upgrade take the same path and what ships is defined once. If the migration ever started
+     * inserting them, this is where the duplication would show.
+     */
+    @Test
+    fun migrate14To15_addsAnEmptyPresetsTable() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT COUNT(*) FROM export_presets").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("presets are seeded in Kotlin, not by the migration", 0, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * The schema check for the render queue.
+     *
+     * Every column here is declared without a SQL `DEFAULT`, matching an entity that declares none.
+     * That is the pairing this project has got wrong three times: a Kotlin constructor default is
+     * not a SQL default, and a `DEFAULT` on one side only installs cleanly and then refuses to open
+     * for everyone upgrading. This is the test that catches it before they do.
+     */
+    @Test
+    fun migrate15To16_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 16, true, *ALL_MIGRATIONS).close()
+    }
+
+    /** The queue starts empty, and an upgrade does not invent jobs nobody asked for. */
+    @Test
+    fun migrate15To16_addsAnEmptyRenderQueue() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 16, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT COUNT(*) FROM render_jobs").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        db.close()
+    }
+
+    /**
+     * A row written by hand survives the round trip Room will make of it.
+     *
+     * Guards the column order and nullability as much as the types: the queue is written by one
+     * process and read by the next, so a column that silently refuses a null is a crash on the
+     * launch after a batch, which is the worst possible time to find out.
+     */
+    @Test
+    fun migrate15To16_acceptsAJobWithEverythingOptionalLeftOut() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 16, true, *ALL_MIGRATIONS)
+
+        db.execSQL(
+            """
+            INSERT INTO render_jobs
+                (jobId, recordId, title, recordIdsCsv, presetJson, colorsCsv, graphTitle,
+                 startTimeMs, endTimeMs, overlayUri, overlayStartedAtMs, targetUri, status,
+                 error, presetName, sourceLabel, recordCount, queuedAt)
+            VALUES
+                ('job-1', 7, 'Subtronics', '7,8', '{"version":1}', '', NULL,
+                 0, 1000, NULL, NULL, NULL, 'QUEUED',
+                 NULL, NULL, NULL, 2, 1700000000000)
+            """.trimIndent()
+        )
+
+        db.query("SELECT recordIdsCsv, status, recordCount FROM render_jobs WHERE jobId = 'job-1'")
+            .use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("7,8", cursor.getString(0))
+                assertEquals("QUEUED", cursor.getString(1))
+                assertEquals(2, cursor.getInt(2))
+            }
+        db.close()
+    }
+
+    /**
+     * The schema check for nestable collections.
+     *
+     * `DEFAULT NULL` on both sides. The entity declares `@ColumnInfo(defaultValue = "NULL")`, so
+     * the migration must say the same — a `DEFAULT` present on one side only installs cleanly and
+     * then refuses to open for everyone upgrading, which is the failure this whole file exists for.
+     */
+    @Test
+    fun migrate16To17_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 17, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Existing collections survive, sitting at the top level.
+     *
+     * Nothing was nested before this version, so every collection that already exists must come
+     * out with no parent — not with a parent of 0, which would point at a collection that does not
+     * exist and quietly hide it from the list.
+     */
+    @Test
+    fun migrate16To17_leavesExistingCollectionsAtTheTop() {
+        helper.createDatabase(TEST_DB, 5).close()
+        var db = helper.runMigrationsAndValidate(TEST_DB, 16, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "INSERT INTO event_groups (groupId, name, notes, createdAt) " +
+                "VALUES (1, 'Coachella', '', 1700000000000)"
+        )
+        db.close()
+
+        db = helper.runMigrationsAndValidate(TEST_DB, 17, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT name, parentGroupId FROM event_groups WHERE groupId = 1").use { cursor ->
+            assertTrue("the collection should have survived", cursor.moveToFirst())
+            assertEquals("Coachella", cursor.getString(0))
+            assertTrue("must be top level, not parented to id 0", cursor.isNull(1))
+        }
+        db.close()
+    }
+
+    /** A collection can be filed inside another once the column exists. */
+    @Test
+    fun migrate16To17_acceptsANestedCollection() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 17, true, *ALL_MIGRATIONS)
+
+        db.execSQL(
+            "INSERT INTO event_groups (groupId, name, notes, createdAt, parentGroupId) VALUES " +
+                "(1, 'Coachella', '', 1700000000000, NULL), " +
+                "(2, 'Day 1', '', 1700000000000, 1)"
+        )
+
+        db.query("SELECT parentGroupId FROM event_groups WHERE groupId = 2").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1L, cursor.getLong(0))
+        }
+        db.close()
+    }
+
+    /** The schema check for per-person heart rate figures. */
+    @Test
+    fun migrate17To18_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 18, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Existing people keep inheriting the app-wide figures.
+     *
+     * Null means "use the default", which is a different thing from zero and has to stay
+     * distinguishable from it — a person migrated to 0 bpm resting would make every zone
+     * percentage they appear in wrong, quietly.
+     */
+    @Test
+    fun migrate17To18_leavesExistingPeopleOnTheDefaults() {
+        helper.createDatabase(TEST_DB, 5).close()
+        var db = helper.runMigrationsAndValidate(TEST_DB, 17, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "INSERT INTO people (personId, name, colorArgb, createdAt) VALUES (1, 'Kyle', -1, 0)"
+        )
+        db.close()
+
+        db = helper.runMigrationsAndValidate(TEST_DB, 18, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT name, restingBpm, maxBpm FROM people WHERE personId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Kyle", cursor.getString(0))
+            assertTrue("resting must be absent, not zero", cursor.isNull(1))
+            assertTrue("maximum must be absent, not zero", cursor.isNull(2))
         }
         db.close()
     }

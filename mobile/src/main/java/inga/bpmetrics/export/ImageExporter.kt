@@ -42,8 +42,6 @@ object ImageExporter {
         val startTimeMs: Long = 0L,
         val endTimeMs: Long = 0L,
         val backgroundOpacity: Int = 100,
-        val showAxes: Boolean = true,
-        val axesColor: Int = 0xFFCCCCCC.toInt(),
         val showLabels: Boolean = true,
         val labelsColor: Int = 0xFFFFFFFF.toInt(),
         val showGrid: Boolean = true,
@@ -80,6 +78,7 @@ object ImageExporter {
         renderOnCanvas(canvas, record, config)
         return bitmap
     }
+
 
     /**
      * Shares a [Bitmap] as a PNG file using an Intent.
@@ -941,9 +940,21 @@ object ImageExporter {
         drawContainer(canvas, dims, config, paint)
         drawGridAndAxes(canvas, dims, ranges, multiConfig, paint)
 
-        val recordConfigs = processedRecords.mapIndexed { index, rec ->
-            val assignedColor = colorForRecord(rec, index, config)
-            multiConfig.copy(lowBpmColor = assignedColor, highBpmColor = assignedColor)
+        // A flat per-person colour is what lets several curves be told apart. With one curve there
+        // is nothing to tell it apart *from*, and flattening it throws away the blue-to-red
+        // gradient — the one thing the line's colour could still be saying. So a lone recording
+        // keeps the gradient, and the person's colour stays an accent elsewhere on the frame.
+        //
+        // This is also where the preview and the render disagreed: the export drops to the
+        // single-record path for one recording and gets the gradient, while the preview always
+        // comes through here. Deciding it here means both agree whichever path they took.
+        val recordConfigs = if (processedRecords.size == 1) {
+            listOf(multiConfig)
+        } else {
+            processedRecords.mapIndexed { index, rec ->
+                val assignedColor = colorForRecord(rec, index, config)
+                multiConfig.copy(lowBpmColor = assignedColor, highBpmColor = assignedColor)
+            }
         }
 
         processedRecords.forEachIndexed { index, rec ->

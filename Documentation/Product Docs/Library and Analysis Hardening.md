@@ -465,5 +465,24 @@ All confirmed:
 1. **An event may span midnight or several days.** Nothing enforces a duration.
 2. **A group's dates are derived from its events**, never stored — same reasoning as event times.
 3. **An event with no recordings survives** until deleted explicitly.
-4. **No nested groups.** One level of structure, with tag inheritance (§2.4) providing the
-   cross-cutting dimension that nesting would otherwise have been used for.
+4. ~~**No nested groups.** One level of structure, with tag inheritance (§2.4) providing the
+   cross-cutting dimension that nesting would otherwise have been used for.~~
+
+   **Superseded.** Collections (formerly groups) nest; events still do not, and a recording still
+   belongs to exactly one event.
+
+   The case that broke the rule was "Subtronics inside Coachella Day 1 inside Coachella" — three
+   levels of strict containment. Tags cannot express it, because a tag is a label rather than a
+   place, and the library still has to be *browsable* as a hierarchy. The original reasoning holds
+   for cross-cutting structure ("every set it rained at" is still a tag) and it was right to resist
+   a tree over everything; what it got wrong was assuming containment never goes past two levels.
+
+   The alternative considered was letting a recording belong to several events. Rejected: it would
+   express containment by duplication, which leaves "which event is this recording's?" unanswerable
+   on the record screen, breaks nearest-wins tag inheritance (with three parents there is no
+   nearest), and makes every total count the same recording once per level.
+
+   Nesting the **container** costs one nullable column and a walk up the parents. Nesting the leaf
+   would have cost the meaning of the leaf. See `CollectionTree` for the depth cap and the cycle
+   guards — a cycle here does not throw, it hangs every walk of the tree, so the guard lives in the
+   repository rather than only in the picker.

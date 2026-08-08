@@ -25,7 +25,7 @@ class EffectiveTagsResolverTest {
         val result = EffectiveTagsResolver.resolve(
             directTags = listOf(loud),
             eventId = null,
-            groupId = null,
+            groupChain = emptyList(),
             eventTags = emptyMap(),
             groupTags = emptyMap()
         )
@@ -40,7 +40,7 @@ class EffectiveTagsResolverTest {
         val result = EffectiveTagsResolver.resolve(
             directTags = listOf(loud),
             eventId = 10,
-            groupId = 20,
+            groupChain = listOf(20L),
             eventTags = mapOf(10L to listOf(saturday)),
             groupTags = mapOf(20L to listOf(coachella))
         )
@@ -62,7 +62,7 @@ class EffectiveTagsResolverTest {
         val result = EffectiveTagsResolver.resolve(
             directTags = listOf(coachella),
             eventId = 10,
-            groupId = 20,
+            groupChain = listOf(20L),
             eventTags = emptyMap(),
             groupTags = mapOf(20L to listOf(coachella))
         )
@@ -76,7 +76,7 @@ class EffectiveTagsResolverTest {
         val result = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
             eventId = 10,
-            groupId = 20,
+            groupChain = listOf(20L),
             eventTags = mapOf(10L to listOf(coachella)),
             groupTags = mapOf(20L to listOf(coachella))
         )
@@ -90,7 +90,7 @@ class EffectiveTagsResolverTest {
         val result = EffectiveTagsResolver.resolve(
             directTags = listOf(loud),
             eventId = null,
-            groupId = null,
+            groupChain = emptyList(),
             eventTags = mapOf(10L to listOf(saturday)),
             groupTags = mapOf(20L to listOf(coachella))
         )
@@ -103,7 +103,7 @@ class EffectiveTagsResolverTest {
         val result = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
             eventId = 10,
-            groupId = null,
+            groupChain = emptyList(),
             eventTags = mapOf(10L to listOf(saturday)),
             groupTags = mapOf(20L to listOf(coachella))
         )
@@ -119,14 +119,14 @@ class EffectiveTagsResolverTest {
         val before = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
             eventId = 10,
-            groupId = 20,
+            groupChain = listOf(20L),
             eventTags = emptyMap(),
             groupTags = mapOf(20L to listOf(coachella))
         )
         val after = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
             eventId = 11,
-            groupId = null,
+            groupChain = emptyList(),
             eventTags = emptyMap(),
             groupTags = mapOf(20L to listOf(coachella))
         )
@@ -185,4 +185,39 @@ class EffectiveTagsResolverTest {
         maxDataPoint = null,
         tags = tags
     )
+
+    @Test
+    fun `a tag on a festival reaches a recording inside one of its days`() {
+        // Collections nest, so inheritance climbs the whole chain. Without this, tagging Coachella
+        // would reach nothing once its sets were filed under days rather than under it directly.
+        val festivalTag = TagEntity(tagId = 90, name = "Coachella", parentCategoryId = 1)
+
+        val result = EffectiveTagsResolver.resolve(
+            directTags = emptyList(),
+            eventId = 10,
+            groupChain = listOf(20L, 21L),
+            eventTags = emptyMap(),
+            groupTags = mapOf(21L to listOf(festivalTag))
+        )
+
+        assertEquals(listOf(90L), result.map { it.tag.tagId })
+        assertEquals(TagSource.GROUP, result.single().source)
+    }
+
+    @Test
+    fun `the nearest collection wins when a tag is set at two levels`() {
+        // Same tag on the day and on the festival is one tag. Attributing it to the day is what
+        // keeps it removable where someone would look for it.
+        val shared = TagEntity(tagId = 91, name = "Rain", parentCategoryId = 1)
+
+        val result = EffectiveTagsResolver.resolve(
+            directTags = emptyList(),
+            eventId = 10,
+            groupChain = listOf(20L, 21L),
+            eventTags = emptyMap(),
+            groupTags = mapOf(20L to listOf(shared), 21L to listOf(shared))
+        )
+
+        assertEquals(1, result.size)
+    }
 }

@@ -1,10 +1,8 @@
 package inga.bpmetrics.ui.settings
 
+import android.content.Context
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,31 +12,30 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -46,162 +43,43 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import inga.bpmetrics.export.ImageExporter
-import inga.bpmetrics.export.VideoExporter
-import androidx.compose.ui.graphics.Color
+import inga.bpmetrics.ui.components.ExpandableSection
+import kotlinx.coroutines.launch
+import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.library.LibraryViewMode
+import inga.bpmetrics.ui.library.LibraryViewModel
+import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 
+/**
+ * Settings, grouped and applied immediately.
+ *
+ * Two things changed here at once. Changes now take effect as they are made — the previous screen
+ * staged everything, tracked whether it was dirty, and asked "Would you like to save your changes
+ * before leaving?" on the way out, which no other settings screen on the platform does and which
+ * was the only reason it needed a back handler.
+ *
+ * And most of what it contained is gone: three of its four sections were export defaults, which
+ * presets replaced. What is left is what a settings screen for *this* app should actually hold,
+ * most of which did not exist before.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
-    onOpenDrawer: () -> Unit,
-    onLeave: () -> Unit
+    onOpenDrawer: () -> Unit
 ) {
     val context = LocalContext.current
-    val categories by viewModel.allCategories.collectAsStateWithLifecycle(initialValue = emptyList())
-    val defaultNamingCategoryId by viewModel.defaultNamingCategoryId.collectAsStateWithLifecycle()
 
-    // Remote states from ViewModel
-    val savedImgW by viewModel.imgWidth.collectAsStateWithLifecycle()
-    val savedImgH by viewModel.imgHeight.collectAsStateWithLifecycle()
-    val savedImgO by viewModel.imgOpacity.collectAsStateWithLifecycle()
-    val savedImgAxes by viewModel.imgShowAxes.collectAsStateWithLifecycle()
-    val savedImgLabels by viewModel.imgShowLabels.collectAsStateWithLifecycle()
-    val savedImgGrid by viewModel.imgShowGrid.collectAsStateWithLifecycle()
-    val savedImgTitle by viewModel.imgShowTitle.collectAsStateWithLifecycle()
-
-    val savedVidW by viewModel.vidWidth.collectAsStateWithLifecycle()
-    val savedVidH by viewModel.vidHeight.collectAsStateWithLifecycle()
-    val savedVidWin by viewModel.vidWindowSize.collectAsStateWithLifecycle()
-    val savedVidFPS by viewModel.vidFrameRate.collectAsStateWithLifecycle()
-    val savedVidO by viewModel.vidOpacity.collectAsStateWithLifecycle()
-    val savedVidAxes by viewModel.vidShowAxes.collectAsStateWithLifecycle()
-    val savedVidLabels by viewModel.vidShowLabels.collectAsStateWithLifecycle()
-    val savedVidGrid by viewModel.vidShowGrid.collectAsStateWithLifecycle()
-    val savedVidTitle by viewModel.vidShowTitle.collectAsStateWithLifecycle()
-    val savedVidStats by viewModel.vidShowStats.collectAsStateWithLifecycle()
-    val savedVidLock by viewModel.vidLockAspect.collectAsStateWithLifecycle()
-    val savedVidOffset by viewModel.vidSyncOffset.collectAsStateWithLifecycle()
-    val savedDefaultTz by viewModel.defaultTimeZone.collectAsStateWithLifecycle()
-
-    // Local states
-    var imgW by remember(savedImgW) { mutableStateOf(savedImgW) }
-    var imgH by remember(savedImgH) { mutableStateOf(savedImgH) }
-    var imgO by remember(savedImgO) { mutableFloatStateOf(savedImgO) }
-    var imgAxes by remember(savedImgAxes) { mutableStateOf(savedImgAxes) }
-    var imgLabels by remember(savedImgLabels) { mutableStateOf(savedImgLabels) }
-    var imgGrid by remember(savedImgGrid) { mutableStateOf(savedImgGrid) }
-    var imgTitle by remember(savedImgTitle) { mutableStateOf(savedImgTitle) }
-
-    var vidW by remember(savedVidW) { mutableStateOf(savedVidW) }
-    var vidH by remember(savedVidH) { mutableStateOf(savedVidH) }
-    var vidWin by remember(savedVidWin) { mutableStateOf(savedVidWin) }
-    var vidFPS by remember(savedVidFPS) { mutableStateOf(savedVidFPS) }
-    var vidO by remember(savedVidO) { mutableFloatStateOf(savedVidO) }
-    var vidAxes by remember(savedVidAxes) { mutableStateOf(savedVidAxes) }
-    var vidLabels by remember(savedVidLabels) { mutableStateOf(savedVidLabels) }
-    var vidGrid by remember(savedVidGrid) { mutableStateOf(savedVidGrid) }
-    var vidTitle by remember(savedVidTitle) { mutableStateOf(savedVidTitle) }
-    var vidStats by remember(savedVidStats) { mutableStateOf(savedVidStats) }
-    var vidLock by remember(savedVidLock) { mutableStateOf(savedVidLock) }
-    var vidOffset by remember(savedVidOffset) { mutableStateOf(savedVidOffset.toString()) }
-    var defaultTz by remember(savedDefaultTz) { mutableStateOf(savedDefaultTz) }
-    var showTzDialog by remember { mutableStateOf(false) }
-
-    var showCategoryDropdown by remember { mutableStateOf(false) }
-    var showUnsavedDialog by remember { mutableStateOf(false) }
-
-    val hasUnsavedChanges = imgW != savedImgW || imgH != savedImgH || imgO != savedImgO ||
-            imgAxes != savedImgAxes || imgLabels != savedImgLabels || imgGrid != savedImgGrid ||
-            imgTitle != savedImgTitle || vidW != savedVidW || vidH != savedVidH ||
-            vidWin != savedVidWin || vidFPS != savedVidFPS || vidO != savedVidO || vidAxes != savedVidAxes ||
-            vidLabels != savedVidLabels || vidGrid != savedVidGrid || vidTitle != savedVidTitle ||
-            vidStats != savedVidStats || vidLock != savedVidLock || vidOffset != savedVidOffset.toString() ||
-            defaultTz != savedDefaultTz
-
-    val saveSettings = {
-        val imageConfig = ImageExporter.ImageExportConfig(
-            width = imgW.toIntOrNull() ?: 1920,
-            height = imgH.toIntOrNull() ?: 1080,
-            backgroundOpacity = imgO.toInt(),
-            showAxes = imgAxes,
-            showGrid = imgGrid,
-            showLabels = imgLabels,
-            showTitle = imgTitle,
-        )
-        val videoConfig = VideoExporter.VideoExportConfig(
-            windowSizeMs = (vidWin.toLongOrNull() ?: 30L) * 1000L,
-            frameRate = vidFPS.toIntOrNull() ?: 30,
-            imageConfig = imageConfig.copy(
-                width = vidW.toIntOrNull() ?: 1280,
-                height = vidH.toIntOrNull() ?: 720,
-                backgroundOpacity = vidO.toInt(),
-                showAxes = vidAxes,
-                showLabels = vidLabels,
-                showGrid = vidGrid,
-                showTitle = vidTitle,
-                showCurrentStats = vidStats
-            ),
-            lockAspectRatio = vidLock
-        )
-        viewModel.setImageDefaults(imageConfig)
-        viewModel.setVideoDefaults(videoConfig)
-        viewModel.setGlobalSyncOffset(vidOffset.toLongOrNull() ?: 0L)
-        viewModel.setDefaultTimeZone(defaultTz)
-        Toast.makeText(context, "Settings Saved", Toast.LENGTH_SHORT).show()
+    LaunchedEffect(Unit) { viewModel.refreshStorage(context) }
+    LaunchedEffect(Unit) {
+        viewModel.message.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }
 
-    // What to do once the user has decided about their unsaved changes. Settings can now be left
-    // two ways -- system back, or opening the drawer -- and the prompt has to guard both, so the
-    // exit itself is deferred until the dialog resolves.
-    var pendingExit by remember { mutableStateOf<(() -> Unit)?>(null) }
-
-    /** Leaves via [exit], prompting first if there is unsaved work. */
-    fun requestExit(exit: () -> Unit) {
-        if (hasUnsavedChanges) {
-            pendingExit = exit
-            showUnsavedDialog = true
-        } else {
-            exit()
-        }
-    }
-
-    BackHandler(enabled = hasUnsavedChanges) {
-        pendingExit = onLeave
-        showUnsavedDialog = true
-    }
-
-    if (showUnsavedDialog) {
-        val resolve = { exiting: Boolean ->
-            val exit = pendingExit
-            showUnsavedDialog = false
-            pendingExit = null
-            if (exiting) exit?.invoke()
-        }
-
-        AlertDialog(
-            onDismissRequest = { resolve(false) },
-            title = { Text("Unsaved Changes") },
-            text = { Text("Would you like to save your changes before leaving?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    saveSettings()
-                    resolve(true)
-                }) { Text("Save") }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = {
-                        resolve(true)
-                    }) { Text("Discard", color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = { resolve(false) }) { Text("Cancel") }
-                }
-            }
-        )
+    val restarting by viewModel.restarting.collectAsStateWithLifecycle()
+    LaunchedEffect(restarting) {
+        if (restarting) relaunch(context)
     }
 
     Scaffold(
@@ -209,169 +87,759 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text("Settings") },
                 navigationIcon = {
-                    IconButton(onClick = { requestExit(onOpenDrawer) }) {
-                        Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { saveSettings() }) {
-                        Icon(Icons.Default.Save, contentDescription = "Save Settings")
+                    IconButton(onClick = onOpenDrawer) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open navigation drawer")
                     }
                 }
             )
         }
-    ) { paddingValues ->
-        Column(modifier = Modifier.padding(paddingValues).padding(16.dp).verticalScroll(rememberScrollState())) {
-            SettingsSectionTitle("Auto-Naming")
-            val selectedCategoryName = categories.find { it.categoryId == defaultNamingCategoryId }?.name ?: "None (Untitled)"
-            OutlinedCard(modifier = Modifier.fillMaxWidth().clickable { showCategoryDropdown = true }) {
-                Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column {
-                        Text("Naming Category", style = MaterialTheme.typography.labelLarge)
-                        Text(selectedCategoryName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-            DropdownMenu(expanded = showCategoryDropdown, onDismissRequest = { showCategoryDropdown = false }) {
-                DropdownMenuItem(text = { Text("None (Untitled)") }, onClick = { viewModel.clearDefaultNamingCategory(); showCategoryDropdown = false })
-                categories.forEach { category ->
-                    DropdownMenuItem(text = { Text(category.name) }, onClick = { viewModel.setDefaultNamingCategory(category.categoryId); showCategoryDropdown = false })
-                }
-            }
-            SettingsDivider()
-            SettingsSectionTitle("Image Export Defaults")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = imgW, onValueChange = { imgW = it }, label = { Text("Width") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                OutlinedTextField(value = imgH, onValueChange = { imgH = it }, label = { Text("Height") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-            }
-            SettingsToggle("Show Title", imgTitle) { imgTitle = it }
-            SettingsToggle("Show Axes", imgAxes) { imgAxes = it }
-            SettingsToggle("Show Labels", imgLabels) { imgLabels = it }
-            SettingsToggle("Show Grid", imgGrid) { imgGrid = it }
-            Text("Background Opacity: ${imgO.toInt()}%", modifier = Modifier.padding(top = 8.dp))
-            Slider(value = imgO, onValueChange = { imgO = it }, valueRange = 0f..100f)
-            SettingsDivider()
-            SettingsSectionTitle("Video Export Defaults")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = vidW, onValueChange = { vidW = it }, label = { Text("Width") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                OutlinedTextField(value = vidH, onValueChange = { vidH = it }, label = { Text("Height") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                OutlinedTextField(value = vidWin, onValueChange = { vidWin = it }, label = { Text("Window Size (Sec)") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                OutlinedTextField(value = vidFPS, onValueChange = { vidFPS = it }, label = { Text("Frame Rate (FPS)") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-            }
-            OutlinedTextField(value = vidOffset, onValueChange = { vidOffset = it }, label = { Text("Global Sync Offset (ms)") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
-            SettingsToggle("Lock Aspect Ratio", vidLock) { vidLock = it }
-            SettingsToggle("Show Title", vidTitle) { vidTitle = it }
-            SettingsToggle("Show Stats", vidStats) { vidStats = it }
-            SettingsToggle("Show Axes", vidAxes) { vidAxes = it }
-            SettingsToggle("Show Labels", vidLabels) { vidLabels = it }
-            SettingsToggle("Show Grid", vidGrid) { vidGrid = it }
-            Text("Background Opacity: ${vidO.toInt()}%", modifier = Modifier.padding(top = 8.dp))
-            Slider(value = vidO, onValueChange = { vidO = it }, valueRange = 0f..100f)
-
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+        ) {
             Spacer(Modifier.height(8.dp))
-            OutlinedCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showTzDialog = true }
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Default Video Time Zone", style = MaterialTheme.typography.labelLarge)
-                        Text(defaultTz, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-
+            AppearanceSection(viewModel)
+            LibrarySection(viewModel)
+            HeartRateSection(viewModel)
+            ExportSection(viewModel)
+            StorageSection(viewModel)
+            SyncSection(viewModel)
+            // No About section here: the app already has one, and two places claiming to be the
+            // version number is how they come to disagree.
             Spacer(Modifier.height(32.dp))
         }
     }
+}
 
-    if (showTzDialog) {
-        var tzSearchQuery by remember { mutableStateOf("") }
-        val availableZones = remember { java.time.ZoneId.getAvailableZoneIds().sorted() }
-        val filteredZones = remember(tzSearchQuery) {
-            if (tzSearchQuery.isBlank()) {
-                val priorityZones = listOf(java.time.ZoneId.systemDefault().id, "UTC", "GMT")
-                (priorityZones + availableZones.filter { it !in priorityZones }).take(50)
-            } else {
-                availableZones.filter { it.contains(tzSearchQuery, ignoreCase = true) }.take(50)
+@Composable
+private fun AppearanceSection(viewModel: SettingsViewModel) {
+    val theme by viewModel.themeMode.collectAsStateWithLifecycle()
+    val dynamic by viewModel.dynamicColour.collectAsStateWithLifecycle()
+    val use24 by viewModel.use24Hour.collectAsStateWithLifecycle()
+    val dateFormat by viewModel.dateFormat.collectAsStateWithLifecycle()
+
+    SettingsGroup("Appearance", "Theme, colour and how times are written") {
+        Label("Theme")
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            ThemeMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = theme == mode,
+                    onClick = { viewModel.setThemeMode(mode) },
+                    label = { Text(mode.label) }
+                )
             }
         }
 
-        AlertDialog(
-            onDismissRequest = { showTzDialog = false },
-            title = { Text("Select Time Zone") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = tzSearchQuery,
-                        onValueChange = { tzSearchQuery = it },
-                        label = { Text("Search Time Zone") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Box(modifier = Modifier.height(200.dp).fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            filteredZones.forEach { zoneId ->
-                                Text(
-                                    text = zoneId,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            defaultTz = zoneId
-                                            showTzDialog = false
-                                        }
-                                        .padding(vertical = 12.dp, horizontal = 8.dp),
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                HorizontalDivider()
-                            }
-                            if (filteredZones.isEmpty()) {
-                                Text(
-                                    text = "No time zones match search",
-                                    color = Color.Gray,
-                                    modifier = Modifier.padding(8.dp)
-                                        .align(Alignment.CenterHorizontally)
-                                )
-                            }
-                        }
+        Spacer(Modifier.height(8.dp))
+        SwitchRow(
+            "Wallpaper colours",
+            // Android 12 is where the platform gained this. Below it the toggle would be a
+            // control over nothing, so it says so rather than pretending.
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                "Take the app's colours from your wallpaper"
+            } else {
+                "Not available on this version of Android"
+            },
+            checked = dynamic,
+            enabled = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
+        ) { viewModel.setDynamicColour(it) }
+
+        SwitchRow("24-hour clock", null, checked = use24) { viewModel.setUse24Hour(it) }
+
+        Spacer(Modifier.height(8.dp))
+        Label("Date format")
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            DateFormats.ALL.forEach { (pattern, example) ->
+                FilterChip(
+                    selected = dateFormat == pattern,
+                    onClick = { viewModel.setDateFormat(pattern) },
+                    label = { Text(example) }
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Hint("Today reads as ${getDateString(System.currentTimeMillis())}")
+    }
+}
+
+@Composable
+private fun LibrarySection(viewModel: SettingsViewModel) {
+    val viewMode by viewModel.defaultViewMode.collectAsStateWithLifecycle()
+    val categories by viewModel.allCategories.collectAsStateWithLifecycle(initialValue = emptyList())
+    val namingCategoryId by viewModel.defaultNamingCategoryId.collectAsStateWithLifecycle()
+    val defaultSort by viewModel.defaultSort.collectAsStateWithLifecycle()
+
+    SettingsGroup("Library", "What the library opens on, and how new recordings are named") {
+        Label("Opens on")
+        Hint("Also updated as you switch views in the library, so it reopens where you left it.")
+        Spacer(Modifier.height(6.dp))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            LibraryViewMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = viewMode == mode.name,
+                    onClick = { viewModel.setDefaultViewMode(mode.name) },
+                    label = {
+                        Text(mode.name.lowercase().replaceFirstChar { it.uppercase() })
+                    }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Label("Sorted by")
+        Spacer(Modifier.height(6.dp))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            LibraryViewModel.SortOption.entries.forEach { option ->
+                FilterChip(
+                    selected = defaultSort == option.name,
+                    onClick = { viewModel.setDefaultSort(option.name) },
+                    label = { Text(option.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }) }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Label("Auto-naming")
+        Hint("New recordings are named after a tag from this category, when one applies.")
+        Spacer(Modifier.height(6.dp))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            FilterChip(
+                selected = namingCategoryId == null,
+                onClick = { viewModel.setDefaultNamingCategory(null) },
+                label = { Text("Off") }
+            )
+            categories.forEach { category ->
+                FilterChip(
+                    selected = namingCategoryId == category.categoryId,
+                    onClick = { viewModel.setDefaultNamingCategory(category.categoryId) },
+                    label = { Text(category.name) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeartRateSection(viewModel: SettingsViewModel) {
+    val resting by viewModel.restingBpm.collectAsStateWithLifecycle()
+    val max by viewModel.maxBpm.collectAsStateWithLifecycle()
+
+    SettingsGroup("Heart rate", "The figures zones are measured against") {
+        Hint(
+            "A fallback for anyone without figures of their own. Set a person's own resting and " +
+                "maximum on their profile — these two are what everyone else is measured against."
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            NumberField(
+                value = resting,
+                label = "Resting",
+                modifier = Modifier.weight(1f)
+            ) { viewModel.setRestingBpm(it) }
+            NumberField(
+                value = max,
+                label = "Maximum",
+                modifier = Modifier.weight(1f)
+            ) { viewModel.setMaxBpm(it) }
+        }
+    }
+}
+
+@Composable
+private fun StorageSection(viewModel: SettingsViewModel) {
+    val context = LocalContext.current
+    val storage by viewModel.storage.collectAsStateWithLifecycle()
+    var confirming by remember { mutableStateOf<StorageInspector.Backup?>(null) }
+
+    SettingsGroup("Storage", "What this app is using, and the backups it keeps") {
+        val report = storage
+        if (report == null) {
+            Hint("Measuring…")
+            return@SettingsGroup
+        }
+
+        report.items.forEach { item ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(item.label, style = MaterialTheme.typography.bodyMedium)
+                    item.detail?.let { Hint(it) }
+                }
+                Text(
+                    StorageInspector.formatSize(item.bytes),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Total", fontWeight = FontWeight.Bold)
+            Text(StorageInspector.formatSize(report.totalBytes), fontWeight = FontWeight.Bold)
+        }
+        Hint("${StorageInspector.formatSize(report.freeBytes)} free on the phone")
+
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(onClick = { viewModel.clearStagedExports(context) }) {
+            Text("Clear staged exports")
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Label("Database backups")
+        Hint(
+            // Why this is worth a section: they have always been taken, and until now the only way
+            // to reach one was a cable and adb.
+            "Taken automatically before each upgrade. Restoring replaces everything in the app " +
+                "with what that backup held."
+        )
+        Spacer(Modifier.height(6.dp))
+
+        if (report.backups.isEmpty()) {
+            Hint("No backups yet — one is taken the next time the database changes shape.")
+        } else {
+            report.backups.forEach { backup ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            getDateString(backup.takenAtMs),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Hint(StorageInspector.formatSize(backup.bytes))
+                    }
+                    TextButton(onClick = { confirming = backup }) { Text("Restore") }
+                    TextButton(onClick = { viewModel.deleteBackup(context, backup) }) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
                     }
                 }
+            }
+        }
+    }
+
+    confirming?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { confirming = null },
+            title = { Text("Restore this backup?") },
+            text = {
+                Text(
+                    "Everything currently in the app will be replaced with what this backup held " +
+                        "on ${getDateString(backup.takenAtMs)}. Your current database is kept " +
+                        "alongside the backups in case you want it back, and BPMetrics will close " +
+                        "so the change can take effect."
+                )
             },
             confirmButton = {
-                TextButton(onClick = { showTzDialog = false }) {
-                    Text("Close")
+                TextButton(onClick = {
+                    confirming = null
+                    viewModel.restoreBackup(context, backup)
+                }) {
+                    Text("Restore", color = MaterialTheme.colorScheme.error)
                 }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = null }) { Text("Cancel") }
             }
         )
     }
 }
 
 @Composable
-private fun SettingsSectionTitle(title: String) {
-    Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 8.dp))
+private fun SyncSection(viewModel: SettingsViewModel) {
+    val context = LocalContext.current
+    val incoming by viewModel.incomingCount.collectAsStateWithLifecycle()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val retry by viewModel.syncRetryMinutes.collectAsStateWithLifecycle()
+
+    SettingsGroup("Sync", "What is still coming from the watch") {
+        Text(
+            if (incoming == 0) {
+                "Nothing waiting."
+            } else {
+                "$incoming recording${if (incoming == 1) "" else "s"} still arriving."
+            },
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(10.dp))
+        // The per-record detail that used to be a section of its own in the drawer. A list empty
+        // almost all of the time does not earn a permanent place in the navigation, and the
+        // question it answers is the one this section is already about.
+        inga.bpmetrics.ui.incoming.IncomingList()
+
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(onClick = {
+            // The watch has always shown a pending count; the phone showed nothing, so a transfer
+            // that had quietly stalled looked identical to one that had never been started.
+            scope.launch {
+                (context.applicationContext as inga.bpmetrics.BPMetricsApp)
+                    .dataClientProcessor.sweepExistingRecords()
+            }
+            Toast.makeText(context, "Checking the watch…", Toast.LENGTH_SHORT).show()
+        }) {
+            Text("Check for recordings now")
+        }
+
+        Spacer(Modifier.height(12.dp))
+        NumberField(
+            value = retry,
+            label = "Retry every (minutes)",
+            modifier = Modifier.fillMaxWidth()
+        ) { viewModel.setSyncRetryMinutes(it) }
+    }
 }
 
+/**
+ * Bundles recent logcat output and the storage breakdown into a shareable file.
+ *
+ * Read back from the app's own logcat buffer rather than a file we keep: nothing here is written
+ * down until someone asks for it, which is the right default for something that carries names.
+ */
+fun shareDiagnostics(context: Context, version: String) {
+    runCatching {
+        val report = StorageInspector.inspect(context)
+        val logs = runCatching {
+            val process = Runtime.getRuntime().exec("logcat -d -t 500 -v time")
+            process.inputStream.bufferedReader().use { it.readText() }
+        }.getOrElse { "Could not read logs: ${it.message}" }
+
+        val text = buildString {
+            appendLine("BPMetrics $version")
+            appendLine("Android ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.MODEL}")
+            appendLine()
+            appendLine("Storage")
+            report.items.forEach {
+                appendLine("  ${it.label}: ${StorageInspector.formatSize(it.bytes)}")
+            }
+            appendLine("  Free: ${StorageInspector.formatSize(report.freeBytes)}")
+            appendLine("  Backups: ${report.backups.size}")
+            appendLine()
+            appendLine("Recent logs")
+            appendLine(logs)
+        }
+
+        val file = java.io.File(context.cacheDir, "bpmetrics-diagnostics.txt")
+        file.writeText(text)
+        inga.bpmetrics.export.ExportUtils.shareFile(context, file, "text/plain")
+    }.onFailure {
+        Toast.makeText(context, "Could not gather diagnostics", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** Closes the app so a restored database is picked up on the next launch. */
+private fun relaunch(context: Context) {
+    Toast.makeText(context, "Restored. Reopen BPMetrics.", Toast.LENGTH_LONG).show()
+    (context as? android.app.Activity)?.finishAffinity()
+    // The process is what holds the open database handle, so it has to go with the activity.
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+        { android.os.Process.killProcess(android.os.Process.myPid()) },
+        1200L
+    )
+}
+
+// --- Shared pieces ---
+
 @Composable
-private fun SettingsToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+private fun SettingsGroup(
+    title: String,
+    subtitle: String,
+    content: @Composable () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        )
+    ) {
+        ExpandableSection(
+            title = title,
+            isExpanded = expanded,
+            onToggle = { expanded = !expanded },
+            titleStyle = MaterialTheme.typography.titleSmall
+        ) {
+            Column(Modifier.padding(bottom = 8.dp)) {
+                Hint(subtitle)
+                Spacer(Modifier.height(10.dp))
+                content()
+            }
+        }
     }
 }
 
 @Composable
-private fun SettingsDivider() {
-    HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+private fun Label(text: String) {
+    Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+}
+
+@Composable
+private fun Hint(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+@Composable
+private fun SwitchRow(
+    label: String,
+    detail: String?,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            detail?.let { Hint(it) }
+        }
+        Spacer(Modifier.width(8.dp))
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+    }
+}
+
+/**
+ * A number, written through as it is typed.
+ *
+ * Holds its own text so a half-typed "6" on the way to "60" is not committed and echoed back — the
+ * value is applied whenever what is typed parses, and the field keeps showing the characters.
+ */
+@Composable
+private fun NumberField(
+    value: Int,
+    label: String,
+    modifier: Modifier = Modifier,
+    onValue: (Int) -> Unit
+) {
+    var editing by remember(value) { mutableStateOf<String?>(null) }
+
+    OutlinedTextField(
+        value = editing ?: value.toString(),
+        onValueChange = { typed ->
+            val cleaned = typed.filter { it.isDigit() }.take(4)
+            editing = cleaned
+            cleaned.toIntOrNull()?.let(onValue)
+        },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+        ),
+        modifier = modifier
+    )
+}
+
+/**
+ * Export settings.
+ *
+ * Not a second home for the appearance options — those live in a preset, and duplicating them here
+ * is exactly what this screen used to do wrong. What belongs here is everything *about* presets
+ * that no single preset can hold: which one new exports start from, getting one in or out of the
+ * app, and the time zone stamped on a video when nothing else says.
+ */
+@Composable
+private fun ExportSection(viewModel: SettingsViewModel) {
+    val context = LocalContext.current
+    val presets by viewModel.presets.collectAsStateWithLifecycle()
+    val timeZone by viewModel.defaultTimeZone.collectAsStateWithLifecycle()
+    var deleting by remember { mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null) }
+    var editing by remember { mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    val previewSubjects by viewModel.previewSubjects.collectAsStateWithLifecycle()
+    val peopleById by viewModel.peopleById.collectAsStateWithLifecycle()
+
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { viewModel.importPreset(context, it) }
+    }
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let { viewModel.writePendingPreset(context, it) }
+    }
+
+    SettingsGroup("Export", "Presets, and what a new export starts from") {
+        Label("Default preset")
+        Hint("What a new export opens with. The look itself is edited in the export utility.")
+        Spacer(Modifier.height(6.dp))
+
+        if (presets.isEmpty()) {
+            Hint("No presets yet.")
+        } else {
+            presets.forEach { preset ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.RadioButton(
+                        selected = preset.isDefault,
+                        onClick = { viewModel.setDefaultPreset(preset) }
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(preset.name, style = MaterialTheme.typography.bodyMedium)
+                        if (preset.isBuiltIn) Hint("Shipped with the app")
+                    }
+                    TextButton(onClick = { editing = preset }) { Text("Edit") }
+                    TextButton(onClick = {
+                        viewModel.stagePresetForExport(preset)
+                        exportLauncher.launch("${preset.name}.bpmpreset.json")
+                    }) { Text("Share") }
+                    // Built-ins are protected in the DAO as well as here: a preset the app relies
+                    // on being present is not something a stray tap should be able to remove.
+                    if (!preset.isBuiltIn) {
+                        TextButton(onClick = { deleting = preset }) {
+                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { creating = true }) { Text("New preset") }
+            OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                Text("Import")
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Label("Time zone")
+        Hint(
+            // Stamped onto a video's clock labels. Almost always the phone's own, and worth
+            // changing exactly once: when the footage was filmed somewhere else.
+            "Used for the times drawn on an export. Change it when the recordings were made in " +
+                "a different zone from the one you are in now."
+        )
+        Spacer(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = timeZone,
+            onValueChange = { viewModel.setDefaultTimeZone(it) },
+            label = { Text("Zone id") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Hint("This phone is in ${java.time.ZoneId.systemDefault().id}")
+    }
+
+    editing?.let { entity ->
+        val loaded = inga.bpmetrics.export.ExportPreset.fromJson(entity.configJson)
+            ?: inga.bpmetrics.export.ExportPreset(name = entity.name)
+        PresetEditorDialog(
+            initial = loaded.copy(name = entity.name),
+            heading = "Edit preset",
+            onePerson = previewSubjects.first,
+            severalPeople = previewSubjects.second,
+            people = peopleById,
+            onDismiss = { editing = null },
+            onSave = { newName, preset ->
+                viewModel.updatePreset(entity, newName, preset)
+                editing = null
+            }
+        )
+    }
+
+    if (creating) {
+        PresetEditorDialog(
+            // Started from the shipped defaults rather than from whichever preset happened to be
+            // selected, so "new" means new.
+            initial = inga.bpmetrics.export.ExportPreset(name = ""),
+            heading = "New preset",
+            onePerson = previewSubjects.first,
+            severalPeople = previewSubjects.second,
+            people = peopleById,
+            onDismiss = { creating = false },
+            onSave = { newName, preset ->
+                viewModel.createPreset(newName, preset)
+                creating = false
+            }
+        )
+    }
+
+    deleting?.let { preset ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete ${preset.name}?") },
+            text = { Text("Exports already queued keep the settings they were made with.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deletePreset(preset)
+                    deleting = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+/**
+ * Creating or editing a preset, with every setting an export offers.
+ *
+ * The same [inga.bpmetrics.ui.export.LookSections] the export utility uses, not a second copy of
+ * the controls — a preset edited here and a preset edited there have to mean the same thing, and
+ * two implementations would be two chances for them not to.
+ *
+ * What is missing is the preview, and deliberately: judging a look against footage is what the
+ * export flow is for. This is where one is set up in advance, so the placement chips are offered
+ * and the drag is not.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PresetEditorDialog(
+    initial: inga.bpmetrics.export.ExportPreset,
+    heading: String,
+    onePerson: List<inga.bpmetrics.library.BpmRecord>,
+    severalPeople: List<inga.bpmetrics.library.BpmRecord>,
+    people: Map<Long, inga.bpmetrics.library.PersonEntity>,
+    onDismiss: () -> Unit,
+    onSave: (String, inga.bpmetrics.export.ExportPreset) -> Unit
+) {
+    var draft by remember { mutableStateOf(initial) }
+    var name by remember { mutableStateOf(initial.name) }
+    var showSeveral by remember { mutableStateOf(false) }
+    var scrubAt by remember { mutableStateOf(0.45f) }
+
+    val subject = if (showSeveral) severalPeople else onePerson
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        // Full screen rather than a boxed dialog: this is a form with six collapsible sections in
+        // it, and the cramped Split dialog was the lesson about putting one of those in a box.
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(heading) },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Cancel"
+                            )
+                        }
+                    },
+                    actions = {
+                        TextButton(
+                            onClick = { onSave(name.trim(), draft) },
+                            enabled = name.isNotBlank()
+                        ) { Text("Save") }
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp)
+            ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Preset name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(12.dp))
+
+                // Something to judge it against. Without this the placement chips, the panel
+                // opacity and the colours all describe a picture nobody can see.
+                if (subject.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = !showSeveral,
+                            onClick = { showSeveral = false },
+                            label = { Text("One person") }
+                        )
+                        FilterChip(
+                            selected = showSeveral,
+                            onClick = { showSeveral = true },
+                            // The two look genuinely different: a lone curve is a blue-to-red
+                            // gradient, several take a colour each. A preset that reads well for
+                            // one can be unreadable for the other.
+                            label = { Text("Several people") }
+                        )
+                    }
+
+                    inga.bpmetrics.ui.export.ExportPreview(
+                        records = subject,
+                        preset = draft,
+                        // No clip and no footage: the curves are drawn on the canvas alone, which
+                        // is what an export with nothing behind it looks like anyway.
+                        clip = null,
+                        placement = inga.bpmetrics.ui.export.GraphPlacement.of(draft),
+                        onPlacementChange = { draft = it.into(draft) },
+                        overlay = null,
+                        colours = PreviewSubjects.coloursFor(subject, people),
+                        title = name.ifBlank { "Preview" },
+                        at = scrubAt,
+                        onScrub = { scrubAt = it },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(14.dp))
+                }
+
+                inga.bpmetrics.ui.export.LookSections(
+                    preset = draft,
+                    onChange = { draft = it },
+                    overlay = null,
+                    onPickOverlay = {},
+                    onClearOverlay = {},
+                    // No clips here, and no preview to judge them against. Both of those belong to
+                    // an export; a preset is the part that outlives one.
+                    hasClips = false,
+                    syncOffsetMs = draft.syncOffsetMs,
+                    onSyncOffsetChange = { draft = draft.copy(syncOffsetMs = it) },
+                    framing = inga.bpmetrics.ui.export.GraphPlacement.of(draft),
+                    onFramingChange = { draft = it.into(draft) },
+                    hasPreview = subject.isNotEmpty(),
+                    showPresetBar = false
+                )
+                Spacer(Modifier.height(32.dp))
+            }
+        }
+    }
 }

@@ -4,7 +4,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import inga.bpmetrics.ui.util.StringFormatHelpers
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import inga.bpmetrics.export.BpmExportService
 import inga.bpmetrics.ui.BPMetricsNavHost
 import inga.bpmetrics.ui.theme.BPMetricsTheme
 
@@ -44,13 +50,46 @@ class MainActivity : ComponentActivity() {
         
         // Register the data client listener to the activity's lifecycle
         lifecycle.addObserver(dataClientListener)
+
+        // Pick up renders left queued by a process the phone killed. Here rather than in the
+        // application object because a foreground service cannot be started from the background on
+        // Android 12 and later, and an activity being created is the one moment we are certainly
+        // not in it. Restoring the queue is separate and has already happened by now; this only
+        // starts the service, and does nothing if there is nothing waiting.
+        runCatching { BpmExportService.resumeQueue(this) }
+            .onFailure { android.util.Log.e("MainActivity", "Could not resume the render queue", it) }
         
         // Set up the modern Android edge-to-edge UI
         enableEdgeToEdge()
         
-        // Load the library screen with navigation
+        val settings = (application as BPMetricsApp).settingsRepository
+
         setContent {
-            BPMetricsTheme {
+            // Collected at the root, because a theme is not something one screen has. Defaults
+            // match what the app did before the setting existed, so nothing changes for anyone who
+            // never opens Settings.
+            val themeMode by settings.themeMode
+                .collectAsState(initial = inga.bpmetrics.ui.settings.ThemeMode.SYSTEM)
+            val dynamicColour by settings.dynamicColour.collectAsState(initial = true)
+
+            // Date and time formats are pushed into the formatter rather than passed down: they
+            // are read by renderers and helpers that have no business knowing about DataStore.
+            val use24Hour by settings.use24Hour.collectAsState(initial = false)
+            val datePattern by settings.dateFormat
+                .collectAsState(initial = inga.bpmetrics.ui.settings.DateFormats.DEFAULT)
+            LaunchedEffect(use24Hour, datePattern) {
+                StringFormatHelpers.use24Hour = use24Hour
+                StringFormatHelpers.datePattern = datePattern
+            }
+
+            BPMetricsTheme(
+                darkTheme = when (themeMode) {
+                    inga.bpmetrics.ui.settings.ThemeMode.LIGHT -> false
+                    inga.bpmetrics.ui.settings.ThemeMode.DARK -> true
+                    inga.bpmetrics.ui.settings.ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                },
+                dynamicColor = dynamicColour
+            ) {
                 BPMetricsNavHost(libraryRepository)
             }
         }

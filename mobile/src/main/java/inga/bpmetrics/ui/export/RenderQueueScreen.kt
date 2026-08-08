@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.export
 
+import inga.bpmetrics.export.BpmExportService
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderJob
 import inga.bpmetrics.export.RenderStatus
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -75,10 +77,55 @@ import inga.bpmetrics.ui.theme.BpmAccent
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
 
-@OptIn(ExperimentalMaterial3Api::class)
+
+/**
+ * What is rendering, and what has rendered.
+ *
+ * Its own section of the app. It was folded into the export flow's last step for a while, on the
+ * reasoning that an export ends up in the queue — but that made the last thing the flow did be
+ * handing back a list of everything ever queued, and it meant checking on a render that started
+ * yesterday required walking into a new export to find it. Starting a render and watching one are
+ * different errands.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun RenderQueueScreen(navController: NavController, onOpenDrawer: () -> Unit) {
+fun RenderQueueScreen(onOpenDrawer: () -> Unit) {
     val queue by RenderQueueManager.queue.collectAsState()
+    val active = queue.count {
+        it.status == RenderStatus.QUEUED || it.status == RenderStatus.RENDERING
+    }
+
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = {
+                    Text(if (active > 0) "Render queue ($active)" else "Render queue")
+                },
+                navigationIcon = {
+                    androidx.compose.material3.IconButton(onClick = onOpenDrawer) {
+                        androidx.compose.material3.Icon(
+                            androidx.compose.material.icons.Icons.Default.Menu,
+                            contentDescription = "Open navigation drawer"
+                        )
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        RenderQueueContent(Modifier.padding(padding))
+    }
+}
+
+/**
+ * The queue itself, without a screen around it.
+ *
+ * Split from [RenderQueueScreen] so anything else that wants to show the queue inline can, without
+ * a second implementation of it drifting away from this one.
+ */
+@Composable
+fun RenderQueueContent(modifier: Modifier = Modifier) {
+    val queue by RenderQueueManager.queue.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val totalJobs = queue.size
     val activeJobs = queue.count { it.status == RenderStatus.RENDERING }
@@ -86,58 +133,36 @@ fun RenderQueueScreen(navController: NavController, onOpenDrawer: () -> Unit) {
     val completedJobs = queue.count { it.status == RenderStatus.COMPLETED }
     val failedOrCancelled = queue.count { it.status == RenderStatus.FAILED || it.status == RenderStatus.CANCELLED }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Video Render Queue", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
-                    }
-                },
-                actions = {
-                    if (queue.any { it.status == RenderStatus.COMPLETED || it.status == RenderStatus.FAILED || it.status == RenderStatus.CANCELLED }) {
-                        IconButton(
-                            onClick = { RenderQueueManager.clearCompleted() }
-                        ) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = "Clear Completed/Inactive")
-                        }
-                    }
-                }
+    Column(modifier = modifier.fillMaxSize()) {
+        // Stats Panel
+        if (totalJobs > 0) {
+            RenderStatsPanel(
+                total = totalJobs,
+                active = activeJobs,
+                queued = queuedJobs,
+                completed = completedJobs,
+                failed = failedOrCancelled
             )
         }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            // Stats Panel
-            if (totalJobs > 0) {
-                RenderStatsPanel(
-                    total = totalJobs,
-                    active = activeJobs,
-                    queued = queuedJobs,
-                    completed = completedJobs,
-                    failed = failedOrCancelled
-                )
-            }
 
-            if (queue.isEmpty()) {
-                EmptyQueueState()
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(queue, key = { it.id }) { job ->
-                        RenderJobCard(
-                            job = job,
-                            onCancel = { RenderQueueManager.cancelJob(job.id) },
-                            onRemove = { RenderQueueManager.removeJob(job.id) }
-                        )
-                    }
+        if (queue.isEmpty()) {
+            EmptyQueueState()
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(queue, key = { it.id }) { job ->
+                    RenderJobCard(
+                        job = job,
+                        onCancel = { RenderQueueManager.cancelJob(job.id) },
+                        onRemove = { RenderQueueManager.removeJob(job.id) },
+                        onRetry = {
+                            RenderQueueManager.retryJob(job.id)
+                            BpmExportService.resumeQueue(context)
+                        }
+                    )
                 }
             }
         }
@@ -208,7 +233,8 @@ fun StatItem(label: String, value: String, color: Color) {
 fun RenderJobCard(
     job: RenderJob,
     onCancel: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onRetry: () -> Unit = {}
 ) {
     var expandedError by remember { mutableStateOf(false) }
 
@@ -303,6 +329,16 @@ fun RenderJobCard(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.height(2.dp))
+                    // What the job is *of*, before what is happening to it. Six rows from one
+                    // batch differ in their source and their look, not in their status, so the
+                    // part that distinguishes them goes first.
+                    job.summary.takeIf { it.isNotBlank() }?.let { summary ->
+                        Text(
+                            text = summary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Text(
                         text = when (job.status) {
                             RenderStatus.RENDERING -> "Rendering video..."
@@ -311,8 +347,8 @@ fun RenderJobCard(
                             RenderStatus.FAILED -> "Rendering failed"
                             RenderStatus.CANCELLED -> "Cancelled"
                         },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
                     )
                 }
 
@@ -332,6 +368,26 @@ fun RenderJobCard(
                             contentDescription = "Remove from Queue",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                } else if (job.isRetryable) {
+                    // The job is kept whole, so this needs nothing rebuilt: a render that ran out
+                    // of space at 90%, or one the phone killed, goes again exactly as configured
+                    // rather than being reassembled from the source, the clip and the framing.
+                    Row {
+                        IconButton(onClick = onRetry) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Retry render",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        IconButton(onClick = onRemove) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Remove from Queue",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 } else if (job.status == RenderStatus.COMPLETED) {
                     val context = androidx.compose.ui.platform.LocalContext.current

@@ -60,8 +60,25 @@ object StringFormatHelpers {
      * @param date The timestamp in milliseconds (epoch time).
      * @return A string representing the date in the local time zone.
      */
+    /**
+     * How dates and times are written, app-wide.
+     *
+     * A mutable holder rather than a parameter on every call site, because the alternative was
+     * threading two preferences through several hundred `getDateString` calls — including ones
+     * inside renderers that have no business knowing about DataStore. Set once at startup and
+     * whenever the setting changes; read everywhere.
+     *
+     * The cost is a global, and the honest reason it is acceptable is that this genuinely is one:
+     * there is no sense in which two parts of the app should disagree about what today looks like.
+     */
+    @Volatile var datePattern: String = "MM/dd/yyyy"
+    @Volatile var use24Hour: Boolean = false
+
     fun getDateString(date: Long) : String {
-        val dateFormatter = DateTimeFormatter.ofPattern("MM/dd/yyyy")
+        // Rebuilt per call rather than cached: a DateTimeFormatter is cheap to make, and caching
+        // one would need invalidating every time the preference changed.
+        val dateFormatter = runCatching { DateTimeFormatter.ofPattern(datePattern) }
+            .getOrElse { DateTimeFormatter.ofPattern("MM/dd/yyyy") }
         val dateText = Instant.ofEpochMilli(date).atZone(ZoneId.systemDefault()).format(dateFormatter)
         return dateText
     }
@@ -74,7 +91,8 @@ object StringFormatHelpers {
      * @return A string representing the time (e.g., "10:30:00 AM") in the selected time zone.
      */
     fun getTimeString(time: Long, zoneId: ZoneId = ZoneId.systemDefault()) : String {
-        val timeFormatter = DateTimeFormatter.ofPattern("hh:mm:ss a", Locale.getDefault())
+        val pattern = if (use24Hour) "HH:mm:ss" else "hh:mm:ss a"
+        val timeFormatter = DateTimeFormatter.ofPattern(pattern, Locale.getDefault())
         val timeString = "${
             Instant.ofEpochMilli(time)
             .atZone(zoneId)

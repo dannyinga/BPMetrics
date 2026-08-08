@@ -37,7 +37,6 @@ import inga.bpmetrics.ui.analysis.ConcurrentAnalysisScreen
 import inga.bpmetrics.ui.analysis.EventAnalysisScreen
 import inga.bpmetrics.ui.analysis.EventDetailViewModel
 import inga.bpmetrics.ui.analysis.SavedAnalysesScreen
-import inga.bpmetrics.ui.graph.BpmGraphDetailScreen
 import inga.bpmetrics.ui.record.BpmRecordScreen
 import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.library.LibraryScreen
@@ -49,9 +48,11 @@ import inga.bpmetrics.ui.settings.SettingsScreen
 import inga.bpmetrics.ui.settings.SettingsViewModel
 import inga.bpmetrics.ui.tags.TagManagementScreen
 import inga.bpmetrics.ui.tags.TagManagementViewModel
-import inga.bpmetrics.ui.export.RenderQueueScreen
-import inga.bpmetrics.ui.export.VideoExportDialog
-import inga.bpmetrics.ui.incoming.IncomingScreen
+import inga.bpmetrics.ui.export.ExportKind
+import inga.bpmetrics.ui.export.ExportSource
+import inga.bpmetrics.ui.export.ExportStep
+import inga.bpmetrics.ui.export.ExportUtilityScreen
+import inga.bpmetrics.ui.export.ExportUtilityViewModel
 import inga.bpmetrics.ui.people.PeopleScreen
 import inga.bpmetrics.ui.watches.WatchesScreen
 import kotlinx.coroutines.launch
@@ -71,6 +72,13 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
 
     val libraryViewModel: LibraryViewModel = viewModel(
         factory = LibraryViewModel.Factory(repository)
+    )
+
+    // Hoisted above the NavHost so an entry point can prime it before navigating — a tile's
+    // "Export video" already knows its source, and making it walk through step 1 to say something
+    // it has just said would be a regression on a flow that is currently two taps.
+    val exportViewModel: ExportUtilityViewModel = viewModel(
+        factory = ExportUtilityViewModel.Factory(repository, settingsRepository)
     )
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -100,10 +108,29 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
     var concurrentRecordIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var awaitingConcurrentSelection by remember { mutableStateOf(false) }
 
-    // Hosted here rather than inside the analysis screen so the export survives navigating away
-    // mid-configuration, and so both the saved and unsaved screens share one dialog.
-    var videoExportRequest by remember {
-        mutableStateOf<Pair<List<inga.bpmetrics.library.BpmRecord>, String?>?>(null)
+    /**
+     * Opens the export utility already knowing what it is exporting.
+     *
+     * Every existing entry point — a library tile, an event page, a saved analysis — arrives here
+     * having already chosen its recordings, so it lands on step 3 rather than being asked again.
+     * The label is passed through because a saved analysis exported from its own screen arrives as
+     * a bare set of recordings, and would otherwise lose the name that was the point of saving it.
+     */
+    val openExportAs: (List<inga.bpmetrics.library.BpmRecord>, String?, ExportKind) -> Unit =
+        { recs, label, kind ->
+            if (recs.isNotEmpty()) {
+                exportViewModel.startAt(
+                    source = ExportSource.Recordings(recs.map { it.metadata.recordId }.toSet()),
+                    step = ExportStep.LOOK,
+                    label = label,
+                    kind = kind
+                )
+                navController.navigateToSection(AppDestination.EXPORT)
+            }
+        }
+
+    val openExport: (List<inga.bpmetrics.library.BpmRecord>, String?) -> Unit = { recs, label ->
+        openExportAs(recs, label, ExportKind.VIDEO)
     }
 
     ModalNavigationDrawer(
@@ -157,6 +184,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                         awaitingConcurrentSelection = false
                         libraryViewModel.clearSelection()
                         navController.navigate(Routes.ANALYSIS_CONCURRENT)
+                    },
+                    onExportSelection = { recs, exportKind ->
+                        libraryViewModel.clearSelection()
+                        openExportAs(recs, null, exportKind)
                     }
                 )
             }
@@ -266,7 +297,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                         graphTitle = metadata.name,
                         // Already saved, so the action would only create a duplicate.
                         onSave = null,
-                        onExportVideo = { recs, graphTitle -> videoExportRequest = recs to graphTitle },
+                        onExportVideo = { recs, graphTitle -> openExport(recs, graphTitle) },
                         onOpenDrawer = openDrawer
                     )
                 } else {
@@ -288,10 +319,6 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
 
             composable(Routes.PEOPLE) {
                 PeopleScreen(onOpenDrawer = openDrawer)
-            }
-
-            composable(Routes.INCOMING) {
-                IncomingScreen(onOpenDrawer = openDrawer)
             }
 
             composable(Routes.ANALYSIS_CONCURRENT) {
@@ -330,7 +357,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                             }
                         }
                     },
-                    onExportVideo = { recs, graphTitle -> videoExportRequest = recs to graphTitle },
+                    onExportVideo = { recs, graphTitle -> openExport(recs, graphTitle) },
                     onOpenDrawer = openDrawer
                 )
             }
@@ -351,7 +378,8 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     onBack = { navController.popBackStack() },
                     onOpenRecord = { navController.navigate("${Routes.DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") },
-                    onExportVideo = { recs, graphTitle -> videoExportRequest = recs to graphTitle }
+                    onExportVideo = { recs, graphTitle -> openExport(recs, graphTitle) },
+                    onExportImage = { recs, graphTitle -> openExportAs(recs, graphTitle, ExportKind.IMAGE) }
                 )
             }
 
@@ -378,6 +406,17 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                             )
                             navController.navigateToSection(AppDestination.ANALYSIS)
                         }
+                    },
+                    onExportImage = {
+                        // Scoped as the *group* rather than as its recordings, so the utility can
+                        // still offer one image per event. Flattening it to a bare set of records
+                        // here would throw away the structure that choice depends on.
+                        exportViewModel.startAt(
+                            source = ExportSource.Group(groupId),
+                            step = ExportStep.CONTENTS,
+                            kind = ExportKind.IMAGE
+                        )
+                        navController.navigateToSection(AppDestination.EXPORT)
                     }
                 )
             }
@@ -390,10 +429,11 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 val settingsViewModel: SettingsViewModel = viewModel(
                     factory = SettingsViewModel.Factory(repository, settingsRepository)
                 )
+                // No onLeave: nothing is staged any more, so leaving cannot lose anything and
+                // the screen has nothing to ask about on the way out.
                 SettingsScreen(
                     viewModel = settingsViewModel,
-                    onOpenDrawer = openDrawer,
-                    onLeave = { navController.navigateToSection(AppDestination.LIBRARY) }
+                    onOpenDrawer = openDrawer
                 )
             }
 
@@ -405,53 +445,34 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 val viewModel: BpmRecordViewModel = viewModel(
                     factory = BpmRecordViewModel.Factory(repository, recordId)
                 )
+                val thisRecord by viewModel.record.collectAsState()
                 BpmRecordScreen(
                     viewModel = viewModel,
                     onBack = { navController.popBackStack() },
                     onDeleted = { navController.popBackStack() },
-                    onShowDetailedGraph = { navController.navigate("${Routes.GRAPH_DETAIL}/$recordId") },
+                    onExportImage = {
+                        openExportAs(listOfNotNull(thisRecord), null, ExportKind.IMAGE)
+                    },
+                    onExportVideo = {
+                        openExportAs(listOfNotNull(thisRecord), null, ExportKind.VIDEO)
+                    },
                     onManageTags = { navController.navigate(Routes.TAG_MANAGEMENT) },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
                 )
             }
 
-            composable(
-                route = "${Routes.GRAPH_DETAIL}/{recordId}",
-                arguments = listOf(navArgument("recordId") { type = NavType.LongType })
-            ) { backStackEntry ->
-                val recordId = backStackEntry.arguments?.getLong("recordId") ?: return@composable
-                val viewModel: BpmRecordViewModel = viewModel(
-                    factory = BpmRecordViewModel.Factory(repository, recordId)
-                )
-                BpmGraphDetailScreen(
-                    viewModel = viewModel,
-                    onBack = { navController.popBackStack() }
+            composable(Routes.EXPORT) {
+                ExportUtilityScreen(
+                    viewModel = exportViewModel,
+                    onOpenDrawer = openDrawer,
+                    onOpenQueue = { navController.navigate(Routes.RENDER_QUEUE) }
                 )
             }
 
             composable(Routes.RENDER_QUEUE) {
-                RenderQueueScreen(navController, onOpenDrawer = openDrawer)
+                inga.bpmetrics.ui.export.RenderQueueScreen(onOpenDrawer = openDrawer)
             }
-        }
-
-        videoExportRequest?.let { (recordsToExport, graphTitle) ->
-            VideoExportDialog(
-                record = recordsToExport.first(),
-                records = recordsToExport,
-                graphTitle = graphTitle,
-                onDismiss = { videoExportRequest = null },
-                onExport = { config, _ ->
-                    BpmExportService.startExport(
-                        context,
-                        recordsToExport.first().metadata.recordId,
-                        graphTitle ?: "Same-time export (${recordsToExport.size} wearers)",
-                        config,
-                        null
-                    )
-                    videoExportRequest = null
-                }
-            )
         }
     }
 }
@@ -480,12 +501,23 @@ object Routes {
     const val LIBRARY = "library"
     const val DETAIL = "detail"
     const val SETTINGS = "settings"
-    const val GRAPH_DETAIL = "graph_detail"
+
+    /** The staged export flow: source, contents, look, make. */
+    const val EXPORT = "export"
+
+    /**
+     * What is rendering, and what has rendered.
+     *
+     * A section of its own rather than the tail of the export flow. Folding it into step 4 meant
+     * the last thing the flow asked was "start these" and the first thing it then showed was a
+     * list of everything ever queued — so finishing an export looked like being handed a backlog.
+     * Renders also outlive the flow that made them: coming back to check on one should not mean
+     * walking through four steps of a new export to reach it.
+     */
     const val RENDER_QUEUE = "render_queue"
     const val WATCHES = "watches"
     const val PEOPLE = "people"
     const val ABOUT = "about"
-    const val INCOMING = "incoming"
 
     /** A live analysis of the Library's current filter, which can be saved. */
     const val ANALYSIS_LIVE = "analysis_live"

@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import inga.bpmetrics.export.CsvExporter
+import inga.bpmetrics.ui.export.ExportKind
 import inga.bpmetrics.ui.Routes
 import androidx.compose.material3.Card
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
@@ -85,6 +86,10 @@ import inga.bpmetrics.datasync.isActive
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderStatus
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.displayName
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 
 /**
  * The main record library screen, displaying a list of BPM records with sorting and filtering options.
@@ -93,8 +98,8 @@ import inga.bpmetrics.library.BpmRecord
  * @param viewModel The [inga.bpmetrics.ui.library.LibraryViewModel] providing the state and logic for this screen.
  */
 import inga.bpmetrics.export.JsonExporter
-import inga.bpmetrics.ui.export.VideoExportDialog
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Timeline
@@ -110,7 +115,9 @@ fun LibraryScreen(
      * say what it is waiting for rather than looking like it navigated somewhere arbitrary.
      */
     awaitingConcurrentSelection: Boolean = false,
-    onAnalyseTogether: (Set<Long>) -> Unit = {}
+    onAnalyseTogether: (Set<Long>) -> Unit = {},
+    /** Opens the export utility for the current multi-selection, as a video or an image. */
+    onExportSelection: (List<BpmRecord>, ExportKind) -> Unit = { _, _ -> }
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
@@ -140,10 +147,13 @@ fun LibraryScreen(
     var showFilterDialog by remember { mutableStateOf(false) }
     var showBulkDeleteDialog by remember { mutableStateOf(false) }
     var showBulkTagDialog by remember { mutableStateOf(false) }
+    var showMergeDialog by remember { mutableStateOf(false) }
+
+    // Needed outside the top bar too, by the merge dialog. Derived rather than held, so it can
+    // never describe a selection that has since changed.
+    val selectedRecordsForBulk = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
     var showBulkWearerDialog by remember { mutableStateOf(false) }
 
-    var showMultiVideoDialog by remember { mutableStateOf(false) }
-    var selectedRecordsForMultiVideo by remember { mutableStateOf<List<BpmRecord>>(emptyList()) }
 
     // --- Events and groups ---
 
@@ -165,6 +175,7 @@ fun LibraryScreen(
     var deletingEvent by remember { mutableStateOf<EventSummary?>(null) }
     var deletingGroup by remember { mutableStateOf<GroupSummary?>(null) }
     var movingEvent by remember { mutableStateOf<EventSummary?>(null) }
+    var movingCollection by remember { mutableStateOf<GroupSummary?>(null) }
     var showAddToEventDialog by remember { mutableStateOf(false) }
     var suggestionToName by remember { mutableStateOf<EventSuggestion?>(null) }
     // Set when "New event…" is chosen from the bulk menu, so the name dialog knows to file the
@@ -371,8 +382,28 @@ fun LibraryScreen(
                                 leadingIcon = { Icon(Icons.Default.Movie, contentDescription = null) },
                                 onClick = {
                                     showSelectionMenu = false
-                                    selectedRecordsForMultiVideo = selectedRecords
-                                    showMultiVideoDialog = true
+                                    onExportSelection(selectedRecords, ExportKind.VIDEO)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Merge into one") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Timeline, contentDescription = null)
+                                },
+                                // Two or more of one person. The menu says why when it cannot,
+                                // rather than offering an item that silently does nothing.
+                                enabled = selectedRecords.size > 1,
+                                onClick = {
+                                    showSelectionMenu = false
+                                    showMergeDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export image") },
+                                leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    onExportSelection(selectedRecords, ExportKind.IMAGE)
                                 }
                             )
                             DropdownMenuItem(
@@ -513,7 +544,7 @@ fun LibraryScreen(
                             when (mode) {
                                 LibraryViewMode.RECORDINGS -> "Recordings"
                                 LibraryViewMode.EVENTS -> "Events"
-                                LibraryViewMode.GROUPS -> "Groups"
+                                LibraryViewMode.GROUPS -> "Collections"
                             }
                         )
                     }
@@ -663,6 +694,7 @@ fun LibraryScreen(
                     onCreateGroup = { showCreateGroupDialog = true },
                     onRenameGroup = { renamingGroup = it },
                     onDeleteGroup = { deletingGroup = it },
+                    onMoveCollection = { movingCollection = it },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
                 )
@@ -713,23 +745,17 @@ fun LibraryScreen(
         )
     }
 
-    if (showMultiVideoDialog && selectedRecordsForMultiVideo.isNotEmpty()) {
-        VideoExportDialog(
-            record = selectedRecordsForMultiVideo.first(),
-            records = selectedRecordsForMultiVideo,
-            onDismiss = {
-                showMultiVideoDialog = false
-                viewModel.clearSelection()
-            },
-            onExport = { config, _ ->
-                inga.bpmetrics.export.BpmExportService.startExport(
-                    context,
-                    selectedRecordsForMultiVideo.first().metadata.recordId,
-                    "Multi-Watch Export (${selectedRecordsForMultiVideo.size} wearers)",
-                    config,
-                    null
-                )
-                Toast.makeText(context, "Multi-watch video export started in background!", Toast.LENGTH_SHORT).show()
+
+    if (showMergeDialog) {
+        MergeSelectionDialog(
+            records = selectedRecordsForBulk,
+            people = peopleById,
+            onDismiss = { showMergeDialog = false },
+            onMerge = { deleteOriginals ->
+                viewModel.mergeSelectedRecords(deleteOriginals) { message ->
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
+                showMergeDialog = false
             }
         )
     }
@@ -827,10 +853,10 @@ fun LibraryScreen(
 
     if (showCreateGroupDialog) {
         NameDialog(
-            title = "New group",
-            label = "Group name",
+            title = "New collection",
+            label = "Collection name",
             confirmLabel = "Create",
-            supporting = "A group collects events that belong together — a tour, a season, a study.",
+            supporting = "A collection gathers events that belong together — a festival, a day of one, a tour. Collections can hold other collections.",
             onDismiss = { showCreateGroupDialog = false },
             onConfirm = { name ->
                 viewModel.createEventGroup(name)
@@ -854,8 +880,8 @@ fun LibraryScreen(
 
     renamingGroup?.let { summary ->
         NameDialog(
-            title = "Rename group",
-            label = "Group name",
+            title = "Rename collection",
+            label = "Collection name",
             initial = summary.group.name,
             onDismiss = { renamingGroup = null },
             onConfirm = { name ->
@@ -877,6 +903,34 @@ fun LibraryScreen(
             },
             onCreateGroup = {
                 movingEvent = null
+                showCreateGroupDialog = true
+            }
+        )
+    }
+
+    movingCollection?.let { summary ->
+        val moving = summary.group.groupId
+        GroupPickerDialog(
+            eventName = summary.group.displayName,
+            // Only somewhere it could legally go. Offering a collection its own descendants would
+            // put a cycle one tap away, and a cycle does not throw — it hangs every walk of the
+            // tree. Refused in the repository too; this is so the option is never presented.
+            groups = eventGroups.filter { candidate ->
+                inga.bpmetrics.library.CollectionTree.canReparent(
+                    eventGroups.map { it.group },
+                    groupId = moving,
+                    parentGroupId = candidate.group.groupId
+                )
+            },
+            currentGroupId = summary.group.parentGroupId,
+            topLevelLabel = "Not inside anything",
+            onDismiss = { movingCollection = null },
+            onPick = { parentId ->
+                viewModel.setCollectionParent(moving, parentId)
+                movingCollection = null
+            },
+            onCreateGroup = {
+                movingCollection = null
                 showCreateGroupDialog = true
             }
         )
@@ -905,9 +959,9 @@ fun LibraryScreen(
             title = "Delete ${summary.group.displayName}?",
             message = if (summary.eventCount > 0) {
                 "Its ${summary.eventCount} event${if (summary.eventCount == 1) "" else "s"} will " +
-                    "be kept and stop belonging to any group. No recordings are deleted."
+                    "be kept and stop belonging to any collection. No recordings are deleted."
             } else {
-                "This group has no events in it."
+                "This collection has nothing in it."
             },
             onDismiss = { deletingGroup = null },
             onConfirm = {
@@ -1027,9 +1081,18 @@ private fun GroupsList(
     onCreateGroup: () -> Unit,
     onRenameGroup: (GroupSummary) -> Unit,
     onDeleteGroup: (GroupSummary) -> Unit,
+    onMoveCollection: (GroupSummary) -> Unit,
     onOpenEvent: (Long) -> Unit,
     onOpenGroup: (Long) -> Unit
 ) {
+    // Flattened into reading order with each card's depth, so the list renders the tree without
+    // every row having to work the shape out again.
+    val tree = remember(groups) {
+        val byId = groups.associateBy { it.group.groupId }
+        inga.bpmetrics.library.CollectionTree.flatten(groups.map { it.group })
+            .mapNotNull { node -> byId[node.group.groupId]?.let { it to node.depth } }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -1039,18 +1102,20 @@ private fun GroupsList(
             OutlinedButton(onClick = onCreateGroup, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Add, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("New group")
+                Text("New collection")
             }
         }
 
-        items(groups, key = { "group-${it.group.groupId}" }) { summary ->
+        items(tree, key = { "group-${it.first.group.groupId}" }) { (summary, depth) ->
             GroupCard(
                 summary = summary,
                 expanded = summary.group.groupId in expandedIds,
                 onOpen = { onOpenGroup(summary.group.groupId) },
                 onToggleExpand = { onToggleExpand(summary.group.groupId) },
                 onRename = { onRenameGroup(summary) },
-                onDelete = { onDeleteGroup(summary) }
+                onDelete = { onDeleteGroup(summary) },
+                onMoveToCollection = { onMoveCollection(summary) },
+                depth = depth
             ) {
                 summary.events.forEach { event ->
                     NestedEventRow(event) { onOpenEvent(event.event.eventId) }
@@ -1059,7 +1124,7 @@ private fun GroupsList(
         }
 
         if (ungrouped.isNotEmpty()) {
-            item { SectionHeader("Not in a group", "${ungrouped.size}") }
+            item { SectionHeader("Not in a collection", "${ungrouped.size}") }
             items(ungrouped, key = { "ungrouped-${it.event.eventId}" }) { event ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Box(Modifier.padding(horizontal = 12.dp)) {
@@ -1072,16 +1137,17 @@ private fun GroupsList(
         if (groups.isEmpty() && ungrouped.isEmpty()) {
             item {
                 EmptySection(
-                    "No groups yet",
-                    "A group collects events that belong together — a tour, a season, a festival. " +
-                        "Create some events first, then group them."
+                    "No collections yet",
+                    "A collection gathers events that belong together — a festival, a day of " +
+                        "one, a tour. Create some events first, then gather them."
                 )
             }
         } else if (groups.isEmpty()) {
             item {
                 EmptySection(
-                    "No groups yet",
-                    "Tag a group once and every recording under it inherits it. Use the overflow " +
+                    "No collections yet",
+                    "Tag a collection once and every recording under it inherits it, however " +
+                        "deeply nested. Use the overflow " +
                         "on an event to move it into one."
                 )
             }
@@ -1153,3 +1219,119 @@ private fun SectionHeader(title: String, count: String) {
 
 // Extension to capitalize first letter since String.capitalize() is deprecated
 fun String.capitalize() = replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+
+/**
+ * Joining a selection of recordings into one.
+ *
+ * Lives here rather than on a recording's own page, where it briefly did: merging is inherently
+ * about *several* recordings, and asking one of them to nominate the others meant building a picker
+ * that duplicated the multi-select the library already has.
+ *
+ * The dialog's job is to say what will happen before it does. Merging is not reversible once the
+ * originals are gone, and the two ways to get it wrong — joining different people, or joining two
+ * sets an hour apart without meaning to — are both invisible afterwards.
+ */
+@Composable
+private fun MergeSelectionDialog(
+    records: List<BpmRecord>,
+    people: Map<Long, inga.bpmetrics.library.PersonEntity>,
+    onDismiss: () -> Unit,
+    onMerge: (deleteOriginals: Boolean) -> Unit
+) {
+    var deleteOriginals by remember { mutableStateOf(true) }
+
+    val refusal = inga.bpmetrics.library.RecordMerge.refusal(records)
+    val ordered = records.sortedBy { it.metadata.startTime }
+    val personName = ordered.firstOrNull()?.metadata?.personId?.let { people[it]?.displayName }
+    val gapMs = if (refusal == null) inga.bpmetrics.library.RecordMerge.gapMs(records) else 0L
+    val span = if (ordered.isEmpty()) 0L else {
+        ordered.maxOf { it.metadata.startTime + it.metadata.durationMs } -
+            ordered.minOf { it.metadata.startTime }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Merge ${records.size} recordings") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (refusal != null) {
+                    Text(refusal, style = MaterialTheme.typography.bodyMedium)
+                    return@Column
+                }
+
+                Text(
+                    "Joins these into one recording of ${personName ?: "this person"}, in clock " +
+                        "order. The gaps between them are kept, so the timeline stays true.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+
+                ordered.forEach { record ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                record.displayName(personName),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "${getTimeString(record.metadata.startTime)} · " +
+                                    inga.bpmetrics.ui.analysis.shortDuration(record.metadata.durationMs),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "The result spans ${inga.bpmetrics.ui.analysis.shortDuration(span)}.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (gapMs > 60_000L) {
+                    // Joining two sets an hour apart is a legitimate thing to want and also an
+                    // easy mistake. Said before the merge rather than discovered after it.
+                    Text(
+                        "${inga.bpmetrics.ui.analysis.shortDuration(gapMs)} of that has no " +
+                            "readings — the time between them.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(
+                        checked = deleteOriginals,
+                        onCheckedChange = { deleteOriginals = it }
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("Delete the originals", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(
+                    // The merged copy is written before anything is removed, so a failure halfway
+                    // cannot leave someone with neither.
+                    if (deleteOriginals) {
+                        "The merged recording is saved before anything is deleted."
+                    } else {
+                        "You will have both the parts and the merged copy."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onMerge(deleteOriginals) },
+                enabled = refusal == null
+            ) { Text("Merge") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
