@@ -12,8 +12,6 @@ import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.EffectiveTag
-import inga.bpmetrics.library.EventSuggestion
-import inga.bpmetrics.library.suggestEvents
 import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
@@ -240,46 +238,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         .map { records -> records.filter { it.metadata.eventId == null } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /**
-     * Clusters of unfiled recordings that look like one occasion, minus the ones already waved off.
-     *
-     * Dismissals are held in memory rather than persisted: they last as long as the session, which
-     * is as long as the list they are decluttering. Storing them would mean a schema for "things the
-     * user was not interested in once", and a suggestion worth making again after a relaunch.
-     */
-    private val _dismissedSuggestions = MutableStateFlow<Set<Set<Long>>>(emptySet())
-
-    val suggestions: StateFlow<List<EventSuggestion>> = combine(
-        unfiledRecords,
-        _dismissedSuggestions,
-        repository.dismissedSuggestionRecords
-    ) { records, dismissedThisSession, dismissedForGood ->
-        // Permanently dismissed recordings are taken out before clustering, not after. Filtering
-        // whole clusters afterwards would let one dismissed recording drag its neighbours out of a
-        // suggestion they were never dismissed from.
-        val remaining = records.filter { it.metadata.recordId !in dismissedForGood }
-        suggestEvents(remaining).filter {
-            it.records.map { r -> r.metadata.recordId }.toSet() !in dismissedThisSession
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /** Hides a suggestion until the app is next launched. */
-    fun dismissSuggestion(suggestion: EventSuggestion) {
-        val ids = suggestion.records.map { it.metadata.recordId }.toSet()
-        _dismissedSuggestions.value = _dismissedSuggestions.value + setOf(ids)
-    }
-
-    /**
-     * Never suggests an event for these recordings again.
-     *
-     * Recorded against the recordings rather than the cluster, because a cluster has no identity —
-     * one more recording arriving would change its membership and bring the whole thing back as a
-     * "new" suggestion to dismiss all over again.
-     */
-    fun dismissSuggestionForever(suggestion: EventSuggestion) {
-        val ids = suggestion.records.map { it.metadata.recordId }.toSet()
-        viewModelScope.launch { repository.dismissSuggestionRecords(ids) }
-    }
 
     fun createEvent(name: String, recordIds: Set<Long> = emptySet()) {
         viewModelScope.launch {
@@ -292,6 +250,71 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun renameEvent(eventId: Long, name: String) {
         viewModelScope.launch { repository.renameEvent(eventId, name) }
     }
+
+    /** Types already used, offered by the editor so a vocabulary forms instead of scattering. */
+    val eventTypesInUse: StateFlow<List<String>> = repository.eventTypesInUse()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Why the last window edit was refused, or null.
+     *
+     * Held rather than delivered as a one-shot message so the editor can keep it on screen next to
+     * the field that caused it. A toast would be gone before the person finished reading the dates.
+     */
+    private val _windowError = MutableStateFlow<String?>(null)
+    val windowError: StateFlow<String?> = _windowError.asStateFlow()
+
+    fun clearWindowError() { _windowError.value = null }
+
+    /**
+     * Saves everything the editor holds, and reports whether it took.
+     *
+     * The window goes last: name and type always apply, and a refused window should not also throw
+     * away a rename the user made in the same dialog.
+     *
+     * @param onDone true when the dialog can close. False leaves it open showing [windowError].
+     */
+    fun applyEventEdit(eventId: Long, edit: EventEdit, onDone: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            repository.renameEvent(eventId, edit.name)
+            repository.setEventType(eventId, edit.type)
+
+            when (val result = repository.setEventWindow(
+                eventId, edit.windowStart, edit.windowEnd, edit.windowPeople
+            )) {
+                is LibraryRepository.WindowResult.Saved -> {
+                    _windowError.value = null
+                    onDone(true)
+                }
+                is LibraryRepository.WindowResult.Collides -> {
+                    _windowError.value =
+                        "That window overlaps \"${result.withName}\" for the same people. " +
+                            "Name who each one applies to, or change the times."
+                    onDone(false)
+                }
+                is LibraryRepository.WindowResult.Backwards -> {
+                    _windowError.value = "A window needs a start and an end, in that order."
+                    onDone(false)
+                }
+            }
+        }
+    }
+
+    /** Who an event's window applies to, for the editor to show as already chosen. */
+    fun windowPeople(eventId: Long): Flow<Set<Long>> = repository.windowPeople(eventId)
+
+    /**
+     * Everything a recording can be filed into, in reading order with its depth.
+     *
+     * The whole tree, collections included. The picker used to offer only leaf events, so a
+     * recording that belonged to a festival rather than to any particular set — the walk between
+     * stages, the queue — had nowhere to go but unfiled. A container is a place a thing can be.
+     */
+    val eventPickerRows: StateFlow<List<Pair<EventEntity, Int>>> = repository.allEventsInTree
+        .map { events ->
+            inga.bpmetrics.library.EventTree.flatten(events).map { it.event to it.depth }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun deleteEvent(eventId: Long) {
         viewModelScope.launch { repository.deleteEvent(eventId) }

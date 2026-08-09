@@ -61,7 +61,9 @@ class SettingsRepository(context: Context) {
         val CONCURRENT_ANALYSES_CONVERTED = booleanPreferencesKey("concurrent_analyses_converted")
 
         /** Recordings the user has said, permanently, not to suggest an event for. */
-        val DISMISSED_SUGGESTION_RECORDS = stringSetPreferencesKey("dismissed_suggestion_records")
+        // "dismissed_suggestion_records" lived here until event suggestions retired in TX-2.1.
+        // Deliberately not re-declared: a value still on disk is simply never read, and reusing
+        // the name for something else would hand a new feature somebody's stale answers.
 
         /** The export appearance last used, for when no preset has been made default. */
         val LAST_USED_EXPORT_PRESET = stringPreferencesKey("last_used_export_preset")
@@ -133,22 +135,6 @@ class SettingsRepository(context: Context) {
     }
 
     /**
-     * Recordings that should never be suggested as an event again.
-     *
-     * Stored by record id rather than by cluster, because a cluster has no identity — one more
-     * recording arriving from a watch changes its membership and it would come back as a new
-     * suggestion the user has to dismiss all over again. The recordings are the thing the user
-     * actually said no about.
-     */
-    val dismissedSuggestionRecords: Flow<Set<Long>> = dataStore.data
-        .map { prefs ->
-            prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS]
-                .orEmpty()
-                .mapNotNull { it.toLongOrNull() }
-                .toSet()
-        }
-
-    /**
      * The export appearance last used, as a serialized preset.
      *
      * Distinct from a default preset: a default is something someone chose to pre-select, this is
@@ -160,14 +146,6 @@ class SettingsRepository(context: Context) {
 
     suspend fun setLastUsedExportPreset(json: String) {
         dataStore.edit { it[PreferencesKeys.LAST_USED_EXPORT_PRESET] = json }
-    }
-
-    suspend fun dismissSuggestionRecords(recordIds: Set<Long>) {
-        dataStore.edit { prefs ->
-            val existing = prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS].orEmpty()
-            prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS] =
-                existing + recordIds.map { it.toString() }
-        }
     }
 
     /**

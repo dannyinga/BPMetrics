@@ -430,22 +430,21 @@ class ExportUtilityViewModel(
     val records: StateFlow<List<BpmRecord>> = combine(
         repository.records,
         _source,
-        repository.getAllEvents(),
-        repository.getAllEventGroups()
-    ) { library, source, events, groups ->
+        repository.allEventsInTree
+    ) { library, source, events ->
         when (source) {
             is ExportSource.None -> emptyList()
             is ExportSource.Recordings -> library.filter { it.metadata.recordId in source.recordIds }
             is ExportSource.Event -> library.filter { it.metadata.eventId == source.eventId }
             is ExportSource.Group -> {
-                // The whole subtree. Exporting "Coachella" means the festival, its days and every
-                // set inside them, or a collection holding only collections would export nothing.
+                // The whole subtree, walked over the whole tree, and including the container
+                // itself. Both halves matter, and both were wrong: walking a collections-only list
+                // missed any event nested under another event, and taking only the events beneath
+                // the container missed recordings filed straight onto it. Either way the export
+                // came out short without saying so.
                 val inScope = inga.bpmetrics.library.EventTree
-                    .descendantsOf(groups, source.groupId)
-                val eventIds = events.filter { it.parentId in inScope }
-                    .map { it.eventId }
-                    .toSet()
-                library.filter { it.metadata.eventId in eventIds }
+                    .descendantsOf(events, source.groupId)
+                library.filter { it.metadata.eventId in inScope }
             }
             // Resolved by id against the library, so a recording deleted since the analysis was
             // saved simply is not offered — an export cannot render a curve that is gone.

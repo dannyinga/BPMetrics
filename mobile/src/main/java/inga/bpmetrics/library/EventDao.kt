@@ -59,6 +59,31 @@ interface EventDao {
     @Query("SELECT * FROM event_window_people")
     suspend fun getAllWindowPeople(): List<EventWindowPersonCrossRef>
 
+    @Query("SELECT personId FROM event_window_people WHERE eventId = :eventId")
+    fun windowPeopleFlow(eventId: Long): Flow<List<Long>>
+
+    @Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun addWindowPerson(link: EventWindowPersonCrossRef)
+
+    @Query("DELETE FROM event_window_people WHERE eventId = :eventId")
+    suspend fun clearWindowPeople(eventId: Long)
+
+    /**
+     * The types already in use, most used first.
+     *
+     * Offered when naming a new one so a library does not end up with "Concert", "concert" and
+     * "Concerts" meaning the same thing. Free text still wins — the point of an open vocabulary is
+     * that the app does not know what someone records.
+     */
+    @Query(
+        """
+        SELECT type FROM events
+        WHERE type IS NOT NULL AND type != '' AND type != 'Collection'
+        GROUP BY type ORDER BY COUNT(*) DESC, type ASC
+        """
+    )
+    fun typesInUseFlow(): Flow<List<String>>
+
     @Query("SELECT * FROM events WHERE eventId = :eventId")
     suspend fun getEvent(eventId: Long): EventEntity?
 

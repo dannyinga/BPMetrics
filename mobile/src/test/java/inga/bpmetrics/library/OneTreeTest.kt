@@ -163,4 +163,59 @@ class OneTreeTest {
             EventMembership.resolve(withWindow, emptyMap(), listOf(recording(10, at(21))))[10L]
         )
     }
+
+    // --- Scope: what a picker promises and what an export delivers ---
+
+    /** What "export this container" resolves to. One line, because there is one rule. */
+    private fun scopeOf(events: List<EventEntity>, records: List<BpmRecordEntity>, rootId: Long) =
+        EventTree.descendantsOf(events, rootId).let { within ->
+            records.filter { it.eventId in within }
+        }
+
+    @Test
+    fun `exporting a container reaches every level beneath it`() {
+        val membership = EventMembership.resolve(festival(), emptyMap(), recordings())
+        val filed = recordings().map { it.copy(eventId = membership[it.recordId]) }
+
+        // Both recordings live on sets, two levels under the festival.
+        assertEquals(2, scopeOf(festival(), filed, 1).size)
+    }
+
+    @Test
+    fun `exporting a container includes what is filed directly onto it`() {
+        // Possible since recordings can be filed into any event, containers included — the walk
+        // between stages, the queue. Taking only the events *beneath* the container dropped these
+        // silently, and a short export looks like a small night rather than like a bug.
+        val onTheFestival = recording(12, at(19)).copy(eventId = 1)
+        val filed = recordings().map {
+            it.copy(eventId = EventMembership.resolve(festival(), emptyMap(), recordings())[it.recordId])
+        } + onTheFestival
+
+        assertEquals(3, scopeOf(festival(), filed, 1).size)
+    }
+
+    @Test
+    fun `the count a picker shows is the count an export delivers`() {
+        // The sprint's verify step, as an assertion. These were two walks over two different lists
+        // — one counting events under a collection, one collecting recordings — so the header could
+        // say one thing while the export contained another.
+        val within = EventTree.descendantsOf(festival(), 1)
+
+        assertEquals(within.size - 1, festival().count { it.eventId != 1L })
+        assertEquals(
+            within.filter { it != 1L }.toSet(),
+            festival().filter { it.eventId != 1L }.map { it.eventId }.toSet()
+        )
+    }
+
+    @Test
+    fun `a container holding only containers still reaches its recordings`() {
+        // Griztronics holds days, days hold sets, sets hold recordings. The festival owns nothing
+        // directly, and one level of walking reported it empty — the original defect.
+        val membership = EventMembership.resolve(festival(), emptyMap(), recordings())
+        val filed = recordings().map { it.copy(eventId = membership[it.recordId]) }
+
+        assertTrue(festival().none { it.parentId == 1L && filed.any { r -> r.eventId == it.eventId } })
+        assertEquals(2, scopeOf(festival(), filed, 1).size)
+    }
 }

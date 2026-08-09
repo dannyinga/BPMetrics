@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import inga.bpmetrics.library.EventSuggestion
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.components.rememberCoverPicker
 import androidx.compose.material.icons.filled.Check
@@ -215,9 +214,9 @@ fun LibraryScreen(
     val viewMode by viewModel.viewMode.collectAsStateWithLifecycle()
     val events by viewModel.events.collectAsStateWithLifecycle()
     val eventGroups by viewModel.eventGroups.collectAsStateWithLifecycle()
+    val eventPickerRows by viewModel.eventPickerRows.collectAsStateWithLifecycle()
     val ungroupedEvents by viewModel.ungroupedEvents.collectAsStateWithLifecycle()
     val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
-    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
 
     // Events and groups share one expansion set. Their ids come from different tables and could
     // collide, but the two never appear in the same view, so a collision is never visible.
@@ -232,7 +231,6 @@ fun LibraryScreen(
     var movingEvent by remember { mutableStateOf<EventSummary?>(null) }
     var movingCollection by remember { mutableStateOf<GroupSummary?>(null) }
     var showAddToEventDialog by remember { mutableStateOf(false) }
-    var suggestionToName by remember { mutableStateOf<EventSuggestion?>(null) }
     // Set when "New event…" is chosen from the bulk menu, so the name dialog knows to file the
     // current selection into whatever it creates rather than creating an empty event.
     var namingEventForSelection by remember { mutableStateOf(false) }
@@ -728,7 +726,7 @@ fun LibraryScreen(
 
 
             // A tile, wherever one appears — in the flat list, inside an event, or under a
-            // suggestion. Selection and navigation behave the same in all three, which is what
+            // collection. Selection and navigation behave the same in all three, which is what
             // makes press-and-hold-then-file work from anywhere.
             val tile: @Composable (BpmRecord) -> Unit = { record ->
                 val isSelected = selectedRecordIds.contains(record.metadata.recordId)
@@ -789,7 +787,6 @@ fun LibraryScreen(
                 LibraryViewMode.EVENTS -> EventsList(
                     events = events,
                     unfiled = unfiled,
-                    suggestions = suggestions,
                     groupNames = remember(eventGroups) {
                         eventGroups.associate { it.group.eventId to it.group.displayName }
                     },
@@ -804,9 +801,6 @@ fun LibraryScreen(
                     onRename = { renamingEvent = it },
                     onMoveToGroup = { movingEvent = it },
                     onDelete = { deletingEvent = it },
-                    onAcceptSuggestion = { suggestionToName = it },
-                    onDismissSuggestion = { viewModel.dismissSuggestion(it) },
-                    onDismissSuggestionForever = { viewModel.dismissSuggestionForever(it) },
                     tile = tile
                 )
 
@@ -959,7 +953,7 @@ fun LibraryScreen(
     if (showAddToEventDialog) {
         AddToEventDialog(
             recordCount = selectedRecordIds.size,
-            events = events,
+            rows = eventPickerRows,
             onDismiss = { showAddToEventDialog = false },
             onPick = { eventId ->
                 viewModel.assignSelectedToEvent(eventId)
@@ -995,25 +989,6 @@ fun LibraryScreen(
         )
     }
 
-    // Naming a suggested event is the same dialog, pre-filled with nothing — the app has no idea
-    // what the occasion was, only that it happened.
-    suggestionToName?.let { suggestion ->
-        NameDialog(
-            title = "New event",
-            label = "Event name",
-            confirmLabel = "Create",
-            supporting = "${suggestion.size} recordings from ${formatSpan(suggestion.span)}.",
-            onDismiss = { suggestionToName = null },
-            onConfirm = { name ->
-                viewModel.createEvent(
-                    name,
-                    suggestion.records.map { it.metadata.recordId }.toSet()
-                )
-                suggestionToName = null
-            }
-        )
-    }
-
     if (showCreateGroupDialog) {
         NameDialog(
             title = "New collection",
@@ -1029,14 +1004,33 @@ fun LibraryScreen(
     }
 
     renamingEvent?.let { summary ->
-        NameDialog(
-            title = "Rename event",
-            label = "Event name",
-            initial = summary.event.name,
-            onDismiss = { renamingEvent = null },
-            onConfirm = { name ->
-                viewModel.renameEvent(summary.event.eventId, name)
+        // Name, type and window together. They used to be a rename dialog and nothing else, so a
+        // window — the thing that actually decides what the event contains — could not be set at all.
+        val knownTypes by viewModel.eventTypesInUse.collectAsStateWithLifecycle()
+        val windowError by viewModel.windowError.collectAsStateWithLifecycle()
+        val windowPeople by remember(summary.event.eventId) {
+            viewModel.windowPeople(summary.event.eventId)
+        }.collectAsStateWithLifecycle(initialValue = emptySet())
+
+        EventEditorDialog(
+            initialName = summary.event.name,
+            initialType = summary.event.type,
+            initialStart = summary.event.windowStart,
+            initialEnd = summary.event.windowEnd,
+            initialPeople = windowPeople,
+            knownTypes = knownTypes,
+            people = availablePeopleForBackup,
+            collisionError = windowError,
+            onDismiss = {
                 renamingEvent = null
+                viewModel.clearWindowError()
+            },
+            onConfirm = { edit ->
+                // Stays open when the window is refused, so the message lands next to the dates
+                // that caused it rather than after the dialog has gone.
+                viewModel.applyEventEdit(summary.event.eventId, edit) { done ->
+                    if (done) renamingEvent = null
+                }
             }
         )
     }
@@ -1136,17 +1130,16 @@ fun LibraryScreen(
 }
 
 /**
- * The events view: suggestions, then the events, then Unfiled.
+ * The events view: the events, then Unfiled.
  *
  * Events come first because they are what the view is for — the organised library, not the inbox.
- * Unfiled sits below as its own section rather than mixed in, and the suggestion cards at the top
+ * Unfiled sits below as its own section rather than mixed in.
  * are what keeps it from being missed.
  */
 @Composable
 private fun EventsList(
     events: List<EventSummary>,
     unfiled: List<BpmRecord>,
-    suggestions: List<EventSuggestion>,
     groupNames: Map<Long, String>,
     eventCovers: Map<Long, inga.bpmetrics.library.Cover>,
     peopleById: Map<Long, inga.bpmetrics.library.PersonEntity>,
@@ -1157,9 +1150,6 @@ private fun EventsList(
     onRename: (EventSummary) -> Unit,
     onMoveToGroup: (EventSummary) -> Unit,
     onDelete: (EventSummary) -> Unit,
-    onAcceptSuggestion: (EventSuggestion) -> Unit,
-    onDismissSuggestion: (EventSuggestion) -> Unit,
-    onDismissSuggestionForever: (EventSuggestion) -> Unit,
     tile: @Composable (BpmRecord) -> Unit
 ) {
     LazyColumn(
@@ -1178,17 +1168,6 @@ private fun EventsList(
         // Keys are prefixed because record ids, event ids and group ids come from different tables
         // and freely collide. LazyColumn requires them unique across the whole list, so an event
         // numbered 3 sitting under a recording numbered 3 would crash the screen.
-        items(suggestions, key = { "suggestion-${it.records.first().metadata.recordId}" }) { suggestion ->
-            SuggestionCard(
-                suggestion = suggestion,
-                people = suggestion.records
-                    .mapNotNull { r -> r.metadata.personId?.let { peopleById[it] } }
-                    .distinct(),
-                onAccept = { onAcceptSuggestion(suggestion) },
-                onDismiss = { onDismissSuggestion(suggestion) },
-                onDismissForever = { onDismissSuggestionForever(suggestion) }
-            )
-        }
 
         if (events.isNotEmpty()) {
             item { SectionHeader("Events", "${events.size}") }
@@ -1228,8 +1207,8 @@ private fun EventsList(
             item {
                 inga.bpmetrics.ui.components.BpmEmptySection(
                     "No events yet",
-                    "Press and hold recordings below, then choose Add to event — or take one of " +
-                        "the suggestions above."
+                    "Press and hold recordings below and choose Add to event, or give an event a " +
+                        "time window and anything recorded inside it files itself."
                 )
             }
         }

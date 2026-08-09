@@ -520,6 +520,121 @@ class LibraryRepository(
         return moved.size
     }
 
+    /** What a window edit did, so the screen can say what went wrong rather than just refusing. */
+    sealed interface WindowResult {
+        data object Saved : WindowResult
+
+        /** Another event at the same level would claim the same recordings. */
+        data class Collides(val withName: String) : WindowResult
+
+        /** The end is before the start, or one of the two is missing. */
+        data object Backwards : WindowResult
+    }
+
+    /**
+     * Gives an event a time window, or clears it.
+     *
+     * A window is not a hint. It *is* the membership rule — every recording starting inside it
+     * belongs to this event unless something deeper claims it — so this reconciles the library
+     * afterwards and recordings move without anyone filing them.
+     *
+     * Refused when a sibling would claim the same recordings, and the refusal names it: two events
+     * overlapping in both time and people has no answer, and the place to say so is here, before
+     * the ambiguity exists. Overlapping in time alone is fine and expected — that is two stages at
+     * one festival, separated by who was at each.
+     *
+     * @param people Who the window applies to. Empty means everyone, which is the common case.
+     */
+    suspend fun setEventWindow(
+        eventId: Long,
+        startMs: Long?,
+        endMs: Long?,
+        people: Set<Long> = emptySet()
+    ): WindowResult {
+        val all = eventDao.getAllEvents()
+        val event = all.firstOrNull { it.eventId == eventId } ?: return WindowResult.Backwards
+
+        if (startMs != null && endMs != null) {
+            if (endMs < startMs) return WindowResult.Backwards
+
+            val windowPeople = eventDao.getAllWindowPeople()
+                .groupBy({ it.eventId }, { it.personId })
+                .mapValues { it.value.toSet() }
+                // The proposed people, not the stored ones — the collision has to be judged against
+                // what is being saved, or narrowing a window to one person would still be refused
+                // on the strength of the version it is replacing.
+                .plus(eventId to people)
+
+            EventMembership.wouldCollide(
+                events = all,
+                windowPeople = windowPeople,
+                eventId = eventId,
+                parentId = event.parentId,
+                startMs = startMs,
+                endMs = endMs,
+                people = people
+            )?.let { other ->
+                val name = all.firstOrNull { it.eventId == other }?.displayName ?: "another event"
+                Log.w(tag, "Refused a window on $eventId: collides with $other")
+                return WindowResult.Collides(name)
+            }
+        }
+
+        eventDao.updateTaxonomy(
+            eventId = eventId,
+            parentId = event.parentId,
+            // Half a window claims nothing, so a partial edit clears rather than half-applies.
+            windowStart = startMs?.takeIf { endMs != null },
+            windowEnd = endMs?.takeIf { startMs != null },
+            type = event.type,
+            excluded = event.excludedFromParentAnalysis
+        )
+
+        eventDao.clearWindowPeople(eventId)
+        people.forEach { eventDao.addWindowPerson(EventWindowPersonCrossRef(eventId, it)) }
+
+        reconcileMembership()
+        return WindowResult.Saved
+    }
+
+    /** Who an event's window applies to. Empty means everyone. */
+    fun windowPeople(eventId: Long): Flow<Set<Long>> =
+        eventDao.windowPeopleFlow(eventId).map { it.toSet() }
+
+    /**
+     * What kind of thing this event is — "Concert", "Gaming Session", whatever the user calls it.
+     *
+     * Free text on purpose. A fixed list would be the app deciding what people record, and the
+     * whole reason for the taxonomy rework was that it had been doing too much of that.
+     */
+    suspend fun setEventType(eventId: Long, type: String?) {
+        val event = eventDao.getEvent(eventId) ?: return
+        eventDao.updateTaxonomy(
+            eventId = eventId,
+            parentId = event.parentId,
+            windowStart = event.windowStart,
+            windowEnd = event.windowEnd,
+            type = type?.trim()?.takeIf { it.isNotBlank() },
+            excluded = event.excludedFromParentAnalysis
+        )
+        // No reconcile: a type does not decide where anything lives. See the table on
+        // [reconcileMembership] for what does.
+    }
+
+    /** Types already in use, most used first, for the editor to offer. */
+    fun eventTypesInUse(): Flow<List<String>> = eventDao.typesInUseFlow()
+
+    /**
+     * Sibling windows that could both claim a recording, for the library to show as needing a
+     * decision rather than resolving one arbitrarily behind the user's back.
+     */
+    suspend fun windowConflicts(): List<EventMembership.Conflict> {
+        val windowPeople = eventDao.getAllWindowPeople()
+            .groupBy({ it.eventId }, { it.personId })
+            .mapValues { it.value.toSet() }
+        return EventMembership.conflicts(eventDao.getAllEvents(), windowPeople)
+    }
+
     suspend fun renameEvent(eventId: Long, name: String) = eventDao.rename(eventId, name.trim())
 
     suspend fun setEventNotes(eventId: Long, notes: String) = eventDao.updateNotes(eventId, notes)
@@ -1089,9 +1204,6 @@ class LibraryRepository(
     /** The sort the library should open on, or null to keep the built-in order. */
     suspend fun getDefaultSort(): String? = settingsRepository.defaultSort.first()
 
-    /** Recordings the user has permanently waved off as an event suggestion. */
-    val dismissedSuggestionRecords: Flow<Set<Long>> = settingsRepository.dismissedSuggestionRecords
-
     // --- Export presets ---
 
     fun getExportPresets(): Flow<List<ExportPresetEntity>> = presetDao.getAllFlow()
@@ -1232,9 +1344,6 @@ class LibraryRepository(
     }
 
     suspend fun deleteExportPreset(presetId: Long) = presetDao.delete(presetId)
-
-    suspend fun dismissSuggestionRecords(recordIds: Set<Long>) =
-        settingsRepository.dismissSuggestionRecords(recordIds)
 
     /**
      * Flattens tags to `categoryId:categoryName:tagName`, one per line.

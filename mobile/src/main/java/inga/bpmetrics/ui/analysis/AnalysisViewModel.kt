@@ -377,19 +377,15 @@ class AnalysisViewModel(
                         ::Library
                     ),
                     repository.effectiveTags,
-                    repository.getAllEventGroups()
-                ) { library, tags, groups ->
-                    // The whole subtree, not just this collection's own events. Analysing
-                    // "Coachella" has to mean the festival, its days, and every set inside them —
-                    // otherwise a collection that holds only other collections analyses to nothing.
-                    val inScope = inga.bpmetrics.library.EventTree
-                        .descendantsOf(groups, groupId)
-                    val ids = library.events
-                        .filter { it.parentId in inScope }
-                        .map { it.eventId }
-                        .toSet()
+                    repository.allEventsInTree
+                ) { library, tags, tree ->
+                    // The whole subtree, over the whole tree, container included. Analysing
+                    // "Coachella" has to mean the festival, its days, every set inside them, and
+                    // anything filed straight onto the festival itself. Walking a collections-only
+                    // list gave a plausible smaller number, which is the worst kind of wrong.
+                    val inScope = inga.bpmetrics.library.EventTree.descendantsOf(tree, groupId)
                     AnalysisRecord.from(
-                        library.records.filter { it.metadata.eventId in ids },
+                        library.records.filter { it.metadata.eventId in inScope },
                         library.categories,
                         library.watches,
                         library.people,
@@ -398,16 +394,13 @@ class AnalysisViewModel(
                     )
                 }
 
-                val scope = combine(
-                    repository.getAllEventGroups(),
-                    repository.getAllEvents()
-                ) { groups, events ->
-                    val inScope = inga.bpmetrics.library.EventTree
-                        .descendantsOf(groups, groupId)
-                    groups.firstOrNull { it.eventId == groupId }
-                        ?.let { group ->
-                            AnalysisScope.Group(group, events.count { it.parentId in inScope })
-                        }
+                val scope = repository.allEventsInTree.map { tree ->
+                    // The count the picker shows and the recordings the analysis uses now come from
+                    // one walk over one list. They were two walks over two different lists, which
+                    // is how the header could say "4 events" over an analysis of six.
+                    val inScope = inga.bpmetrics.library.EventTree.descendantsOf(tree, groupId)
+                    tree.firstOrNull { it.eventId == groupId }
+                        ?.let { group -> AnalysisScope.Group(group, inScope.size - 1) }
                         ?: AnalysisScope.Unknown
                 }
 

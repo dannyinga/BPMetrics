@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import inga.bpmetrics.library.EventSuggestion
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.ui.components.PersonSwatch
@@ -270,6 +272,10 @@ fun EventCard(
                     // collection line saying half a fact each.
                     Text(
                         buildString {
+                            // Type first when there is one: "Concert · 14 Aug, 21:00–22:30" reads as
+                            // what the thing was, then when. The span alone makes every card look
+                            // the same at a glance.
+                            summary.event.type?.takeIf { it.isNotBlank() }?.let { append("$it  ·  ") }
                             append(formatSpan(summary.span))
                             groupName?.let { append("  ·  $it") }
                         },
@@ -305,6 +311,7 @@ fun EventCard(
                     )
                 }
                 EventOverflow(
+                    renameLabel = "Edit",
                     onRename = onRename,
                     onMoveToGroup = onMoveToGroup,
                     onDelete = onDelete,
@@ -489,6 +496,8 @@ fun GroupCard(
 
 @Composable
 private fun EventOverflow(
+    /** "Rename" for a collection, "Edit" for an event — the event dialog does rather more. */
+    renameLabel: String = "Rename",
     onRename: () -> Unit,
     onMoveToGroup: (() -> Unit)?,
     onDelete: () -> Unit,
@@ -511,7 +520,7 @@ private fun EventOverflow(
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
-                text = { Text("Rename") },
+                text = { Text(renameLabel) },
                 onClick = { open = false; onRename() }
             )
             onMoveToGroup?.let { move ->
@@ -664,7 +673,14 @@ fun GroupPickerDialog(
 @Composable
 fun AddToEventDialog(
     recordCount: Int,
-    events: List<EventSummary>,
+    /**
+     * The whole tree in reading order, each with its depth.
+     *
+     * Containers included. This offered only leaf events, so a recording belonging to the festival
+     * rather than to any one set — the walk between stages, the queue — had nowhere to go but
+     * unfiled. Anything that can hold recordings is offered, at the depth it sits.
+     */
+    rows: List<Pair<inga.bpmetrics.library.EventEntity, Int>>,
     onDismiss: () -> Unit,
     onPick: (Long?) -> Unit,
     onCreateEvent: () -> Unit
@@ -673,26 +689,39 @@ fun AddToEventDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add $recordCount recording${if (recordCount == 1) "" else "s"} to…") },
         text = {
-            Column {
+            Column(
+                Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 DropdownMenuItem(
                     text = { Text("New event…") },
                     leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
                     onClick = onCreateEvent
                 )
-                if (events.isNotEmpty()) HorizontalDivider()
-                events.forEach { summary ->
+                if (rows.isNotEmpty()) HorizontalDivider()
+                rows.forEach { (event, depth) ->
                     DropdownMenuItem(
+                        modifier = Modifier.padding(start = (depth.coerceAtLeast(0) * 14).dp),
                         text = {
                             Column {
-                                Text(summary.event.displayName)
-                                Text(
-                                    formatSpan(summary.span),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Text(event.displayName)
+                                val detail = listOfNotNull(
+                                    event.type?.takeIf { it.isNotBlank() },
+                                    event.windowStart?.let { start ->
+                                        event.windowEnd?.let { formatSpan(TimeSpan(start, it)) }
+                                    }
+                                ).joinToString("  ·  ")
+                                if (detail.isNotBlank()) {
+                                    Text(
+                                        detail,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         },
-                        onClick = { onPick(summary.event.eventId) }
+                        onClick = { onPick(event.eventId) }
                     )
                 }
                 HorizontalDivider()
@@ -707,87 +736,6 @@ fun AddToEventDialog(
     )
 }
 
-/**
- * Offers to turn a cluster of unfiled recordings into an event.
- *
- * Deliberately a card in the list rather than a prompt: it is a shortcut, and a shortcut that
- * interrupts is worse than the work it saves.
- */
-@Composable
-fun SuggestionCard(
-    suggestion: EventSuggestion,
-    people: List<PersonEntity>,
-    onAccept: () -> Unit,
-    onDismiss: () -> Unit,
-    onDismissForever: () -> Unit
-) {
-    var showConfirmDismiss by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        )
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                "These ${suggestion.size} recordings ran together",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                formatSpan(suggestion.span),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(6.dp))
-            PersonDots(people)
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = onAccept) { Text("Create event") }
-                // "Not now" hides it until relaunch; "Dismiss" means never again. Both exist
-                // because they answer different questions — "not yet" and "no".
-                TextButton(onClick = onDismiss) { Text("Not now") }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = { showConfirmDismiss = true }) {
-                    Text(
-                        "Dismiss",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-    }
-
-    // Confirmed because there is no undo. The recordings stay exactly where they are; only the
-    // offer to group them goes away, which the wording has to make clear or "dismiss" reads as
-    // something that might delete them.
-    if (showConfirmDismiss) {
-        AlertDialog(
-            onDismissRequest = { showConfirmDismiss = false },
-            title = { Text("Stop suggesting these?") },
-            text = {
-                Text(
-                    "These ${suggestion.size} recordings will not be suggested as an event again. " +
-                        "They stay in your library and can still be filed by hand at any time."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showConfirmDismiss = false
-                    onDismissForever()
-                }) { Text("Stop suggesting") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConfirmDismiss = false }) { Text("Cancel") }
-            }
-        )
-    }
-}
 
 /** A one-line row for an event nested inside an expanded group. */
 @Composable
