@@ -56,7 +56,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.displayName
 import inga.bpmetrics.ui.components.PersonSwatch
@@ -81,7 +80,7 @@ private enum class SourceKind(val label: String) {
 @Composable
 fun SourceStep(
     events: List<EventEntity>,
-    groups: List<EventGroupEntity>,
+    groups: List<EventEntity>,
     recordings: List<BpmRecord>,
     peopleById: Map<Long, PersonEntity>,
     selected: ExportSource,
@@ -148,13 +147,13 @@ fun SourceStep(
                     )
                 }
 
-                SourceKind.GROUPS -> items(groups, key = { "group-${it.groupId}" }) { group ->
-                    val eventCount = events.count { it.groupId == group.groupId }
+                SourceKind.GROUPS -> items(groups, key = { "group-${it.eventId}" }) { group ->
+                    val eventCount = events.count { it.parentId == group.eventId }
                     SourceRow(
                         title = group.displayName,
                         subtitle = "$eventCount event${if (eventCount == 1) "" else "s"}",
-                        isSelected = selected == ExportSource.Group(group.groupId),
-                        onClick = { onSelect(ExportSource.Group(group.groupId)) }
+                        isSelected = selected == ExportSource.Group(group.eventId),
+                        onClick = { onSelect(ExportSource.Group(group.eventId)) }
                     )
                 }
 

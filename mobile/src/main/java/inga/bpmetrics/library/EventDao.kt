@@ -12,21 +12,52 @@ import kotlinx.coroutines.flow.Flow
 interface EventDao {
 
     /**
-     * Every event, most recent first by what it contains.
+     * Events the library lists as events, most recent first by what they contain.
      *
      * Ordered by its latest recording rather than by `createdAt`, so the list reads chronologically
      * by *when things happened* — which is how anyone looks for a set they were at — rather than by
      * when someone got round to creating the entry.
+     *
+     * Collections are excluded because the screens show them in their own section, from
+     * [getCollectionsFlow]. They are the same rows in the same table since the fold, so without
+     * this each one would appear twice on one screen.
+     *
+     * **Never walk the tree with this.** Ancestry, descendants, spans and membership all need
+     * [getAllEvents] or [getAllEventsFlowUnfiltered]: a chain with the collections cut out of it
+     * breaks in the middle, and a recording two levels down stops being found — which is the exact
+     * defect this whole initiative exists to end.
      */
     @Query(
         """
         SELECT e.* FROM events e
         LEFT JOIN bpm_records r ON r.eventId = e.eventId
+        WHERE e.type IS NOT 'Collection'
         GROUP BY e.eventId
         ORDER BY MAX(COALESCE(r.startTime, e.createdAt)) DESC
         """
     )
     fun getAllEventsFlow(): Flow<List<EventEntity>>
+
+    /** Every event, once. What a reconcile walks; a flow would restart it on its own writes. */
+    @Query("SELECT * FROM events")
+    suspend fun getAllEvents(): List<EventEntity>
+
+    /**
+     * Every event including the folded collections, as a flow.
+     *
+     * [getAllEventsFlow] hides collections so the screens do not show them twice while the old
+     * table is still being read. Anything walking the tree needs the whole tree.
+     */
+    @Query("SELECT * FROM events")
+    fun getAllEventsFlowUnfiltered(): Flow<List<EventEntity>>
+
+    /** The events that were collections. Newest first, as the collections list always was. */
+    @Query("SELECT * FROM events WHERE type = 'Collection' ORDER BY createdAt DESC")
+    fun getCollectionsFlow(): Flow<List<EventEntity>>
+
+    /** Who each window applies to. Empty for a window that names nobody, which is most of them. */
+    @Query("SELECT * FROM event_window_people")
+    suspend fun getAllWindowPeople(): List<EventWindowPersonCrossRef>
 
     @Query("SELECT * FROM events WHERE eventId = :eventId")
     suspend fun getEvent(eventId: Long): EventEntity?
@@ -35,15 +66,26 @@ interface EventDao {
         """
         SELECT e.* FROM events e
         LEFT JOIN bpm_records r ON r.eventId = e.eventId
-        WHERE e.groupId = :groupId
+        WHERE e.parentId = :groupId
         GROUP BY e.eventId
         ORDER BY MIN(COALESCE(r.startTime, e.createdAt)) ASC
         """
     )
+    // `parentId`, not the legacy `groupId`: filing an event under a collection has written the
+    // tree link since the fold, so reading the old column would show a collection frozen at
+    // whatever it held before the migration.
     fun getEventsForGroupFlow(groupId: Long): Flow<List<EventEntity>>
 
-    /** Events not yet filed into a group. */
-    @Query("SELECT * FROM events WHERE groupId IS NULL ORDER BY createdAt DESC")
+    /**
+     * Events not yet filed into a group.
+     *
+     * A collection has no `groupId` either, so it would read as ungrouped and show up beside the
+     * collections section that already lists it. Same exclusion as [getAllEventsFlow].
+     */
+    @Query(
+        "SELECT * FROM events WHERE groupId IS NULL AND type IS NOT 'Collection' " +
+            "ORDER BY createdAt DESC"
+    )
     fun getUngroupedEventsFlow(): Flow<List<EventEntity>>
 
     @Insert
@@ -79,8 +121,32 @@ interface EventDao {
     @Query("SELECT coverPath FROM events WHERE eventId = :eventId")
     suspend fun coverPathOf(eventId: Long): String?
 
-    @Query("UPDATE events SET groupId = :groupId WHERE eventId = :eventId")
-    suspend fun setGroup(eventId: Long, groupId: Long?)
+    /**
+     * The taxonomy fields, in one write.
+     *
+     * One statement rather than five, because these are set together — by a restore rebuilding an
+     * event, or by an editor saving one — and five separate writes would let a reader observe an
+     * event that has a window but not yet a parent, and place recordings by it.
+     */
+    @Query(
+        """
+        UPDATE events
+        SET parentId = :parentId,
+            windowStart = :windowStart,
+            windowEnd = :windowEnd,
+            type = :type,
+            excludedFromParentAnalysis = :excluded
+        WHERE eventId = :eventId
+        """
+    )
+    suspend fun updateTaxonomy(
+        eventId: Long,
+        parentId: Long?,
+        windowStart: Long?,
+        windowEnd: Long?,
+        type: String?,
+        excluded: Boolean
+    )
 
     @Query("DELETE FROM events WHERE eventId = :eventId")
     suspend fun deleteEvent(eventId: Long)

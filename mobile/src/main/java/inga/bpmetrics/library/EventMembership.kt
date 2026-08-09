@@ -86,12 +86,20 @@ object EventMembership {
         recordings: List<BpmRecordEntity>
     ): Map<Long, Long?> {
         val windows = windowsOf(events, windowPeople)
+        val realEvents = events.mapTo(mutableSetOf()) { it.eventId }
 
         return recordings.associate { record ->
             val claiming = windows.filter { it.claims(record.startTime, record.personId) }
 
             val winner = when {
-                claiming.isEmpty() -> record.eventId
+                // Hand filing stands, but only at an event that is still there. The column holds
+                // the derived answer and the manual one in the same place and cannot tell them
+                // apart, so a value left pointing at a deleted event would otherwise be read as a
+                // deliberate filing and preserved by every reconcile from now on — a recording that
+                // belongs to nothing, is not unfiled, and appears in no event's contents. Dropping
+                // it here makes a reconcile self-healing against a dangling reference, whatever
+                // left one behind.
+                claiming.isEmpty() -> record.eventId?.takeIf { it in realEvents }
                 // Deepest wins, and where two sit at the same depth the later window does — that
                 // pair is a conflict the app should already have refused, so this only decides
                 // what to show while it is being repaired. Deterministic beats arbitrary.

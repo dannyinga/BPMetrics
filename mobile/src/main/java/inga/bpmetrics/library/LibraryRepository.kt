@@ -77,7 +77,6 @@ class LibraryRepository(
     private val watchDao = database.watchDao()
     private val personDao = database.personDao()
     private val eventDao = database.eventDao()
-    private val eventGroupDao = database.eventGroupDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
     private val presetDao = database.exportPresetDao()
 
@@ -194,6 +193,7 @@ class LibraryRepository(
         Log.d(tag, "Deleting record and data points for ID: $id")
         recordDao.deleteRecordById(id)
         recordDao.deleteDataPointsByRecordId(id)
+        reconcileMembership()
     }
 
     /**
@@ -294,6 +294,10 @@ class LibraryRepository(
             autoNameRecord(recordId, "Untitled")
         }
         
+        // A recording arriving may land inside an existing window, so where it lives is not
+        // something ingest can decide — only the one resolver can.
+        reconcileMembership()
+
         _savingRecord.value = false
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")
         return recordId
@@ -424,12 +428,124 @@ class LibraryRepository(
             EventEntity(name = name.trim(), groupId = groupId, createdAt = System.currentTimeMillis())
         )
         Log.d(tag, "Created event '${name.trim()}' as $id")
+        reconcileMembership()
         return id
+    }
+
+    /**
+     * How many bulk operations are in progress. See [inBulk].
+     *
+     * Not thread-safe, and deliberately not: every mutation path here runs on the repository's own
+     * IO dispatcher from a single caller at a time, and a lock around a counter would suggest a
+     * concurrency guarantee the rest of this class does not make.
+     */
+    private var bulkDepth = 0
+
+    /**
+     * Runs [block] with membership reconciliation deferred until it finishes.
+     *
+     * Every mutation reconciles, which is what makes the stored column trustworthy — but a restore
+     * creating fifty events and importing a thousand recordings would then run a thousand full
+     * reconciles, each walking the whole library. The result is identical and the wait is minutes.
+     *
+     * Nested calls are counted rather than flagged, so a bulk operation calling another one still
+     * reconciles exactly once, at the outermost exit.
+     *
+     * The reconcile runs in a `finally`: a restore that fails halfway has still moved rows, and
+     * leaving the derived column stale would be a worse state than either finishing or not starting.
+     */
+    suspend fun <T> inBulk(block: suspend () -> T): T {
+        bulkDepth++
+        return try {
+            block()
+        } finally {
+            bulkDepth--
+            if (bulkDepth == 0) reconcileMembership()
+        }
+    }
+
+    /**
+     * Recomputes where every recording lives, and writes it. The only thing that writes it.
+     *
+     * `bpm_records.eventId` is a cache of what [EventMembership.resolve] says, kept because reads
+     * are constant and the things that change the answer happen twice a week. What makes a cache
+     * safe is not the cache, it is having exactly one writer — the previous arrangement made every
+     * feature that changed something also responsible for correcting what depended on it, and four
+     * separate "0 recordings" defects came from one of them not knowing it had to.
+     *
+     * So: callers read the column, and call this after one of the mutations below. Nothing else
+     * assigns membership.
+     *
+     * | Invalidates | Does not |
+     * |---|---|
+     * | A recording arriving, deleted, split or merged | A title or note |
+     * | A window created, moved or cleared | A tag, cover or type |
+     * | An event created, deleted or reparented | Anything on a person or watch |
+     * | The people qualifying a window | |
+     *
+     * Being able to write that table down is the point. A short closed list can be audited;
+     * "wherever it matters" cannot.
+     *
+     * The **whole** library is recomputed rather than the part that changed. A few thousand
+     * recordings against a few hundred events is milliseconds, and working out which rows *could*
+     * have been affected would be a second, subtler definition of membership sitting next to the
+     * first — the same class of mistake in a new place.
+     *
+     * @return how many recordings changed hands, which is normally zero and is worth logging when
+     * it is not.
+     */
+    suspend fun reconcileMembership(): Int {
+        if (bulkDepth > 0) return 0
+        val events = eventDao.getAllEvents()
+        val recordings = recordDao.getAllRecordEntities()
+        val windowPeople = eventDao.getAllWindowPeople()
+            .groupBy({ it.eventId }, { it.personId })
+            .mapValues { it.value.toSet() }
+
+        val resolved = EventMembership.resolve(events, windowPeople, recordings)
+
+        // Grouped so this is one statement per destination rather than one per recording, then
+        // chunked because Room turns `IN (:ids)` into one bind variable per id and SQLite caps
+        // those at 999 — which a first reconcile over a whole unfiled library reaches immediately.
+        val moved = recordings.filter { resolved[it.recordId] != it.eventId }
+        moved.groupBy { resolved[it.recordId] }.forEach { (eventId, records) ->
+            records.map { it.recordId }.chunked(SQL_VARIABLE_LIMIT).forEach { chunk ->
+                eventDao.assignRecordsToEvent(chunk, eventId)
+            }
+        }
+
+        if (moved.isNotEmpty()) {
+            Log.i(tag, "Reconciled membership: ${moved.size} recordings moved")
+        }
+        return moved.size
     }
 
     suspend fun renameEvent(eventId: Long, name: String) = eventDao.rename(eventId, name.trim())
 
     suspend fun setEventNotes(eventId: Long, notes: String) = eventDao.updateNotes(eventId, notes)
+
+    /**
+     * Puts an event's place in the tree back as a backup recorded it.
+     *
+     * Deliberately unguarded, unlike an editor's move: a backup is a snapshot of a tree that was
+     * already valid, and refusing part of it would restore a *different* library from the one that
+     * was saved. [EventTree] tolerates a cycle rather than hanging on one, so a corrupt file makes
+     * a repairable mess instead of an unopenable app.
+     */
+    suspend fun restoreEventTaxonomy(
+        eventId: Long,
+        parentId: Long?,
+        windowStart: Long?,
+        windowEnd: Long?,
+        type: String?,
+        excludedFromParentAnalysis: Boolean
+    ) {
+        eventDao.updateTaxonomy(
+            eventId, parentId, windowStart, windowEnd, type, excludedFromParentAnalysis
+        )
+        // A window is the membership rule, so changing one changes where recordings live.
+        reconcileMembership()
+    }
 
     // --- Cover images ---
 
@@ -449,7 +565,9 @@ class LibraryRepository(
 
     private suspend fun currentCoverPath(owner: CoverOwner): String? = when (owner) {
         is CoverOwner.Event -> eventDao.coverPathOf(owner.eventId)
-        is CoverOwner.Collection -> eventGroupDao.coverPathOf(owner.groupId)
+        // A collection is an event, so both go to the same table. Two calls into two tables is
+        // how a cover set on a collection came to be read back from an event and found missing.
+        is CoverOwner.Collection -> eventDao.coverPathOf(owner.groupId)
         is CoverOwner.Recording -> eventDao.recordCoverPathOf(owner.recordId)
     }
 
@@ -462,7 +580,7 @@ class LibraryRepository(
         val blur = cover?.blur
         when (owner) {
             is CoverOwner.Event -> eventDao.updateCover(owner.eventId, p, l, t, r, b, blur)
-            is CoverOwner.Collection -> eventGroupDao.updateCover(owner.groupId, p, l, t, r, b, blur)
+            is CoverOwner.Collection -> eventDao.updateCover(owner.groupId, p, l, t, r, b, blur)
             is CoverOwner.Recording -> eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur)
         }
     }
@@ -530,6 +648,69 @@ class LibraryRepository(
         return true
     }
 
+    /**
+     * Restores a cover from the bytes a backup carried, keeping the framing it was saved with.
+     *
+     * Distinct from [setCover], which starts from a gallery `Uri` and deliberately resets the crop
+     * because a new picture's fractions describe somewhere arbitrary. Here the picture and the crop
+     * belong together — they are the same cover, coming home.
+     *
+     * The crop is written even when [bytes] is null or unwritable, so a backup whose image could not
+     * be read still restores the framing. Replacing the missing picture then lands it as it was set,
+     * rather than resetting to the whole frame.
+     */
+    suspend fun restoreCover(
+        context: android.content.Context,
+        owner: CoverOwner,
+        bytes: ByteArray?,
+        crop: Cover,
+        nameHint: String
+    ) {
+        val id = when (owner) {
+            is CoverOwner.Event -> owner.eventId
+            is CoverOwner.Collection -> owner.groupId
+            is CoverOwner.Recording -> owner.recordId
+        }
+        val stored = bytes?.let { CoverStore.writeBytes(context, it, nameHint, id) }
+        writeCover(owner, crop.copy(path = stored ?: ""))
+    }
+
+    /** The same, for a person's photograph. See [restoreCover]. */
+    suspend fun restorePersonPhoto(
+        context: android.content.Context,
+        personId: Long,
+        bytes: ByteArray?,
+        crop: Cover,
+        nameHint: String
+    ) {
+        val stored = bytes?.let {
+            CoverStore.writeBytes(context, it, nameHint, personId, CoverStore.Kind.PERSON)
+        }
+        personDao.updatePhoto(
+            personId, stored, crop.cropLeft, crop.cropTop, crop.cropRight, crop.cropBottom
+        )
+    }
+
+    /**
+     * The tag with this name on this axis, creating either if it is not there.
+     *
+     * A restore needs this because a backup names tags rather than numbering them — ids are
+     * reassigned on insert, so "Character:Hulk" has to be looked up or made afresh. Restoring into a
+     * library that already has the tag reuses it, which is what merging two libraries should do.
+     */
+    suspend fun findOrCreateTag(categoryName: String, tagName: String): Long? {
+        if (tagName.isBlank()) return null
+        val categoryId = tagDao.getAllCategories()
+            .firstOrNull { it.name.equals(categoryName, ignoreCase = true) }
+            ?.categoryId
+            ?: tagDao.insertCategory(CategoryEntity(name = categoryName))
+
+        return tagDao.getAllTags()
+            .firstOrNull { it.parentCategoryId == categoryId && it.name.equals(tagName, true) }
+            ?.tagId
+            ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = categoryId))
+    }
+
     /** Re-frames the photograph a person already has, leaving the file alone. */
     suspend fun setPersonPhotoCrop(personId: Long, photo: Cover) {
         personDao.updatePhoto(
@@ -587,12 +768,11 @@ class LibraryRepository(
 
     /** Removes every stored cover and the rows pointing at them. */
     suspend fun clearAllCovers(context: android.content.Context): Int {
-        eventDao.getAllEventsFlow().first().forEach {
-            if (it.coverPath != null) eventDao.updateCover(it.eventId, null, null, null, null, null, null)
-        }
-        eventGroupDao.getAllGroups().forEach {
+        // The whole tree, so collections are included — they are events. Reading the filtered
+        // list here would leave every collection cover behind while reporting them all cleared.
+        eventDao.getAllEvents().forEach {
             if (it.coverPath != null) {
-                eventGroupDao.updateCover(it.groupId, null, null, null, null, null, null)
+                eventDao.updateCover(it.eventId, null, null, null, null, null, null)
             }
         }
         val removed = CoverStore.clearAll(context)
@@ -601,7 +781,8 @@ class LibraryRepository(
         return removed
     }
 
-    suspend fun setEventGroup(eventId: Long, groupId: Long?) = eventDao.setGroup(eventId, groupId)
+    /** Files an event under a collection, refusing a move that would make a cycle. */
+    suspend fun setEventGroup(eventId: Long, groupId: Long?) = setEventParent(eventId, groupId)
 
     /**
      * Removes an event and releases its recordings.
@@ -612,6 +793,7 @@ class LibraryRepository(
     suspend fun deleteEvent(eventId: Long) {
         eventDao.unfileRecordsForEvent(eventId)
         eventDao.deleteEvent(eventId)
+        reconcileMembership()
         Log.d(tag, "Deleted event $eventId; its recordings are unfiled, not removed")
     }
 
@@ -628,6 +810,10 @@ class LibraryRepository(
         val changed = recordIds.toList()
             .chunked(SQL_VARIABLE_LIMIT)
             .sumOf { chunk -> eventDao.assignRecordsToEvent(chunk, eventId) }
+        // Hand filing is an input to membership, not the answer: a window covering these
+        // recordings still wins. Reconciling here means the library shows the real answer at once
+        // rather than the requested one until something else happens to recompute.
+        reconcileMembership()
         Log.d(tag, "Filed $changed recording(s) under event ${eventId ?: "nothing"}")
         return changed
     }
@@ -638,32 +824,80 @@ class LibraryRepository(
             .chunked(SQL_VARIABLE_LIMIT)
             .flatMap { chunk -> eventDao.recordIdsWithoutEvent(chunk) }
 
-    fun getAllEventGroups(): Flow<List<EventGroupEntity>> = eventGroupDao.getAllGroupsFlow()
+    // --- Collections ---
+    //
+    // A collection is an event with [COLLECTION_TYPE]. It was its own table until migration 23→24;
+    // everything below now reads and writes the one tree, so a count, a span or a roll-up has one
+    // implementation instead of two that have to be kept agreeing. `event_groups` still exists and
+    // is no longer read — see MIGRATION_23_24 for why it is still there.
+    //
+    // The names are unchanged so the screens did not all have to move at once. They read a little
+    // oddly against `EventEntity`, and go when the library screen is redesigned in Sprint 3.
 
-    suspend fun getEventGroup(groupId: Long): EventGroupEntity? = eventGroupDao.getGroup(groupId)
+    /** Every collection, newest first. */
+    fun getAllEventGroups(): Flow<List<EventEntity>> =
+        eventDao.getCollectionsFlow()
 
+    /**
+     * The whole tree, collections included.
+     *
+     * What anything walking ancestry or descendants needs. [getAllEvents] hides collections so the
+     * screens do not list them twice; a walk that hid them would break the chain in the middle.
+     */
+    val allEventsInTree: Flow<List<EventEntity>> = eventDao.getAllEventsFlowUnfiltered()
+
+    suspend fun getEventGroup(groupId: Long): EventEntity? =
+        eventDao.getEvent(groupId)?.takeIf { it.isCollection }
+
+    /**
+     * Every recording anywhere beneath a collection.
+     *
+     * Through [EventTree.descendantsOf], so a recording three levels down counts. The query this
+     * replaced looked one level deep, which is the "0 recordings" defect that started all of this.
+     */
     fun getRecordsForGroup(groupId: Long): Flow<List<BpmRecordEntity>> =
-        eventGroupDao.getRecordsForGroupFlow(groupId)
+        combine(eventDao.getAllEventsFlowUnfiltered(), recordDao.getAllRecordEntitiesFlow()) { events, records ->
+            val within = EventTree.descendantsOf(events, groupId)
+            records.filter { it.eventId in within }.sortedBy { it.startTime }
+        }
 
-    suspend fun getGroupSpan(groupId: Long): TimeSpan? = eventGroupDao.getGroupSpan(groupId)?.toSpan()
+    /** When a collection starts and ends: its window, or the span of everything beneath it. */
+    suspend fun getGroupSpan(groupId: Long): TimeSpan? {
+        val events = eventDao.getAllEvents()
+        val records = recordDao.getAllRecordEntities()
+        val membership = records.associate { it.recordId to it.eventId }
+        return EventTree.spanOf(events, groupId, records, membership)
+            ?.let { TimeSpan(it.startMs, it.endMs) }
+    }
 
-    suspend fun countEventsForGroup(groupId: Long): Int = eventGroupDao.countEventsForGroup(groupId)
+    /** How many events sit beneath a collection, at any depth. Excludes the collection itself. */
+    suspend fun countEventsForGroup(groupId: Long): Int =
+        EventTree.descendantsOf(eventDao.getAllEvents(), groupId).size - 1
 
-    suspend fun countRecordsForGroup(groupId: Long): Int = eventGroupDao.countRecordsForGroup(groupId)
+    /** How many recordings sit beneath a collection, at any depth. */
+    suspend fun countRecordsForGroup(groupId: Long): Int {
+        val within = EventTree.descendantsOf(eventDao.getAllEvents(), groupId)
+        return recordDao.getAllRecordEntities().count { it.eventId in within }
+    }
 
     suspend fun createEventGroup(name: String): Long {
-        val id = eventGroupDao.insertGroup(
-            EventGroupEntity(name = name.trim(), createdAt = System.currentTimeMillis())
+        val id = eventDao.insertEvent(
+            EventEntity(
+                name = name.trim(),
+                type = COLLECTION_TYPE,
+                createdAt = System.currentTimeMillis()
+            )
         )
-        Log.d(tag, "Created group '${name.trim()}' as $id")
+        Log.d(tag, "Created collection '${name.trim()}' as $id")
+        reconcileMembership()
         return id
     }
 
     suspend fun renameEventGroup(groupId: Long, name: String) =
-        eventGroupDao.rename(groupId, name.trim())
+        eventDao.rename(groupId, name.trim())
 
     suspend fun setEventGroupNotes(groupId: Long, notes: String) =
-        eventGroupDao.updateNotes(groupId, notes)
+        eventDao.updateNotes(groupId, notes)
 
     /**
      * Joins several recordings of one person into a single one.
@@ -712,28 +946,42 @@ class LibraryRepository(
     }
 
     /** Removes a collection and releases what it held. Its events and children survive. */
-    suspend fun deleteEventGroup(groupId: Long) {
-        eventGroupDao.ungroupEvents(groupId)
-        eventGroupDao.orphanChildren(groupId)
-        eventGroupDao.deleteGroup(groupId)
-        Log.d(tag, "Deleted collection $groupId; its events and children are released, not removed")
-    }
+    suspend fun deleteEventGroup(groupId: Long) = deleteEvent(groupId)
 
     /**
      * Files one collection inside another.
      *
      * @return false when the move would make a collection its own ancestor, or nest deeper than
-     *   [CollectionTree.MAX_DEPTH]. Both are refused here rather than in the UI: a cycle makes
+     *   a cycle. Refused here rather than in the UI: a cycle makes
      *   every walk of the tree non-terminating, and no screen should be the only thing standing
      *   between the database and an infinite loop.
      */
-    suspend fun setEventGroupParent(groupId: Long, parentGroupId: Long?): Boolean {
-        val all = eventGroupDao.getAllGroups()
-        if (!CollectionTree.canReparent(all, groupId, parentGroupId)) {
-            Log.w(tag, "Refused to file collection $groupId under $parentGroupId")
+    suspend fun setEventGroupParent(groupId: Long, parentGroupId: Long?): Boolean =
+        setEventParent(groupId, parentGroupId)
+
+    /**
+     * Files one event inside another.
+     *
+     * @return false when the move would make an event its own ancestor. Refused here rather than in
+     *   the UI: a cycle makes every walk of the tree non-terminating, and no screen should be the
+     *   only thing standing between the database and an infinite loop.
+     */
+    suspend fun setEventParent(eventId: Long, parentId: Long?): Boolean {
+        val all = eventDao.getAllEvents()
+        if (parentId != null && EventTree.wouldCycle(all, eventId, parentId)) {
+            Log.w(tag, "Refused to file event $eventId under $parentId")
             return false
         }
-        eventGroupDao.setParent(groupId, parentGroupId)
+        val current = all.firstOrNull { it.eventId == eventId } ?: return false
+        eventDao.updateTaxonomy(
+            eventId = eventId,
+            parentId = parentId,
+            windowStart = current.windowStart,
+            windowEnd = current.windowEnd,
+            type = current.type,
+            excluded = current.excludedFromParentAnalysis
+        )
+        reconcileMembership()
         return true
     }
 
@@ -743,7 +991,7 @@ class LibraryRepository(
      * What "analyse Coachella" resolves to: the festival, its days, and every event in any of them.
      */
     suspend fun descendantGroupIds(groupId: Long): Set<Long> =
-        CollectionTree.descendantsOf(eventGroupDao.getAllGroups(), groupId)
+        EventTree.descendantsOf(eventDao.getAllEvents(), groupId)
 
     /** Every saved analysis with its frozen rows, for a backup to carry. */
     suspend fun getSavedAnalysesForBackup(): List<inga.bpmetrics.export.SavedAnalysisDto> =
@@ -811,6 +1059,19 @@ class LibraryRepository(
 
     /** Every app preference, for a backup to carry. */
     suspend fun getSettingsForBackup() = settingsRepository.exportPreferences()
+
+    /**
+     * The tags applied to each event, keyed by event id.
+     *
+     * A backup carried record tags from the beginning and never carried these, so a restore returned
+     * every recording and lost the labelling of the containers holding them.
+     */
+    suspend fun getEventTagsForBackup(): Map<Long, List<TagEntity>> =
+        tagDao.getAllEventTagsFlow().first()
+            .groupBy({ it.ownerId }, { it.tag })
+
+    /** The tags applied to each collection, keyed by collection id. See [getEventTagsForBackup]. */
+    suspend fun getGroupTagsForBackup(): Map<Long, List<TagEntity>> = getEventTagsForBackup()
 
     /** Applies preferences from a backup. Returns how many were understood. */
     suspend fun restoreSettings(snapshots: List<inga.bpmetrics.ui.settings.PreferenceSnapshot>): Int =
@@ -1142,6 +1403,13 @@ class LibraryRepository(
         personDao.updateName(personId, name.trim())
         Log.d(tag, "Person $personId is now called '${name.trim()}'")
     }
+
+    /**
+     * Puts a profile's creation time back to what a backup recorded, so the people list keeps the
+     * order it had. Only a restore has any business calling this.
+     */
+    suspend fun setPersonCreatedAt(personId: Long, createdAt: Long) =
+        personDao.updateCreatedAt(personId, createdAt)
 
     suspend fun setPersonColor(personId: Long, colorArgb: Int) =
         personDao.updateColor(personId, colorArgb)
@@ -1478,20 +1746,23 @@ class LibraryRepository(
 
     fun getTagsForEvent(eventId: Long): Flow<List<TagEntity>> = tagDao.getTagsForEventFlow(eventId)
 
-    suspend fun addTagToGroup(groupId: Long, tagId: Long) =
-        tagDao.insertGroupTagCrossRef(EventGroupTagCrossRef(groupId, tagId))
+    // Collections are events, so their tags live in `event_tag_cross_ref` alongside everything
+    // else — migration 23→24 copied the existing ones across. These three used to write and read
+    // `event_group_tag_cross_ref`, which would have put new tags somewhere inheritance no longer
+    // looks: applied, visible on the collection, and silently absent from every recording under it.
 
-    suspend fun removeTagFromGroup(groupId: Long, tagId: Long) = tagDao.untagGroup(groupId, tagId)
+    suspend fun addTagToGroup(groupId: Long, tagId: Long) = addTagToEvent(groupId, tagId)
 
-    fun getTagsForGroup(groupId: Long): Flow<List<TagEntity>> = tagDao.getTagsForGroupFlow(groupId)
+    suspend fun removeTagFromGroup(groupId: Long, tagId: Long) = removeTagFromEvent(groupId, tagId)
+
+    fun getTagsForGroup(groupId: Long): Flow<List<TagEntity>> = getTagsForEvent(groupId)
 
     /** Every event's tags, indexed by event. Live, so applying one anywhere updates every reader. */
     val allEventTags: Flow<Map<Long, List<TagEntity>>> =
         tagDao.getAllEventTagsFlow().map { EffectiveTagsResolver.index(it) }
 
-    /** Every group's tags, indexed by group. */
-    val allGroupTags: Flow<Map<Long, List<TagEntity>>> =
-        tagDao.getAllGroupTagsFlow().map { EffectiveTagsResolver.index(it) }
+    /** Collections are events, so their tags come from the same index. */
+    val allGroupTags: Flow<Map<Long, List<TagEntity>>> get() = allEventTags
 
     /**
      * Effective tags for every recording in the library, keyed by record id.
@@ -1503,18 +1774,16 @@ class LibraryRepository(
     val effectiveTags: Flow<Map<Long, List<EffectiveTag>>> = combine(
         records,
         tagDao.getAllEventTagsFlow(),
-        tagDao.getAllGroupTagsFlow(),
-        eventDao.getAllEventsFlow(),
-        eventGroupDao.getAllGroupsFlow()
-    ) { library, eventTags, groupTags, events, groups ->
+        eventDao.getAllEventsFlowUnfiltered()
+    ) { library, eventTags, events ->
+        // One chain, walked once. This used to take an event-to-collection map and a
+        // collection-to-parent map and stitch them together inside the resolver; a tag on a
+        // festival reaching a recording two levels down depended on those two agreeing. Since the
+        // fold there is only `parentId`, so inheritance climbs the same tree membership does.
         EffectiveTagsResolver.resolveAll(
             records = library,
             eventTags = EffectiveTagsResolver.index(eventTags),
-            groupTags = EffectiveTagsResolver.index(groupTags),
-            groupIdByEvent = events.associate { it.eventId to it.groupId },
-            // Collections nest, so inheritance climbs the whole chain: a tag on a festival reaches
-            // the recordings inside its days without being applied to each of them.
-            parentByGroup = groups.associate { it.groupId to it.parentGroupId }
+            events = events
         )
     }
 

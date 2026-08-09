@@ -73,7 +73,7 @@ fun LibraryFilterDialog(
     availablePeople: List<inga.bpmetrics.library.PersonEntity> = emptyList(),
     availableWatches: List<inga.bpmetrics.library.WatchEntity> = emptyList(),
     availableEvents: List<inga.bpmetrics.library.EventEntity> = emptyList(),
-    availableGroups: List<inga.bpmetrics.library.EventGroupEntity> = emptyList()
+    availableGroups: List<inga.bpmetrics.library.EventEntity> = emptyList()
 ) {
     var dateRange by remember { mutableStateOf(currentFilter.dateRange) }
     var selectedTagIds by remember { mutableStateOf(currentFilter.selectedTagIds) }
@@ -339,12 +339,12 @@ fun LibraryFilterDialog(
                         ) {
                             availableGroups.forEach { group ->
                                 FilterChip(
-                                    selected = group.groupId in selectedGroupIds,
+                                    selected = group.eventId in selectedGroupIds,
                                     onClick = {
-                                        selectedGroupIds = if (group.groupId in selectedGroupIds) {
-                                            selectedGroupIds - group.groupId
+                                        selectedGroupIds = if (group.eventId in selectedGroupIds) {
+                                            selectedGroupIds - group.eventId
                                         } else {
-                                            selectedGroupIds + group.groupId
+                                            selectedGroupIds + group.eventId
                                         }
                                     },
                                     label = { Text(group.displayName) },

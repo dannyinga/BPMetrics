@@ -3,6 +3,7 @@ package inga.bpmetrics.ui.library
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordEntity
 import inga.bpmetrics.library.EventEntity
+import inga.bpmetrics.library.COLLECTION_TYPE
 import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.PersonEntity
 import org.junit.Assert.assertEquals
@@ -57,7 +58,7 @@ class GroupSummaryTest {
     )
 
     private fun festival() = GroupSummary(
-        group = EventGroupEntity(groupId = 1, name = "Coachella"),
+        group = EventEntity(eventId = 1, name = "Coachella", type = COLLECTION_TYPE),
         events = emptyList(),
         allEvents = listOf(subtronics, zedsDead),
         nestedCollectionCount = 2
@@ -96,7 +97,7 @@ class GroupSummaryTest {
         // The expanded card lists only what a collection holds directly; anything deeper is its own
         // card below. Conflating the two would list the same event twice.
         val day = GroupSummary(
-            group = EventGroupEntity(groupId = 2, name = "Day 1"),
+            group = EventEntity(eventId = 2, name = "Day 1", type = COLLECTION_TYPE),
             events = listOf(subtronics),
             allEvents = listOf(subtronics),
             nestedCollectionCount = 0
@@ -111,7 +112,7 @@ class GroupSummaryTest {
         // The default keeps every existing construction correct: a collection with nothing nested
         // counts exactly what it holds.
         val flat = GroupSummary(
-            group = EventGroupEntity(groupId = 9, name = "Bass Canyon"),
+            group = EventEntity(eventId = 9, name = "Bass Canyon", type = COLLECTION_TYPE),
             events = listOf(zedsDead)
         )
 

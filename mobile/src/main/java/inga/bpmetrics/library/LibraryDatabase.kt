@@ -96,6 +96,10 @@ interface BpmRecordDao {
     @Query("SELECT * FROM bpm_records")
     suspend fun getAllRecordEntities() : List<BpmRecordEntity>
 
+    /** The same as a flow, for anything that has to recompute when the library changes. */
+    @Query("SELECT * FROM bpm_records")
+    fun getAllRecordEntitiesFlow(): Flow<List<BpmRecordEntity>>
+
     /**
      * Retrieves the metadata for a specific BPM record by its ID.
      */
@@ -158,7 +162,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 23
+internal const val LIBRARY_DB_VERSION = 24
 
 @Database(
     entities = [
@@ -188,7 +192,6 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun watchDao(): WatchDao
     abstract fun personDao(): PersonDao
     abstract fun eventDao(): EventDao
-    abstract fun eventGroupDao(): EventGroupDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
     abstract fun exportPresetDao(): ExportPresetDao
     abstract fun renderJobDao(): RenderJobDao
@@ -970,6 +973,106 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Collections become events. One tree, where there were two kinds of container.
+         *
+         * A collection was already an event in everything but name — a thing with a title, notes, a
+         * cover, tags, and other things inside it. The only difference was that it could not hold a
+         * time window and events could not nest. Both of those went away in 23, so keeping two
+         * tables meant maintaining two of every count, span and roll-up. That duplication is the
+         * direct cause of four separate "0 recordings" defects in this app, each one a second
+         * implementation of a walk disagreeing with the first.
+         *
+         * **`event_groups` is not dropped.** Everything is copied out, nothing is deleted, and
+         * `events.groupId` keeps pointing where it always did. If this fold turns out to be wrong,
+         * the original arrangement is still sitting there to be read back. The table goes a version
+         * or two later, once a real library has lived on the new shape — a destructive migration
+         * that runs the same day as the code that needs it has no way back.
+         */
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // A migration must survive being run twice — a failure rolls back and is retried on
+                // the next launch — and this one cannot rely on `INSERT OR IGNORE` to make that
+                // true. The ids it inserts are derived from the current maximum, so a second pass
+                // computes a *different* offset, collides with nothing, and cheerfully duplicates
+                // every collection in the library. Hence an explicit guard rather than a clever
+                // conflict clause.
+                //
+                // `type` is safe to test on: it arrived in 23 and nothing writes it yet, so no
+                // event can carry a type unless this migration put it there.
+                val alreadyFolded = db.query(
+                    "SELECT COUNT(*) FROM events WHERE type = 'Collection'"
+                ).use { if (it.moveToFirst()) it.getLong(0) else 0L } > 0L
+
+                if (alreadyFolded) {
+                    android.util.Log.i(TAG, "MIGRATION_23_24: collections already folded, skipping")
+                    return
+                }
+
+                // Read once, before anything is inserted, and used as a literal below.
+                //
+                // The obvious `groupId + (SELECT MAX(eventId) FROM events)` inside the INSERT is a
+                // trap: the subquery is re-evaluated per row as the insert proceeds, so the offset
+                // grows underneath its own statement and the mapping stops being a mapping. Frozen
+                // here, `newEventId = groupId + offset` holds for every row, which is what lets the
+                // reparenting below be plain arithmetic instead of a temporary table.
+                val offset = db.query("SELECT IFNULL(MAX(eventId), 0) FROM events").use {
+                    if (it.moveToFirst()) it.getLong(0) else 0L
+                }
+
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO events (
+                        eventId, name, notes, createdAt, groupId, parentId, type,
+                        excludedFromParentAnalysis,
+                        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom,
+                        coverBlur
+                    )
+                    SELECT
+                        groupId + $offset, name, notes, createdAt, NULL,
+                        CASE WHEN parentGroupId IS NULL THEN NULL ELSE parentGroupId + $offset END,
+                        'Collection', 0,
+                        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom,
+                        coverBlur
+                    FROM event_groups
+                    """.trimIndent()
+                )
+
+                // Every event that was in a collection now sits under the event that collection
+                // became. Restricted to rows that had no parent: an event nested in 23 was put
+                // there deliberately and by something further down the tree, and its collection
+                // membership is the older, coarser statement of where it lives.
+                db.execSQL(
+                    """
+                    UPDATE events
+                    SET parentId = groupId + $offset
+                    WHERE groupId IS NOT NULL
+                      AND parentId IS NULL
+                      AND groupId IN (SELECT groupId FROM event_groups)
+                    """.trimIndent()
+                )
+
+                // Tags follow their collection. Without this the fold would quietly strip the
+                // labelling off every container in the library, which is the failure the backup
+                // format just had to be rescued from.
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO event_tag_cross_ref (eventId, tagId)
+                    SELECT groupId + $offset, tagId FROM event_group_tag_cross_ref
+                    """.trimIndent()
+                )
+
+                val folded = db.query("SELECT COUNT(*) FROM event_groups").use {
+                    if (it.moveToFirst()) it.getLong(0) else 0L
+                }
+                android.util.Log.i(
+                    TAG,
+                    "MIGRATION_23_24: folded $folded collections into the event tree " +
+                        "(id offset $offset); event_groups kept as a safety net"
+                )
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -1036,7 +1139,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_19_20,
                         MIGRATION_20_21,
                         MIGRATION_21_22,
-                        MIGRATION_22_23
+                        MIGRATION_22_23,
+                        MIGRATION_23_24
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

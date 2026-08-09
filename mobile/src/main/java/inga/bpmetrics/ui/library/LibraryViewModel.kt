@@ -11,7 +11,6 @@ import inga.bpmetrics.export.restoreBackup
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EventSuggestion
 import inga.bpmetrics.library.suggestEvents
@@ -64,7 +63,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.effectiveTags,
         repository.getAllEvents()
     ) { records, filter, tags, events ->
-        applyFilter(records, filter, tags, events.associate { it.eventId to it.groupId })
+        applyFilter(records, filter, tags, events.associate { it.eventId to it.parentId })
     }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
 
     /**
@@ -136,62 +135,44 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     val coversByRecord: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> = combine(
         repository.records,
-        repository.getAllEvents(),
-        repository.getAllEventGroups()
-    ) { records, events, groups ->
+        repository.allEventsInTree
+    ) { records, events ->
         val eventCovers = events.associate { it.eventId to it.ownCover }
-        val eventGroups = events.associate { it.eventId to it.groupId }
-        val groupCovers = groups.associate { it.groupId to it.ownCover }
-        val groupParents = groups.associate { it.groupId to it.parentGroupId }
 
         records.mapNotNull { record ->
             inga.bpmetrics.library.CoverResolver.forRecording(
                 directCover = record.metadata.ownCover,
                 eventId = record.metadata.eventId,
                 eventCovers = eventCovers,
-                eventGroups = eventGroups,
-                groupCovers = groupCovers,
-                groupParents = groupParents
+                events = events
             )?.let { record.metadata.recordId to it.cover }
         }.toMap()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
-     * The cover for every event and every collection, resolved the same way a recording's is.
+     * The cover for every event, collections included, resolved the same way a recording's is.
      *
-     * An event with no picture of its own shows its collection's, and a nested collection shows its
-     * parent's — otherwise "set a cover on Coachella" would decorate the Coachella card and leave
-     * every day inside it blank, which is not what inheritance means anywhere else in the app.
+     * An event with no picture of its own shows the one above it — otherwise "set a cover on
+     * Coachella" would decorate the Coachella card and leave every day inside it blank, which is
+     * not what inheritance means anywhere else in the app.
+     *
+     * This was three flows before the fold: one for recordings, one for events walking up to their
+     * collection, and one for collections walking up their parents. Three walks, three chances to
+     * disagree. Collections are events, so it is one walk over one tree, and [coversByGroup] is now
+     * literally the same map read under its old name.
      */
-    val coversByEvent: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> = combine(
-        repository.getAllEvents(),
-        repository.getAllEventGroups()
-    ) { events, groups ->
-        val groupCovers = groups.associate { it.groupId to it.ownCover }
-        val groupParents = groups.associate { it.groupId to it.parentGroupId }
-        events.mapNotNull { event ->
-            inga.bpmetrics.library.CoverResolver.resolve(
-                directCover = null,
-                eventCover = event.ownCover,
-                groupChainCovers = inga.bpmetrics.library.CoverResolver
-                    .ancestryOf(event.groupId, groupParents)
-                    .map { groupCovers[it] }
-            )?.let { event.eventId to it.cover }
-        }.toMap()
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
-
-    /** The same for collections, walking up their parents. */
-    val coversByGroup: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> =
-        repository.getAllEventGroups().map { groups ->
-            val covers = groups.associate { it.groupId to it.ownCover }
-            val parents = groups.associate { it.groupId to it.parentGroupId }
-            groups.mapNotNull { group ->
-                inga.bpmetrics.library.CoverResolver
-                    .ancestryOf(group.groupId, parents)
-                    .firstNotNullOfOrNull { covers[it] }
-                    ?.let { group.groupId to it }
+    val coversByEvent: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> =
+        repository.allEventsInTree.map { events ->
+            val own = events.associate { it.eventId to it.ownCover }
+            events.mapNotNull { event ->
+                inga.bpmetrics.library.EventTree.ancestryOf(events, event.eventId)
+                    .firstNotNullOfOrNull { own[it.eventId] }
+                    ?.let { event.eventId to it }
             }.toMap()
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Collections are events, so their covers come from the same map. */
+    val coversByGroup: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> get() = coversByEvent
 
     /**
      * Events with everything the list needs to describe them without a second query per row.
@@ -225,12 +206,12 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.getAllEventGroups(),
         events
     ) { groups, summaries ->
-        val byGroup = summaries.groupBy { it.event.groupId }
+        val byGroup = summaries.groupBy { it.event.parentId }
         groups.map { group ->
             // The whole subtree, not just what this collection holds directly. A festival that
             // holds nothing but days has no events of its own, and reporting that as "0 events,
             // 0 recordings" describes the row rather than the thing the row stands for.
-            val subtree = inga.bpmetrics.library.CollectionTree.descendantsOf(groups, group.groupId)
+            val subtree = inga.bpmetrics.library.EventTree.descendantsOf(groups, group.eventId)
             GroupSummary(
                 group = group,
                 events = byGroup[group.groupId].orEmpty(),
@@ -243,7 +224,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Events belonging to no group, shown alongside the groups so they are not lost. */
     val ungroupedEvents: StateFlow<List<EventSummary>> = events
-        .map { summaries -> summaries.filter { it.event.groupId == null } }
+        .map { summaries -> summaries.filter { it.event.parentId == null } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
@@ -418,9 +399,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * person. Importing a backup record by record would return the recordings and leave every one
      * of them attributed to nobody, because the ingest path can only *find* a person, not make one.
      */
-    fun restoreFromBackup(backup: LibraryBackup, onDone: (RestoreResult) -> Unit) {
+    fun restoreFromBackup(
+        backup: LibraryBackup,
+        context: android.content.Context,
+        onDone: (RestoreResult) -> Unit
+    ) {
         viewModelScope.launch {
-            onDone(restoreBackup(backup, repository))
+            onDone(restoreBackup(backup, repository, context))
         }
     }
 
@@ -436,6 +421,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         people: List<PersonEntity>,
         watches: List<WatchEntity>,
         categories: List<CategoryEntity>,
+        context: android.content.Context,
         onReady: (String) -> Unit
     ) {
         viewModelScope.launch {
@@ -446,9 +432,27 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                     watches = watches,
                     categories = categories,
                     savedAnalyses = repository.getSavedAnalysesForBackup(),
-                    settings = repository.getSettingsForBackup()
-                    , events = repository.getAllEvents().first()
-                    , eventGroups = repository.getAllEventGroups().first()
+                    settings = repository.getSettingsForBackup(),
+                    // The whole tree, collections included — they are events carrying
+                    // `type: "Collection"`, so they restore through the same path as everything
+                    // else. `eventGroups` stays in the format only to read files written before
+                    // the fold; nothing writes it any more.
+                    events = repository.allEventsInTree.first(),
+                    eventGroups = emptyList(),
+                    // Tags on events, which since the fold includes tags on collections. These were
+                    // never exported, so a restored library came back with every recording and none
+                    // of the organisation above it.
+                    eventTags = repository.getEventTagsForBackup(),
+                    groupTags = emptyMap(),
+                    // Cover and photograph bytes, inlined. A stored file name means nothing on the
+                    // device a backup is restored onto.
+                    readImage = { name ->
+                        runCatching {
+                            inga.bpmetrics.library.CoverStore.fileFor(context, name)
+                                .takeIf { it.isFile }
+                                ?.readBytes()
+                        }.getOrNull()
+                    }
                 )
             )
         }
@@ -867,7 +871,7 @@ data class EventSummary(
  * 0 recordings": every count was true of the collection itself and false of what it represents.
  */
 data class GroupSummary(
-    val group: EventGroupEntity,
+    val group: EventEntity,
     val events: List<EventSummary>,
     /** Everything in the subtree, this collection's own events included. */
     val allEvents: List<EventSummary> = events,

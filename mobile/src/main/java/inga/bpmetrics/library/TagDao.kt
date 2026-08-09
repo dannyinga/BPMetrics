@@ -34,6 +34,14 @@ interface TagDao {
     @Query("SELECT * FROM tags WHERE parentCategoryId = :categoryId ORDER BY name ASC")
     fun getTagsByCategoryFlow(categoryId: Long): Flow<List<TagEntity>>
 
+    /** Every tag in the library. A restore matches a backup's tag names against these. */
+    @Query("SELECT * FROM tags")
+    suspend fun getAllTags(): List<TagEntity>
+
+    /** Every category. See [getAllTags]. */
+    @Query("SELECT * FROM categories")
+    suspend fun getAllCategories(): List<CategoryEntity>
+
     @Query("SELECT * FROM tags WHERE tagId = :id")
     suspend fun getTagById(id: Long): TagEntity?
 

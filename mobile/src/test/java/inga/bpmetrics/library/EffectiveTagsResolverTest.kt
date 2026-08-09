@@ -24,10 +24,8 @@ class EffectiveTagsResolverTest {
     fun `a recording's own tags are direct`() {
         val result = EffectiveTagsResolver.resolve(
             directTags = listOf(loud),
-            eventId = null,
-            groupChain = emptyList(),
-            eventTags = emptyMap(),
-            groupTags = emptyMap()
+            ancestry = emptyList(),
+            eventTags = emptyMap()
         )
 
         assertEquals(1, result.size)
@@ -39,17 +37,15 @@ class EffectiveTagsResolverTest {
     fun `all three levels arrive, each knowing where it came from`() {
         val result = EffectiveTagsResolver.resolve(
             directTags = listOf(loud),
-            eventId = 10,
-            groupChain = listOf(20L),
-            eventTags = mapOf(10L to listOf(saturday)),
-            groupTags = mapOf(20L to listOf(coachella))
+            ancestry = listOf(10L, 20L),
+            eventTags = mapOf(10L to listOf(saturday), 20L to listOf(coachella))
         )
 
         assertEquals(
             listOf(
                 "Loud" to TagSource.DIRECT,
                 "Saturday" to TagSource.EVENT,
-                "Coachella 2026" to TagSource.GROUP
+                "Coachella 2026" to TagSource.ANCESTOR
             ),
             result.map { it.tag.name to it.source }
         )
@@ -61,10 +57,8 @@ class EffectiveTagsResolverTest {
         // it removable in the place someone actually applied it.
         val result = EffectiveTagsResolver.resolve(
             directTags = listOf(coachella),
-            eventId = 10,
-            groupChain = listOf(20L),
-            eventTags = emptyMap(),
-            groupTags = mapOf(20L to listOf(coachella))
+            ancestry = listOf(10L, 20L),
+            eventTags = mapOf(20L to listOf(coachella))
         )
 
         assertEquals(1, result.size)
@@ -75,10 +69,8 @@ class EffectiveTagsResolverTest {
     fun `an event tag beats the same tag on the group`() {
         val result = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
-            eventId = 10,
-            groupChain = listOf(20L),
-            eventTags = mapOf(10L to listOf(coachella)),
-            groupTags = mapOf(20L to listOf(coachella))
+            ancestry = listOf(10L, 20L),
+            eventTags = mapOf(10L to listOf(coachella), 20L to listOf(coachella))
         )
 
         assertEquals(1, result.size)
@@ -89,10 +81,8 @@ class EffectiveTagsResolverTest {
     fun `an unfiled recording inherits nothing`() {
         val result = EffectiveTagsResolver.resolve(
             directTags = listOf(loud),
-            eventId = null,
-            groupChain = emptyList(),
-            eventTags = mapOf(10L to listOf(saturday)),
-            groupTags = mapOf(20L to listOf(coachella))
+            ancestry = emptyList(),
+            eventTags = mapOf(10L to listOf(saturday), 20L to listOf(coachella))
         )
 
         assertEquals(listOf("Loud"), result.map { it.tag.name })
@@ -102,10 +92,8 @@ class EffectiveTagsResolverTest {
     fun `an event outside any group inherits only the event's tags`() {
         val result = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
-            eventId = 10,
-            groupChain = emptyList(),
-            eventTags = mapOf(10L to listOf(saturday)),
-            groupTags = mapOf(20L to listOf(coachella))
+            ancestry = listOf(10L),
+            eventTags = mapOf(10L to listOf(saturday), 20L to listOf(coachella))
         )
 
         assertEquals(listOf("Saturday"), result.map { it.tag.name })
@@ -118,17 +106,13 @@ class EffectiveTagsResolverTest {
         // is left behind to clean up — and nothing lies.
         val before = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
-            eventId = 10,
-            groupChain = listOf(20L),
-            eventTags = emptyMap(),
-            groupTags = mapOf(20L to listOf(coachella))
+            ancestry = listOf(10L, 20L),
+            eventTags = mapOf(20L to listOf(coachella))
         )
         val after = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
-            eventId = 11,
-            groupChain = emptyList(),
-            eventTags = emptyMap(),
-            groupTags = mapOf(20L to listOf(coachella))
+            ancestry = listOf(11L),
+            eventTags = mapOf(20L to listOf(coachella))
         )
 
         assertEquals(listOf("Coachella 2026"), before.map { it.tag.name })
@@ -143,9 +127,12 @@ class EffectiveTagsResolverTest {
 
         val resolved = EffectiveTagsResolver.resolveAll(
             records = listOf(filed, elsewhere, unfiled),
-            eventTags = mapOf(10L to listOf(saturday)),
-            groupTags = mapOf(20L to listOf(coachella)),
-            groupIdByEvent = mapOf(10L to 20L, 11L to null)
+            eventTags = mapOf(10L to listOf(saturday), 20L to listOf(coachella)),
+            events = listOf(
+                EventEntity(eventId = 10, name = "Saturday", parentId = 20L),
+                EventEntity(eventId = 11, name = "Sunday"),
+                EventEntity(eventId = 20, name = "Coachella 2026")
+            )
         )
 
         assertEquals(
@@ -194,14 +181,12 @@ class EffectiveTagsResolverTest {
 
         val result = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
-            eventId = 10,
-            groupChain = listOf(20L, 21L),
-            eventTags = emptyMap(),
-            groupTags = mapOf(21L to listOf(festivalTag))
+            ancestry = listOf(10L, 20L, 21L),
+            eventTags = mapOf(21L to listOf(festivalTag))
         )
 
         assertEquals(listOf(90L), result.map { it.tag.tagId })
-        assertEquals(TagSource.GROUP, result.single().source)
+        assertEquals(TagSource.ANCESTOR, result.single().source)
     }
 
     @Test
@@ -212,10 +197,8 @@ class EffectiveTagsResolverTest {
 
         val result = EffectiveTagsResolver.resolve(
             directTags = emptyList(),
-            eventId = 10,
-            groupChain = listOf(20L, 21L),
-            eventTags = emptyMap(),
-            groupTags = mapOf(20L to listOf(shared), 21L to listOf(shared))
+            ancestry = listOf(10L, 20L, 21L),
+            eventTags = mapOf(20L to listOf(shared), 21L to listOf(shared))
         )
 
         assertEquals(1, result.size)

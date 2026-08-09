@@ -3,7 +3,6 @@ package inga.bpmetrics.ui.export
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.ExportPresetEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
@@ -32,7 +31,7 @@ class ExportScopeResetTest {
 
     private val recordsFlow = MutableStateFlow<List<BpmRecord>>(emptyList())
     private val eventsFlow = MutableStateFlow<List<EventEntity>>(emptyList())
-    private val groupsFlow = MutableStateFlow<List<EventGroupEntity>>(emptyList())
+    private val groupsFlow = MutableStateFlow<List<EventEntity>>(emptyList())
     private val peopleFlow = MutableStateFlow<List<PersonEntity>>(emptyList())
     private val presetsFlow = MutableStateFlow<List<ExportPresetEntity>>(emptyList())
     private val tagsFlow = MutableStateFlow<Map<Long, List<EffectiveTag>>>(emptyMap())

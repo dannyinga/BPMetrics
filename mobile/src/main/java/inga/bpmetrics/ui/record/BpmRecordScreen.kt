@@ -587,7 +587,7 @@ private fun Breadcrumb(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
-                    .clickable { onOpenGroup(group.groupId) }
+                    .clickable { onOpenGroup(group.eventId) }
                     .padding(vertical = 4.dp, horizontal = 2.dp)
             )
             Text(

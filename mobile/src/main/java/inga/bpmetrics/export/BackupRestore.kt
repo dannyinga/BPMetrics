@@ -34,7 +34,8 @@ data class RestoreResult(
  */
 suspend fun restoreBackup(
     backup: LibraryBackup,
-    repository: LibraryRepository
+    repository: LibraryRepository,
+    context: android.content.Context
 ): RestoreResult {
     val tag = "BackupRestore"
 
@@ -46,12 +47,28 @@ suspend fun restoreBackup(
     }
 
     return try {
+      repository.inBulk {
         var peopleCreated = 0
         val existingPeople = repository.getAllPeople().first().associateBy { it.name.lowercase() }
         backup.people.forEach { person ->
-            if (existingPeople[person.name.lowercase()] == null) {
-                repository.addPerson(person.name, person.colorArgb)
-                peopleCreated++
+            val personId = existingPeople[person.name.lowercase()]?.personId
+                ?: repository.addPerson(person.name, person.colorArgb).also { peopleCreated++ }
+
+            // Their own resting and maximum, which decide where every zone boundary sits on their
+            // charts. Absent from the format until 4, so an older backup leaves them inherited.
+            if (person.restingBpm != null || person.maxBpm != null) {
+                repository.setPersonZones(personId, person.restingBpm, person.maxBpm)
+            }
+            if (person.createdAt > 0L) repository.setPersonCreatedAt(personId, person.createdAt)
+            val photo = person.photoBase64?.fromBase64()
+            if (photo != null || person.photoCrop != null) {
+                repository.restorePersonPhoto(
+                    context = context,
+                    personId = personId,
+                    bytes = photo,
+                    crop = person.photoCrop.toCover(),
+                    nameHint = person.name
+                )
             }
         }
 
@@ -69,11 +86,26 @@ suspend fun restoreBackup(
         }
 
         // Groups before events before records, so each link exists before something needs it.
+        //
+        // Two passes over each, because a parent is named rather than numbered and may appear after
+        // its child in the file. Creating everything first means the second pass can always resolve
+        // the name — a single pass silently dropped any nesting that ran backwards through the list.
         var groupsCreated = 0
         val groupIdsByName = mutableMapOf<String, Long>()
         backup.eventGroups.forEach { group ->
+            if (groupIdsByName.containsKey(group.name)) return@forEach
             groupIdsByName[group.name] = repository.createEventGroup(group.name)
             groupsCreated++
+        }
+        backup.eventGroups.forEach { group ->
+            val groupId = groupIdsByName[group.name] ?: return@forEach
+            if (group.notes.isNotBlank()) repository.setEventGroupNotes(groupId, group.notes)
+            group.parentName?.let { parent ->
+                groupIdsByName[parent]?.let { repository.setEventGroupParent(groupId, it) }
+            }
+            restoreCover(repository, context, LibraryRepository.CoverOwner.Collection(groupId),
+                group.cover, group.name)
+            group.tags.forEach { applyTag(repository, it) { id -> repository.addTagToGroup(groupId, id) } }
         }
 
         var eventsCreated = 0
@@ -86,6 +118,26 @@ suspend fun restoreBackup(
                 groupId = event.groupName?.let { groupIdsByName[it] }
             )
             eventsCreated++
+        }
+        backup.events.forEach { event ->
+            val eventId = eventIdsByName[event.name] ?: return@forEach
+            if (event.notes.isNotBlank()) repository.setEventNotes(eventId, event.notes)
+            repository.restoreEventTaxonomy(
+                eventId = eventId,
+                // An event naming itself as its parent is dropped rather than written. Everything
+                // downstream survives a cycle, but there is no reading of the file under which this
+                // was intended, so it is not worth carrying forward.
+                parentId = event.parentName
+                    ?.takeIf { it != event.name }
+                    ?.let { eventIdsByName[it] },
+                windowStart = event.windowStart,
+                windowEnd = event.windowEnd,
+                type = event.type,
+                excludedFromParentAnalysis = event.excludedFromParentAnalysis
+            )
+            restoreCover(repository, context, LibraryRepository.CoverOwner.Event(eventId),
+                event.cover, event.name)
+            event.tags.forEach { applyTag(repository, it) { id -> repository.addTagToEvent(eventId, id) } }
         }
 
         // Import records and remember where each one landed. Ids are reassigned on insert, so a
@@ -109,6 +161,8 @@ suspend fun restoreBackup(
                     repository.assignRecordsToEvent(listOf(newId), eventId)
                 }
             }
+            restoreCover(repository, context, LibraryRepository.CoverOwner.Recording(newId),
+                dto.cover, dto.title)
             imported++
         }
 
@@ -140,8 +194,60 @@ suspend fun restoreBackup(
         )
         Log.i(tag, "Restored $result")
         result
+      }
     } catch (e: Exception) {
         Log.e(tag, "Restore failed", e)
         RestoreResult(failure = e.message ?: e.toString())
     }
 }
+
+/**
+ * Writes a backup's cover onto whatever it belonged to, if it had one.
+ *
+ * Silent when there is no cover, which is the common case, so every call site can be one line
+ * rather than an `if` around three.
+ */
+private suspend fun restoreCover(
+    repository: LibraryRepository,
+    context: android.content.Context,
+    owner: LibraryRepository.CoverOwner,
+    dto: CoverDto?,
+    nameHint: String
+) {
+    if (dto == null) return
+    repository.restoreCover(
+        context = context,
+        owner = owner,
+        bytes = dto.imageBase64?.fromBase64(),
+        crop = dto.toCover(),
+        nameHint = nameHint
+    )
+}
+
+/**
+ * Finds or creates the tag a backup named, then hands its id to [attach].
+ *
+ * Tags travel as "Category:Tag" because ids are reassigned on import. A name with no colon is
+ * treated as uncategorised rather than dropped — a value is more use on the wrong axis than absent,
+ * and moving it afterwards is one gesture.
+ */
+private suspend fun applyTag(
+    repository: LibraryRepository,
+    qualified: String,
+    attach: suspend (Long) -> Unit
+) {
+    val categoryName = qualified.substringBefore(':', "Uncategorized").ifBlank { "Uncategorized" }
+    val tagName = qualified.substringAfter(':', qualified).trim()
+    repository.findOrCreateTag(categoryName, tagName)?.let { attach(it) }
+}
+
+/** The framing a backup recorded, defaulting to the whole picture when it carried none. */
+internal fun CoverDto?.toCover(): inga.bpmetrics.library.Cover =
+    inga.bpmetrics.library.Cover(
+        path = "",
+        cropLeft = this?.cropLeft ?: 0f,
+        cropTop = this?.cropTop ?: 0f,
+        cropRight = this?.cropRight ?: 1f,
+        cropBottom = this?.cropBottom ?: 1f,
+        blur = this?.blur ?: 0f
+    )

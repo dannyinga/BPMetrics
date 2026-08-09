@@ -13,6 +13,8 @@ import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.library.Cover
+import inga.bpmetrics.library.TagEntity
 import inga.bpmetrics.library.WatchEntity
 import inga.bpmetrics.ui.settings.PreferenceSnapshot
 import java.io.BufferedReader
@@ -32,6 +34,20 @@ import java.sql.Date
  * So people and watches are carried alongside the records, and each record refers to them by a
  * stable key rather than by a database id — ids are reassigned on insert, names and watch UUIDs
  * are not.
+ *
+ * ## Every field of every DTO below has a default. This is load-bearing.
+ *
+ * Gson does not run constructors. Given a class with a required parameter it allocates the object
+ * through `Unsafe` and assigns whatever fields the JSON mentions, so a Kotlin default never runs and
+ * a key the file omits is left as **null** — including on a property declared non-null, which the
+ * compiler then lets every call site dereference. `EventDto.tags: List<String> = emptyList()` came
+ * back null from a format 3 file for exactly this reason, and the restore fell over on the first
+ * `forEach`. Restoring an older backup is the one moment this format exists for.
+ *
+ * When *all* parameters have defaults, Kotlin emits a synthetic no-arg constructor, Gson finds and
+ * calls it, and the defaults apply as written. So the rule is: no required parameters, ever, in
+ * anything that gets deserialised here. A new field arriving without one reintroduces the bug for
+ * every field of its class, not just its own.
  *
  * @property formatVersion Incremented when the shape changes, so an older build can refuse a file
  * it would otherwise half-read.
@@ -57,9 +73,21 @@ data class LibraryBackup(
          * Added here the moment events existed, rather than once they had a screen. A backup that
          * silently stops being complete is the failure this format keeps having to be rescued from.
          *
-         * Export presets are still absent because they still do not exist.
+         * 4: everything three had stopped covering. Tags on events and on collections, collection
+         *    nesting, cover images and their crops, people's photographs and their own heart rate
+         *    figures, and an event's type, window and parent.
+         *
+         *    Three sprints of schema went by without this being touched, so a backup taken then
+         *    restored a library with every recording intact and every piece of *organisation* gone
+         *    — which is worse than an obvious failure, because it looks like it worked. The round
+         *    trip is now asserted by a test for exactly that reason.
+         *
+         * Export presets are still absent, deliberately: they describe how an export looks rather
+         * than what the library contains, they are shareable as their own files, and a preset from
+         * a newer build refuses to load on an older one — which a whole-library restore should
+         * never do.
          */
-        const val FORMAT_VERSION = 3
+        const val FORMAT_VERSION = 4
     }
 }
 
@@ -70,17 +98,57 @@ data class LibraryBackup(
  * restore rebuilds the links. Two events sharing a name will merge on restore, which is a fair
  * reading of what the user meant by naming them the same thing.
  */
+/**
+ * A cover image and how it is framed, carried inline.
+ *
+ * The bytes rather than the stored file name. A cover lives in the app's own private storage under
+ * a name meaningful only to that install, so exporting the name produces a backup that restores
+ * every crop and every blur setting and no pictures at all — which looks like it worked.
+ *
+ * Covers are downscaled to 512px on the long edge before they are stored, so a library with a dozen
+ * of them adds a few hundred kilobytes to the file. That is the right trade against a backup that
+ * is quietly incomplete.
+ */
+data class CoverDto(
+    val imageBase64: String? = null,
+    val cropLeft: Float = 0f,
+    val cropTop: Float = 0f,
+    val cropRight: Float = 1f,
+    val cropBottom: Float = 1f,
+    val blur: Float = 0f
+)
+
 data class EventDto(
-    val name: String,
+    val name: String = "",
     val groupName: String? = null,
     val notes: String = "",
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+    /** Tags applied to the event itself, in "Category:Tag" form. Absent entirely before format 4. */
+    val tags: List<String> = emptyList(),
+    val type: String? = null,
+    /** The event above this one, by name. Events nest as of the taxonomy work. */
+    val parentName: String? = null,
+    val windowStart: Long? = null,
+    val windowEnd: Long? = null,
+    val excludedFromParentAnalysis: Boolean = false,
+    val cover: CoverDto? = null
 )
 
 data class EventGroupDto(
-    val name: String,
+    val name: String = "",
     val notes: String = "",
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+    /** Tags applied to the collection itself. Absent entirely before format 4. */
+    val tags: List<String> = emptyList(),
+    /**
+     * The collection above this one, by name.
+     *
+     * Without it a three-level festival came back as three unrelated collections — the nesting was
+     * simply dropped, silently, and rebuilding it by hand is exactly the work a backup exists to
+     * avoid.
+     */
+    val parentName: String? = null,
+    val cover: CoverDto? = null
 )
 
 /**
@@ -91,8 +159,8 @@ data class EventGroupDto(
  * and travels as-is: that is the whole point of a frozen analysis.
  */
 data class SavedAnalysisDto(
-    val name: String,
-    val createdAt: Long,
+    val name: String = "",
+    val createdAt: Long = 0L,
     val filterDescription: String = "",
     val kind: String = "GROUP",
     val windowStartMs: Long? = null,
@@ -102,25 +170,39 @@ data class SavedAnalysisDto(
 
 data class SavedAnalysisRecordDto(
     /** The recording's id in the library this backup came from. Remapped on restore. */
-    val recordId: Long,
-    val title: String,
-    val date: Long,
-    val minBpm: Double?,
-    val avgBpm: Double?,
-    val maxBpm: Double?,
-    val activeDurationMs: Long,
+    val recordId: Long = 0L,
+    val title: String = "",
+    val date: Long = 0L,
+    val minBpm: Double? = null,
+    val avgBpm: Double? = null,
+    val maxBpm: Double? = null,
+    val activeDurationMs: Long = 0L,
     val tagsEncoded: String = "",
     val wearerName: String = "",
     val watchName: String = ""
 )
 
 data class PersonDto(
-    val name: String,
-    val colorArgb: Int
+    val name: String = "",
+    val colorArgb: Int = 0,
+    /** When the profile was made, so a restored library sorts people as it did. */
+    val createdAt: Long = 0L,
+    /** Their own resting and maximum, or null to inherit the app-wide figures. */
+    val restingBpm: Int? = null,
+    val maxBpm: Int? = null,
+    /**
+     * Their photograph, inline as base64.
+     *
+     * The bytes rather than the file name, because a backup is one file that has to restore on a
+     * different device — a name pointing into another install's private storage restores to
+     * nothing. Photographs are capped at 512px, so this costs tens of kilobytes each.
+     */
+    val photoBase64: String? = null,
+    val photoCrop: CoverDto? = null
 )
 
 data class WatchDto(
-    val watchId: String,
+    val watchId: String = "",
     val deviceName: String = "",
     val lastKnownModel: String = ""
 )
@@ -136,7 +218,7 @@ data class BpmRecordJsonDto(
      * what lets a saved analysis find the recordings it referred to after they have been renumbered.
      */
     val recordId: Long = 0L,
-    val title: String,
+    val title: String = "",
     val description: String = "",
     val deviceId: String = "Watch",
     /** Who wore it, by name — matched to a person on restore, created if missing. */
@@ -146,9 +228,11 @@ data class BpmRecordJsonDto(
     /** Which event this was part of, by name — events are renumbered on import. */
     val eventName: String? = null,
     val date: Long = 0L,
-    val startTime: Long,
-    val endTime: Long,
+    val startTime: Long = 0L,
+    val endTime: Long = 0L,
     val tags: List<String> = emptyList(), // "Category:Tag" format
+    /** A cover set on this recording directly, rather than inherited from an event. */
+    val cover: CoverDto? = null,
     val dataPoints: List<BpmDataPointDto> = emptyList()
 )
 
@@ -179,32 +263,67 @@ object JsonExporter {
         savedAnalyses: List<SavedAnalysisDto> = emptyList(),
         settings: List<PreferenceSnapshot> = emptyList(),
         events: List<EventEntity> = emptyList(),
-        eventGroups: List<EventGroupEntity> = emptyList()
+        eventGroups: List<EventGroupEntity> = emptyList(),
+        /** Tags applied to each event, by event id. */
+        eventTags: Map<Long, List<TagEntity>> = emptyMap(),
+        /** Tags applied to each collection, by collection id. */
+        groupTags: Map<Long, List<TagEntity>> = emptyMap(),
+        /**
+         * Reads a stored image by its file name, for inlining.
+         *
+         * Passed in rather than read here so this stays a pure transformation and can be tested
+         * without a filesystem — the round-trip test supplies bytes directly.
+         */
+        readImage: (String) -> ByteArray? = { null }
     ): String {
         val categoryNames = categories.associate { it.categoryId to it.name }
         val peopleById = people.associateBy { it.personId }
         val eventsById = events.associateBy { it.eventId }
         val groupNames = eventGroups.associate { it.groupId to it.name }
 
-        // Only the events these recordings belong to, and only the groups those events sit in.
+        // The events these recordings belong to, **and everything above them**.
+        //
+        // Only the direct events would export a set and lose the day and the festival it was part
+        // of — `parentName` would name something the file does not contain, and the restore would
+        // rebuild a flat list. Collections are events since the fold, so one ancestry walk covers
+        // what used to be a separate climb through collections and their parents.
         val usedEvents = records
             .mapNotNull { it.metadata.eventId }
             .distinct()
-            .mapNotNull { eventsById[it] }
+            .flatMap { inga.bpmetrics.library.EventTree.ancestryOf(events, it) }
+            .distinctBy { it.eventId }
+        val eventNames = events.associate { it.eventId to it.name }
         val usedEventDtos = usedEvents.map { event ->
-            EventDto(event.name, event.groupId?.let { groupNames[it] }, event.notes, event.createdAt)
+            EventDto(
+                name = event.name,
+                groupName = event.groupId?.let { groupNames[it] },
+                notes = event.notes,
+                createdAt = event.createdAt,
+                tags = eventTags[event.eventId].orEmpty().map { it.qualified(categoryNames) },
+                type = event.type,
+                parentName = event.parentId?.let { eventNames[it] },
+                windowStart = event.windowStart,
+                windowEnd = event.windowEnd,
+                excludedFromParentAnalysis = event.excludedFromParentAnalysis,
+                cover = event.ownCover?.toDto(readImage)
+            )
         }
-        val usedGroupDtos = usedEvents
-            .mapNotNull { it.groupId }
-            .distinct()
-            .mapNotNull { id -> eventGroups.firstOrNull { it.groupId == id } }
-            .map { EventGroupDto(it.name, it.notes, it.createdAt) }
 
         val usedPeople = records
             .mapNotNull { it.metadata.personId }
             .distinct()
             .mapNotNull { peopleById[it] }
-            .map { PersonDto(name = it.name, colorArgb = it.colorArgb) }
+            .map { person ->
+                PersonDto(
+                    name = person.name,
+                    colorArgb = person.colorArgb,
+                    createdAt = person.createdAt,
+                    restingBpm = person.restingBpm,
+                    maxBpm = person.maxBpm,
+                    photoBase64 = person.photoPath?.let(readImage)?.toBase64(),
+                    photoCrop = person.ownPhoto?.toDto { null }
+                )
+            }
 
         val usedWatchIds = records.mapNotNull { it.metadata.watchId }.toSet()
         val usedWatches = watches
@@ -227,9 +346,19 @@ object JsonExporter {
                 endTime = record.metadata.endTime,
                 // Category *name*, not id. This used to write the id while the importer expected a
                 // name, so tags never survived a round trip.
-                tags = record.tags.map { tag ->
-                    "${categoryNames[tag.parentCategoryId] ?: "Uncategorized"}:${tag.name}"
-                },
+                tags = record.tags.map { it.qualified(categoryNames) },
+                cover = record.metadata.coverPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let {
+                        Cover(
+                            path = it,
+                            cropLeft = record.metadata.coverCropLeft ?: 0f,
+                            cropTop = record.metadata.coverCropTop ?: 0f,
+                            cropRight = record.metadata.coverCropRight ?: 1f,
+                            cropBottom = record.metadata.coverCropBottom ?: 1f,
+                            blur = record.metadata.coverBlur ?: 0f
+                        ).toDto(readImage)
+                    },
                 dataPoints = record.dataPoints.map { BpmDataPointDto(it.timestamp, it.bpm) }
             )
         }
@@ -242,7 +371,10 @@ object JsonExporter {
                 records = dtos,
                 savedAnalyses = savedAnalyses,
                 settings = settings
-                , eventGroups = usedGroupDtos
+                // Nothing writes `eventGroups` since the fold — collections travel as events with
+                // `type: "Collection"`. The field stays in the format so a file written before
+                // then still restores.
+                , eventGroups = emptyList()
                 , events = usedEventDtos
             )
         )
@@ -351,3 +483,32 @@ object JsonExporter {
         }
     }
 }
+
+/** How far up a chain of collections to walk before assuming a cycle. */
+private const val MAX_ANCESTRY = 32
+
+/** A tag as the backup writes it: the axis it belongs to, then the value. */
+internal fun TagEntity.qualified(categoryNames: Map<Long, String>): String =
+    "${categoryNames[parentCategoryId] ?: "Uncategorized"}:$name"
+
+internal fun ByteArray.toBase64(): String =
+    android.util.Base64.encodeToString(this, android.util.Base64.NO_WRAP)
+
+internal fun String.fromBase64(): ByteArray? =
+    runCatching { android.util.Base64.decode(this, android.util.Base64.NO_WRAP) }.getOrNull()
+
+/**
+ * A cover as the backup carries it, with the image inlined if it can be read.
+ *
+ * The crop survives even when the image cannot — a missing file leaves the framing intact so a
+ * replacement picture lands the way the old one was set, rather than resetting to the whole frame.
+ */
+internal fun Cover.toDto(readImage: (String) -> ByteArray?): CoverDto =
+    CoverDto(
+        imageBase64 = readImage(path)?.toBase64(),
+        cropLeft = cropLeft,
+        cropTop = cropTop,
+        cropRight = cropRight,
+        cropBottom = cropBottom,
+        blur = blur
+    )

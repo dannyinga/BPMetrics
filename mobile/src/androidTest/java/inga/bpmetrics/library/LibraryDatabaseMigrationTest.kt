@@ -1076,4 +1076,258 @@ class LibraryDatabaseMigrationTest {
         assertNotNull(db)
         db.close()
     }
+
+    // --- 23 -> 24: collections fold into the event tree ---
+
+    /**
+     * The whole point of the fold: a collection comes out the other side as an event.
+     *
+     * Room cannot help here. The entities did not change, so `24.json` has the same identity hash as
+     * `23.json` and `runMigrationsAndValidate` passes however wrong the data SQL is. Every assertion
+     * below is the only thing standing between a mistake and a real library.
+     */
+    @Test
+    fun migrate23To24_turnsCollectionsIntoEvents() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL(
+                "INSERT INTO event_groups (groupId, name, notes, createdAt, parentGroupId) " +
+                    "VALUES (1, 'Griztronics', 'the big one', 100, NULL)"
+            )
+            execSQL(
+                "INSERT INTO event_groups (groupId, name, notes, createdAt, parentGroupId) " +
+                    "VALUES (2, 'Day 1', '', 200, 1)"
+            )
+            execSQL(
+                "INSERT INTO events (eventId, name, notes, createdAt, groupId) " +
+                    "VALUES (5, 'Subtronics', '', 300, 2)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        // Both collections are now events, carrying their names, notes and creation times.
+        db.query(
+            "SELECT name, notes, createdAt FROM events WHERE type = 'Collection' ORDER BY createdAt"
+        ).use {
+            assertEquals(2, it.count)
+            it.moveToFirst()
+            assertEquals("Griztronics", it.getString(0))
+            assertEquals("the big one", it.getString(1))
+            assertEquals(100L, it.getLong(2))
+        }
+
+        // Day 1 sits under Griztronics — collection nesting became event nesting.
+        db.query(
+            "SELECT p.name FROM events c JOIN events p ON c.parentId = p.eventId " +
+                "WHERE c.name = 'Day 1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Griztronics", it.getString(0))
+        }
+
+        // And the event that was *in* Day 1 is now under it.
+        db.query(
+            "SELECT p.name FROM events c JOIN events p ON c.parentId = p.eventId " +
+                "WHERE c.name = 'Subtronics'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Day 1", it.getString(0))
+        }
+
+        db.close()
+    }
+
+    /**
+     * Nothing is thrown away.
+     *
+     * The promise this migration was written under: `event_groups` stays exactly as it was, so if
+     * the fold turns out to be the wrong shape the original arrangement can still be read back. A
+     * destructive migration shipping the same day as the code that needs it has no way back.
+     */
+    @Test
+    fun migrate23To24_keepsTheOriginalCollections() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'Grizt', 100)")
+            execSQL("INSERT INTO events (eventId, name, createdAt, groupId) VALUES (5, 'Sub', 300, 1)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query("SELECT name FROM event_groups").use {
+            assertEquals(1, it.count)
+            it.moveToFirst()
+            assertEquals("Grizt", it.getString(0))
+        }
+        // The old link is left pointing where it always did, for the same reason.
+        db.query("SELECT groupId FROM events WHERE name = 'Sub'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1L, it.getLong(0))
+        }
+
+        db.close()
+    }
+
+    /** A collection's tags follow it, or the fold would strip the labelling off every container. */
+    @Test
+    fun migrate23To24_carriesCollectionTags() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO categories (categoryId, name) VALUES (1, 'Venue')")
+            execSQL("INSERT INTO tags (tagId, name, parentCategoryId) VALUES (1, 'Red Rocks', 1)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'Grizt', 100)")
+            execSQL("INSERT INTO event_group_tag_cross_ref (groupId, tagId) VALUES (1, 1)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query(
+            "SELECT t.name FROM tags t " +
+                "JOIN event_tag_cross_ref x ON x.tagId = t.tagId " +
+                "JOIN events e ON e.eventId = x.eventId WHERE e.name = 'Grizt'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Red Rocks", it.getString(0))
+        }
+
+        db.close()
+    }
+
+    /** A cover set on a collection is still there once it is an event. */
+    @Test
+    fun migrate23To24_carriesCollectionCovers() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL(
+                "INSERT INTO event_groups " +
+                    "(groupId, name, createdAt, coverPath, coverCropTop, coverBlur) " +
+                    "VALUES (1, 'Grizt', 100, 'cover-1.jpg', 0.25, 0.4)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query(
+            "SELECT coverPath, coverCropTop, coverBlur FROM events WHERE name = 'Grizt'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("cover-1.jpg", it.getString(0))
+            assertEquals(0.25f, it.getFloat(1), 0.001f)
+            assertEquals(0.4f, it.getFloat(2), 0.001f)
+        }
+
+        db.close()
+    }
+
+    /**
+     * A new event id must not land on an existing one.
+     *
+     * The mapping is `groupId + max(eventId)`, and the tempting way to write that — the subquery
+     * inline in the INSERT — is re-evaluated per row, so the offset climbs underneath its own
+     * statement. Low group ids against existing events is the arrangement that exposes it.
+     */
+    @Test
+    fun migrate23To24_doesNotCollideWithExistingEventIds() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (1, 'Existing A', 10)")
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (2, 'Existing B', 20)")
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (3, 'Existing C', 30)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'One', 100)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (2, 'Two', 200)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (3, 'Three', 300)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        // Six distinct events, and none of the originals overwritten.
+        db.query("SELECT COUNT(*), COUNT(DISTINCT eventId) FROM events").use {
+            it.moveToFirst()
+            assertEquals(6, it.getInt(0))
+            assertEquals(6, it.getInt(1))
+        }
+        db.query("SELECT name FROM events WHERE eventId = 1").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Existing A", it.getString(0))
+        }
+
+        db.close()
+    }
+
+    /**
+     * An event already nested in 23 keeps the parent it was given.
+     *
+     * Nesting was the deliberate, finer statement of where something lives; a collection is the
+     * older and coarser one. Letting the collection win would undo a filing decision.
+     */
+    @Test
+    fun migrate23To24_leavesAnExistingParentAlone() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'Grizt', 100)")
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (5, 'Day 1', 200)")
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, groupId, parentId) " +
+                    "VALUES (6, 'Sub', 300, 1, 5)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query("SELECT parentId FROM events WHERE name = 'Sub'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(5L, it.getLong(0))
+        }
+
+        db.close()
+    }
+
+    /**
+     * Running it twice must not duplicate the library.
+     *
+     * `INSERT OR IGNORE` does not make this safe on its own: a second pass computes a larger offset,
+     * so the same collections arrive under fresh ids and conflict with nothing. The guard inside the
+     * migration is what this asserts.
+     */
+    @Test
+    fun migrate23To24_isIdempotent() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'Grizt', 100)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (2, 'Day 1', 200)")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        LibraryDatabase.MIGRATION_23_24.migrate(db)
+
+        db.query("SELECT COUNT(*) FROM events").use {
+            it.moveToFirst()
+            assertEquals(2, it.getInt(0))
+        }
+
+        db.close()
+    }
+
+    /** A library with no collections migrates to a library with no collections. */
+    @Test
+    fun migrate23To24_withNothingToFold() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (1, 'Just an event', 10)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query("SELECT COUNT(*) FROM events").use {
+            it.moveToFirst()
+            assertEquals(1, it.getInt(0))
+        }
+        db.query("SELECT parentId FROM events WHERE eventId = 1").use {
+            it.moveToFirst()
+            assertTrue(it.isNull(0))
+        }
+
+        db.close()
+    }
 }

@@ -440,9 +440,9 @@ class ExportUtilityViewModel(
             is ExportSource.Group -> {
                 // The whole subtree. Exporting "Coachella" means the festival, its days and every
                 // set inside them, or a collection holding only collections would export nothing.
-                val inScope = inga.bpmetrics.library.CollectionTree
+                val inScope = inga.bpmetrics.library.EventTree
                     .descendantsOf(groups, source.groupId)
-                val eventIds = events.filter { it.groupId in inScope }
+                val eventIds = events.filter { it.parentId in inScope }
                     .map { it.eventId }
                     .toSet()
                 library.filter { it.metadata.eventId in eventIds }
@@ -470,7 +470,7 @@ class ExportUtilityViewModel(
             is ExportSource.Event ->
                 events.firstOrNull { it.eventId == source.eventId }?.displayName.orEmpty()
             is ExportSource.Group ->
-                groups.firstOrNull { it.groupId == source.groupId }?.displayName.orEmpty()
+                groups.firstOrNull { it.eventId == source.groupId }?.displayName.orEmpty()
             is ExportSource.SavedAnalysis -> savedAnalysisName.value
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
@@ -497,7 +497,7 @@ class ExportUtilityViewModel(
             is ExportSource.Event ->
                 events.firstOrNull { it.eventId == source.eventId }?.displayName.orEmpty()
             is ExportSource.Group ->
-                groups.firstOrNull { it.groupId == source.groupId }?.displayName.orEmpty()
+                groups.firstOrNull { it.eventId == source.groupId }?.displayName.orEmpty()
             is ExportSource.SavedAnalysis -> savedAnalysisName.value
             is ExportSource.Recordings -> {
                 val single = records.singleOrNull()

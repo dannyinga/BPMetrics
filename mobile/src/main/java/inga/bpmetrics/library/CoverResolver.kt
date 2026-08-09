@@ -79,8 +79,8 @@ enum class CoverSource {
     /** Set on the event this recording is filed under. */
     EVENT,
 
-    /** Set on a collection above it — its event's, or one of that collection's parents. */
-    GROUP
+    /** Set on an event further up the tree. See [TagSource.ANCESTOR]. */
+    ANCESTOR
 }
 
 /** A cover as it applies to something, and why. */
@@ -121,48 +121,29 @@ object CoverResolver {
         directCover?.let { return EffectiveCover(it, CoverSource.DIRECT) }
         eventCover?.let { return EffectiveCover(it, CoverSource.EVENT) }
         groupChainCovers.firstNotNullOfOrNull { it }
-            ?.let { return EffectiveCover(it, CoverSource.GROUP) }
+            ?.let { return EffectiveCover(it, CoverSource.ANCESTOR) }
         return null
-    }
-
-    /**
-     * The collections above [groupId], nearest first.
-     *
-     * Cycle-guarded. A collection that is its own ancestor should be impossible — `CollectionTree`
-     * refuses to create one — but a walk up parents is the code that *hangs* rather than throws if
-     * one ever exists, and this runs while a list is being drawn.
-     */
-    fun ancestryOf(groupId: Long?, parents: Map<Long, Long?>): List<Long> {
-        val chain = mutableListOf<Long>()
-        val seen = mutableSetOf<Long>()
-        var current = groupId
-        while (current != null && seen.add(current)) {
-            chain += current
-            current = parents[current]
-        }
-        return chain
     }
 
     /**
      * The cover for a recording, from whole maps rather than a pre-walked chain.
      *
-     * The convenience the UI actually wants: a screen holds every event and collection already, and
-     * asking it to assemble an ancestry per row is how one screen comes to walk the tree slightly
-     * differently from another.
+     * The convenience the UI actually wants: a screen holds every event already, and asking it to
+     * assemble an ancestry per row is how one screen comes to walk the tree slightly differently
+     * from another. This had its own copy of that walk until TX-1.4; it now calls the same
+     * [EventTree.ancestryOf] as everything else, cycle guard and all.
      */
     fun forRecording(
         directCover: Cover?,
         eventId: Long?,
         eventCovers: Map<Long, Cover?>,
-        eventGroups: Map<Long, Long?>,
-        groupCovers: Map<Long, Cover?>,
-        groupParents: Map<Long, Long?>
+        events: List<EventEntity>
     ): EffectiveCover? {
-        val groupId = eventId?.let { eventGroups[it] }
+        val ancestry = eventId?.let { EventTree.ancestryOf(events, it) }.orEmpty()
         return resolve(
             directCover = directCover,
-            eventCover = eventId?.let { eventCovers[it] },
-            groupChainCovers = ancestryOf(groupId, groupParents).map { groupCovers[it] }
+            eventCover = ancestry.firstOrNull()?.let { eventCovers[it.eventId] },
+            groupChainCovers = ancestry.drop(1).map { eventCovers[it.eventId] }
         )
     }
 }

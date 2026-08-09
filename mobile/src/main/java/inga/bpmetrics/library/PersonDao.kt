@@ -47,6 +47,16 @@ interface PersonDao {
     @Query("UPDATE people SET restingBpm = :restingBpm, maxBpm = :maxBpm WHERE personId = :personId")
     suspend fun updateZones(personId: Long, restingBpm: Int?, maxBpm: Int?)
 
+    /**
+     * When the profile was made.
+     *
+     * Only a restore sets this — the people list is ordered by it, so a restored library would
+     * otherwise show everyone in the order the backup happened to be written rather than the order
+     * they were added.
+     */
+    @Query("UPDATE people SET createdAt = :createdAt WHERE personId = :personId")
+    suspend fun updateCreatedAt(personId: Long, createdAt: Long)
+
     @Query("UPDATE people SET colorArgb = :colorArgb WHERE personId = :personId")
     suspend fun updateColor(personId: Long, colorArgb: Int)
 

@@ -382,10 +382,10 @@ class AnalysisViewModel(
                     // The whole subtree, not just this collection's own events. Analysing
                     // "Coachella" has to mean the festival, its days, and every set inside them —
                     // otherwise a collection that holds only other collections analyses to nothing.
-                    val inScope = inga.bpmetrics.library.CollectionTree
+                    val inScope = inga.bpmetrics.library.EventTree
                         .descendantsOf(groups, groupId)
                     val ids = library.events
-                        .filter { it.groupId in inScope }
+                        .filter { it.parentId in inScope }
                         .map { it.eventId }
                         .toSet()
                     AnalysisRecord.from(
@@ -402,11 +402,11 @@ class AnalysisViewModel(
                     repository.getAllEventGroups(),
                     repository.getAllEvents()
                 ) { groups, events ->
-                    val inScope = inga.bpmetrics.library.CollectionTree
+                    val inScope = inga.bpmetrics.library.EventTree
                         .descendantsOf(groups, groupId)
-                    groups.firstOrNull { it.groupId == groupId }
+                    groups.firstOrNull { it.eventId == groupId }
                         ?.let { group ->
-                            AnalysisScope.Group(group, events.count { it.groupId in inScope })
+                            AnalysisScope.Group(group, events.count { it.parentId in inScope })
                         }
                         ?: AnalysisScope.Unknown
                 }
@@ -502,7 +502,7 @@ private fun LibraryRepository.describeFilter(
                 .map { it.displayName },
             events = events.filter { it.eventId in filter.selectedEventIds }
                 .map { it.displayName },
-            groups = groups.filter { it.groupId in filter.selectedGroupIds }
+            groups = groups.filter { it.eventId in filter.selectedGroupIds }
                 .map { it.displayName }
         )
     )

@@ -625,12 +625,12 @@ fun GroupPickerDialog(
                         text = {
                             Text(
                                 group.group.displayName,
-                                fontWeight = if (currentGroupId == group.group.groupId) {
+                                fontWeight = if (currentGroupId == group.group.eventId) {
                                     FontWeight.Bold
                                 } else null
                             )
                         },
-                        onClick = { onPick(group.group.groupId) }
+                        onClick = { onPick(group.group.eventId) }
                     )
                 }
                 HorizontalDivider()

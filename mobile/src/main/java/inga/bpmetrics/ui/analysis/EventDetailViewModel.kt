@@ -7,7 +7,6 @@ import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EffectiveTagsResolver
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +29,7 @@ import kotlinx.coroutines.launch
  */
 data class EventDetailState(
     val event: EventEntity? = null,
-    val group: EventGroupEntity? = null,
+    val group: EventEntity? = null,
     val records: List<BpmRecord> = emptyList(),
     val people: Map<Long, PersonEntity> = emptyMap(),
     val analysis: ConcurrentAnalysis = ConcurrentAnalysis(),
@@ -100,26 +99,23 @@ class EventDetailViewModel(
      */
     val tags: StateFlow<List<EffectiveTag>> = combine(
         repository.getTagsForEvent(eventId),
-        eventFlow,
-        // Observed rather than read once, so tagging the collection refreshes this page rather
-        // than waiting for something else to reload it.
-        repository.allGroupTags,
-        repository.getAllEventGroups()
-    ) { own, event, groupTags, groups ->
+        // Observed rather than read once, so tagging an event above this one refreshes this page
+        // rather than waiting for something else to reload it.
+        repository.allEventTags,
+        repository.allEventsInTree
+    ) { own, eventTags, events ->
         EffectiveTagsResolver.resolve(
             // The event's own tags are direct *here*: this is the level they were applied at. The
             // same resolver, asked from one rung down the hierarchy.
             directTags = own,
-            eventId = null,
-            // Every collection above this event, nearest first — its own, then the one that holds
-            // that, and so on. A tag set on a festival reaches the sets inside its days.
-            groupChain = event?.groupId
-                ?.let { inga.bpmetrics.library.CollectionTree.ancestryOf(groups, it) }
-                ?.map { it.groupId }
-                ?.reversed()
-                .orEmpty(),
-            eventTags = emptyMap(),
-            groupTags = groupTags
+            // The full ancestry, this event included, rather than only what is above it. Its own
+            // tags are already in `directTags` and the resolver takes the nearest attribution, so
+            // they stay direct — while dropping the first entry would put its *parent* at depth
+            // zero, where the resolver labels tags "this event". That reads as a tag applied here
+            // and removable here, and it is neither.
+            ancestry = inga.bpmetrics.library.EventTree.ancestryOf(events, eventId)
+                .map { it.eventId },
+            eventTags = eventTags
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

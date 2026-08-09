@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
-import inga.bpmetrics.library.EventGroupEntity
+import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.ui.library.LibraryViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -24,7 +24,7 @@ sealed interface AnalysisScope {
 
     /** A group of events. */
     data class Group(
-        val group: EventGroupEntity,
+        val group: EventEntity,
         val eventCount: Int
     ) : AnalysisScope {
         override val title: String get() = group.displayName

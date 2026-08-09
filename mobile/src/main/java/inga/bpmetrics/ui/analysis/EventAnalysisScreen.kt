@@ -245,7 +245,7 @@ fun EventAnalysisScreen(
                     recordCount = state.records.size,
                     personCount = analysis.series.size,
                     groupName = state.group?.displayName,
-                    onOpenGroup = { state.group?.let { onOpenGroup(it.groupId) } }
+                    onOpenGroup = { state.group?.let { onOpenGroup(it.eventId) } }
                 )
             }
 

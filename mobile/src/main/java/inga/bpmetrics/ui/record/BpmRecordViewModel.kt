@@ -8,7 +8,6 @@ import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TagEntity
@@ -30,7 +29,7 @@ import kotlinx.coroutines.launch
 /** Where a recording sits in the hierarchy, for the breadcrumb. Both null when it is unfiled. */
 data class RecordPlacement(
     val event: EventEntity? = null,
-    val group: EventGroupEntity? = null
+    val group: EventEntity? = null
 )
 
 /**
@@ -101,13 +100,14 @@ class BpmRecordViewModel(
     /** Which event and group this belongs to, for the breadcrumb. */
     val placement: StateFlow<RecordPlacement> = combine(
         _record,
-        repository.getAllEvents(),
-        repository.getAllEventGroups()
-    ) { rec, events, groups ->
+        repository.allEventsInTree
+    ) { rec, events ->
         val event = rec?.metadata?.eventId?.let { id -> events.firstOrNull { it.eventId == id } }
         RecordPlacement(
             event = event,
-            group = event?.groupId?.let { id -> groups.firstOrNull { it.groupId == id } }
+            // The event above it, whatever kind of thing that is. Before the fold the breadcrumb
+            // could only name a collection, so a set nested inside a day showed no context at all.
+            group = event?.parentId?.let { id -> events.firstOrNull { it.eventId == id } }
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecordPlacement())
 
@@ -119,17 +119,14 @@ class BpmRecordViewModel(
      */
     val cover: StateFlow<inga.bpmetrics.library.Cover?> = combine(
         _record,
-        repository.getAllEvents(),
-        repository.getAllEventGroups()
-    ) { rec, events, groups ->
+        repository.allEventsInTree
+    ) { rec, events ->
         if (rec == null) return@combine null
         inga.bpmetrics.library.CoverResolver.forRecording(
             directCover = rec.metadata.ownCover,
             eventId = rec.metadata.eventId,
             eventCovers = events.associate { it.eventId to it.ownCover },
-            eventGroups = events.associate { it.eventId to it.groupId },
-            groupCovers = groups.associate { it.groupId to it.ownCover },
-            groupParents = groups.associate { it.groupId to it.parentGroupId }
+            events = events
         )?.cover
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 

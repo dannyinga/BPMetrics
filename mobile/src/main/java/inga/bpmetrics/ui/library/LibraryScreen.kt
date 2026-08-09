@@ -184,7 +184,7 @@ fun LibraryScreen(
 
     val pickGroupCover = rememberCoverPicker { uri ->
         coveringGroup?.let { target ->
-            viewModel.setGroupCover(context, target.group.groupId, uri) { ok ->
+            viewModel.setGroupCover(context, target.group.eventId, uri) { ok ->
                 if (ok) {
                     // Straight into framing, as everywhere else a picture is chosen.
                     framingGroup = target
@@ -260,7 +260,7 @@ fun LibraryScreen(
                     val backup = JsonExporter.readBackup(context, uri)
                     if (backup != null) {
                         successCount += backup.records.size
-                        viewModel.restoreFromBackup(backup) { result ->
+                        viewModel.restoreFromBackup(backup, context) { result ->
                             Toast.makeText(
                                 context,
                                 if (result.succeeded) {
@@ -324,7 +324,8 @@ fun LibraryScreen(
             records = toWrite,
             people = availablePeopleForBackup,
             watches = watches,
-            categories = categoriesForBackup
+            categories = categoriesForBackup,
+            context = context
         ) { json ->
             val ok = try {
                 context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) } != null
@@ -790,7 +791,7 @@ fun LibraryScreen(
                     unfiled = unfiled,
                     suggestions = suggestions,
                     groupNames = remember(eventGroups) {
-                        eventGroups.associate { it.group.groupId to it.group.displayName }
+                        eventGroups.associate { it.group.eventId to it.group.displayName }
                     },
                     eventCovers = coversByEvent,
                     peopleById = peopleById,
@@ -822,7 +823,7 @@ fun LibraryScreen(
                     onMoveCollection = { movingCollection = it },
                     onSetGroupCover = { coveringGroup = it; pickGroupCover() },
                     onFrameGroupCover = { framingGroup = it },
-                    onRemoveGroupCover = { viewModel.clearGroupCover(context, it.group.groupId) },
+                    onRemoveGroupCover = { viewModel.clearGroupCover(context, it.group.eventId) },
                     groupCovers = coversByGroup,
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
@@ -835,7 +836,7 @@ fun LibraryScreen(
     // ago is not on that snapshot, and framing would open on nothing.
     framingGroup?.let { snapshot ->
         val live = eventGroups
-            .firstOrNull { it.group.groupId == snapshot.group.groupId }
+            .firstOrNull { it.group.eventId == snapshot.group.eventId }
             ?.group
             ?: snapshot.group
 
@@ -853,11 +854,11 @@ fun LibraryScreen(
                 },
                 onDismiss = { framingGroup = null },
                 onConfirm = {
-                    viewModel.setGroupCoverCrop(live.groupId, it)
+                    viewModel.setGroupCoverCrop(live.eventId, it)
                     framingGroup = null
                 },
                 onRemove = {
-                    viewModel.clearGroupCover(context, live.groupId)
+                    viewModel.clearGroupCover(context, live.eventId)
                     framingGroup = null
                 }
             )
@@ -1047,7 +1048,7 @@ fun LibraryScreen(
             initial = summary.group.name,
             onDismiss = { renamingGroup = null },
             onConfirm = { name ->
-                viewModel.renameEventGroup(summary.group.groupId, name)
+                viewModel.renameEventGroup(summary.group.eventId, name)
                 renamingGroup = null
             }
         )
@@ -1057,7 +1058,7 @@ fun LibraryScreen(
         GroupPickerDialog(
             eventName = summary.event.displayName,
             groups = eventGroups,
-            currentGroupId = summary.event.groupId,
+            currentGroupId = summary.event.parentId,
             onDismiss = { movingEvent = null },
             onPick = { groupId ->
                 viewModel.setEventGroup(summary.event.eventId, groupId)
@@ -1071,20 +1072,20 @@ fun LibraryScreen(
     }
 
     movingCollection?.let { summary ->
-        val moving = summary.group.groupId
+        val moving = summary.group.eventId
         GroupPickerDialog(
             eventName = summary.group.displayName,
             // Only somewhere it could legally go. Offering a collection its own descendants would
             // put a cycle one tap away, and a cycle does not throw — it hangs every walk of the
             // tree. Refused in the repository too; this is so the option is never presented.
             groups = eventGroups.filter { candidate ->
-                inga.bpmetrics.library.CollectionTree.canReparent(
+                !inga.bpmetrics.library.EventTree.wouldCycle(
                     eventGroups.map { it.group },
-                    groupId = moving,
-                    parentGroupId = candidate.group.groupId
+                    eventId = moving,
+                    candidateParent = candidate.group.eventId
                 )
             },
-            currentGroupId = summary.group.parentGroupId,
+            currentGroupId = summary.group.parentId,
             topLevelLabel = "Not inside anything",
             onDismiss = { movingCollection = null },
             onPick = { parentId ->
@@ -1127,7 +1128,7 @@ fun LibraryScreen(
             },
             onDismiss = { deletingGroup = null },
             onConfirm = {
-                viewModel.deleteEventGroup(summary.group.groupId)
+                viewModel.deleteEventGroup(summary.group.eventId)
                 deletingGroup = null
             }
         )
@@ -1195,7 +1196,7 @@ private fun EventsList(
         items(events, key = { "event-${it.event.eventId}" }) { summary ->
             EventCard(
                 summary = summary,
-                groupName = summary.event.groupId?.let { groupNames[it] },
+                groupName = summary.event.parentId?.let { groupNames[it] },
                 expanded = summary.event.eventId in expandedIds,
                 onOpen = { onOpenEvent(summary.event.eventId) },
                 onToggleExpand = { onToggleExpand(summary.event.eventId) },
@@ -1261,18 +1262,18 @@ private fun GroupsList(
     // and "Day 2" carried on sitting there, indented under nothing, which is worse than not
     // collapsing at all. A card appears only when every collection above it is open.
     val tree = remember(groups, expandedIds) {
-        val byId = groups.associateBy { it.group.groupId }
+        val byId = groups.associateBy { it.group.eventId }
         val entities = groups.map { it.group }
 
-        inga.bpmetrics.library.CollectionTree.flatten(entities)
-            .mapNotNull { node -> byId[node.group.groupId]?.let { it to node.depth } }
+        inga.bpmetrics.library.EventTree.flatten(entities)
+            .mapNotNull { node -> byId[node.event.eventId]?.let { it to node.depth } }
             .filter { (summary, _) ->
-                val parentId = summary.group.parentGroupId ?: return@filter true
+                val parentId = summary.group.parentId ?: return@filter true
                 // Every ancestor, not just the immediate parent: closing a grandparent has to hide
-                // the whole branch, not just the generation directly beneath it. CollectionTree's
-                // walk is the cycle-guarded one, and this runs while a list is being drawn.
-                inga.bpmetrics.library.CollectionTree.ancestryOf(entities, parentId)
-                    .all { it.groupId in expandedIds }
+                // the whole branch, not just the generation directly beneath it. EventTree walk is the cycle-guarded one
+                // and the same one membership uses, and this runs while a list is being drawn.
+                inga.bpmetrics.library.EventTree.ancestryOf(entities, parentId)
+                    .all { it.eventId in expandedIds }
             }
     }
 
@@ -1289,19 +1290,19 @@ private fun GroupsList(
             }
         }
 
-        items(tree, key = { "group-${it.first.group.groupId}" }) { (summary, depth) ->
+        items(tree, key = { "group-${it.first.group.eventId}" }) { (summary, depth) ->
             GroupCard(
                 summary = summary,
-                expanded = summary.group.groupId in expandedIds,
-                onOpen = { onOpenGroup(summary.group.groupId) },
-                onToggleExpand = { onToggleExpand(summary.group.groupId) },
+                expanded = summary.group.eventId in expandedIds,
+                onOpen = { onOpenGroup(summary.group.eventId) },
+                onToggleExpand = { onToggleExpand(summary.group.eventId) },
                 onRename = { onRenameGroup(summary) },
                 onDelete = { onDeleteGroup(summary) },
                 onMoveToCollection = { onMoveCollection(summary) },
                 onSetCover = { onSetGroupCover(summary) },
                 onFrameCover = { onFrameGroupCover(summary) },
                 onRemoveCover = { onRemoveGroupCover(summary) },
-                cover = groupCovers[summary.group.groupId],
+                cover = groupCovers[summary.group.eventId],
                 depth = depth
             ) {
                 summary.events.forEach { event ->
