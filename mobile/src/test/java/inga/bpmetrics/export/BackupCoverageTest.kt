@@ -41,6 +41,7 @@ class BackupCoverageTest {
             "eventId" to "Reassigned on insert; the backup keys events by name.",
             "groupId" to "Carried as groupName; ids are reassigned.",
             "parentId" to "Carried as parentName.",
+            "locationId" to "Carried as locationName; venues are renumbered on import.",
             "coverPath" to "A name inside this install's storage. The image travels as bytes.",
             "coverCropLeft" to "Carried inside cover.",
             "coverCropTop" to "Carried inside cover.",

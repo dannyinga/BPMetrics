@@ -22,10 +22,117 @@ import kotlinx.coroutines.flow.*
  * which it is looking at.
  */
 class AnalysisViewModel(
-    analysisRecords: Flow<List<AnalysisRecord>>,
+    /** Everything the scope resolves to, before this analysis leaves anything out. */
+    private val allInScope: Flow<List<AnalysisRecord>>,
     private val savedAnalysisId: Long? = null,
-    scope: Flow<AnalysisScope> = flowOf(AnalysisScope.Unknown)
+    scope: Flow<AnalysisScope> = flowOf(AnalysisScope.Unknown),
+    /**
+     * The tree, so excluding an event can exclude its subtree.
+     *
+     * Empty for a saved analysis, which has no live tree to walk — its rows are a snapshot, and
+     * anything excluded was excluded when it was saved.
+     */
+    private val tree: Flow<List<inga.bpmetrics.library.EventEntity>> = flowOf(emptyList())
 ) : ViewModel() {
+
+    // --- What this analysis leaves out (TX-3.6 to 3.8) ---
+
+    private val _exclusions = MutableStateFlow(ScopeExclusions())
+    val exclusions: StateFlow<ScopeExclusions> = _exclusions.asStateFlow()
+
+    /**
+     * The rows the refinement sheet lists, derived from the whole scope rather than the refined
+     * one — a row has to stay on screen after it is unticked, or there is no way to tick it back.
+     */
+    val scopeEntries: StateFlow<List<ScopeEntry>> = combine(
+        allInScope, tree, _exclusions
+    ) { records, events, excluded ->
+        // Through [ScopeRefinement.entriesFor], not a second copy of it here. The tree-less case —
+        // a saved analysis — is that function's documented fallback rather than this screen's own
+        // idea of what is in scope.
+        ScopeRefinement.entriesFor(
+            events = events,
+            records = records.map {
+                ScopeRefinement.ScopeItem(
+                    recordId = it.recordId,
+                    eventId = it.eventId,
+                    title = it.title,
+                    startTime = it.date,
+                    eventLabel = it.eventLabel
+                )
+            },
+            // No root: a collection scope holds unrelated branches, a filter holds whatever it
+            // matched, and a saved analysis has no live tree. None of those has a level to take.
+            rootId = null,
+            exclusions = excluded
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun toggleScopeEntry(entry: ScopeEntry, include: Boolean) {
+        _exclusions.value = ScopeRefinement.toggle(_exclusions.value, entry, include)
+    }
+
+    fun clearExclusions() { _exclusions.value = ScopeExclusions() }
+
+    /**
+     * The scope after exclusions, which is what everything below analyses.
+     *
+     * Applied once, here, rather than at each figure — the totals, the lanes and the rankings all
+     * read this, so a header cannot describe a different set of recordings from the rows under it.
+     *
+     * It is also how TX-3.8 is satisfied without a column to store exclusions in. Saving writes a
+     * snapshot of `uiState.records`, which is this flow, so an excluded recording is simply not in
+     * the saved analysis — persisted by being absent. Nothing else keeps them, so they are transient
+     * everywhere else, which is the whole rule: "not part of this analysis" is a fact about the
+     * analysis, and an analysis that was never saved is not a thing facts can be about.
+     *
+     * The consequence worth knowing: excluding, saving, then wanting it back means re-saving from
+     * the live scope. That is the honest behaviour for a frozen snapshot — the alternative is a
+     * saved analysis whose contents change when you tick a box, which is not frozen at all.
+     */
+    private val analysisRecords: Flow<List<AnalysisRecord>> = combine(
+        allInScope, tree, _exclusions
+    ) { records, events, excluded ->
+        if (excluded.isEmpty) records else {
+            val dropped = mutableSetOf<Long>()
+            excluded.excludedEventIds.forEach {
+                dropped += inga.bpmetrics.library.EventTree.descendantsOf(events, it)
+            }
+            events.forEach { event ->
+                if (event.excludedFromParentAnalysis &&
+                    event.eventId !in excluded.includedDespiteFlag
+                ) {
+                    dropped += inga.bpmetrics.library.EventTree.descendantsOf(events, event.eventId)
+                }
+            }
+            records.filter {
+                it.eventId !in dropped && it.recordId !in excluded.excludedRecordIds
+            }
+        }
+    }
+
+    // --- Comparing along an axis (TX-3.3 to 3.5) ---
+
+    private val _splitAxisKey = MutableStateFlow<String?>(null)
+
+    /** Only axes the scope can actually be compared along. See [AnalysisSplit.axesFor]. */
+    val availableAxes: StateFlow<List<SplitAxis>> = analysisRecords
+        .map { AnalysisSplit.axesFor(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val selectedAxis: StateFlow<SplitAxis?> = combine(availableAxes, _splitAxisKey) { axes, key ->
+        // Resolved against what is currently offered, so an axis that stops qualifying — the last
+        // Hulk recording excluded, say — falls away rather than showing one lane.
+        axes.firstOrNull { it.key == key }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val lanes: StateFlow<List<SplitLane>> = combine(analysisRecords, selectedAxis) { records, axis ->
+        axis?.let { AnalysisSplit.split(records, it) }.orEmpty()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun setSplitAxis(key: String?) {
+        _splitAxisKey.value = if (_splitAxisKey.value == key) null else key
+    }
 
     private val _selectedMetric = MutableStateFlow(MetricType.HIGH)
     /**
@@ -147,9 +254,12 @@ class AnalysisViewModel(
         // The Event tab is what makes a group analysis answer "which set went hardest" — and
         // because it is derived from the records rather than from the scope, a filtered analysis
         // that happens to span several events gets the same answer without asking for it.
+        // By the qualified name, not the short one. Two events called "Subtronics" from different
+        // weekends would otherwise merge into one bar and average two nights together — and the
+        // short name is what the library shows precisely so it can be reused across festivals.
         val eventGroups = records
-            .filter { it.eventName.isNotBlank() }
-            .groupBy { it.eventName }
+            .filter { it.eventLabel.isNotBlank() }
+            .groupBy { it.eventLabel }
 
         val categoryGroups = buildMap {
             putAll(tagGroups)
@@ -160,8 +270,8 @@ class AnalysisViewModel(
 
         // An event bar should open that event, which needs its id rather than its name.
         val eventIdsByName = records
-            .filter { it.eventName.isNotBlank() }
-            .associate { it.eventName to it.eventId }
+            .filter { it.eventLabel.isNotBlank() }
+            .associate { it.eventLabel to it.eventId }
 
         // Categories come from the records themselves rather than the library, so a saved analysis
         // still shows the right tabs after a category has been renamed or removed.
@@ -342,11 +452,12 @@ class AnalysisViewModel(
                 AnalysisViewModel(
                     // Tags passed to the filter as well as to the reduction, so filtering by a
                     // group's tag selects everything underneath it — §2.5.
-                    analysisRecords = repository.analysisRecords { library, tags ->
+                    allInScope = repository.analysisRecords { library, tags ->
                         LibraryViewModel.applyFilter(library, filter, tags)
                     },
                     savedAnalysisId = null,
-                    scope = repository.describeFilter(filter)
+                    scope = repository.describeFilter(filter),
+                    tree = repository.allEventsInTree
                 ) as T
         }
 
@@ -373,7 +484,7 @@ class AnalysisViewModel(
                         repository.getAllCategories(),
                         repository.getAllWatches(),
                         repository.getAllPeople(),
-                        repository.getAllEvents(),
+                        repository.allEventsInTree,
                         ::Library
                     ),
                     repository.effectiveTags,
@@ -381,8 +492,9 @@ class AnalysisViewModel(
                         repository.allEventsInTree,
                         repository.allCollectionEventLinks(),
                         repository.allCollectionRecordLinks()
-                    ) { tree, eventLinks, recordLinks -> Triple(tree, eventLinks, recordLinks) }
-                ) { library, tags, (tree, eventLinks, recordLinks) ->
+                    ) { tree, eventLinks, recordLinks -> Triple(tree, eventLinks, recordLinks) },
+                    repository.getAllLocations()
+                ) { library, tags, (tree, eventLinks, recordLinks), places ->
                     // A collection, resolved through the same walk its card counts with. References
                     // are followed now rather than frozen when they were made, so a recording filed
                     // into one of its events afterwards is in the analysis.
@@ -399,7 +511,8 @@ class AnalysisViewModel(
                         library.watches,
                         library.people,
                         library.events,
-                        tags
+                        tags,
+                        places
                     )
                 }
 
@@ -426,9 +539,10 @@ class AnalysisViewModel(
                 }
 
                 return AnalysisViewModel(
-                    analysisRecords = records,
+                    allInScope = records,
                     savedAnalysisId = null,
-                    scope = scope
+                    scope = scope,
+                    tree = repository.allEventsInTree
                 ).apply { tagging = ScopeTagging(repository, groupId) } as T
             }
         }
@@ -444,7 +558,7 @@ class AnalysisViewModel(
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 val saved = flow { emit(repository.loadSavedAnalysis(analysisId)) }
                 return AnalysisViewModel(
-                    analysisRecords = saved.map { loaded ->
+                    allInScope = saved.map { loaded ->
                         loaded?.records.orEmpty().map { AnalysisRecord.from(it) }
                     },
                     savedAnalysisId = analysisId,
@@ -470,16 +584,18 @@ private fun LibraryRepository.analysisRecords(
         Map<Long, List<inga.bpmetrics.library.EffectiveTag>>
     ) -> List<inga.bpmetrics.library.BpmRecord>
 ): Flow<List<AnalysisRecord>> = combine(
-    combine(records, getAllCategories(), getAllWatches(), getAllPeople(), getAllEvents(), ::Library),
-    effectiveTags
-) { library, tags ->
+    combine(records, getAllCategories(), getAllWatches(), getAllPeople(), allEventsInTree, ::Library),
+    effectiveTags,
+    getAllLocations()
+) { library, tags, places ->
     AnalysisRecord.from(
         select(library.records, tags),
         library.categories,
         library.watches,
         library.people,
         library.events,
-        tags
+        tags,
+        places
     )
 }
 
@@ -554,6 +670,10 @@ class ScopeTagging(
 
     fun tagsInCategory(categoryId: Long): Flow<List<TagEntity>> =
         repository.getTagsByCategory(categoryId)
+
+    /** Makes a tag on an axis, creating the axis if it is new. See [LibraryRepository.findOrCreateTag]. */
+    suspend fun createTag(categoryName: String, tagName: String): Long? =
+        repository.findOrCreateTag(categoryName, tagName)
 
     suspend fun setTags(tagIds: List<Long>) {
         val current = repository.getTagsForGroup(groupId).first().map { it.tagId }

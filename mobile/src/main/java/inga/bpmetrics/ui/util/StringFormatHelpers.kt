@@ -9,6 +9,14 @@ import java.util.Locale
  * Helper object providing utility functions for formatting raw timestamps and durations
  * into human-readable strings for the UI.
  */
+/**
+ * The device's own clock, for times that genuinely belong to the reader.
+ *
+ * Named rather than passed as `ZoneId.systemDefault()` so the two cases are distinguishable in
+ * review: "this is the reader's time" is a claim, and it should look like one.
+ */
+val ReaderClock: ZoneId get() = ZoneId.systemDefault()
+
 object StringFormatHelpers {
 
     /**
@@ -74,12 +82,23 @@ object StringFormatHelpers {
     @Volatile var datePattern: String = "MM/dd/yyyy"
     @Volatile var use24Hour: Boolean = false
 
-    fun getDateString(date: Long) : String {
+    /**
+     * A date, in a stated clock.
+     *
+     * **The zone is required.** It defaulted to the device, which is correct for "exported five
+     * minutes ago" and wrong for every recording made anywhere else — a set watched at 21:00 at the
+     * Gorge reads as the next day once you fly home, for ever. A default made that the silent
+     * outcome at thirty call sites; requiring the argument makes each one a decision.
+     *
+     * Pass [ReaderClock] where the time genuinely belongs to whoever is looking — a render finished,
+     * a backup written — and the recording's own zone everywhere else.
+     */
+    fun getDateString(date: Long, zoneId: ZoneId) : String {
         // Rebuilt per call rather than cached: a DateTimeFormatter is cheap to make, and caching
         // one would need invalidating every time the preference changed.
         val dateFormatter = runCatching { DateTimeFormatter.ofPattern(datePattern) }
             .getOrElse { DateTimeFormatter.ofPattern("MM/dd/yyyy") }
-        val dateText = Instant.ofEpochMilli(date).atZone(ZoneId.systemDefault()).format(dateFormatter)
+        val dateText = Instant.ofEpochMilli(date).atZone(zoneId).format(dateFormatter)
         return dateText
     }
 
@@ -90,7 +109,10 @@ object StringFormatHelpers {
      * @param zoneId The time zone to format the time in. Defaults to the system default time zone.
      * @return A string representing the time (e.g., "10:30:00 AM") in the selected time zone.
      */
-    fun getTimeString(time: Long, zoneId: ZoneId = ZoneId.systemDefault()) : String {
+    /**
+     * A time, in a stated clock. See [getDateString] for why the zone is not optional.
+     */
+    fun getTimeString(time: Long, zoneId: ZoneId) : String {
         val pattern = if (use24Hour) "HH:mm:ss" else "hh:mm:ss a"
         val timeFormatter = DateTimeFormatter.ofPattern(pattern, Locale.getDefault())
         val timeString = "${

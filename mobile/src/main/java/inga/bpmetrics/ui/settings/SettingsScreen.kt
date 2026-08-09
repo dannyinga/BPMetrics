@@ -51,6 +51,7 @@ import kotlinx.coroutines.launch
 import inga.bpmetrics.ui.components.FlowRow
 import inga.bpmetrics.ui.library.LibraryViewMode
 import inga.bpmetrics.ui.library.LibraryViewModel
+import inga.bpmetrics.ui.util.ReaderClock
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 
 /**
@@ -157,7 +158,7 @@ private fun AppearanceSection(viewModel: SettingsViewModel) {
             }
         }
         Spacer(Modifier.height(4.dp))
-        Hint("Today reads as ${getDateString(System.currentTimeMillis())}")
+        Hint("Today reads as ${getDateString(System.currentTimeMillis(), ReaderClock)}")
     }
 }
 
@@ -321,7 +322,7 @@ private fun StorageSection(viewModel: SettingsViewModel) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            getDateString(backup.takenAtMs),
+                            getDateString(backup.takenAtMs, ReaderClock),
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Hint(StorageInspector.formatSize(backup.bytes))
@@ -342,7 +343,7 @@ private fun StorageSection(viewModel: SettingsViewModel) {
             text = {
                 Text(
                     "Everything currently in the app will be replaced with what this backup held " +
-                        "on ${getDateString(backup.takenAtMs)}. Your current database is kept " +
+                        "on ${getDateString(backup.takenAtMs, ReaderClock)}. Your current database is kept " +
                         "alongside the backups in case you want it back, and BPMetrics will close " +
                         "so the change can take effect."
                 )

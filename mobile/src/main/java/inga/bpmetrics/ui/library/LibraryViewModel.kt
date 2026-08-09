@@ -173,6 +173,23 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
+     * Each event's resolved venue name, for cards to show where without walking per row.
+     *
+     * Resolved rather than the event's own, so a set inside a festival reads "The Gorge" rather
+     * than nothing — the same reason the comparison axis uses the resolved venue.
+     */
+    val placeNamesByEvent: StateFlow<Map<Long, String>> = combine(
+        repository.allEventsInTree,
+        repository.getAllLocations()
+    ) { events, places ->
+        val byId = places.associateBy { it.locationId }
+        events.mapNotNull { event ->
+            inga.bpmetrics.library.LocationResolver.forEvent(event.eventId, events, byId)
+                ?.let { event.eventId to it.location.displayName }
+        }.toMap()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /**
      * A collection's own cover.
      *
      * No inheritance, unlike an event's: a set has no parent to inherit from, and inheriting from
@@ -222,11 +239,46 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
 
-    fun createEvent(name: String, recordIds: Set<Long> = emptySet()) {
+    /**
+     * Makes an event with everything the editor collected.
+     *
+     * Name, type, parent and window in one go, because they are one decision. Creating and then
+     * having to find the new event in the list to give it a window is how events end up at the top
+     * level with no time on them.
+     *
+     * The window goes last and can be refused — see [applyEventEdit]. The event still exists when it
+     * is, which is the right outcome: the name and the filing were fine, and a collision is a
+     * question about the times rather than a reason to throw the whole thing away.
+     *
+     * @param onDone true when the dialog can close.
+     */
+    fun createEvent(edit: EventEdit, recordIds: Set<Long> = emptySet(), onDone: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val id = repository.createEvent(name)
+            val id = repository.createEvent(edit.name)
+            repository.setEventType(id, edit.type)
+            edit.parentId?.let { repository.setEventParent(id, it) }
+            repository.setEventLocation(id, edit.locationId)
             if (recordIds.isNotEmpty()) repository.assignRecordsToEvent(recordIds, id)
-            clearSelection()
+
+            when (val result = repository.setEventWindow(
+                id, edit.windowStart, edit.windowEnd, edit.windowPeople
+            )) {
+                is LibraryRepository.WindowResult.Saved -> {
+                    _windowError.value = null
+                    clearSelection()
+                    onDone(true)
+                }
+                is LibraryRepository.WindowResult.Collides -> {
+                    _windowError.value =
+                        "Made, but that window overlaps \"${result.withName}\" for the same " +
+                            "people. Change the times, or name who each one applies to."
+                    onDone(false)
+                }
+                is LibraryRepository.WindowResult.Backwards -> {
+                    _windowError.value = "A window needs a start and an end, in that order."
+                    onDone(false)
+                }
+            }
         }
     }
 
@@ -261,6 +313,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         viewModelScope.launch {
             repository.renameEvent(eventId, edit.name)
             repository.setEventType(eventId, edit.type)
+            repository.setEventLocation(eventId, edit.locationId)
 
             when (val result = repository.setEventWindow(
                 eventId, edit.windowStart, edit.windowEnd, edit.windowPeople
@@ -364,6 +417,45 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             if (member) repository.addEventToCollection(collectionId, eventId)
             else repository.removeEventFromCollection(collectionId, eventId)
         }
+    }
+
+    /** The venue registry, for the event editor to offer. */
+    val locations: StateFlow<List<inga.bpmetrics.library.LocationEntity>> =
+        repository.getAllLocations()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * What an event would inherit if it named no venue of its own.
+     *
+     * Shown in the editor so nobody sets a venue on a set that already has the right one from its
+     * festival — which is the whole saving the registry is meant to give.
+     */
+    fun inheritedLocationName(eventId: Long?, parentId: Long?): Flow<String?> = combine(
+        repository.allEventsInTree, locations
+    ) { events, places ->
+        val from = parentId ?: events.firstOrNull { it.eventId == eventId }?.parentId
+        from?.let {
+            inga.bpmetrics.library.LocationResolver
+                .forEvent(it, events, places.associateBy { p -> p.locationId })
+                ?.location
+                ?.displayName
+        }
+    }
+
+    /**
+     * The clock an event's window is typed in.
+     *
+     * Its venue's, inherited, falling back to the reader's. This is what makes a window mean what
+     * it says: typed as nine at the Gorge, stored as the instant that is nine *there*.
+     */
+    fun windowZone(eventId: Long?, parentId: Long? = null): Flow<java.util.TimeZone> = combine(
+        repository.allEventsInTree, locations
+    ) { events, places ->
+        val byId = places.associateBy { it.locationId }
+        val at = eventId ?: parentId
+        at?.let {
+            inga.bpmetrics.library.LocationResolver.forEvent(it, events, byId)?.location?.zone
+        } ?: java.util.TimeZone.getDefault()
     }
 
     fun collectionsHoldingEvent(eventId: Long): Flow<Set<Long>> =
@@ -825,6 +917,18 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /**
      * Adds selected tags to all selected records.
      */
+    /**
+     * Makes a tag where it is being applied, creating its axis if that is new too.
+     *
+     * Through [LibraryRepository.findOrCreateTag], so typing an axis that already exists reuses it
+     * rather than making a second one with the same name.
+     */
+    fun createTag(categoryName: String, tagName: String, onMade: (Long) -> Unit) {
+        viewModelScope.launch {
+            repository.findOrCreateTag(categoryName, tagName)?.let(onMade)
+        }
+    }
+
     fun addTagsToSelectedRecords(tagIds: List<Long>) {
         val idsToTag = _selectedRecordIds.value
         viewModelScope.launch {

@@ -61,6 +61,7 @@ data class LibraryBackup(
     val savedAnalyses: List<SavedAnalysisDto> = emptyList(),
     val settings: List<PreferenceSnapshot> = emptyList(),
     val eventGroups: List<EventGroupDto> = emptyList(),
+    val locations: List<LocationDto> = emptyList(),
     val events: List<EventDto> = emptyList()
 ) {
     companion object {
@@ -131,7 +132,9 @@ data class EventDto(
     val windowStart: Long? = null,
     val windowEnd: Long? = null,
     val excludedFromParentAnalysis: Boolean = false,
-    val cover: CoverDto? = null
+    val cover: CoverDto? = null,
+    /** Where it happened, by name — locations are renumbered on import, as everything else is. */
+    val locationName: String? = null
 )
 
 data class EventGroupDto(
@@ -201,6 +204,21 @@ data class PersonDto(
     val photoCrop: CoverDto? = null
 )
 
+/**
+ * A venue, keyed by name rather than id.
+ *
+ * Ids are reassigned on import, so events refer to a location by what it is called and the restore
+ * rebuilds the links. Two locations sharing a name merge, which is a fair reading of naming them
+ * the same thing.
+ */
+data class LocationDto(
+    val name: String = "",
+    val timeZoneId: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val photoBase64: String? = null
+)
+
 data class WatchDto(
     val watchId: String = "",
     val deviceName: String = "",
@@ -233,6 +251,13 @@ data class BpmRecordJsonDto(
     val tags: List<String> = emptyList(), // "Category:Tag" format
     /** A cover set on this recording directly, rather than inherited from an event. */
     val cover: CoverDto? = null,
+    /**
+     * A location chosen for this recording specifically.
+     *
+     * The *override*, not the resolved answer — that is derived from the event tree on restore, so
+     * carrying it would preserve a stale value where the tree has since been rearranged.
+     */
+    val locationName: String? = null,
     val dataPoints: List<BpmDataPointDto> = emptyList()
 )
 
@@ -274,8 +299,11 @@ object JsonExporter {
          * Passed in rather than read here so this stays a pure transformation and can be tested
          * without a filesystem — the round-trip test supplies bytes directly.
          */
-        readImage: (String) -> ByteArray? = { null }
+        readImage: (String) -> ByteArray? = { null },
+        /** The venue registry, so events can name where they were. */
+        locations: List<inga.bpmetrics.library.LocationEntity> = emptyList()
     ): String {
+        val locationNames = locations.associate { it.locationId to it.name }
         val categoryNames = categories.associate { it.categoryId to it.name }
         val peopleById = people.associateBy { it.personId }
         val eventsById = events.associateBy { it.eventId }
@@ -307,7 +335,8 @@ object JsonExporter {
                 windowStart = event.windowStart,
                 windowEnd = event.windowEnd,
                 excludedFromParentAnalysis = event.excludedFromParentAnalysis,
-                cover = event.ownCover?.toDto(readImage)
+                cover = event.ownCover?.toDto(readImage),
+                locationName = event.locationId?.let { locationNames[it] }
             )
         }
 
@@ -349,6 +378,7 @@ object JsonExporter {
                 // Category *name*, not id. This used to write the id while the importer expected a
                 // name, so tags never survived a round trip.
                 tags = record.tags.map { it.qualified(categoryNames) },
+                locationName = record.metadata.locationId?.let { locationNames[it] },
                 cover = record.metadata.coverPath
                     ?.takeIf { it.isNotBlank() }
                     ?.let {
@@ -368,6 +398,15 @@ object JsonExporter {
         return gson.toJson(
             LibraryBackup(
                 exportedAt = System.currentTimeMillis(),
+                locations = locations.map { place ->
+                    LocationDto(
+                        name = place.name,
+                        timeZoneId = place.timeZoneId,
+                        latitude = place.latitude,
+                        longitude = place.longitude,
+                        photoBase64 = place.photoPath?.let(readImage)?.toBase64()
+                    )
+                },
                 people = usedPeople,
                 watches = usedWatches,
                 records = dtos,

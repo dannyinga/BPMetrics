@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import inga.bpmetrics.library.clock
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.LaunchedEffect
@@ -553,7 +554,7 @@ private fun queueBatch(
             context,
             forThisClip.first().metadata.recordId,
             // Named by clip time, so a queue of six is readable rather than six identical rows.
-            "$name · ${getTimeString(job.clip.startedAtMs)}",
+            "$name · ${getTimeString(job.clip.startedAtMs, forThisClip.clock)}",
             viewModel.buildConfig(
                 forRecords = forThisClip,
                 overlay = job.clip.uri,
@@ -756,6 +757,7 @@ private fun LookStep(
             // because both are decided once rather than watched.
             if (!isImage && records.isNotEmpty() && ticked.size > 1) {
                 ClipSelectorStrip(
+                    clock = records.clock,
                     clips = ticked,
                     selectedUri = previewing?.clip?.uri,
                     onSelect = onSelectClip

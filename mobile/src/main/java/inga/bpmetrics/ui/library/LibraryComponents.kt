@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
+import inga.bpmetrics.ui.util.ReaderClock
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.components.FlowRow
@@ -173,14 +174,14 @@ fun LibraryFilterDialog(
                                     modifier = Modifier.weight(1f),
                                     contentPadding = ButtonDefaults.TextButtonContentPadding
                                 ) {
-                                    Text(getDateString(dateRange!!.first), style = MaterialTheme.typography.bodySmall)
+                                    Text(getDateString(dateRange!!.first, ReaderClock), style = MaterialTheme.typography.bodySmall)
                                 }
                                 OutlinedButton(
                                     onClick = { showTimePickerForStart = true },
                                     modifier = Modifier.weight(1f),
                                     contentPadding = ButtonDefaults.TextButtonContentPadding
                                 ) {
-                                    Text(getTimeString(dateRange!!.first), style = MaterialTheme.typography.bodySmall)
+                                    Text(getTimeString(dateRange!!.first, ReaderClock), style = MaterialTheme.typography.bodySmall)
                                 }
                             }
 
@@ -192,14 +193,14 @@ fun LibraryFilterDialog(
                                     modifier = Modifier.weight(1f),
                                     contentPadding = ButtonDefaults.TextButtonContentPadding
                                 ) {
-                                    Text(getDateString(dateRange!!.second), style = MaterialTheme.typography.bodySmall)
+                                    Text(getDateString(dateRange!!.second, ReaderClock), style = MaterialTheme.typography.bodySmall)
                                 }
                                 OutlinedButton(
                                     onClick = { showTimePickerForEnd = true },
                                     modifier = Modifier.weight(1f),
                                     contentPadding = ButtonDefaults.TextButtonContentPadding
                                 ) {
-                                    Text(getTimeString(dateRange!!.second), style = MaterialTheme.typography.bodySmall)
+                                    Text(getTimeString(dateRange!!.second, ReaderClock), style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                         }

@@ -90,6 +90,7 @@ import inga.bpmetrics.datasync.IncomingRecordManager
 import inga.bpmetrics.datasync.isActive
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderStatus
+import inga.bpmetrics.library.clock
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.displayName
 import androidx.compose.foundation.rememberScrollState
@@ -196,6 +197,8 @@ fun LibraryScreen(
     val timeline by viewModel.timeline.collectAsStateWithLifecycle()
     val eventSummariesById by viewModel.eventSummariesById.collectAsStateWithLifecycle()
     val timelineExpanded by viewModel.expandedInTimeline.collectAsStateWithLifecycle()
+    val knownLocations by viewModel.locations.collectAsStateWithLifecycle()
+    val placeNames by viewModel.placeNamesByEvent.collectAsStateWithLifecycle()
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     var renamingCollection by remember { mutableStateOf<CollectionSummary?>(null) }
     // Registered once for the screen rather than once per card: a launcher per collection would be
@@ -824,6 +827,7 @@ fun LibraryScreen(
                                 uiState.records.associateBy { it.metadata.recordId }
                             },
                             eventCovers = coversByEvent,
+                            placeNames = placeNames,
                             peopleById = peopleById,
                             expandedIds = timelineExpanded,
                             onToggleExpand = { viewModel.toggleTimelineExpansion(it) },
@@ -846,6 +850,7 @@ fun LibraryScreen(
                         uiState.records.associateBy { it.metadata.recordId }
                     },
                     eventCovers = coversByEvent,
+                    placeNames = placeNames,
                     peopleById = peopleById,
                     expandedIds = timelineExpanded,
                     onToggleExpand = { viewModel.toggleTimelineExpansion(it) },
@@ -949,12 +954,9 @@ fun LibraryScreen(
                 viewModel.addTagsToSelectedRecords(selectedTagIds)
                 showBulkTagDialog = false
             },
-            onManageTags = {
-                showBulkTagDialog = false
-                navController.navigate(Routes.TAG_MANAGEMENT)
-            },
             categories = categories,
             getTagsByCategoryFlow = { viewModel.repository.getTagsByCategory(it) },
+            onCreateTag = { axis, name, onMade -> viewModel.createTag(axis, name, onMade) },
             initialSelectedTagIds = emptyList()
         )
     }
@@ -993,22 +995,38 @@ fun LibraryScreen(
 
     if (showCreateEventDialog) {
         val forSelection = namingEventForSelection
-        val count = selectedRecordIds.size
-        NameDialog(
-            title = "New event",
-            label = "Event name",
-            confirmLabel = "Create",
-            supporting = if (forSelection) {
-                "The $count selected recording${if (count == 1) "" else "s"} will be filed here."
-            } else null,
+        val selected = selectedRecordIds
+        val knownTypes by viewModel.eventTypesInUse.collectAsStateWithLifecycle()
+        val windowError by viewModel.windowError.collectAsStateWithLifecycle()
+
+        // The same editor as afterwards, rather than a name field and a trip back to fix everything
+        // else. "A new set inside Day 1, nine till half ten" is one thought.
+        val chosen = remember(selected, uiState.records) {
+            uiState.records.filter { it.metadata.recordId in selected }
+        }
+        EventEditorDialog(
+            initialName = "",
+            knownTypes = knownTypes,
+            people = availablePeopleForBackup,
+            // From the recordings being filed into it, where there are any — the same rule as
+            // editing, applied to what the event is about to contain rather than what it holds.
+            suggestedStart = chosen.minOfOrNull { it.metadata.startTime }?.takeIf { forSelection },
+            suggestedEnd = chosen.maxOfOrNull { it.metadata.endTime }?.takeIf { forSelection },
+            parentOptions = eventPickerRows,
+            locations = knownLocations,
+            collisionError = windowError,
             onDismiss = {
                 showCreateEventDialog = false
                 namingEventForSelection = false
+                viewModel.clearWindowError()
             },
-            onConfirm = { name ->
-                viewModel.createEvent(name, if (forSelection) selectedRecordIds else emptySet())
-                showCreateEventDialog = false
-                namingEventForSelection = false
+            onConfirm = { edit ->
+                viewModel.createEvent(edit, if (forSelection) selected else emptySet()) { done ->
+                    if (done) {
+                        showCreateEventDialog = false
+                        namingEventForSelection = false
+                    }
+                }
             }
         )
     }
@@ -1037,6 +1055,12 @@ fun LibraryScreen(
         val windowPeople by remember(summary.event.eventId) {
             viewModel.windowPeople(summary.event.eventId)
         }.collectAsStateWithLifecycle(initialValue = emptySet())
+        val inheritedForEditing by remember(summary.event.eventId) {
+            viewModel.inheritedLocationName(summary.event.eventId, null)
+        }.collectAsStateWithLifecycle(initialValue = null)
+        val editingZone by remember(summary.event.eventId) {
+            viewModel.windowZone(summary.event.eventId)
+        }.collectAsStateWithLifecycle(initialValue = java.util.TimeZone.getDefault())
 
         EventEditorDialog(
             initialName = summary.event.name,
@@ -1044,6 +1068,14 @@ fun LibraryScreen(
             initialStart = summary.event.windowStart,
             initialEnd = summary.event.windowEnd,
             initialPeople = windowPeople,
+            // The span of what it already holds, so switching a window on starts from the truth
+            // rather than from today.
+            suggestedStart = summary.span?.startMs,
+            suggestedEnd = summary.span?.endMs,
+            initialLocationId = summary.event.locationId,
+            locations = knownLocations,
+            inheritedLocationName = inheritedForEditing,
+            zone = editingZone,
             knownTypes = knownTypes,
             people = availablePeopleForBackup,
             collisionError = windowError,
@@ -1406,7 +1438,7 @@ private fun MergeSelectionDialog(
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                "${getTimeString(record.metadata.startTime)} · " +
+                                "${getTimeString(record.metadata.startTime, record.clock)} · " +
                                     inga.bpmetrics.ui.analysis.shortDuration(record.metadata.durationMs),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -59,6 +59,25 @@ data class AnalysisRecord(
     val eventId: Long? = null,
     val eventName: String = "",
     /**
+     * What kind of thing the event was — "Concert", "Raid", "Run".
+     *
+     * A fourth comparison axis, not decoration: "do gaming sessions or concerts wind me up more" is
+     * Spiderman vs Hulk one level up, and falls out of the same machinery.
+     */
+    val eventType: String = "",
+    /**
+     * The event named by where it sits — "Subtronics | Day 1 | Griztronics at the Gorge".
+     *
+     * Carried alongside the short name because an analysis compares across branches, and two
+     * events both called "Subtronics" from different weekends are two different nights. Frozen
+     * into a saved snapshot for the same reason every other label is: the analysis is a statement
+     * about a moment, and the tree can be rearranged afterwards.
+     */
+    val eventQualifiedName: String = "",
+    /** Where it happened, by identity and by name — see [SplitAxis.Place]. */
+    val locationId: Long? = null,
+    val locationName: String = "",
+    /**
      * Measured time in each heart rate band.
      *
      * Carried per record so any grouping — a person, a tag, an event, the whole scope — is the sum
@@ -67,6 +86,15 @@ data class AnalysisRecord(
      */
     val zoneTimes: List<ZoneTime> = emptyList()
 ) {
+    /**
+     * How to name this recording's event where branches sit side by side.
+     *
+     * The qualified name when there is one, falling back to the short one — a snapshot saved before
+     * qualified names existed has only the short name, and no label at all is worse than an
+     * ambiguous one.
+     */
+    val eventLabel: String get() = eventQualifiedName.ifBlank { eventName }
+
     companion object {
         /**
          * Reduces a library record to the values an analysis uses.
@@ -80,6 +108,9 @@ data class AnalysisRecord(
             peopleNames: Map<Long, String> = emptyMap(),
             personColors: Map<Long, Int> = emptyMap(),
             eventNames: Map<Long, String> = emptyMap(),
+            eventTypes: Map<Long, String> = emptyMap(),
+            eventPaths: Map<Long, String> = emptyMap(),
+            eventLocations: Map<Long, inga.bpmetrics.library.LocationEntity> = emptyMap(),
             /**
              * Tags including what the recording inherits from its event and group.
              *
@@ -122,6 +153,17 @@ data class AnalysisRecord(
                 personColorArgb = record.metadata.personId?.let { personColors[it] },
                 eventId = record.metadata.eventId,
                 eventName = record.metadata.eventId?.let { eventNames[it] }.orEmpty(),
+                eventType = record.metadata.eventId?.let { eventTypes[it] }.orEmpty(),
+                eventQualifiedName = record.metadata.eventId
+                    ?.let { eventPaths[it] }
+                    .orEmpty(),
+                // The *resolved* venue, so a set inside a festival reports the festival's rather
+                // than nothing — inheritance is what makes the axis usable at every depth.
+                locationId = record.metadata.eventId?.let { eventLocations[it] }?.locationId,
+                locationName = record.metadata.eventId
+                    ?.let { eventLocations[it] }
+                    ?.displayName
+                    .orEmpty(),
                 // Same walk over the data points that produced the active duration, and the same
                 // gap rule, so the bands and the measured total always agree.
                 zoneTimes = BpmZones.split(
@@ -138,17 +180,31 @@ data class AnalysisRecord(
             watches: List<WatchEntity> = emptyList(),
             people: List<PersonEntity> = emptyList(),
             events: List<EventEntity> = emptyList(),
-            effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap()
+            effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap(),
+            locations: List<inga.bpmetrics.library.LocationEntity> = emptyList()
         ): List<AnalysisRecord> {
             val names = categories.associate { it.categoryId to it.name }
             val watchNames = watches.associate { it.watchId to it.displayName }
             val peopleNames = people.associate { it.personId to it.displayName }
             val personColors = people.associate { it.personId to it.colorArgb }
             val eventNames = events.associate { it.eventId to it.displayName }
+            val eventTypes = events.associate { it.eventId to it.type.orEmpty() }
+            // Resolved once for the library rather than per record: a festival with four hundred
+            // recordings would otherwise walk the same three links four hundred times.
+            val eventPaths = events.associate {
+                it.eventId to inga.bpmetrics.library.EventTree.qualifiedNameOf(events, it.eventId)
+            }
+            // The venue each event *resolves* to, inheritance included, so a set reports its
+            // festival's rather than nothing.
+            val byId = locations.associateBy { it.locationId }
+            val eventLocations = events.mapNotNull { event ->
+                inga.bpmetrics.library.LocationResolver.forEvent(event.eventId, events, byId)
+                    ?.let { event.eventId to it.location }
+            }.toMap()
             return records.map {
                 from(
-                    it, names, watchNames, peopleNames, personColors, eventNames,
-                    effectiveTags[it.metadata.recordId]
+                    it, names, watchNames, peopleNames, personColors, eventNames, eventTypes,
+                    eventPaths, eventLocations, effectiveTags[it.metadata.recordId]
                 )
             }
         }

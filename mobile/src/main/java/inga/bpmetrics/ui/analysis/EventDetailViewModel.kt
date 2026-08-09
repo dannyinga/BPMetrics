@@ -123,6 +123,11 @@ class EventDetailViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Makes a tag where it is applied, creating its axis if new. */
+    fun createTag(categoryName: String, tagName: String, onMade: (Long) -> Unit) {
+        viewModelScope.launch { repository.findOrCreateTag(categoryName, tagName)?.let(onMade) }
+    }
+
     fun setTags(tagIds: List<Long>) {
         viewModelScope.launch {
             val current = repository.getTagsForEvent(eventId).first().map { it.tagId }

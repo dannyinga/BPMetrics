@@ -72,6 +72,25 @@ suspend fun restoreBackup(
             }
         }
 
+        // Venues before events, so an event can name where it was. Matched by name rather than
+        // duplicated, so restoring into a library that already knows the Gorge reuses it.
+        val locationIdsByName = mutableMapOf<String, Long>()
+        val existingLocations = repository.getAllLocations().first()
+            .associateBy { it.name.lowercase() }
+        backup.locations.forEach { place ->
+            val id = existingLocations[place.name.lowercase()]?.locationId
+                ?: repository.createLocation(
+                    name = place.name,
+                    timeZoneId = place.timeZoneId,
+                    latitude = place.latitude,
+                    longitude = place.longitude
+                )
+            locationIdsByName[place.name] = id
+            place.photoBase64?.fromBase64()?.let { bytes ->
+                repository.restoreLocationPhoto(context, id, bytes, place.name)
+            }
+        }
+
         var watchesCreated = 0
         val existingWatchIds = repository.getAllWatches().first().map { it.watchId }.toSet()
         backup.watches.forEach { watch ->
@@ -135,6 +154,8 @@ suspend fun restoreBackup(
                 type = event.type,
                 excludedFromParentAnalysis = event.excludedFromParentAnalysis
             )
+            event.locationName?.let { locationIdsByName[it] }
+                ?.let { repository.setEventLocation(eventId, it) }
             restoreCover(repository, context, LibraryRepository.CoverOwner.Event(eventId),
                 event.cover, event.name)
             event.tags.forEach { applyTag(repository, it) { id -> repository.addTagToEvent(eventId, id) } }
@@ -161,6 +182,8 @@ suspend fun restoreBackup(
                     repository.assignRecordsToEvent(listOf(newId), eventId)
                 }
             }
+            dto.locationName?.let { locationIdsByName[it] }
+                ?.let { repository.setRecordLocation(newId, it) }
             restoreCover(repository, context, LibraryRepository.CoverOwner.Recording(newId),
                 dto.cover, dto.title)
             imported++

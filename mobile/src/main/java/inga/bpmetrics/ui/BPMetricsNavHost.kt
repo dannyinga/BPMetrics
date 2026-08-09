@@ -48,8 +48,6 @@ import inga.bpmetrics.ui.navigation.AppDestination
 import inga.bpmetrics.ui.navigation.AppDrawerContent
 import inga.bpmetrics.ui.settings.SettingsScreen
 import inga.bpmetrics.ui.settings.SettingsViewModel
-import inga.bpmetrics.ui.tags.TagManagementScreen
-import inga.bpmetrics.ui.tags.TagManagementViewModel
 import inga.bpmetrics.ui.export.ExportKind
 import inga.bpmetrics.ui.export.ExportSource
 import inga.bpmetrics.ui.export.ExportStep
@@ -219,13 +217,6 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                         openExportAs(recs, null, exportKind)
                     }
                 )
-            }
-
-            composable(Routes.TAG_MANAGEMENT) {
-                val viewModel: TagManagementViewModel = viewModel(
-                    factory = TagManagementViewModel.Factory(repository)
-                )
-                TagManagementScreen(navController, viewModel, onOpenDrawer = openDrawer)
             }
 
             // The drawer lands on the shelf of stored analyses rather than a live one, because a
@@ -454,6 +445,22 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 AboutScreen(onOpenDrawer = openDrawer)
             }
 
+            composable(Routes.LOCATIONS) {
+                val viewModel: inga.bpmetrics.ui.locations.LocationsViewModel = viewModel(
+                    factory = inga.bpmetrics.ui.locations.LocationsViewModel.Factory(repository)
+                )
+                inga.bpmetrics.ui.locations.LocationsScreen(viewModel, onOpenDrawer = openDrawer)
+            }
+
+            composable(Routes.TAG_MANAGEMENT) {
+                val viewModel: inga.bpmetrics.ui.tags.TagManagementViewModel = viewModel(
+                    factory = inga.bpmetrics.ui.tags.TagManagementViewModel.Factory(repository)
+                )
+                inga.bpmetrics.ui.tags.TagManagementScreen(
+                    navController, viewModel, onOpenDrawer = openDrawer
+                )
+            }
+
             composable(Routes.SETTINGS) {
                 val settingsViewModel: SettingsViewModel = viewModel(
                     factory = SettingsViewModel.Factory(repository, settingsRepository)
@@ -485,7 +492,6 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     onExportVideo = {
                         openExportAs(listOfNotNull(thisRecord), null, ExportKind.VIDEO)
                     },
-                    onManageTags = { navController.navigate(Routes.TAG_MANAGEMENT) },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
                 )
@@ -527,7 +533,18 @@ private fun NavHostController.navigateToSection(destination: AppDestination) {
 object Routes {
     /** Combined analysis route. */
     const val ANALYSIS = "analysis"
+    /**
+     * Where tags are reviewed, renamed and tidied.
+     *
+     * No longer where they are *made* — that happens wherever one is applied, because a screen you
+     * had to visit first is why labelling, and every comparison built on it, went largely unused.
+     * This is maintenance: fixing a typo, merging two axes that mean the same thing, deleting a tag
+     * that turned out to be a bad idea.
+     */
     const val TAG_MANAGEMENT = "tag_management"
+
+    /** The venue registry — where things happened, and what the clock says there. */
+    const val LOCATIONS = "locations"
     const val LIBRARY = "library"
     const val DETAIL = "detail"
     const val SETTINGS = "settings"

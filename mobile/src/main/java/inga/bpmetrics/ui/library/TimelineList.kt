@@ -40,6 +40,8 @@ fun TimelineList(
     summaries: Map<Long, EventSummary>,
     recordsById: Map<Long, BpmRecord>,
     eventCovers: Map<Long, Cover>,
+    /** Each event's resolved venue, so a card can say where without walking the tree per row. */
+    placeNames: Map<Long, String> = emptyMap(),
     peopleById: Map<Long, PersonEntity>,
     expandedIds: Set<Long>,
     onToggleExpand: (Long) -> Unit,
@@ -106,6 +108,7 @@ fun TimelineList(
                                 onLongClick = { onToggleEventSelection(entry.event.eventId) },
                                 cover = eventCovers[entry.event.eventId],
                                 groupName = null,
+                                placeName = placeNames[entry.event.eventId],
                                 // While a selection is running, a tap adds to it rather than
                                 // navigating away — the same rule the recording tiles follow, and
                                 // the alternative is losing the selection by mistapping.

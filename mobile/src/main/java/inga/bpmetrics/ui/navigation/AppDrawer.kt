@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -84,6 +85,7 @@ enum class AppDestination(
     PEOPLE(inga.bpmetrics.ui.Routes.PEOPLE, "People", Icons.Default.People, false),
     WATCHES(inga.bpmetrics.ui.Routes.WATCHES, "Watches", Icons.Default.Watch, false),
     TAGS(inga.bpmetrics.ui.Routes.TAG_MANAGEMENT, "Tags", Icons.Default.Sell, false),
+    LOCATIONS(inga.bpmetrics.ui.Routes.LOCATIONS, "Locations", Icons.Default.Place, false),
     SETTINGS(inga.bpmetrics.ui.Routes.SETTINGS, "Settings", Icons.Default.Settings, false),
     ABOUT(inga.bpmetrics.ui.Routes.ABOUT, "About", Icons.Default.Info, false);
 

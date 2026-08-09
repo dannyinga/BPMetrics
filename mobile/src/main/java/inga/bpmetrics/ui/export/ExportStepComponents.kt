@@ -54,6 +54,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import inga.bpmetrics.library.clock
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.PersonEntity
@@ -173,7 +174,7 @@ fun SourceStep(
                         ?.contains(record.metadata.recordId) == true
                     SourceRow(
                         title = record.displayName(wearer?.displayName),
-                        subtitle = "${getDateString(record.metadata.date)} · " +
+                        subtitle = "${getDateString(record.metadata.date, record.clock)} · " +
                             getDurationString(record.metadata.durationMs),
                         accent = wearer?.colorArgb?.let { Color(it) },
                         isSelected = chosen,
@@ -374,6 +375,7 @@ fun ContentsStep(
                     selection = selection,
                     // Only people who were actually recording during this clip. Offering the rest
                     // would let someone tick a curve that has no data for the footage.
+                    clock = records.clock,
                     candidates = records.filter { selection.clip.overlaps(it) },
                     recordsById = recordsById,
                     peopleById = peopleById,
@@ -387,6 +389,14 @@ fun ContentsStep(
 
 @Composable
 private fun ClipCard(
+    /**
+     * The recordings' clock.
+     *
+     * A clip is a file with a device timestamp, but it is being lined up against a recording — so
+     * showing the two in different zones would put a clip filmed "at 21:04" next to a set that says
+     * 00:04, which is exactly the confusion venues exist to remove.
+     */
+    clock: java.time.ZoneId,
     selection: ClipSelection,
     candidates: List<BpmRecord>,
     recordsById: Map<Long, BpmRecord>,
@@ -415,7 +425,7 @@ private fun ClipCard(
 
                 Column(Modifier.weight(1f)) {
                     Text(
-                        getTimeString(selection.clip.startedAtMs),
+                        getTimeString(selection.clip.startedAtMs, clock),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )

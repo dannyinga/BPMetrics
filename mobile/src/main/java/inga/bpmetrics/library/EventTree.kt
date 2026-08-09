@@ -59,6 +59,27 @@ object EventTree {
      * The order is what makes nearest-wins inheritance work: the first entry carrying a tag or a
      * cover is the one that applies.
      */
+    /**
+     * An event named by where it sits: "Subtronics | Day 1 | Griztronics at the Gorge".
+     *
+     * Short names are what make the library readable — every festival has a Day 1, and prefixing
+     * each one with its festival turns a list of days into a list of paragraphs. But a short name
+     * is only unique in its own branch, and an analysis puts branches side by side: two events both
+     * called "Subtronics", from different weekends, are two different nights and reading as one is
+     * a wrong answer rather than a cosmetic one.
+     *
+     * So the tree keeps the short name and anything comparing across it asks for this. Innermost
+     * first, because the thing itself is what you are looking for and the ancestry is what tells
+     * two of them apart.
+     *
+     * Cycle-guarded by [ancestryOf], which this is a rendering of rather than a second walk.
+     */
+    fun qualifiedNameOf(
+        all: List<EventEntity>,
+        eventId: Long,
+        separator: String = "  |  "
+    ): String = ancestryOf(all, eventId).joinToString(separator) { it.displayName }
+
     fun ancestryOf(all: List<EventEntity>, eventId: Long): List<EventEntity> {
         val byId = all.associateBy { it.eventId }
         val chain = mutableListOf<EventEntity>()

@@ -48,6 +48,7 @@ import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
 import inga.bpmetrics.ui.components.PersonPicker
 import inga.bpmetrics.ui.components.PersonSwatch
+import inga.bpmetrics.ui.util.ReaderClock
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import java.util.UUID
 
@@ -206,7 +207,7 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
                         append(row.watch.lastKnownModel).append(" · ")
                     }
                     append(if (row.recordCount == 1) "1 recording" else "${row.recordCount} recordings")
-                    if (row.watch.lastSeen > 0) append(" · last seen ${getDateString(row.watch.lastSeen)}")
+                    if (row.watch.lastSeen > 0) append(" · last seen ${getDateString(row.watch.lastSeen, ReaderClock)}")
                 },
                 style = MaterialTheme.typography.bodySmall
             )

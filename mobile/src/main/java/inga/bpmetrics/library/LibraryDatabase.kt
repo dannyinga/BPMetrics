@@ -96,6 +96,18 @@ interface BpmRecordDao {
     @Query("SELECT * FROM bpm_records")
     suspend fun getAllRecordEntities() : List<BpmRecordEntity>
 
+    /** The clock a recording is read in, as resolved by the one writer. */
+    @Query("UPDATE bpm_records SET timeZoneId = :zoneId WHERE recordId = :id")
+    suspend fun updateResolvedTimeZone(id: Long, zoneId: String?)
+
+    /** A location chosen for this recording specifically, overriding what it inherits. */
+    @Query("UPDATE bpm_records SET locationId = :locationId WHERE recordId = :id")
+    suspend fun updateRecordLocation(id: Long, locationId: Long?)
+
+    /** Forgets a location that has been deleted. See [EventDao.forgetLocation]. */
+    @Query("UPDATE bpm_records SET locationId = NULL WHERE locationId = :locationId")
+    suspend fun forgetLocation(locationId: Long)
+
     /** The same as a flow, for anything that has to recompute when the library changes. */
     @Query("SELECT * FROM bpm_records")
     fun getAllRecordEntitiesFlow(): Flow<List<BpmRecordEntity>>
@@ -162,7 +174,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 25
+internal const val LIBRARY_DB_VERSION = 26
 
 @Database(
     entities = [
@@ -180,6 +192,7 @@ internal const val LIBRARY_DB_VERSION = 25
         CollectionEntity::class,
         CollectionEventCrossRef::class,
         CollectionRecordCrossRef::class,
+        LocationEntity::class,
         EventWindowPersonCrossRef::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class,
@@ -196,6 +209,7 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun personDao(): PersonDao
     abstract fun eventDao(): EventDao
     abstract fun collectionDao(): CollectionDao
+    abstract fun locationDao(): LocationDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
     abstract fun exportPresetDao(): ExportPresetDao
     abstract fun renderJobDao(): RenderJobDao
@@ -1135,6 +1149,45 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Venues, as a registry, and the clock each one keeps.
+         *
+         * A location is the same kind of thing as a person or a watch: made once, pointed at by
+         * many events, renamed in one place. That is what makes comparing across venues a
+         * comparison of identities rather than of two strings matching, and it is why the Gorge
+         * spelled three ways is not three venues.
+         *
+         * The zone is stored on the location and **chosen rather than derived**. The only reason to
+         * work one out from coordinates is not knowing it, and someone naming a venue knows what
+         * time it is there — so this needs no boundary dataset, no third-party dependency, and no
+         * network. Coordinates are optional and informational; nothing depends on them.
+         *
+         * References are nullable and nothing is backfilled. A zone could be guessed for existing
+         * recordings from the device default, and it would be wrong for every one made away from
+         * home — which is exactly the set this feature exists for. Null means "nobody has said",
+         * and the app falls back to the reader's zone as it always did.
+         */
+        val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `locations` (" +
+                        "`locationId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`timeZoneId` TEXT DEFAULT NULL, " +
+                        "`latitude` REAL DEFAULT NULL, " +
+                        "`longitude` REAL DEFAULT NULL, " +
+                        "`photoPath` TEXT DEFAULT NULL, " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
+                // Not foreign keys, matching every other reference in this model: deleting a venue
+                // must leave its events alone rather than take the night with it.
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `locationId` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `bpm_records` ADD COLUMN `locationId` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `bpm_records` ADD COLUMN `timeZoneId` TEXT DEFAULT NULL")
+                android.util.Log.i(TAG, "MIGRATION_25_26: venues, and the clock each one keeps")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -1203,7 +1256,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_21_22,
                         MIGRATION_22_23,
                         MIGRATION_23_24,
-                        MIGRATION_24_25
+                        MIGRATION_24_25,
+                        MIGRATION_25_26
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

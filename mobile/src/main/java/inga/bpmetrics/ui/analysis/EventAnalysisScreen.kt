@@ -293,8 +293,8 @@ fun EventAnalysisScreen(
                     ) {
                         Text(
                             text = if (viewWindow.isZoomed) {
-                                "Showing ${getTimeString(viewWindow.startMs)} – " +
-                                    getTimeString(viewWindow.endMs)
+                                "Showing ${getTimeString(viewWindow.startMs, analysis.clock)} – " +
+                                    getTimeString(viewWindow.endMs, analysis.clock)
                             } else {
                                 "Pinch to zoom · tap a curve to isolate it"
                             },
@@ -319,6 +319,7 @@ fun EventAnalysisScreen(
 
             item {
                 PersonReadout(
+                    clock = analysis.clock,
                     analysis = analysis,
                     at = scrubbedMs,
                     isolatedId = isolatedId,
@@ -368,6 +369,7 @@ fun EventAnalysisScreen(
                 }
                 items(analysis.peaks, key = { "peak-${it.wallClockMs}" }) { moment ->
                     EventMomentRow(
+                        clock = analysis.clock,
                         moment = moment,
                         isSelected = scrubbedMs == moment.wallClockMs,
                         onClick = { scrubbedMs = moment.wallClockMs }
@@ -410,9 +412,9 @@ fun EventAnalysisScreen(
                 viewModel.setTags(selected)
                 showTagDialog = false
             },
-            onManageTags = { showTagDialog = false },
             categories = categories,
             getTagsByCategoryFlow = { viewModel.tagsInCategory(it) },
+            onCreateTag = { axis, name, onMade -> viewModel.createTag(axis, name, onMade) },
             // Only what was applied *here* is pre-selected. Offering an inherited tag as though it
             // could be unticked would promise something this dialog cannot do.
             initialSelectedTagIds = tags.filterNot { it.isInherited }.map { it.tag.tagId }
@@ -558,6 +560,7 @@ private fun EventHeader(
  */
 @Composable
 private fun PersonReadout(
+    clock: java.time.ZoneId,
     analysis: ConcurrentAnalysis,
     at: Long?,
     isolatedId: String?,
@@ -566,7 +569,7 @@ private fun PersonReadout(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Text(
-                text = at?.let { "At ${getTimeString(it)}" }
+                text = at?.let { "At ${getTimeString(it, clock)}" }
                     ?: "Tap or drag the chart to read a moment",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold
@@ -719,7 +722,12 @@ private fun Stat(label: String, value: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun EventMomentRow(moment: GroupMoment, isSelected: Boolean, onClick: () -> Unit) {
+private fun EventMomentRow(
+    moment: GroupMoment,
+    isSelected: Boolean,
+    clock: java.time.ZoneId,
+    onClick: () -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = if (isSelected) {
@@ -735,7 +743,7 @@ private fun EventMomentRow(moment: GroupMoment, isSelected: Boolean, onClick: ()
         ) {
             Column {
                 Text(
-                    text = getTimeString(moment.wallClockMs),
+                    text = getTimeString(moment.wallClockMs, clock),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Bold
                 )

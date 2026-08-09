@@ -120,7 +120,7 @@ fun ConcurrentAnalysisScreen(
         ) {
             item {
                 Text(
-                    text = "${getTimeString(analysis.windowStartMs)} – ${getTimeString(analysis.windowEndMs)}",
+                    text = "${getTimeString(analysis.windowStartMs, analysis.clock)} – ${getTimeString(analysis.windowEndMs, analysis.clock)}",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 if (!analysis.hasOverlap) {
@@ -153,7 +153,8 @@ fun ConcurrentAnalysisScreen(
                     ) {
                         Text(
                             text = if (viewWindow.isZoomed) {
-                                "Showing ${getTimeString(viewWindow.startMs)} – ${getTimeString(viewWindow.endMs)}"
+                                "Showing ${getTimeString(viewWindow.startMs, analysis.clock)} – " +
+                                    getTimeString(viewWindow.endMs, analysis.clock)
                             } else {
                                 "Pinch the chart to zoom"
                             },
@@ -198,6 +199,7 @@ fun ConcurrentAnalysisScreen(
 
                 items(analysis.peaks) { moment ->
                     MomentRow(
+                        clock = analysis.clock,
                         moment = moment,
                         isSelected = scrubbedMs == moment.wallClockMs,
                         onClick = { scrubbedMs = moment.wallClockMs }
@@ -258,7 +260,8 @@ private fun ReadoutLegend(analysis: ConcurrentAnalysis, at: Long?) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Text(
-                text = at?.let { "At ${getTimeString(it)}" } ?: "Tap or drag the chart to read a moment",
+                text = at?.let { "At ${getTimeString(it, analysis.clock)}" }
+                    ?: "Tap or drag the chart to read a moment",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -309,7 +312,12 @@ private fun ReadoutLegend(analysis: ConcurrentAnalysis, at: Long?) {
 }
 
 @Composable
-private fun MomentRow(moment: GroupMoment, isSelected: Boolean, onClick: () -> Unit) {
+private fun MomentRow(
+    moment: GroupMoment,
+    isSelected: Boolean,
+    clock: java.time.ZoneId,
+    onClick: () -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = if (isSelected) {
@@ -327,7 +335,7 @@ private fun MomentRow(moment: GroupMoment, isSelected: Boolean, onClick: () -> U
         ) {
             Column {
                 Text(
-                    text = getTimeString(moment.wallClockMs),
+                    text = getTimeString(moment.wallClockMs, clock),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Bold
                 )

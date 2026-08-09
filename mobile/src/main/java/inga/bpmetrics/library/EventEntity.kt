@@ -82,7 +82,20 @@ data class EventEntity(
     @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
     /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
+
+    /**
+     * Where this happened, by reference to the location registry.
+     *
+     * A venue is a property of the occasion, so it is set once on the festival and every recording
+     * beneath it inherits — the same nearest-wins walk as tags and covers. Null means inherit from
+     * the event above, and failing that, nobody has said.
+     *
+     * Not a foreign key, matching every other reference in this model: deleting a venue must leave
+     * its events alone rather than take the night with it. An event whose location was deleted
+     * keeps its recordings and its times and simply stops saying where.
+     */
+    @ColumnInfo(defaultValue = "NULL") val locationId: Long? = null
 ) {
     /** How to refer to this event when it has somehow been left unnamed. */
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled event"

@@ -125,6 +125,14 @@ interface EventDao {
         blur: Float?
     )
 
+    /** Where this event happened, by reference to the location registry. */
+    @Query("UPDATE events SET locationId = :locationId WHERE eventId = :eventId")
+    suspend fun updateLocation(eventId: Long, locationId: Long?)
+
+    /** Forgets a location that has been deleted, leaving the events themselves alone. */
+    @Query("UPDATE events SET locationId = NULL WHERE locationId = :locationId")
+    suspend fun forgetLocation(locationId: Long)
+
     @Query("SELECT coverPath FROM events WHERE eventId = :eventId")
     suspend fun coverPathOf(eventId: Long): String?
 

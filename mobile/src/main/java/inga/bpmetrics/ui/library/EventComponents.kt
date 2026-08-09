@@ -234,6 +234,8 @@ private fun countLabel(count: Int, noun: String) =
 fun EventCard(
     summary: EventSummary,
     groupName: String?,
+    /** The venue it resolves to, inherited included, or null where none applies. */
+    placeName: String? = null,
     onAddToCollection: (() -> Unit)? = null,
     expanded: Boolean,
     onOpen: () -> Unit,
@@ -314,6 +316,10 @@ fun EventCard(
                             // the same at a glance.
                             summary.event.type?.takeIf { it.isNotBlank() }?.let { append("$it  ·  ") }
                             append(formatSpan(summary.span))
+                            // Where, after when. A venue was set once and then visible nowhere,
+                            // which made it impossible to tell an event with the right clock from
+                            // one that had simply never been given one.
+                            placeName?.takeIf { it.isNotBlank() }?.let { append("  ·  $it") }
                             groupName?.let { append("  ·  $it") }
                         },
                         style = MaterialTheme.typography.bodySmall.overCover(cover != null),

@@ -78,6 +78,7 @@ class LibraryRepository(
     private val personDao = database.personDao()
     private val eventDao = database.eventDao()
     private val collectionDao = database.collectionDao()
+    private val locationDao = database.locationDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
     private val presetDao = database.exportPresetDao()
 
@@ -462,7 +463,10 @@ class LibraryRepository(
             block()
         } finally {
             bulkDepth--
-            if (bulkDepth == 0) reconcileMembership()
+            if (bulkDepth == 0) {
+                reconcileMembership()
+                reconcileTimeZones()
+            }
         }
     }
 
@@ -518,6 +522,9 @@ class LibraryRepository(
 
         if (moved.isNotEmpty()) {
             Log.i(tag, "Reconciled membership: ${moved.size} recordings moved")
+            // Where a recording lives decides which clock it inherits, so the two answers move
+            // together. Leaving this to the caller is how one of them ends up stale.
+            reconcileTimeZones()
         }
         return moved.size
     }
@@ -621,6 +628,113 @@ class LibraryRepository(
         )
         // No reconcile: a type does not decide where anything lives. See the table on
         // [reconcileMembership] for what does.
+    }
+
+    /**
+     * Where an event happened, by reference to the venue registry.
+     *
+     * Reconciles afterwards: the zone a recording is read in is inherited, so pointing an event at
+     * a different venue changes what every recording under it says the time was.
+     */
+    suspend fun setEventLocation(eventId: Long, locationId: Long?) {
+        eventDao.updateLocation(eventId, locationId)
+        reconcileTimeZones()
+    }
+
+    /** A venue chosen for one recording, overriding what it would inherit. */
+    suspend fun setRecordLocation(recordId: Long, locationId: Long?) {
+        recordDao.updateRecordLocation(recordId, locationId)
+        reconcileTimeZones()
+    }
+
+    /**
+     * Resolves and writes the clock every recording is read in. The only thing that writes it.
+     *
+     * The same single-writer rule as membership, for the same reason: the answer is inherited, it
+     * is read on every screen that shows a time, and a stored value is only trustworthy if exactly
+     * one thing puts it there. Deferred inside [inBulk] alongside the membership pass.
+     */
+    suspend fun reconcileTimeZones(): Int {
+        if (bulkDepth > 0) return 0
+        val events = eventDao.getAllEvents()
+        val records = recordDao.getAllRecordEntities()
+
+        val locations = locationDao.getAll().associateBy { it.locationId }
+
+        val changed = records.mapNotNull { record ->
+            val resolved = LocationResolver.resolvedZoneId(
+                record.locationId, record.eventId, events, locations
+            )
+            if (resolved != record.timeZoneId) record.recordId to resolved else null
+        }
+        changed.forEach { (id, zone) -> recordDao.updateResolvedTimeZone(id, zone) }
+
+        if (changed.isNotEmpty()) Log.i(tag, "Reconciled ${changed.size} recording clock(s)")
+        return changed.size
+    }
+
+    // --- Locations ---
+
+    fun getAllLocations(): Flow<List<LocationEntity>> = locationDao.getAllFlow()
+
+    suspend fun getLocation(locationId: Long): LocationEntity? = locationDao.get(locationId)
+
+    suspend fun createLocation(
+        name: String,
+        timeZoneId: String? = null,
+        latitude: Double? = null,
+        longitude: Double? = null
+    ): Long = locationDao.insert(
+        LocationEntity(
+            name = name.trim(),
+            timeZoneId = timeZoneId?.takeIf { it.isNotBlank() },
+            latitude = latitude,
+            longitude = longitude,
+            createdAt = System.currentTimeMillis()
+        )
+    ).also { Log.d(tag, "Created location '${name.trim()}' as $it") }
+
+    suspend fun renameLocation(locationId: Long, name: String) =
+        locationDao.rename(locationId, name.trim())
+
+    /** Changing a venue's clock changes what every recording under it says the time was. */
+    suspend fun setLocationZone(locationId: Long, timeZoneId: String?) {
+        locationDao.updateZone(locationId, timeZoneId?.takeIf { it.isNotBlank() })
+        reconcileTimeZones()
+    }
+
+    suspend fun setLocationCoordinates(locationId: Long, latitude: Double?, longitude: Double?) =
+        locationDao.updateCoordinates(locationId, latitude, longitude)
+
+    suspend fun countEventsAt(locationId: Long): Int = locationDao.countEventsAt(locationId)
+
+    /**
+     * Removes a venue and forgets it everywhere, leaving everything else alone.
+     *
+     * Orphans rather than cascades, like every other reference in this model: an event whose venue
+     * was deleted keeps its recordings and its times and simply stops saying where.
+     */
+    suspend fun deleteLocation(context: android.content.Context, locationId: Long) {
+        val photo = locationDao.photoPathOf(locationId)
+        eventDao.forgetLocation(locationId)
+        recordDao.forgetLocation(locationId)
+        locationDao.delete(locationId)
+        photo?.let {
+            CoverStore.delete(context, it)
+            inga.bpmetrics.ui.components.invalidateCover(it)
+        }
+        reconcileTimeZones()
+    }
+
+    /** A picture for a venue, stored the same way a person's photograph is. */
+    suspend fun restoreLocationPhoto(
+        context: android.content.Context,
+        locationId: Long,
+        bytes: ByteArray,
+        nameHint: String
+    ) {
+        CoverStore.writeBytes(context, bytes, nameHint, locationId, CoverStore.Kind.PERSON)
+            ?.let { locationDao.updatePhoto(locationId, it) }
     }
 
     /** Types already in use, most used first, for the editor to offer. */
@@ -1860,16 +1974,39 @@ class LibraryRepository(
      * @param recordId The ID of the record.
      * @param tagId The ID of the tag to assign.
      */
-    suspend fun addTagToRecord(recordId: Long, tagId: Long) {
+    /**
+     * Tags a recording, replacing whatever it already had on that axis.
+     *
+     * **One tag per category per recording.** A recording is Spiderman or Hulk, not both. That makes
+     * a category a partition — every recording in scope falls in exactly one lane, the lanes sum to
+     * the whole, and no total counts anything twice. A comparison whose lanes overlap is one whose
+     * percentages mean nothing, and explaining that at every total is worse than the constraint.
+     *
+     * Enforced by *replacing* rather than refusing. Someone tapping Hulk on a recording marked
+     * Spiderman plainly means to change it; an error saying "already has a character" would be the
+     * app telling them what they can see.
+     *
+     *  the tag that was displaced, if one was, so a caller can say so.
+     */
+    suspend fun addTagToRecord(recordId: Long, tagId: Long): TagEntity? {
+        val tag = tagDao.getTagById(tagId)
+
+        val displaced = tag?.let { incoming ->
+            tagDao.getTagsForRecordFlow(recordId).first()
+                .firstOrNull {
+                    it.parentCategoryId == incoming.parentCategoryId && it.tagId != incoming.tagId
+                }
+        }
+        displaced?.let { tagDao.untagRecord(recordId, it.tagId) }
+
         tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
-        
+
         // Auto-Rename logic: Pull default naming category from settings
         val defaultNamingCatId = settingsRepository.defaultNamingCategoryId.first()
-        val tag = tagDao.getTagById(tagId)
-        
         if (tag != null && tag.parentCategoryId == defaultNamingCatId) {
             autoNameRecord(recordId, tag.name)
         }
+        return displaced
     }
 
     /**

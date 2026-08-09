@@ -96,6 +96,23 @@ fun AnalysisScreen(
     var showSaveDialog by remember { mutableStateOf(false) }
     var saveName by remember { mutableStateOf("") }
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val availableAxes by viewModel.availableAxes.collectAsStateWithLifecycle()
+    val selectedAxis by viewModel.selectedAxis.collectAsStateWithLifecycle()
+    val lanes by viewModel.lanes.collectAsStateWithLifecycle()
+    val exclusions by viewModel.exclusions.collectAsStateWithLifecycle()
+    val scopeEntries by viewModel.scopeEntries.collectAsStateWithLifecycle()
+    var showScopeRefinement by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+
+    if (showScopeRefinement) {
+        ScopeRefinementDialog(
+            entries = scopeEntries,
+            onToggle = { entry, include -> viewModel.toggleScopeEntry(entry, include) },
+            onReset = { viewModel.clearExclusions() },
+            onDismiss = { showScopeRefinement = false }
+        )
+    }
     val selectedMetric by viewModel.selectedMetric.collectAsStateWithLifecycle()
     val selectedCategoryId by viewModel.selectedCategoryTabId.collectAsStateWithLifecycle()
     val isolatedPersonId by viewModel.isolatedPersonId.collectAsStateWithLifecycle()
@@ -199,7 +216,16 @@ fun AnalysisScreen(
             )
 
             when (section) {
-                AnalysisSection.SUMMARY -> SummarySection(uiState, viewModel.tagging)
+                AnalysisSection.SUMMARY -> SummarySection(
+                    uiState = uiState,
+                    tagging = viewModel.tagging,
+                    axes = availableAxes,
+                    selectedAxis = selectedAxis,
+                    lanes = lanes,
+                    onSelectAxis = { viewModel.setSplitAxis(it) },
+                    onRefineScope = { showScopeRefinement = true },
+                    isRefined = !exclusions.isEmpty
+                )
 
                 AnalysisSection.COMPARE -> CompareSection(
                     uiState = uiState,
@@ -351,13 +377,45 @@ private fun SectionBar(
 }
 
 @Composable
-private fun SummarySection(uiState: AnalysisUiState, tagging: ScopeTagging?) {
+private fun SummarySection(
+    uiState: AnalysisUiState,
+    tagging: ScopeTagging?,
+    axes: List<SplitAxis>,
+    selectedAxis: SplitAxis?,
+    lanes: List<SplitLane>,
+    onSelectAxis: (String?) -> Unit,
+    onRefineScope: () -> Unit,
+    isRefined: Boolean
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { ScopeHeader(uiState) }
+
+        // Above the totals, because choosing to compare changes what every figure below means.
+        if (axes.isNotEmpty()) {
+            item {
+                SplitAxisPicker(
+                    axes = axes,
+                    selected = selectedAxis,
+                    onSelect = onSelectAxis
+                )
+            }
+        }
+        if (lanes.isNotEmpty()) {
+            item { SplitLanes(lanes) }
+        }
+
+        // Offered whether or not anything is excluded yet, so "what is actually in this" is
+        // answerable without first having to change something.
+        item {
+            androidx.compose.material3.TextButton(onClick = onRefineScope) {
+                Text(if (isRefined) "Some recordings excluded — review" else "What's included")
+            }
+        }
+
         // Where the whole scope's time went. The same split every person row and every ranking bar
         // shows, summed — one definition of "time in the peak band" for the entire screen.
         if (uiState.zoneTimes.any { it.durationMs > 0L }) {
@@ -425,9 +483,11 @@ private fun GroupTags(tagging: ScopeTagging) {
                 scope.launch { tagging.setTags(selected) }
                 showDialog = false
             },
-            onManageTags = { showDialog = false },
             categories = categories,
             getTagsByCategoryFlow = { tagging.tagsInCategory(it) },
+            onCreateTag = { axis, name, onMade ->
+                scope.launch { tagging.createTag(axis, name)?.let(onMade) }
+            },
             initialSelectedTagIds = tags.map { it.tag.tagId }
         )
     }

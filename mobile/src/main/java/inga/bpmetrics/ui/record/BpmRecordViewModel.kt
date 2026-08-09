@@ -97,6 +97,44 @@ class BpmRecordViewModel(
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConcurrentAnalysis())
 
+    /** The venue registry, for the override picker to offer. */
+    val locations: StateFlow<List<inga.bpmetrics.library.LocationEntity>> =
+        repository.getAllLocations()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Where this recording was, and whether that came from itself or from an event above it.
+     *
+     * Resolved rather than read off the row, so a recording inside a festival says "The Gorge"
+     * instead of nothing — and the screen can say the venue is inherited, which is the difference
+     * between "nobody set this" and "the festival already did".
+     */
+    val place: StateFlow<inga.bpmetrics.library.EffectivePlace?> = combine(
+        _record, repository.allEventsInTree, locations
+    ) { rec, events, places ->
+        rec?.let {
+            inga.bpmetrics.library.LocationResolver.forRecording(
+                directLocationId = it.metadata.locationId,
+                eventId = it.metadata.eventId,
+                events = events,
+                locations = places.associateBy { p -> p.locationId }
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * Pins this recording to a venue, or clears the pin so it inherits again.
+     *
+     * For the one that genuinely differs — someone who joined from elsewhere, a watch left on the
+     * wrong clock. Null puts it back to whatever its event says, which is right far more often.
+     */
+    fun setLocation(locationId: Long?) {
+        viewModelScope.launch {
+            repository.setRecordLocation(recordId, locationId)
+            loadRecord()
+        }
+    }
+
     /** Which event and group this belongs to, for the breadcrumb. */
     val placement: StateFlow<RecordPlacement> = combine(
         _record,
@@ -308,6 +346,11 @@ class BpmRecordViewModel(
      * @param categoryId The ID of the category.
      */
     fun getTagsByCategory(categoryId: Long): Flow<List<TagEntity>> = repository.getTagsByCategory(categoryId)
+
+    /** Makes a tag where it is applied, creating its axis if new. */
+    fun createTag(categoryName: String, tagName: String, onMade: (Long) -> Unit) {
+        viewModelScope.launch { repository.findOrCreateTag(categoryName, tagName)?.let(onMade) }
+    }
 
     /**
      * Manually triggers a reload of the record from the database.

@@ -44,6 +44,7 @@ import inga.bpmetrics.library.SavedAnalysisEntity
 import inga.bpmetrics.library.WatchEntity
 import inga.bpmetrics.ui.library.LibraryFilterDialog
 import inga.bpmetrics.ui.library.LibraryViewModel
+import inga.bpmetrics.ui.util.ReaderClock
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import kotlinx.coroutines.flow.Flow
@@ -131,7 +132,7 @@ fun SavedAnalysesScreen(
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Saved ${getDateString(analysis.createdAt)} at ${getTimeString(analysis.createdAt)}",
+                                    "Saved ${getDateString(analysis.createdAt, ReaderClock)} at ${getTimeString(analysis.createdAt, ReaderClock)}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 if (analysis.filterDescription.isNotBlank()) {

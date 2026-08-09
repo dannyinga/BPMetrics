@@ -1,6 +1,7 @@
 package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.export.ImageExporter
+import inga.bpmetrics.library.clock
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmZones
 import inga.bpmetrics.library.ZoneTime
@@ -148,8 +149,22 @@ data class ConcurrentAnalysis(
     val windowStartMs: Long = 0L,
     val windowEndMs: Long = 0L,
     val intensity: List<GroupMoment> = emptyList(),
-    val peaks: List<GroupMoment> = emptyList()
+    val peaks: List<GroupMoment> = emptyList(),
+    /**
+     * The clock these recordings are read in, as an IANA id.
+     *
+     * Carried on the analysis rather than looked up per label: the chart axis, the scrubber and the
+     * legend all print times, and three of them working it out separately is three chances to draw
+     * an axis in one zone and a readout in another.
+     */
+    val zoneId: String? = null
 ) {
+    val clock: java.time.ZoneId
+        get() = zoneId
+            ?.takeIf { it in java.util.TimeZone.getAvailableIDs() }
+            ?.let { runCatching { java.time.ZoneId.of(it) }.getOrNull() }
+            ?: java.time.ZoneId.systemDefault()
+
     val isEmpty: Boolean get() = series.isEmpty()
     val durationMs: Long get() = (windowEndMs - windowStartMs).coerceAtLeast(0L)
 
@@ -205,7 +220,7 @@ data class ConcurrentAnalysis(
                 )
             }
 
-            return of(series, window)
+            return of(series, window, records.clock.id)
         }
 
         /**
@@ -215,7 +230,11 @@ data class ConcurrentAnalysis(
          * gets the same group intensity, the same peak selection and the same chart, rather than a
          * parallel implementation free to disagree with this one about what a moment is.
          */
-        fun of(series: List<ConcurrentSeries>, window: LongRange? = null): ConcurrentAnalysis {
+        fun of(
+            series: List<ConcurrentSeries>,
+            window: LongRange? = null,
+            zoneId: String? = null
+        ): ConcurrentAnalysis {
             if (series.isEmpty()) return ConcurrentAnalysis()
 
             val start = window?.first ?: series.minOf { it.points.first().wallClockMs }
@@ -228,7 +247,8 @@ data class ConcurrentAnalysis(
                 windowStartMs = start,
                 windowEndMs = end,
                 intensity = intensity,
-                peaks = findPeaks(intensity)
+                peaks = findPeaks(intensity),
+                zoneId = zoneId
             )
         }
 

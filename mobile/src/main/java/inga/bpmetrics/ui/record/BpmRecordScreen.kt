@@ -12,12 +12,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -57,6 +59,8 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import inga.bpmetrics.export.CsvExporter
 import inga.bpmetrics.ui.graph.TimeUtils
+import inga.bpmetrics.library.clock
+import inga.bpmetrics.library.clockDiffersFromReader
 import inga.bpmetrics.library.displayName
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
 import inga.bpmetrics.ui.analysis.ConcurrentChart
@@ -86,7 +90,6 @@ import androidx.compose.material.icons.filled.Share
  * @param onDeleted Callback when the record is successfully deleted.
  * @param onExportImage Opens the export utility, scoped to this recording, making an image.
  * @param onExportVideo Opens the export utility, scoped to this recording, making a video.
- * @param onManageTags Callback to navigate to the tag management screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,7 +99,6 @@ fun BpmRecordScreen(
     onDeleted: () -> Unit,
     onExportImage: () -> Unit,
     onExportVideo: () -> Unit,
-    onManageTags: () -> Unit,
     onOpenEvent: (Long) -> Unit = {},
     onOpenGroup: (Long) -> Unit = {}
 ) {
@@ -108,9 +110,12 @@ fun BpmRecordScreen(
     val insights by viewModel.insights.collectAsState()
     val placement by viewModel.placement.collectAsState()
     val cover by viewModel.cover.collectAsState()
+    val place by viewModel.place.collectAsState()
+    val knownLocations by viewModel.locations.collectAsState()
     var scrubbedMs by remember { mutableStateOf<Long?>(null) }
     var isEditing by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
+    var pickingPlace by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showSplitDialog by remember { mutableStateOf(false) }
     var showCoverCrop by remember { mutableStateOf(false) }
@@ -179,7 +184,22 @@ fun BpmRecordScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                             }
-                            Text("${getDateString(r.metadata.date)} ${getTimeString(r.metadata.startTime)}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                buildString {
+                                    append(getDateString(r.metadata.date, r.clock))
+                                    append(" ")
+                                    append(getTimeString(r.metadata.startTime, r.clock))
+                                    // Only where it differs from the reader. Stamping the zone on
+                                    // every time in a library that never leaves one is noise;
+                                    // omitting it on the one made three zones away is a wrong
+                                    // number with no warning.
+                                    if (r.metadata.clockDiffersFromReader) {
+                                        append("  ")
+                                        append(r.clock.id.substringAfterLast('/').replace('_', ' '))
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     },
                     actions = {
@@ -256,6 +276,17 @@ fun BpmRecordScreen(
                     Spacer(Modifier.height(12.dp))
                 }
 
+                // Where it was, and which clock the times above are in. Shown always — including
+                // when nothing is set — because "no venue" is the state someone needs to see in
+                // order to fix it, and a row that appears only once configured is a row nobody
+                // finds.
+                PlaceRow(
+                    place = place,
+                    clock = r.clock,
+                    onEdit = { pickingPlace = true }
+                )
+                Spacer(Modifier.height(12.dp))
+
                 // The chart comes first. It used to sit below the description, the tags and the
                 // metadata, which meant the one thing the page exists to show was the one thing
                 // you had to scroll to reach.
@@ -289,6 +320,7 @@ fun BpmRecordScreen(
                 if (!analysis.isEmpty) {
                     BpmSectionHeader("Insights")
                     RecordInsightsSection(
+                    clock = r.clock,
                         insights = insights,
                         onSelectMoment = { scrubbedMs = it }
                     )
@@ -467,7 +499,21 @@ fun BpmRecordScreen(
             }
         }
 
-        if (showTagDialog) {
+        if (pickingPlace) {
+        RecordPlacePickerDialog(
+            locations = knownLocations,
+            inheritedName = place?.takeIf { it.isInherited }?.location?.displayName,
+            onDismiss = { pickingPlace = false },
+            onPick = {
+                viewModel.setLocation(it)
+                pickingPlace = false
+            }
+        )
+    }
+
+    if (showTagDialog) {
+            val allCategories by viewModel.getAllCategories()
+                .collectAsState(initial = emptyList())
             TagSelectionDialog(
                 onDismiss = { showTagDialog = false },
                 onSave = { selectedIds ->
@@ -476,11 +522,9 @@ fun BpmRecordScreen(
                     selectedIds.forEach { if (!currentIds.contains(it)) viewModel.addTag(it) }
                     showTagDialog = false
                 },
-                onManageTags = {
-                    showTagDialog = false
-                    onManageTags()
-                },
-                viewModel = viewModel,
+                categories = allCategories,
+                getTagsByCategoryFlow = { viewModel.getTagsByCategory(it) },
+                onCreateTag = { axis, name, onMade -> viewModel.createTag(axis, name, onMade) },
                 initialSelectedTagIds = r.tags.map { it.tagId }
             )
         }
@@ -643,7 +687,8 @@ private fun RecordChartSection(
                     val bpm = series?.bpmAt(at)
                     // No reading inside a dropout, which is a different thing from a heart rate
                     // of zero and has to read differently.
-                    "${getTimeString(at)} - ${bpm?.roundToInt()?.toString() ?: "not measured"}"
+                    "${getTimeString(at, analysis.clock)} - " +
+                        (bpm?.roundToInt()?.toString() ?: "not measured")
                 } ?: "Tap or drag to read a moment, pinch to zoom",
                 style = MaterialTheme.typography.bodySmall
             )
@@ -692,6 +737,7 @@ private fun RecordChartSection(
 @Composable
 private fun RecordInsightsSection(
     insights: RecordInsights,
+    clock: java.time.ZoneId,
     onSelectMoment: (Long) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -793,7 +839,7 @@ private fun RecordInsightsSection(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        getTimeString(peak.wallClockMs),
+                        getTimeString(peak.wallClockMs, clock),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
@@ -964,3 +1010,113 @@ private fun SplitRecordDialog(
     )
 }
 
+
+/**
+ * Where this recording was, and which clock its times are in.
+ *
+ * Shown even when nothing is set, because "no venue" is the state someone needs to see in order to
+ * fix it — a row that appears only once configured is a row nobody finds.
+ *
+ * The zone is named only when it differs from the reader's. In a library that never leaves one
+ * zone, stamping every screen with it is noise; on the one recording made three zones away, leaving
+ * it off is a wrong time with no warning.
+ */
+@Composable
+private fun PlaceRow(
+    place: inga.bpmetrics.library.EffectivePlace?,
+    clock: java.time.ZoneId,
+    onEdit: () -> Unit
+) {
+    androidx.compose.material3.OutlinedButton(
+        onClick = onEdit,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(
+            Icons.Default.Place,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                place?.location?.displayName ?: "No location",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            val detail = buildString {
+                if (place?.isInherited == true) append("from its event")
+                if (clock.id != java.time.ZoneId.systemDefault().id) {
+                    if (isNotEmpty()) append("  ·  ")
+                    append("times shown in ${clock.id}")
+                }
+            }
+            if (detail.isNotBlank()) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Pinning one recording to a venue, overriding what it inherits.
+ *
+ * For the recording that genuinely differs — someone who joined from elsewhere, a watch left on the
+ * wrong clock. Clearing the pin is offered first, because inheriting is right far more often than
+ * overriding and should be the easier thing to get back to.
+ */
+@Composable
+private fun RecordPlacePickerDialog(
+    locations: List<inga.bpmetrics.library.LocationEntity>,
+    inheritedName: String?,
+    onDismiss: () -> Unit,
+    onPick: (Long?) -> Unit
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Where was this?") },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = {
+                        Text(inheritedName?.let { "Inherit — $it" } ?: "Not set")
+                    },
+                    onClick = { onPick(null) }
+                )
+                if (locations.isEmpty()) {
+                    Text(
+                        "No locations yet. Make one under Locations in the menu.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                locations.forEach { place ->
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(place.displayName)
+                                place.timeZoneId?.let {
+                                    Text(
+                                        it,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        },
+                        onClick = { onPick(place.locationId) }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}

@@ -234,6 +234,60 @@ have been the wrong trade: it makes every label vaguer to avoid one label being 
 
 ---
 
+### 2.7 Where it happened, and what time it was there
+
+A recording carries a wall clock and nothing that says which wall. Every timestamp in the app is
+rendered in the phone's *current* zone, so a set watched at 21:00 at the Gorge reads as 21:00 until
+you fly home, and then reads as 00:00 the next day — for ever. The recording did not move. The
+reader did.
+
+This is not a display nicety. An event window is the membership rule, and a window is entered as a
+wall-clock time; if the clock a recording is stored against and the clock a window is entered
+against disagree, membership is wrong. Two festivals in different zones cannot both be correct
+under one interpretation.
+
+**A location is a registry entry, like a person or a watch.** A name, a time zone, optionally a
+picture and coordinates. You make "The Gorge" once and point events at it, exactly as you point a
+recording at a person — and for the same reasons: renaming it fixes every event at once, and
+comparing across locations works on identity rather than on whether two strings match.
+
+This is what removes the hardest part of the problem. The only reason to derive a time zone from
+coordinates is not knowing it, and someone naming a venue knows what time it is there. Picking the
+zone once, when the location is made, is one extra field on a form that gets filled in rarely —
+against a bundled boundary dataset of several megabytes, a lookup that can be subtly wrong near a
+border, and a third-party dependency deciding what time your recordings say. The registry is
+smaller, more accurate and more honest.
+
+**Coordinates are optional and informational.** Useful for a map one day, and for "where was this",
+but nothing depends on them. They can be filled from the device if location permission is granted —
+a GPS fix needs no network — and the feature works completely without it. Permission is an
+optional convenience, never a requirement, and a location typed by hand is worth exactly as much as
+one captured automatically.
+
+**Events carry the location; recordings inherit it.** A venue is a property of the occasion — you
+were at the Gorge all night, with everyone else — and putting it on each recording would mean
+setting it once per watch per night. Inheritance is the same nearest-wins walk up `EventTree` that
+tags and covers already use, so there is one implementation, and a recording can still override
+where it genuinely differs.
+
+**The resolved zone is frozen onto the recording.** Inheritance decides it; a column stores it. The
+same reasoning as membership: it changes rarely, is read constantly, and a stored value can be
+checked against the pure function that produced it. It also means a recording exported or backed up
+carries its own clock rather than depending on a tree that may since have been rearranged.
+
+**Location is a fourth comparison axis**, alongside person, event and tag category — "the Gorge
+against Showbox" is the same machinery as Spiderman against Hulk, and it works whether or not any
+coordinates were ever captured.
+
+What this does *not* change: the stored instant. Recordings are epoch milliseconds and stay that
+way. A zone is how an instant is written down, never what it is — and the day this is confused is
+the day a daylight-saving boundary starts moving people's recordings around.
+
+**Nothing here touches the network.** Zone ids come from the platform's own tzdata, which Android
+keeps current; coordinates, when wanted, come from the device's own receiver. The app continues to
+work with the radio off, which is the condition it is most often used in.
+
+---
 ## 3. Analysis, which is the point
 
 Every comparison the app can offer is "split these recordings by X and lay the groups over each
@@ -402,6 +456,40 @@ Day 1 average that excludes the merch queue.
 
 ---
 
+### Sprint 3b — Place and time zone
+
+| Ticket | Work |
+|---|---|
+| **TX-3b.1** | `LocationEntity` — name, time zone, optional picture and coordinates — with a registry screen beside People and Watches. `EventEntity` gains `locationId`; `BpmRecordEntity` gains an override and the resolved `timeZoneId`. |
+| **TX-3b.2** | `LocationResolver` — nearest-wins up `EventTree`, the same shape as `CoverResolver` and `EffectiveTagsResolver`. Pure, tested, and the only definition of "where was this". |
+| **TX-3b.3** | Optional coordinate capture from the device, behind a permission the app never requires. No network, no Play Services: the framework location provider, or nothing. |
+| **TX-3b.4** | `reconcileTimeZones()` — resolves and writes `bpm_records.timeZoneId`, on the same closed trigger list as membership and by the same single-writer rule. |
+| **TX-3b.5** | One formatter that takes an instant and a zone. Every timestamp in the app goes through it: library, timeline, record screen, analysis, export. A recording renders in *its* clock everywhere, with the zone shown where it differs from the reader's. |
+| **TX-3b.6** | Location on the event editor: pick from the registry, or make one in the same gesture — the same inline pattern as tags. |
+| **TX-3b.7** | Location as a comparison axis — `SplitAxis.Place`, offered on the same two-or-more rule as the others, and working whether or not coordinates were ever captured. |
+| **TX-3b.8** | Windows are entered and displayed in the event's own zone. This is the correctness half: a window typed as 21:00 at the Gorge must mean 21:00 there. |
+
+**Verify:** a west-coast festival and an east-coast one in the same library, each reading in its own
+clock on every screen; a window typed at one of them claiming the right recordings; "the Gorge
+against Showbox" answerable as a split; and all of it working with the radio off and location
+permission refused.
+
+**Risks worth naming before starting:**
+
+- **TX-3b.5 is the large one.** Every timestamp render is a call site, and the ones that get missed
+  are the ones nobody looks at twice. Worth finding them by making the zone-less formatter
+  impossible to call rather than by grepping.
+- **A window is a wall-clock time in a zone, not an instant.** Storing the instant is right, but the
+  editor must convert through the event's zone both ways, and the conversion has to survive the
+  event's location being changed afterwards — at which point the honest behaviour is to keep the
+  wall-clock reading and move the instant, since "the set started at nine" is what was meant.
+- **Daylight saving.** A window spanning a transition is an hour longer or shorter than it looks.
+  Correct, and worth a test rather than a discovery.
+- **Deleting a location** must orphan rather than cascade, like every other reference in this model.
+  An event whose venue was deleted keeps its recordings and its times; it simply stops saying where.
+
+---
+
 ### Sprint 4 — Filtering
 
 | Ticket | Work |
@@ -486,10 +574,28 @@ throughout.
    Day 1 and Day 2, because that is when it was. See §3.2.
 7. **A scope may exclude parts of itself.** Day 1 without the merch queue is a different and better
    number than Day 1 with it. See §3.1.
+8. **A location is a registry entry, like a person or a watch.** Name, time zone, optionally a
+   picture and coordinates. Made once and pointed at, so renaming fixes every event and comparing
+   works on identity rather than on two strings matching. See §2.7.
+9. **The time zone is chosen, not derived.** Someone naming a venue knows what time it is there, so
+   asking once beats a bundled boundary dataset of several megabytes that can be subtly wrong near
+   a border. This is what removed the only dependency this feature would have needed.
+10. **Location lives on the event, and recordings inherit it.** A venue is a property of the
+    occasion, so it is set once a night rather than once per watch. The same nearest-wins walk as
+    tags and covers, with a recording able to override.
+11. **The resolved zone is frozen onto the recording.** Same reasoning as membership: rare to
+    change, constant to read, and checkable against the pure function that produced it. A backed-up
+    recording carries its own clock rather than depending on a tree.
+12. **Coordinates are optional and informational.** Capturable from the device where permission is
+    granted — a GPS fix needs no network — and nothing depends on them. A location typed by hand is
+    worth exactly as much as one captured automatically.
+13. **Nothing added here touches the network.** Zone ids come from the platform tzdata; coordinates
+    come from the device receiver. The app keeps working with the radio off, which is the condition
+    it is most often used in.
 
 ### Still open
 
-Nothing blocking. Two things to decide while building:
+Nothing blocking. Three things to decide while building:
 
 1. **Is a full recompute still cheap at ten thousand recordings?** The design says recompute
    everything rather than the affected part, because a partial recompute is a second definition of
@@ -498,3 +604,7 @@ Nothing blocking. Two things to decide while building:
 2. **Should `excludedFromParentAnalysis` be implied by type?** A "Break" is almost always excluded,
    and typing one could set the flag. Convenient, but a type quietly changing a number is the kind
    of helpfulness that is hard to find when it is wrong.
+3. **What happens to a window when its event's zone changes?** The reading — "the set started at
+   nine" — is almost certainly what was meant, so the wall clock should hold and the instant move.
+   But that silently reassigns membership, so it wants a word on screen rather than being done
+   quietly. Decide when TX-3b.8 is built, not before.

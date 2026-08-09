@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.core.BpmWatchRecord
+import inga.bpmetrics.library.clock
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.ui.util.StringFormatHelpers
 import java.io.BufferedReader
@@ -31,7 +32,7 @@ object CsvExporter {
         writer.appendLine("Description,${record.metadata.description}")
         writer.appendLine("Device ID,${record.metadata.deviceId}")
         writer.appendLine("Wearer Name,${record.metadata.wearerName}")
-        writer.appendLine("Date,${StringFormatHelpers.getDateString(record.metadata.date)}")
+        writer.appendLine("Date,${StringFormatHelpers.getDateString(record.metadata.date, record.clock)}")
         writer.appendLine("Start Time (ms),${record.metadata.startTime}")
         writer.appendLine("End Time (ms),${record.metadata.endTime}")
         writer.appendLine("Duration (ms),${record.metadata.durationMs}")

@@ -1368,6 +1368,8 @@ private fun NumberField(
  */
 @Composable
 fun ClipSelectorStrip(
+    /** The recordings' clock — see ClipCard. */
+    clock: java.time.ZoneId,
     clips: List<ClipSelection>,
     selectedUri: Uri?,
     onSelect: (Uri) -> Unit
@@ -1401,7 +1403,8 @@ fun ClipSelectorStrip(
                 }
                 Text(
                     inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString(
-                        selection.clip.startedAtMs
+                        selection.clip.startedAtMs,
+                        clock
                     ),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = if (chosen) FontWeight.Bold else null,

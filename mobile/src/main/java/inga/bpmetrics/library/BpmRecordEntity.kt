@@ -89,7 +89,32 @@ data class BpmRecordEntity (
     @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
     /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
+
+    /**
+     * The clock this recording is read in — an IANA id like "America/Los_Angeles".
+     *
+     * **Resolved, then stored.** [inga.bpmetrics.library.LocationResolver] decides it by walking up
+     * the event tree; one writer puts the answer here. Same reasoning as event membership: it
+     * changes rarely, is read on every screen that shows a time, and a stored value can be checked
+     * against the pure function that produced it.
+     *
+     * Storing it also means a backed-up or exported recording carries its own clock rather than
+     * depending on a tree that may since have been rearranged.
+     *
+     * Null means nobody has said — fall back to the reader's zone, which is what the app did
+     * everywhere before this existed.
+     */
+    @ColumnInfo(defaultValue = "NULL") val timeZoneId: String? = null,
+
+    /**
+     * A location set on this recording specifically, overriding whatever it would inherit.
+     *
+     * For the recording that genuinely differs from its event — someone who joined from elsewhere,
+     * a watch left on the wrong clock. Kept apart from [timeZoneId] so a reconcile can overwrite
+     * the resolved answer without destroying a deliberate one.
+     */
+    @ColumnInfo(defaultValue = "NULL") val locationId: Long? = null
     ) {
 
     /** This recording's own cover, if it was given one. */
