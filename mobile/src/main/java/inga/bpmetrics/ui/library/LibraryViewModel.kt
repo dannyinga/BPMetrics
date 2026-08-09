@@ -214,7 +214,10 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             val subtree = inga.bpmetrics.library.EventTree.descendantsOf(groups, group.eventId)
             GroupSummary(
                 group = group,
-                events = byGroup[group.groupId].orEmpty(),
+                // `eventId`, not `groupId`. A collection is an event, so its own id is `eventId`;
+                // `groupId` is the legacy column, null on every collection — and `byGroup` is keyed
+                // by parent, so looking up null handed every top-level event to every collection.
+                events = byGroup[group.eventId].orEmpty(),
                 allEvents = subtree.toList().flatMap { byGroup[it].orEmpty() },
                 // Itself excluded — a collection is not inside itself.
                 nestedCollectionCount = subtree.size - 1

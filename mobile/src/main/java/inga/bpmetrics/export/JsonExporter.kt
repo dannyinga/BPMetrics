@@ -279,7 +279,6 @@ object JsonExporter {
         val categoryNames = categories.associate { it.categoryId to it.name }
         val peopleById = people.associateBy { it.personId }
         val eventsById = events.associateBy { it.eventId }
-        val groupNames = eventGroups.associate { it.groupId to it.name }
 
         // The events these recordings belong to, **and everything above them**.
         //
@@ -296,7 +295,10 @@ object JsonExporter {
         val usedEventDtos = usedEvents.map { event ->
             EventDto(
                 name = event.name,
-                groupName = event.groupId?.let { groupNames[it] },
+                // Always null now. An event says where it sits with `parentName`, which reaches any
+                // depth; `groupName` only ever named a collection and stays in the format so a
+                // file written before the fold still restores.
+                groupName = null,
                 notes = event.notes,
                 createdAt = event.createdAt,
                 tags = eventTags[event.eventId].orEmpty().map { it.qualified(categoryNames) },

@@ -357,16 +357,26 @@ fun GroupCard(
     onRemoveCover: (() -> Unit)? = null,
     /** Its own picture or the one it inherits from a parent, resolved by the caller. */
     cover: inga.bpmetrics.library.Cover? = null,
-    /** How deep this sits, so the tree reads as a tree rather than a flat list. */
-    depth: Int = 1,
+    /**
+     * How deep this sits, so the tree reads as a tree rather than a flat list.
+     *
+     * **Zero at the top level**, matching [inga.bpmetrics.library.EventTree.flatten]. The walk this
+     * replaced counted from one, so subtracting one here was right then and made every top-level
+     * collection ask for negative padding after the fold — which Compose throws on, taking the
+     * whole screen down rather than merely looking wrong.
+     */
+    depth: Int = 0,
     content: @Composable () -> Unit
 ) {
     Card(
         // Indented by depth, which is the whole point of nesting being visible: a day inside a
         // festival should look like it is inside it.
+        //
+        // Floored at zero rather than trusted. An off-by-one in a caller should misdraw a card, not
+        // crash the list — and this is a crash that reached a device once already.
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = ((depth - 1) * 14).dp),
+            .padding(start = (depth.coerceAtLeast(0) * 14).dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )

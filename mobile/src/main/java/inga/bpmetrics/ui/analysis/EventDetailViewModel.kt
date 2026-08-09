@@ -78,7 +78,9 @@ class EventDetailViewModel(
     ) { event, records, groups, people, watches ->
         EventDetailState(
             event = event,
-            group = event?.groupId?.let { id -> groups.firstOrNull { it.groupId == id } },
+            // `parentId`/`eventId`, not the legacy `groupId` on either side — that column is null on
+            // anything created since the fold, so the breadcrumb would simply stop appearing.
+            group = event?.parentId?.let { id -> groups.firstOrNull { it.eventId == id } },
             records = records.sortedBy { it.metadata.startTime },
             people = people.associateBy { it.personId },
             analysis = EventAnalysis.from(records, watches = watches, people = people),
