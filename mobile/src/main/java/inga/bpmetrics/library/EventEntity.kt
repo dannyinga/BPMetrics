@@ -2,6 +2,7 @@ package inga.bpmetrics.library
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -26,6 +27,47 @@ data class EventEntity(
     @ColumnInfo(defaultValue = "NULL") val groupId: Long? = null,
     @ColumnInfo(defaultValue = "") val notes: String = "",
     val createdAt: Long = 0L,
+
+    /**
+     * The event this one sits inside, or null at the top of the timeline.
+     *
+     * Events nest now: a festival holds days, a day holds sets, a set holds recordings. Which of
+     * those an event *is* depends only on what it happens to hold — see the Taxonomy Consolidation
+     * doc, §2.1.
+     *
+     * Not a foreign key, matching `EventGroupEntity.parentGroupId`: deleting a parent must orphan
+     * its children to the top rather than cascade, because deleting "Coachella" should not
+     * silently take both of its days and every set in them.
+     */
+    @ColumnInfo(defaultValue = "NULL") val parentId: Long? = null,
+
+    /**
+     * When this event happened, if it is the kind that has a time.
+     *
+     * A window is the **membership rule**, not a hint: a recording inside it belongs to this event,
+     * and to the deepest such event where several nest. Null means the event has no time of its
+     * own and takes its span from what it contains.
+     */
+    @ColumnInfo(defaultValue = "NULL") val windowStart: Long? = null,
+    @ColumnInfo(defaultValue = "NULL") val windowEnd: Long? = null,
+
+    /**
+     * What kind of thing this is — "Concert", "Festival", "Gaming session", "Run", "Raid".
+     *
+     * Free text, suggested from types already in use. This is what keeps the app out of any one
+     * domain: the container is generic and the word on it is the user's. A fixed vocabulary is
+     * exactly the part that would make this concert software.
+     */
+    @ColumnInfo(defaultValue = "NULL") val type: String? = null,
+
+    /**
+     * Whether this event's numbers are left out of its parent's.
+     *
+     * A camp break or a merch queue is genuinely part of the day and genuinely not part of what the
+     * day's average should mean. Set once here rather than excluded by hand in every roll-up.
+     * Affects analysis only — never the library, the timeline or an export.
+     */
+    @ColumnInfo(defaultValue = "0") val excludedFromParentAnalysis: Boolean = false,
 
     /**
      * The picture that stands for this event, as a file name inside `files/covers/`.
@@ -109,3 +151,25 @@ data class TimeSpan(
 ) {
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
 }
+
+/**
+ * Which people an event's window applies to, where it applies to some of them.
+ *
+ * This is what lets two stages at one festival both be nine until half past. Kyle at Subtronics and
+ * Ben at Excision overlap in time and not in people, so a recording still has exactly one answer —
+ * the key is (time × person) rather than time alone. Without it the model would have to refuse
+ * simultaneous events, which is wrong about how a festival works.
+ *
+ * **No rows means everyone.** That is the common case and it stays the simple one: an event with no
+ * qualification claims every recording in its window, and two such siblings therefore cannot
+ * overlap.
+ */
+@Entity(
+    tableName = "event_window_people",
+    primaryKeys = ["eventId", "personId"],
+    indices = [Index("personId")]
+)
+data class EventWindowPersonCrossRef(
+    val eventId: Long,
+    val personId: Long
+)

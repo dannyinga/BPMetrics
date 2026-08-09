@@ -50,7 +50,8 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_18_19,
             LibraryDatabase.MIGRATION_19_20,
             LibraryDatabase.MIGRATION_20_21,
-            LibraryDatabase.MIGRATION_21_22
+            LibraryDatabase.MIGRATION_21_22,
+            LibraryDatabase.MIGRATION_22_23
         )
     }
 
@@ -759,6 +760,63 @@ class LibraryDatabaseMigrationTest {
         db.query("SELECT coverPath FROM bpm_records WHERE recordId = 1").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals("own.jpg", cursor.getString(0))
+        }
+        db.close()
+    }
+
+    /** The schema check for events becoming the timeline. */
+    @Test
+    fun migrate22To23_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 23, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Every existing event comes through unchanged.
+     *
+     * This migration is additive on purpose — folding collections into the tree is a separate one,
+     * because that rewrites data and this cannot break anything. An event with no parent and no
+     * window has to behave exactly as it did before, or the split was pointless.
+     */
+    @Test
+    fun migrate22To23_leavesExistingEventsAtTheTopWithNoWindow() {
+        helper.createDatabase(TEST_DB, 5).close()
+        var db = helper.runMigrationsAndValidate(TEST_DB, 22, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "INSERT INTO events (eventId, name, groupId, notes, createdAt) " +
+                "VALUES (1, 'Subtronics', NULL, '', 1700000000000)"
+        )
+        db.close()
+
+        db = helper.runMigrationsAndValidate(TEST_DB, 23, true, *ALL_MIGRATIONS)
+
+        db.query(
+            "SELECT name, parentId, windowStart, windowEnd, type, excludedFromParentAnalysis " +
+                "FROM events WHERE eventId = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Subtronics", cursor.getString(0))
+            assertTrue("an existing event must stay at the top", cursor.isNull(1))
+            assertTrue("and must not gain a window", cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            // Not nullable: there is no third state between excluded and not.
+            assertEquals(0, cursor.getInt(5))
+        }
+        db.close()
+    }
+
+    /** Two stages at one festival: the table that lets their windows overlap. */
+    @Test
+    fun migrate22To23_letsAWindowNameThePeopleItAppliesTo() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 23, true, *ALL_MIGRATIONS)
+
+        db.execSQL("INSERT INTO event_window_people (eventId, personId) VALUES (1, 100), (1, 200)")
+
+        db.query("SELECT COUNT(*) FROM event_window_people WHERE eventId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(2, cursor.getInt(0))
         }
         db.close()
     }

@@ -158,7 +158,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 22
+internal const val LIBRARY_DB_VERSION = 23
 
 @Database(
     entities = [
@@ -173,6 +173,7 @@ internal const val LIBRARY_DB_VERSION = 22
         EventGroupEntity::class,
         EventTagCrossRef::class,
         EventGroupTagCrossRef::class,
+        EventWindowPersonCrossRef::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class,
         ExportPresetEntity::class,
@@ -929,6 +930,46 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Events become the timeline: nesting, optionally time-bounded, typed.
+         *
+         * Additive only. Every column is nullable or defaulted, `event_groups` is untouched, and
+         * nothing existing changes meaning — an event with no parent and no window behaves exactly
+         * as it did. Folding collections into this tree is a separate migration, deliberately,
+         * because that one rewrites data and this one cannot break anything.
+         *
+         * `excludedFromParentAnalysis` is `INTEGER NOT NULL DEFAULT 0` rather than nullable: there
+         * is no third state between excluded and not, and a nullable boolean invites one.
+         *
+         * SQL copied from the generated `23.json`.
+         */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `parentId` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `windowStart` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `windowEnd` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `type` TEXT DEFAULT NULL")
+                db.execSQL(
+                    "ALTER TABLE `events` ADD COLUMN `excludedFromParentAnalysis` " +
+                        "INTEGER NOT NULL DEFAULT 0"
+                )
+
+                // No rows means the window applies to everyone, which is the common case and the
+                // one that needs no storage at all.
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `event_window_people` (" +
+                        "`eventId` INTEGER NOT NULL, `personId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`eventId`, `personId`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_event_window_people_personId` " +
+                        "ON `event_window_people` (`personId`)"
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_22_23: Events nest, and may carry a window")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -994,7 +1035,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_18_19,
                         MIGRATION_19_20,
                         MIGRATION_20_21,
-                        MIGRATION_21_22
+                        MIGRATION_21_22,
+                        MIGRATION_22_23
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.
