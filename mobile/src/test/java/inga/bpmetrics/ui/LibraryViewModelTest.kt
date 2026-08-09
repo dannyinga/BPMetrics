@@ -26,6 +26,8 @@ class LibraryViewModelTest {
     private val recordsFlow = MutableStateFlow<List<BpmRecord>>(emptyList())
     private val effectiveTagsFlow = MutableStateFlow<Map<Long, List<EffectiveTag>>>(emptyMap())
     private val eventsFlow = MutableStateFlow<List<EventEntity>>(emptyList())
+    private val locationsFlow =
+        MutableStateFlow<List<inga.bpmetrics.library.LocationEntity>>(emptyList())
 
     @Before
     fun setup() {
@@ -36,6 +38,11 @@ class LibraryViewModelTest {
         every { repository.records } returns recordsFlow
         every { repository.effectiveTags } returns effectiveTagsFlow
         every { repository.getAllEvents() } returns eventsFlow
+        // `combine` waits on every source, and a relaxed mock hands back a Flow that never emits —
+        // so one missing stub hangs the test with a timeout that names nothing. Anything
+        // `filteredRecords` reads has to be stubbed, even where this test does not care about it.
+        every { repository.allEventsInTree } returns eventsFlow
+        every { repository.getAllLocations() } returns locationsFlow
     }
 
     @Test

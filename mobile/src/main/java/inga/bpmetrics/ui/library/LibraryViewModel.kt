@@ -59,9 +59,28 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.records,
         _filterState,
         repository.effectiveTags,
-        repository.getAllEvents()
-    ) { records, filter, tags, events ->
-        applyFilter(records, filter, tags, events.associate { it.eventId to it.parentId })
+        // The whole tree and the venue registry, because free text matches event and place names
+        // too — someone types "gorge" without knowing or caring which dimension holds it.
+        repository.allEventsInTree,
+        repository.getAllLocations()
+    ) { records, filter, tags, events, places ->
+        val byId = places.associateBy { it.locationId }
+        val resolved = events.associate { event ->
+            event.eventId to inga.bpmetrics.library.LocationResolver
+                .forEvent(event.eventId, events, byId)
+                ?.location
+        }
+        applyFilter(
+            records = records,
+            filter = filter,
+            effectiveTags = tags,
+            groupIdByEvent = events.associate { it.eventId to it.parentId },
+            eventNames = events.associate { it.eventId to it.displayName },
+            placeNames = resolved.mapNotNull { (id, place) ->
+                place?.let { id to it.displayName }
+            }.toMap(),
+            locationIdByEvent = resolved.mapValues { it.value?.locationId }
+        )
     }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
 
     /**
@@ -91,6 +110,145 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /** Watches known to the registry, for the filter to offer. */
     val availableWatches: StateFlow<List<WatchEntity>> = repository.getAllWatches()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    /**
+     * The active filter as chips, resolved to names.
+     *
+     * Through [FilterChips], which is pure and is the only thing that describes a filter — two
+     * places rendering "what is applied" is two places free to disagree about it.
+     */
+    val filterChips: StateFlow<List<FilterChip>> = combine(
+        _filterState,
+        combine(availablePeople, repository.getAllCategories(), repository.allEventsInTree) {
+            p, c, e -> Triple(p, c, e)
+        },
+        combine(repository.getAllLocations(), repository.getAllWatches(), repository.allTags) {
+            l, w, t -> Triple(l, w, t)
+        }
+    ) { filter, (people, categories, events), (places, watches, tags) ->
+        FilterChips.of(
+            filter = filter,
+            people = people,
+            tags = tags,
+            categories = categories,
+            events = events,
+            locations = places,
+            watches = watches,
+            formatDate = {
+                inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(
+                    it, inga.bpmetrics.ui.util.ReaderClock
+                )
+            }
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** What each dimension can be narrowed to. */
+    val filterOptions: StateFlow<FilterOptions> = combine(
+        combine(availablePeople, repository.allTags, repository.getAllCategories()) {
+            p, t, c -> Triple(p, t, c)
+        },
+        combine(repository.allEventsInTree, repository.getAllCollections()) { e, s -> e to s },
+        combine(repository.getAllLocations(), repository.getAllWatches()) { l, w -> l to w }
+    ) { (people, tags, categories), (events, sets), (places, watches) ->
+        val categoryNames = categories.associate { it.categoryId to it.name }
+        FilterOptions(
+            people = people.map { it.personId.toString() to it.displayName },
+            tags = tags.map { tag ->
+                tag.tagId.toString() to
+                    (categoryNames[tag.parentCategoryId]?.let { "$it › ${tag.name}" } ?: tag.name)
+            }.sortedBy { it.second },
+            events = events.map { it.eventId.toString() to it.displayName }.sortedBy { it.second },
+            collections = sets.map { it.collectionId.toString() to it.displayName },
+            locations = places.map { it.locationId.toString() to it.displayName },
+            watches = watches.filter { it.isNamed }.map { it.watchId to it.displayName }
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FilterOptions())
+
+    fun setQuery(text: String) { _filterState.value = _filterState.value.copy(query = text) }
+
+    fun removeChip(chip: FilterChip) {
+        _filterState.value = FilterChips.without(_filterState.value, chip)
+    }
+
+    /** Adds one term. Ids arrive as strings because a watch is a UUID and everything else is not. */
+    fun addFilterTerm(dimension: FilterDimension, id: String) {
+        val current = _filterState.value
+        val numeric = id.toLongOrNull()
+        _filterState.value = when (dimension) {
+            FilterDimension.PERSON -> numeric?.let {
+                current.copy(selectedPersonIds = current.selectedPersonIds + it)
+            }
+            FilterDimension.TAG -> numeric?.let {
+                current.copy(selectedTagIds = current.selectedTagIds + it)
+            }
+            FilterDimension.EVENT -> numeric?.let {
+                current.copy(selectedEventIds = current.selectedEventIds + it)
+            }
+            FilterDimension.COLLECTION -> numeric?.let {
+                current.copy(selectedGroupIds = current.selectedGroupIds + it)
+            }
+            FilterDimension.LOCATION -> numeric?.let {
+                current.copy(selectedLocationIds = current.selectedLocationIds + it)
+            }
+            FilterDimension.WATCH -> current.copy(selectedWatchIds = current.selectedWatchIds + id)
+            FilterDimension.DATE, FilterDimension.RATE -> current
+        } ?: current
+    }
+
+    fun clearFilter() { _filterState.value = FilterState() }
+
+    // --- Saved views (TX-4.3) ---
+
+    /**
+     * Filters someone kept, pinned to the library.
+     *
+     * What makes the bar worth building: a filter that has to be rebuilt each time is a form, and
+     * one that can be pinned is a view. It stores the *question*, so a recording added tomorrow
+     * appears in it — freezing the answer would make it a saved analysis, which already exists.
+     */
+    val savedViews: StateFlow<List<inga.bpmetrics.library.SavedViewEntity>> =
+        repository.getSavedViews()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Whichever saved view the current filter exactly matches, or null. */
+    val activeViewId: StateFlow<Long?> = combine(savedViews, _filterState) { views, filter ->
+        // Compared as filters rather than as text: two JSON strings can differ by key order and
+        // mean the same thing, and a pinned view that fails to light up when it is applied looks
+        // broken.
+        views.firstOrNull { FilterSerialisation.fromJson(it.filterJson) == filter }?.viewId
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun saveCurrentAsView(name: String) {
+        viewModelScope.launch {
+            repository.saveView(name, FilterSerialisation.toJson(_filterState.value))
+        }
+    }
+
+    /**
+     * Applies a view, or clears it when it is already applied.
+     *
+     * Tapping the lit one turns it off, so a pinned view is a toggle rather than a one-way door
+     * that needs the separate Clear to escape.
+     */
+    fun applyView(view: inga.bpmetrics.library.SavedViewEntity) {
+        val stored = FilterSerialisation.fromJson(view.filterJson)
+        _filterState.value = if (_filterState.value == stored) FilterState() else stored
+    }
+
+    /** Replaces what a view asks with whatever is applied now. */
+    fun updateViewToCurrent(viewId: Long) {
+        viewModelScope.launch {
+            repository.updateViewFilter(viewId, FilterSerialisation.toJson(_filterState.value))
+        }
+    }
+
+    fun renameView(viewId: Long, name: String) {
+        viewModelScope.launch { repository.renameView(viewId, name) }
+    }
+
+    fun deleteView(viewId: Long) {
+        viewModelScope.launch { repository.deleteView(viewId) }
+    }
+
 
     // --- Events and groups ---
 
@@ -966,6 +1124,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * Represents the criteria used to filter the record list.
      */
     data class FilterState(
+        /**
+         * Free text, matched against a recording's title, its person, its event and its venue.
+         *
+         * The thing a filter dialog could never be: you know what you are looking for before you
+         * know which of the app's dimensions it lives in. Typing "gorge" should find it whether
+         * that is a venue, an event name or something someone typed in a title.
+         */
+        val query: String = "",
         val dateRange: Pair<Long, Long>? = null,
         val selectedTagIds: Set<Long> = emptySet(),
         val minBpm: Double = 0.0,
@@ -994,8 +1160,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
          */
         val selectedEventIds: Set<Long> = emptySet(),
         /** Groups to include, matched through the event each recording is filed under. */
-        val selectedGroupIds: Set<Long> = emptySet()
-    )
+        val selectedGroupIds: Set<Long> = emptySet(),
+        /** Venues to include, matched on the location a recording resolves to. */
+        val selectedLocationIds: Set<Long> = emptySet()
+    ) {
+        /** Whether anything is narrowing the library at all. */
+        val isEmpty: Boolean
+            get() = this == FilterState()
+    }
 
     companion object {
         /**
@@ -1017,7 +1189,11 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             records: List<BpmRecord>,
             filter: FilterState,
             effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap(),
-            groupIdByEvent: Map<Long, Long?> = emptyMap()
+            groupIdByEvent: Map<Long, Long?> = emptyMap(),
+            /** Event names and venues, so free text can match them without a second lookup. */
+            eventNames: Map<Long, String> = emptyMap(),
+            placeNames: Map<Long, String> = emptyMap(),
+            locationIdByEvent: Map<Long?, Long?> = emptyMap()
         ): List<BpmRecord> {
             // Tag ids resolved through the hierarchy, so filtering by a group's tag returns every
             // recording underneath it — the point of §2.5. Falls back to the recording's own tags
@@ -1082,8 +1258,22 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                 val groupMatch = filter.selectedGroupIds.isEmpty() ||
                         record.metadata.eventId?.let { groupIdByEvent[it] } in filter.selectedGroupIds
 
+                // Free text across everything a person might remember about a recording. They
+                // know what they are looking for before they know which of the app's dimensions
+                // it lives in, which is the thing a sectioned dialog could never do.
+                val queryMatch = filter.query.isBlank() || listOfNotNull(
+                    record.metadata.title,
+                    record.metadata.description,
+                    record.metadata.wearerName,
+                    record.metadata.eventId?.let { eventNames[it] },
+                    record.metadata.eventId?.let { placeNames[it] }
+                ).any { it.contains(filter.query.trim(), ignoreCase = true) }
+
+                val locationMatch = filter.selectedLocationIds.isEmpty() ||
+                    locationIdByEvent[record.metadata.eventId] in filter.selectedLocationIds
+
                 dateMatch && tagMatch && bpmMatch && wearerMatch && watchMatch &&
-                        eventMatch && groupMatch
+                        eventMatch && groupMatch && queryMatch && locationMatch
             }
         }
     }

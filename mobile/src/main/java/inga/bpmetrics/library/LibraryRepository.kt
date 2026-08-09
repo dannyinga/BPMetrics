@@ -79,6 +79,7 @@ class LibraryRepository(
     private val eventDao = database.eventDao()
     private val collectionDao = database.collectionDao()
     private val locationDao = database.locationDao()
+    private val savedViewDao = database.savedViewDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
     private val presetDao = database.exportPresetDao()
 
@@ -672,6 +673,30 @@ class LibraryRepository(
         if (changed.isNotEmpty()) Log.i(tag, "Reconciled ${changed.size} recording clock(s)")
         return changed.size
     }
+
+    // --- Saved views ---
+
+    fun getSavedViews(): Flow<List<SavedViewEntity>> = savedViewDao.getAllFlow()
+
+    suspend fun saveView(name: String, filterJson: String): Long =
+        savedViewDao.insert(
+            SavedViewEntity(
+                name = name.trim(),
+                filterJson = filterJson,
+                createdAt = System.currentTimeMillis()
+            )
+        ).also { Log.d(tag, "Saved view '${name.trim()}' as $it") }
+
+    suspend fun renameView(viewId: Long, name: String) = savedViewDao.rename(viewId, name.trim())
+
+    /** Replaces what a view asks, for "I meant this, plus Ben". */
+    suspend fun updateViewFilter(viewId: Long, filterJson: String) =
+        savedViewDao.updateFilter(viewId, filterJson)
+
+    suspend fun setViewPinned(viewId: Long, pinned: Boolean) =
+        savedViewDao.setPinned(viewId, pinned)
+
+    suspend fun deleteView(viewId: Long) = savedViewDao.delete(viewId)
 
     // --- Locations ---
 
@@ -2041,6 +2066,9 @@ class LibraryRepository(
     suspend fun removeTagFromGroup(groupId: Long, tagId: Long) = removeTagFromEvent(groupId, tagId)
 
     fun getTagsForGroup(groupId: Long): Flow<List<TagEntity>> = getTagsForEvent(groupId)
+
+    /** Every tag in the library, live, for the filter bar to offer. */
+    val allTags: Flow<List<TagEntity>> = tagDao.getAllTagsFlow()
 
     /** Every event's tags, indexed by event. Live, so applying one anywhere updates every reader. */
     val allEventTags: Flow<Map<Long, List<TagEntity>>> =

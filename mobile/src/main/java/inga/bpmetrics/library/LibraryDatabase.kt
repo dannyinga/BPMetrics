@@ -174,7 +174,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 26
+internal const val LIBRARY_DB_VERSION = 27
 
 @Database(
     entities = [
@@ -193,6 +193,7 @@ internal const val LIBRARY_DB_VERSION = 26
         CollectionEventCrossRef::class,
         CollectionRecordCrossRef::class,
         LocationEntity::class,
+        SavedViewEntity::class,
         EventWindowPersonCrossRef::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class,
@@ -210,6 +211,7 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun eventDao(): EventDao
     abstract fun collectionDao(): CollectionDao
     abstract fun locationDao(): LocationDao
+    abstract fun savedViewDao(): SavedViewDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
     abstract fun exportPresetDao(): ExportPresetDao
     abstract fun renderJobDao(): RenderJobDao
@@ -1188,6 +1190,28 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Saved views: a filter someone kept.
+         *
+         * The filter is stored as text rather than as a column per dimension. The dimensions change
+         * — location arrived one sprint after the rest — and a table that grows a column each time
+         * is a migration each time. Nothing queries a view in SQL; they are read as a list and
+         * applied in memory.
+         */
+        val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `saved_views` (" +
+                        "`viewId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`filterJson` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`isPinned` INTEGER NOT NULL DEFAULT 1)"
+                )
+                android.util.Log.i(TAG, "MIGRATION_26_27: saved views")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -1257,7 +1281,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_22_23,
                         MIGRATION_23_24,
                         MIGRATION_24_25,
-                        MIGRATION_25_26
+                        MIGRATION_25_26,
+                        MIGRATION_26_27
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

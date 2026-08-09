@@ -178,7 +178,9 @@ fun LibraryScreen(
     // Which collection a cover is being chosen for. Held outside the picker because the launcher is
     var showSortMenu by remember { mutableStateOf(false) }
     var showSelectionMenu by remember { mutableStateOf(false) }
-    var showFilterDialog by remember { mutableStateOf(false) }
+    // The filter is a bar now, not a dialog. Kept only as "is the bar open" — the terms themselves
+    // live in the ViewModel, so closing the bar no longer hides what is applied.
+    var showFilterBar by rememberSaveable { mutableStateOf(false) }
     var showBulkDeleteDialog by remember { mutableStateOf(false) }
     var showBulkTagDialog by remember { mutableStateOf(false) }
     var showMergeDialog by remember { mutableStateOf(false) }
@@ -199,6 +201,10 @@ fun LibraryScreen(
     val timelineExpanded by viewModel.expandedInTimeline.collectAsStateWithLifecycle()
     val knownLocations by viewModel.locations.collectAsStateWithLifecycle()
     val placeNames by viewModel.placeNamesByEvent.collectAsStateWithLifecycle()
+    val filterChips by viewModel.filterChips.collectAsStateWithLifecycle()
+    val filterOptions by viewModel.filterOptions.collectAsStateWithLifecycle()
+    val savedViews by viewModel.savedViews.collectAsStateWithLifecycle()
+    val activeViewId by viewModel.activeViewId.collectAsStateWithLifecycle()
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     var renamingCollection by remember { mutableStateOf<CollectionSummary?>(null) }
     // Registered once for the screen rather than once per card: a launcher per collection would be
@@ -667,8 +673,8 @@ fun LibraryScreen(
                                 }
                             }
 
-                            val filtered = filterState != LibraryViewModel.FilterState()
-                            IconButton(onClick = { showFilterDialog = true }) {
+                            val filtered = !filterState.isEmpty
+                            IconButton(onClick = { showFilterBar = !showFilterBar }) {
                                 Icon(
                                     // The icon carries the state, so an active filter is visible
                                     // without a row explaining it.
@@ -725,6 +731,30 @@ fun LibraryScreen(
                         modifier = Modifier.padding(12.dp)
                     )
                 }
+            }
+
+            // Below the view switch, above the list: it narrows whichever view is showing, and
+            // putting it above the switch would read as filtering the switch.
+            //
+            // Shown whenever anything is applied, whether or not it was opened. A filter you
+            // cannot see is the thing that made the dialog wrong — you would scroll a library
+            // wondering where half of it went.
+            if (showFilterBar || !filterState.isEmpty || savedViews.isNotEmpty()) {
+                FilterBar(
+                    query = filterState.query,
+                    chips = filterChips,
+                    options = filterOptions,
+                    onQueryChange = { viewModel.setQuery(it) },
+                    onRemoveChip = { viewModel.removeChip(it) },
+                    onAdd = { dimension, id -> viewModel.addFilterTerm(dimension, id) },
+                    onClearAll = { viewModel.clearFilter() },
+                    savedViews = savedViews,
+                    activeViewId = activeViewId,
+                    onApplyView = { viewModel.applyView(it) },
+                    onSaveView = { viewModel.saveCurrentAsView(it) },
+                    onDeleteView = { viewModel.deleteView(it) }
+                )
+                Spacer(Modifier.height(4.dp))
             }
 
             // Three ways of looking at the same recordings, so the switch sits above everything
@@ -879,32 +909,6 @@ fun LibraryScreen(
                 )
             }
         }
-    }
-
-    if (showFilterDialog) {
-        val availablePeople by viewModel.availablePeople.collectAsStateWithLifecycle()
-        val availableWatches by viewModel.availableWatches.collectAsStateWithLifecycle()
-
-        LibraryFilterDialog(
-            currentFilter = filterState,
-            onDismiss = { showFilterDialog = false },
-            onApply = { newFilter ->
-                viewModel.updateFilter { newFilter }
-                showFilterDialog = false
-            },
-            repository = viewModel.repository,
-            availablePeople = availablePeople,
-            availableWatches = availableWatches,
-            availableEvents = events.map { it.event },
-            // Events that contain other events. This axis filters on `parentId`, so what it can
-            // usefully offer is containers — a festival, a day — not the sets from the collections
-            // view, which are a different relation entirely. Filtering by collection membership is
-            // sprint 4, with the rest of the filtering work.
-            availableGroups = remember(eventPickerRows) {
-                val containers = eventPickerRows.mapNotNull { (event, _) -> event.parentId }.toSet()
-                eventPickerRows.map { it.first }.filter { it.eventId in containers }
-            }
-        )
     }
 
     if (showBulkDeleteDialog) {
