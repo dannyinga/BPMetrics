@@ -1,6 +1,10 @@
 package inga.bpmetrics.ui.library
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,9 +13,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Watch
+import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
@@ -88,11 +97,11 @@ fun LibraryFilterDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Filter Records") },
+        title = { Text("Filter recordings") },
         text = {
             LazyColumn(modifier = Modifier.heightIn(max = 500.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 item {
-                    Text("Date Range", style = MaterialTheme.typography.titleMedium)
+                    FilterSection("When", dateRange != null) {
                     FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -195,10 +204,14 @@ fun LibraryFilterDialog(
                             }
                         }
                     }
+                    }
                 }
 
                 item {
-                    Text("BPM Range (Avg)", style = MaterialTheme.typography.titleMedium)
+                    FilterSection(
+                        "Average heart rate",
+                        minBpm.toIntOrNull()?.let { it > 0 } == true || maxBpm.isNotBlank()
+                    ) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = minBpm,
@@ -215,11 +228,12 @@ fun LibraryFilterDialog(
                             singleLine = true
                         )
                     }
+                    }
                 }
 
                 if (availablePeople.isNotEmpty()) {
                     item {
-                        Text("Wearer", style = MaterialTheme.typography.titleMedium)
+                        FilterSection("Wearer", selectedPersonIds.isNotEmpty(), selectedPersonIds.size) {
                         Text(
                             "Who was wearing the watch at the time.",
                             style = MaterialTheme.typography.bodySmall
@@ -244,11 +258,12 @@ fun LibraryFilterDialog(
                             }
                         }
                     }
+                    }
                 }
 
                 if (availableWatches.isNotEmpty()) {
                     item {
-                        Text("Watch", style = MaterialTheme.typography.titleMedium)
+                        FilterSection("Watch", selectedWatchIds.isNotEmpty(), selectedWatchIds.size) {
                         Text(
                             "The device itself, whoever was wearing it.",
                             style = MaterialTheme.typography.bodySmall
@@ -267,16 +282,24 @@ fun LibraryFilterDialog(
                                             selectedWatchIds + watch.watchId
                                         }
                                     },
-                                    label = { Text("⌚ ${watch.displayName}") }
+                                    label = { Text(watch.displayName) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Watch,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 )
                             }
                         }
+                    }
                     }
                 }
 
                 if (availableEvents.isNotEmpty()) {
                     item {
-                        Text("Event", style = MaterialTheme.typography.titleMedium)
+                        FilterSection("Event", selectedEventIds.isNotEmpty(), selectedEventIds.size) {
                         Text(
                             "The occasion a recording is filed under.",
                             style = MaterialTheme.typography.bodySmall
@@ -301,10 +324,11 @@ fun LibraryFilterDialog(
                         }
                     }
                 }
+                    }
 
                 if (availableGroups.isNotEmpty()) {
                     item {
-                        Text("Collection", style = MaterialTheme.typography.titleMedium)
+                        FilterSection("Collection", selectedGroupIds.isNotEmpty(), selectedGroupIds.size) {
                         Text(
                             "Matches everything inside it, however deeply nested.",
                             style = MaterialTheme.typography.bodySmall
@@ -323,12 +347,20 @@ fun LibraryFilterDialog(
                                             selectedGroupIds + group.groupId
                                         }
                                     },
-                                    label = { Text("📁 ${group.displayName}") }
+                                    label = { Text(group.displayName) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Folder,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 )
                             }
                         }
                     }
                 }
+                    }
 
                 item {
                     Text("Tags", style = MaterialTheme.typography.titleMedium)
@@ -593,4 +625,55 @@ fun BulkWearerDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+/**
+ * One collapsible band of the filter dialog.
+ *
+ * The dialog had six sections all open at once inside a 500dp box, so finding any one of them meant
+ * scrolling past the other five — and the tag categories, which were already collapsible, were
+ * buried at the bottom under all of it.
+ *
+ * Open when it is doing something, closed when it is not. That is the same rule the tag categories
+ * already used, and it means the dialog opens showing exactly the filters that are active.
+ *
+ * @param active whether this section is currently narrowing anything.
+ * @param count how many things it has selected, shown on the header so it need not be opened to see.
+ */
+@Composable
+private fun FilterSection(
+    title: String,
+    active: Boolean,
+    count: Int = 0,
+    content: @Composable () -> Unit
+) {
+    var expanded by remember(active) { mutableStateOf(active) }
+
+    ExpandableSection(
+        title = title,
+        isExpanded = expanded,
+        onToggle = { expanded = !expanded },
+        titleStyle = MaterialTheme.typography.titleSmall,
+        leadingContent = if (active) {
+            {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+        } else null
+    ) {
+        Column {
+            if (count > 0) {
+                Text(
+                    "$count selected",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            content()
+        }
+    }
 }

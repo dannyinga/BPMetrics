@@ -148,6 +148,49 @@ class EventDetailViewModel(
         viewModelScope.launch { repository.setEventNotes(eventId, notes) }
     }
 
+    /**
+     * A picture for this event, and so for every recording filed under it.
+     *
+     * Including ones that arrive from a watch afterwards — nothing is written onto the recordings,
+     * they resolve upward to find it. See `CoverResolver`.
+     */
+    fun setCover(
+        context: android.content.Context,
+        source: android.net.Uri,
+        onResult: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            val hint = repository.getEvent(eventId)?.displayName ?: "event"
+            onResult(
+                repository.setCover(
+                    context = context,
+                    owner = LibraryRepository.CoverOwner.Event(eventId),
+                    source = source,
+                    nameHint = hint
+                )
+            )
+        }
+    }
+
+    /** Re-frames the picture this event already has, leaving the file alone. */
+    fun setCoverCrop(cover: inga.bpmetrics.library.Cover) {
+        viewModelScope.launch {
+            repository.setCoverCrop(LibraryRepository.CoverOwner.Event(eventId), cover)
+        }
+    }
+
+    /**
+     * Takes this event's own picture off.
+     *
+     * Its recordings fall back to the collection above it rather than to nothing, which is why the
+     * column stores null rather than an empty string.
+     */
+    fun clearCover(context: android.content.Context) {
+        viewModelScope.launch {
+            repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
+        }
+    }
+
     /** Takes a recording out of the event. It goes back to Unfiled; it is never deleted. */
     fun removeRecord(recordId: Long) {
         viewModelScope.launch { repository.assignRecordsToEvent(listOf(recordId), null) }

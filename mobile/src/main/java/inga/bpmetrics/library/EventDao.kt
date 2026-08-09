@@ -55,6 +55,30 @@ interface EventDao {
     @Query("UPDATE events SET notes = :notes WHERE eventId = :eventId")
     suspend fun updateNotes(eventId: Long, notes: String)
 
+    /**
+     * The picture that stands for this event, and how it is framed.
+     *
+     * All five together, because a path without a crop is a cover framed differently from how it
+     * was set, and a crop without a path is nothing at all. Null across the board means inherit
+     * from the collection above — see CoverResolver.
+     */
+    @Query(
+        "UPDATE events SET coverPath = :path, coverCropLeft = :left, coverCropTop = :top, " +
+            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur WHERE eventId = :eventId"
+    )
+    suspend fun updateCover(
+        eventId: Long,
+        path: String?,
+        left: Float?,
+        top: Float?,
+        right: Float?,
+        bottom: Float?,
+        blur: Float?
+    )
+
+    @Query("SELECT coverPath FROM events WHERE eventId = :eventId")
+    suspend fun coverPathOf(eventId: Long): String?
+
     @Query("UPDATE events SET groupId = :groupId WHERE eventId = :eventId")
     suspend fun setGroup(eventId: Long, groupId: Long?)
 
@@ -109,6 +133,47 @@ interface EventDao {
     suspend fun assignRecordsToEvent(recordIds: List<Long>, eventId: Long?): Int
 
     /** Unfiles everything under an event, used when the event itself is deleted. */
+    /**
+     * A picture for one recording, overriding whatever its event would give it.
+     *
+     * The exception rather than the rule — see `CoverResolver`. Null across the board hands the
+     * recording back to its event's cover.
+     */
+    @Query(
+        "UPDATE bpm_records SET coverPath = :path, coverCropLeft = :left, coverCropTop = :top, " +
+            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur WHERE recordId = :recordId"
+    )
+    suspend fun updateRecordCover(
+        recordId: Long,
+        path: String?,
+        left: Float?,
+        top: Float?,
+        right: Float?,
+        bottom: Float?,
+        blur: Float?
+    )
+
+    @Query("SELECT coverPath FROM bpm_records WHERE recordId = :recordId")
+    suspend fun recordCoverPathOf(recordId: Long): String?
+
+    /**
+     * The distinct events these recordings are filed under, ignoring any that are unfiled.
+     *
+     * Room will not put a null in a result, so a query that selected `eventId` across the lot
+     * could not report the unfiled ones — they would arrive as zero and read as a real event.
+     * Unfiled is asked separately, by [unfiledCountAmong], and the two answers combine at the
+     * caller.
+     */
+    @Query(
+        "SELECT DISTINCT eventId FROM bpm_records " +
+            "WHERE recordId IN (:recordIds) AND eventId IS NOT NULL"
+    )
+    suspend fun distinctEventIdsFor(recordIds: List<Long>): List<Long>
+
+    /** How many of these recordings are in no event at all. */
+    @Query("SELECT COUNT(*) FROM bpm_records WHERE recordId IN (:recordIds) AND eventId IS NULL")
+    suspend fun unfiledCountAmong(recordIds: List<Long>): Int
+
     @Query("UPDATE bpm_records SET eventId = NULL WHERE eventId = :eventId")
     suspend fun unfileRecordsForEvent(eventId: Long)
 }

@@ -13,16 +13,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.TextButton
@@ -44,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -62,6 +68,9 @@ import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.tags.EffectiveTagChip
 import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.components.BpmCard
+import inga.bpmetrics.ui.components.BpmSectionHeader
+import inga.bpmetrics.ui.components.BpmSpacing
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.components.PersonPicker
 import androidx.compose.material.icons.filled.Done
@@ -98,12 +107,27 @@ fun BpmRecordScreen(
     val analysis by viewModel.analysis.collectAsState()
     val insights by viewModel.insights.collectAsState()
     val placement by viewModel.placement.collectAsState()
+    val cover by viewModel.cover.collectAsState()
     var scrubbedMs by remember { mutableStateOf<Long?>(null) }
     var isEditing by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showSplitDialog by remember { mutableStateOf(false) }
+    var showCoverCrop by remember { mutableStateOf(false) }
     val context = LocalContext.current
+
+    // Opens the photo picker and stores what comes back, then goes straight into framing it. A
+    // picture that lands cropped by chance and has to be found again to fix is worse than one extra
+    // step taken while the choice is still fresh.
+    val pickOwnCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
+        viewModel.setOwnCover(context, uri) { stored ->
+            if (stored) {
+                showCoverCrop = true
+            } else {
+                Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     val saveCsvLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
@@ -126,7 +150,11 @@ fun BpmRecordScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
                     title = {
                         Column {
                             if (isEditing) {
@@ -186,15 +214,66 @@ fun BpmRecordScreen(
             ) {
                 Spacer(Modifier.height(8.dp))
 
+                // The cover, if there is one, behind where this recording sits. A header rather
+                // than the whole page: the chart below has to be read precisely, and a photograph
+                // behind a curve is the one place in this app a picture actively gets in the way.
+                cover?.let {
+                    inga.bpmetrics.ui.components.CoverBackground(
+                        cover = it,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .clip(MaterialTheme.shapes.medium),
+                        // Bottom-weighted, because the breadcrumb sits low in it and the top of
+                        // the picture has nothing written on it.
+                        scrim = inga.bpmetrics.ui.components.CoverScrim.HEADER
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .padding(BpmSpacing.Medium),
+                            contentAlignment = Alignment.BottomStart
+                        ) {
+                            Breadcrumb(
+                                placement = placement,
+                                onOpenEvent = onOpenEvent,
+                                onOpenGroup = onOpenGroup
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(BpmSpacing.Medium))
+                }
+
                 // Where this recording sits. Per §2.4 no analysis screen is a dead end, and a
                 // recording is the bottom of the hierarchy — the only way out is upward.
-                Breadcrumb(
-                    placement = placement,
-                    onOpenEvent = onOpenEvent,
-                    onOpenGroup = onOpenGroup
-                )
+                if (cover == null) {
+                    Breadcrumb(
+                        placement = placement,
+                        onOpenEvent = onOpenEvent,
+                        onOpenGroup = onOpenGroup
+                    )
 
-                Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                // The chart comes first. It used to sit below the description, the tags and the
+                // metadata, which meant the one thing the page exists to show was the one thing
+                // you had to scroll to reach.
+                //
+                // The event page's chart at one lane, rather than the static preview that used to
+                // sit here. Same code, so this scrubs and zooms exactly as that one does — there
+                // were two chart implementations and only one of them could.
+                if (!analysis.isEmpty) {
+                    RecordChartSection(
+                        analysis = analysis,
+                        scrubbedMs = scrubbedMs,
+                        onScrub = { scrubbedMs = it },
+                        onExportImage = onExportImage,
+                        onExportVideo = onExportVideo,
+                        onSplit = { showSplitDialog = true }
+                    )
+                    Spacer(Modifier.height(BpmSpacing.Large))
+                }
 
                 // Display low, avg, and max BPM metrics.
                 BpmTrio(
@@ -205,7 +284,16 @@ fun BpmRecordScreen(
                     fontSize = 24.sp
                 )
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(BpmSpacing.Large))
+
+                if (!analysis.isEmpty) {
+                    BpmSectionHeader("Insights")
+                    RecordInsightsSection(
+                        insights = insights,
+                        onSelectMoment = { scrubbedMs = it }
+                    )
+                    Spacer(Modifier.height(BpmSpacing.Large))
+                }
 
                 // Device & Wearer Metadata Card
                 if (isEditing) {
@@ -247,22 +335,27 @@ fun BpmRecordScreen(
                         val wearerLabel = r.metadata.personId?.let { id ->
                             people.firstOrNull { it.personId == id }?.displayName
                         } ?: r.metadata.wearerName.takeIf { it.isNotBlank() }
-                        val deviceBadge = buildString {
-                            if (wearerLabel != null) append("👤 $wearerLabel  •  ")
-                            append("⌚ ${r.watchLabel(watchName)}")
+                        wearerLabel?.let {
+                            inga.bpmetrics.ui.components.BpmIconLabel(
+                                icon = Icons.Default.Person,
+                                text = it,
+                                tone = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Spacer(Modifier.width(12.dp))
                         }
-                        Text(
-                            text = deviceBadge,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
+                        inga.bpmetrics.ui.components.BpmIconLabel(
+                            icon = Icons.Default.Watch,
+                            text = r.watchLabel(watchName),
+                            tone = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.titleSmall
                         )
                     }
                     Spacer(Modifier.height(16.dp))
                 }
                 
-                Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
-                    Text("Description", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                BpmCard(title = "Details") {
+                    Text("Description", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     if (isEditing) {
                         OutlinedTextField(
                             value = editedDescription,
@@ -277,7 +370,7 @@ fun BpmRecordScreen(
                     Spacer(Modifier.height(16.dp))
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Tags", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Tags", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         IconButton(onClick = { showTagDialog = true }) {
                             Icon(Icons.Default.Add, contentDescription = "Add Tag")
                         }
@@ -307,34 +400,70 @@ fun BpmRecordScreen(
                         }
                     }
                 }
-                Spacer(Modifier.height(24.dp))
 
-                // The event page's chart at one lane, rather than the static preview that used to
-                // sit here. Same code, so this scrubs and zooms exactly as that one does — there
-                // were two chart implementations and only one of them could.
-                if (!analysis.isEmpty) {
-                    RecordChartSection(
-                        analysis = analysis,
-                        scrubbedMs = scrubbedMs,
-                        onScrub = { scrubbedMs = it },
-                        onExportImage = onExportImage,
-                        onExportVideo = onExportVideo,
-                        onSplit = { showSplitDialog = true }
+                Spacer(Modifier.height(BpmSpacing.Large))
+
+                // A picture for this recording alone. Available whether or not it is filed under
+                // anything: a cover normally lives on the event so a whole night matches, but a
+                // one-off recording has no event to hang one on, and telling someone to make an
+                // event for a single recording is not an answer.
+                BpmCard(
+                    title = "Cover",
+                    action = {
+                        if (r.metadata.ownCover != null) {
+                            TextButton(onClick = { showCoverCrop = true }) { Text("Reframe") }
+                        }
+                    }
+                ) {
+                    val own = r.metadata.ownCover
+                    Text(
+                        when {
+                            own != null -> "This recording has its own picture, which overrides " +
+                                "whatever its event would give it."
+                            r.metadata.eventId != null -> "Showing its event's cover. Setting one " +
+                                "here overrides it for this recording only."
+                            else -> "This recording is not in an event, so it has no cover to " +
+                                "inherit. Set one and it is this recording's own."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    Spacer(Modifier.height(20.dp))
-
-                    RecordInsightsSection(
-                        insights = insights,
-                        onSelectMoment = { scrubbedMs = it }
-                    )
-                }
-                
-                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.End) {
-                    IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(BpmSpacing.Small))
+                    Row(horizontalArrangement = Arrangement.spacedBy(BpmSpacing.Small)) {
+                        TextButton(onClick = pickOwnCover) {
+                            Icon(Icons.Default.Image, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(BpmSpacing.Tiny))
+                            Text(if (own == null) "Choose a picture" else "Replace")
+                        }
+                        if (own != null) {
+                            TextButton(
+                                onClick = { viewModel.clearOwnCover(context) },
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) { Text("Remove") }
+                        }
                     }
                 }
+
+                Spacer(Modifier.height(BpmSpacing.Large))
+
+                // Deleting is the one thing on this page that cannot be undone, so it is named
+                // rather than left as a bare red glyph floating at the end of the scroll.
+                BpmCard(title = "Danger zone") {
+                    TextButton(
+                        onClick = { showDeleteConfirm = true },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(BpmSpacing.Small))
+                        Text("Delete this recording")
+                    }
+                }
+
+                Spacer(Modifier.height(BpmSpacing.XLarge))
             }
         }
 
@@ -353,6 +482,39 @@ fun BpmRecordScreen(
                 },
                 viewModel = viewModel,
                 initialSelectedTagIds = r.tags.map { it.tagId }
+            )
+        }
+
+        // Framed against a real tile carrying this recording's own title and readings, rather than
+        // an abstract box — the same photo that looks fine in a crop dialog can put a face directly
+        // behind the words.
+        r.metadata.ownCover?.takeIf { showCoverCrop }?.let { cover ->
+            inga.bpmetrics.ui.components.CoverCropDialog(
+                cover = cover,
+                previewContent = {
+                    Column {
+                        Text(
+                            r.displayName(null, watchName),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                        Text(
+                            "${r.metadata.avg?.toInt() ?: 0} avg · " +
+                                "${r.maxDataPoint?.bpm?.toInt() ?: 0} max",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                },
+                onDismiss = { showCoverCrop = false },
+                onConfirm = {
+                    viewModel.setOwnCoverCrop(it)
+                    showCoverCrop = false
+                },
+                onRemove = {
+                    viewModel.clearOwnCover(context)
+                    showCoverCrop = false
+                }
             )
         }
 

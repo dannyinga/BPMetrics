@@ -4,6 +4,7 @@ import android.graphics.RectF
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -279,16 +280,233 @@ class ExportPresetTest {
     }
 
     @Test
-    fun `the built-ins are the three shapes worth having`() {
+    fun `the built-ins are the three shapes worth having, plus two looks`() {
         val builtIn = ExportPreset.BUILT_IN
 
-        assertEquals(3, builtIn.size)
+        assertEquals(5, builtIn.size)
         assertEquals(
-            listOf(1920 to 1080, 1080 to 1920, 1080 to 1080),
+            listOf(1920 to 1080, 1080 to 1920, 1080 to 1080, 1080 to 1920, 1920 to 1080),
             builtIn.map { it.width to it.height }
         )
         // All at the current version, or seeding would write presets the app refuses to read back.
         assertTrue(builtIn.all { it.version == ExportPreset.CURRENT_VERSION })
+        // Distinct names: the top-up for existing installs matches on name, so a duplicate would
+        // make one of the pair permanently unreachable.
+        assertEquals(builtIn.size, builtIn.map { it.name }.distinct().size)
+    }
+
+    @Test
+    fun `the two look presets sit low and quiet rather than over the footage`() {
+        // The reason they exist. A shape preset draws the same full panel in the same place; these
+        // are for putting a clip out without the whole apparatus on top of the subject.
+        //
+        // Not asserted on area: the lower third is a wide band and covers more of the frame than
+        // the default panel does. What makes it quieter is that it is dim, gridless and out of the
+        // way, which is what this checks.
+        val shapes = ExportPreset.BUILT_IN.take(3)
+        val looks = ExportPreset.BUILT_IN.drop(3)
+
+        looks.forEach { look ->
+            assertFalse("${look.name} still draws a grid", look.showGrid)
+            assertTrue(
+                "${look.name} is not dimmer than a shape preset",
+                look.backgroundOpacity < shapes.minOf { it.backgroundOpacity }
+            )
+            // Below the middle, so the curve annotates the footage instead of covering it.
+            assertTrue("${look.name} reaches into the top half", look.graphTop > 0.5f)
+            // And inside the frame, so its handles can still be grabbed in the preview.
+            assertTrue("${look.name} runs off the bottom", look.graphBottom < 1f)
+        }
+    }
+
+    @Test
+    fun `the built-ins survive the round trip they are seeded through`() {
+        // Seeding writes toJson and every read goes through fromJson, so a built-in that does not
+        // survive that trip would ship subtly different from how it is written here.
+        ExportPreset.BUILT_IN.forEach { preset ->
+            assertEquals(preset, ExportPreset.fromJson(preset.toJson()))
+        }
+    }
+
+    @Test
+    fun `the built-in revision is bumped whenever the list grows`() {
+        // The guard on the top-up for existing installs: without a bump, presets added to the list
+        // reach a fresh install and nothing else.
+        assertTrue(ExportPreset.BUILT_IN_REVISION >= 2)
+    }
+
+    @Test
+    fun `a pill shows everything by default`() {
+        val shipped = ExportPreset()
+
+        assertTrue(shipped.pillShowPhoto)
+        assertTrue(shipped.pillShowName)
+        assertTrue(shipped.pillBpmInPersonColor)
+        assertEquals(1f, shipped.pillScale, 0.0001f)
+        assertEquals(PillCorner.TOP_RIGHT, shipped.pillCorner)
+    }
+
+    @Test
+    fun `a pill scale of zero is repaired rather than rendered`() {
+        // Zero is not a small pill, it is an absent one — and zero is exactly what a payload
+        // written before these fields existed would carry if Gson ever stopped finding the no-arg
+        // constructor. See the note on the Gson trap above.
+        val shipped = ExportPreset()
+
+        assertEquals(shipped.pillScale, ExportPreset(pillScale = 0f).sanitised().pillScale, 0.0001f)
+        assertEquals(
+            shipped.pillPhotoScale,
+            ExportPreset(pillPhotoScale = 0f).sanitised().pillPhotoScale,
+            0.0001f
+        )
+        assertEquals(
+            shipped.pillBpmScale,
+            ExportPreset(pillBpmScale = 0f).sanitised().pillBpmScale,
+            0.0001f
+        )
+    }
+
+    @Test
+    fun `a deliberate pill scale is kept, and an absurd one is bounded`() {
+        assertEquals(0.7f, ExportPreset(pillScale = 0.7f).sanitised().pillScale, 0.0001f)
+        assertEquals(2f, ExportPreset(pillScale = 40f).sanitised().pillScale, 0.0001f)
+        assertEquals(0.5f, ExportPreset(pillScale = 0.2f).sanitised().pillScale, 0.0001f)
+    }
+
+    @Test
+    fun `readout settings survive being saved and read back`() {
+        val tuned = ExportPreset(
+            name = "Six wearers",
+            pillShowPhoto = false,
+            pillShowName = true,
+            pillBpmInPersonColor = false,
+            pillScale = 0.8f,
+            pillPhotoScale = 1.4f,
+            pillBpmScale = 1.2f,
+            pillCorner = PillCorner.TOP_RIGHT
+        )
+
+        assertEquals(tuned, ExportPreset.fromJson(tuned.toJson()))
+    }
+
+    @Test
+    fun `readout settings reach the render config`() {
+        // A setting that stops at the preset is one that appears to save and then does nothing,
+        // which has happened in this file before.
+        val tuned = ExportPreset(
+            pillShowPhoto = false,
+            pillShowName = false,
+            pillBpmInPersonColor = false,
+            pillScale = 0.75f,
+            pillCorner = PillCorner.TOP_RIGHT
+        )
+
+        val applied = tuned.applyTo(
+            VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig())
+        ).imageConfig
+
+        assertFalse(applied.pillShowPhoto)
+        assertFalse(applied.pillShowName)
+        assertFalse(applied.pillBpmInPersonColor)
+        assertEquals(0.75f, applied.pillScale, 0.0001f)
+        assertEquals(PillCorner.TOP_RIGHT, applied.pillCorner)
+    }
+
+    @Test
+    fun `a preset written before the readouts existed comes back with a real corner`() {
+        // The enum-arrives-null trap again, on a second field.
+        val older = """
+            {"version":3,"name":"Older","width":1920,"height":1080,
+             "graphLeft":0.25,"graphTop":0.58,"graphRight":0.75,"graphBottom":0.91,
+             "showLabels":true,"showGrid":true,"showTitle":true,"showCurrentStats":true,
+             "backgroundOpacity":100,"windowSizeMs":30000,"frameRate":30,"timeZoneId":"UTC"}
+        """.trimIndent()
+
+        val restored = ExportPreset.fromJson(older)!!
+
+        assertNotNull(restored.pillCorner)
+        assertEquals(ExportPreset().pillCorner, restored.pillCorner)
+        // And a usable size rather than a zero that would render nothing.
+        assertTrue(restored.pillScale > 0f)
+    }
+
+    @Test
+    fun `the wordmark ships off`() {
+        // Deliberate, and stated in the product doc: an unfinished app putting its name on
+        // someone's footage asks them to publish a mark that is about to change.
+        assertFalse(ExportPreset().showWordmark)
+        assertTrue(ExportPreset.BUILT_IN.none { it.showWordmark })
+    }
+
+    @Test
+    fun `a preset written before the wordmark existed comes back with a real corner`() {
+        // The trap this guards is an absent enum arriving as null in a field the type system swears
+        // cannot be null, so the first thing to touch it throws.
+        //
+        // It does not currently bite, and the reason is worth writing down: every parameter of
+        // ExportPreset has a default, so Kotlin emits a synthetic no-arg constructor, Gson finds it
+        // and the Kotlin defaults apply. That is a property of the class, not a guarantee from
+        // Gson — add one parameter without a default and the whole class silently reverts to
+        // zero-filling. sanitised() is what makes it true either way, and this asserts the outcome
+        // rather than the mechanism.
+        val beforeWordmark = """
+            {"version":2,"name":"Older","width":1920,"height":1080,
+             "graphLeft":0.25,"graphTop":0.58,"graphRight":0.75,"graphBottom":0.91,
+             "showLabels":true,"showGrid":true,"showTitle":true,"showCurrentStats":true,
+             "backgroundOpacity":100,"windowSizeMs":30000,"frameRate":30,
+             "timeZoneId":"UTC"}
+        """.trimIndent()
+
+        val restored = ExportPreset.fromJson(beforeWordmark)!!
+
+        assertNotNull(restored.wordmarkCorner)
+        assertEquals(ExportPreset().wordmarkCorner, restored.wordmarkCorner)
+        assertFalse(restored.showWordmark)
+        // A usable opacity rather than a zero that would render an invisible mark the moment
+        // someone switched the wordmark on.
+        assertEquals(ExportPreset().wordmarkOpacity, restored.wordmarkOpacity)
+        assertTrue(restored.wordmarkOpacity in 1..100)
+    }
+
+    @Test
+    fun `a wordmark opacity outside the range is brought back into it`() {
+        assertEquals(100, ExportPreset(wordmarkOpacity = 4000).sanitised().wordmarkOpacity)
+        assertEquals(0, ExportPreset(wordmarkOpacity = -7).sanitised().wordmarkOpacity)
+    }
+
+    @Test
+    fun `the wordmark travels with the look it was saved in`() {
+        val signed = ExportPreset(
+            name = "Signed",
+            showWordmark = true,
+            wordmarkCorner = WordmarkCorner.TOP_LEFT,
+            wordmarkOpacity = 40
+        )
+
+        val restored = ExportPreset.fromJson(signed.toJson())!!
+
+        assertTrue(restored.showWordmark)
+        assertEquals(WordmarkCorner.TOP_LEFT, restored.wordmarkCorner)
+        assertEquals(40, restored.wordmarkOpacity)
+    }
+
+    @Test
+    fun `applying a preset carries the wordmark onto the render config`() {
+        // The renderers read the config, not the preset. A field that stops at the preset is a
+        // setting that appears to save and then does nothing, which has happened here before.
+        val signed = ExportPreset(
+            showWordmark = true,
+            wordmarkCorner = WordmarkCorner.BOTTOM_LEFT,
+            wordmarkOpacity = 30
+        )
+
+        val applied = signed.applyTo(
+            VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig())
+        )
+
+        assertTrue(applied.imageConfig.showWordmark)
+        assertEquals(WordmarkCorner.BOTTOM_LEFT, applied.imageConfig.wordmarkCorner)
+        assertEquals(30, applied.imageConfig.wordmarkOpacity)
     }
 
     /**

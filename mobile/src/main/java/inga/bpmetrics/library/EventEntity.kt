@@ -25,10 +25,30 @@ data class EventEntity(
     val name: String,
     @ColumnInfo(defaultValue = "NULL") val groupId: Long? = null,
     @ColumnInfo(defaultValue = "") val notes: String = "",
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+
+    /**
+     * The picture that stands for this event, as a file name inside `files/covers/`.
+     *
+     * Null means inherit from the collection above — see [CoverResolver]. A name rather than a path
+     * because the app's own files directory moves between installs and backups, and an absolute
+     * path written on one device is meaningless on another.
+     */
+    @ColumnInfo(defaultValue = "NULL") val coverPath: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
+    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
 ) {
     /** How to refer to this event when it has somehow been left unnamed. */
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled event"
+
+    /** This event's own cover, or null if it has none of its own to offer. */
+    val ownCover: Cover? get() = Cover.of(
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
+    )
 }
 
 /**
@@ -59,9 +79,23 @@ data class EventGroupEntity(
      * cascade, because deleting "Coachella" should not silently take both of its days and every
      * event in them with it.
      */
-    @ColumnInfo(defaultValue = "NULL") val parentGroupId: Long? = null
+    @ColumnInfo(defaultValue = "NULL") val parentGroupId: Long? = null,
+
+    /** See [EventEntity.coverPath]. Null means inherit from the collection above this one. */
+    @ColumnInfo(defaultValue = "NULL") val coverPath: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
+    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
 ) {
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled collection"
+
+    /** This collection's own cover, or null if it has none of its own to offer. */
+    val ownCover: Cover? get() = Cover.of(
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
+    )
 }
 
 /**

@@ -67,6 +67,18 @@ object StorageInspector {
                         "${staged.size} file(s) left in the cache"
                     }
                 ),
+                run {
+                    val covers = inga.bpmetrics.library.CoverStore.all(context)
+                    Item(
+                        "Cover images",
+                        covers.sumOf { it.length() },
+                        if (covers.isEmpty()) {
+                            "None set"
+                        } else {
+                            "${covers.size} picture(s), downscaled copies"
+                        }
+                    )
+                },
                 Item("Other cache", cacheBytesExcluding(context, staged), null)
             ),
             backups = backups,

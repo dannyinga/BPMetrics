@@ -55,12 +55,16 @@ object TimelineImageExporter {
         val showGrid: Boolean = true,
         val showLabels: Boolean = true,
         val showStats: Boolean = true,
-        val lowBpmColor: Int = 0xFF42A5F5.toInt(),
-        val highBpmColor: Int = 0xFFF44336.toInt(),
-        val labelsColor: Int = 0xFFFFFFFF.toInt(),
-        val gridColor: Int = 0x33CCCCCC,
+        val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
+        val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
+        val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
+        val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
         val backgroundOpacity: Int = 100,
-        val timeZoneId: String = ZoneId.systemDefault().id
+        val timeZoneId: String = ZoneId.systemDefault().id,
+        /** See [ExportPreset.showWordmark]. Off by default; the preset carries the choice. */
+        val showWordmark: Boolean = false,
+        val wordmarkCorner: WordmarkCorner = WordmarkCorner.BOTTOM_RIGHT,
+        val wordmarkOpacity: Int = 55
     ) {
         val durationMs: Long get() = (windowEndWallClockMs - windowStartWallClockMs).coerceAtLeast(1L)
     }
@@ -80,7 +84,7 @@ object TimelineImageExporter {
         val zone = runCatching { ZoneId.of(spec.timeZoneId) }.getOrDefault(ZoneId.systemDefault())
         val bitmap = createBitmap(spec.width, spec.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val paint = Paint().apply { isAntiAlias = true }
+        val paint = Paint().apply { isAntiAlias = true; fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals }
 
         // Scaled off the short edge, so a 1080×1920 story and a 1920×1080 landscape get text of
         // comparable weight rather than one of them being unreadable.
@@ -90,9 +94,8 @@ object TimelineImageExporter {
         // picture is meant to drop onto footage in something that composites.
         val bgAlpha = (spec.backgroundOpacity * 255 / 100).coerceIn(0, 255)
         if (bgAlpha > 0) {
-            paint.reset()
-            paint.isAntiAlias = true
-            paint.color = 0xFF121212.toInt()
+            paint.resetForExport()
+            paint.color = inga.bpmetrics.ui.theme.BpmPalette.SURFACE
             paint.alpha = bgAlpha
             canvas.drawRoundRect(
                 RectF(0f, 0f, spec.width.toFloat(), spec.height.toFloat()),
@@ -150,6 +153,25 @@ object TimelineImageExporter {
             drawStats(canvas, spec, drawable, plot.bottom + axisHeight, margin, scale, statsLayout, paint)
         }
 
+        if (spec.showWordmark) {
+            // Inside the plot, for the same reason as the video renderer: the chart is what anyone
+            // is looking at, and a mark in the corner of the picture is in the part nobody reads.
+            //
+            // Unlike the video panel there is no padding to tuck it into — this canvas gives the
+            // whole rectangle to the curves — so it does sit over the drawing. That is the trade,
+            // and it is why the corner is a setting: a set that peaks in the middle leaves the
+            // corners clear, one that runs high all evening does not.
+            Wordmark.draw(
+                canvas = canvas,
+                bounds = plot,
+                corner = spec.wordmarkCorner,
+                opacityPercent = spec.wordmarkOpacity,
+                color = spec.labelsColor,
+                scale = scale,
+                paint = paint
+            )
+        }
+
         return bitmap
     }
 
@@ -163,8 +185,7 @@ object TimelineImageExporter {
         top: Float,
         paint: Paint
     ): Float {
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.color = spec.labelsColor
         paint.textSize = 46f * scale
         paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -221,8 +242,7 @@ object TimelineImageExporter {
             val x1 = plot.left + plot.width() * (section.endMs.toFloat() / spec.durationMs)
             if (x1 <= x0) return@forEachIndexed
 
-            paint.reset()
-            paint.isAntiAlias = true
+            paint.resetForExport()
             // Alternating weight rather than colour: the curves already own colour, and a second
             // colour scheme competing with them makes both harder to read.
             paint.color = spec.labelsColor
@@ -241,8 +261,7 @@ object TimelineImageExporter {
 
             // A hairline down the plot, so a section boundary is findable against the curve too.
             if (index > 0) {
-                paint.reset()
-                paint.isAntiAlias = true
+                paint.resetForExport()
                 paint.color = spec.gridColor
                 paint.strokeWidth = 1.5f * scale
                 canvas.drawLine(x0, plot.top, x0, plot.bottom, paint)
@@ -264,15 +283,13 @@ object TimelineImageExporter {
             val y = plot.bottom - plot.height() * (i.toFloat() / lines)
 
             if (spec.showGrid) {
-                paint.reset()
-                paint.isAntiAlias = true
+                paint.resetForExport()
                 paint.color = spec.gridColor
                 paint.strokeWidth = 1.5f * scale
                 canvas.drawLine(plot.left, y, plot.right, y, paint)
             }
             if (spec.showLabels) {
-                paint.reset()
-                paint.isAntiAlias = true
+                paint.resetForExport()
                 paint.color = spec.labelsColor
                 paint.alpha = 190
                 paint.textSize = 24f * scale
@@ -325,8 +342,7 @@ object TimelineImageExporter {
             lastTs = point.timestampMs
         }
 
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 4.5f * scale
         paint.strokeCap = Paint.Cap.ROUND
@@ -362,8 +378,7 @@ object TimelineImageExporter {
         // Fewer labels when each carries a date, or they collide.
         val ticks = if (multiDay) 4 else 6
 
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.color = spec.labelsColor
         paint.alpha = 190
         paint.textSize = 22f * scale
@@ -409,8 +424,7 @@ object TimelineImageExporter {
             val x = margin + column * layout.columnWidth
             val rowY = y + row * layout.rowHeight
 
-            paint.reset()
-            paint.isAntiAlias = true
+            paint.resetForExport()
             paint.color = entry.colorArgb
             canvas.drawCircle(x + 8f * scale, rowY - 8f * scale, 8f * scale, paint)
 
@@ -475,8 +489,7 @@ object TimelineImageExporter {
         scale: Float,
         paint: Paint
     ): StatsLayout {
-        paint.reset()
-        paint.isAntiAlias = true
+        paint.resetForExport()
         paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
         paint.textSize = NAME_SIZE * scale
 
@@ -525,22 +538,9 @@ object TimelineImageExporter {
         return if (cut <= 1) "" else text.take(cut) + "…"
     }
 
-    private fun blend(from: Int, to: Int): Int {
-        val hsvA = FloatArray(3)
-        val hsvB = FloatArray(3)
-        android.graphics.Color.colorToHSV(from, hsvA)
-        android.graphics.Color.colorToHSV(to, hsvB)
-        var startHue = hsvA[0]
-        var endHue = hsvB[0]
-        if (endHue < startHue) endHue += 360f
-        return android.graphics.Color.HSVToColor(
-            floatArrayOf(
-                (startHue + (endHue - startHue) * 0.5f) % 360f,
-                (hsvA[1] + hsvB[1]) / 2f,
-                (hsvA[2] + hsvB[2]) / 2f
-            )
-        )
-    }
+    /** The midpoint of the ramp between two colours — the third copy of a walk that is now shared. */
+    private fun blend(from: Int, to: Int): Int =
+        inga.bpmetrics.ui.theme.BpmRamp.blend(from, to, 0.5f)
 
     /** The vertical scale, padded so the curve does not touch the frame. */
     private class BpmRange(val min: Double, val max: Double) {

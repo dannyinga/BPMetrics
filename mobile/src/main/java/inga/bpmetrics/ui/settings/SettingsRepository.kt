@@ -68,9 +68,6 @@ class SettingsRepository(context: Context) {
 
         // --- Appearance ---
 
-        /** SYSTEM, LIGHT or DARK. Stored as a name so a new option does not shift the others. */
-        val THEME_MODE = stringPreferencesKey("theme_mode")
-
         /** Whether to take colours from the wallpaper, where the platform offers them. */
         val DYNAMIC_COLOUR = booleanPreferencesKey("dynamic_colour")
 
@@ -94,6 +91,18 @@ class SettingsRepository(context: Context) {
 
         /** Whether the old per-screen export defaults have been folded into a preset. */
         val EXPORT_DEFAULTS_MIGRATED = booleanPreferencesKey("export_defaults_migrated")
+
+        /**
+         * Which revision of the shipped preset list this install has been offered.
+         *
+         * Seeding only runs against an empty table, so every install that already has presets
+         * would never see a built-in added later. Held as a revision rather than by comparing
+         * names, because a name check cannot tell "never had it" from "deleted it on purpose" —
+         * and resurrecting a preset someone deleted on every launch makes it undeletable.
+         */
+        val BUILT_IN_PRESET_REVISION = androidx.datastore.preferences.core.intPreferencesKey(
+            "built_in_preset_revision"
+        )
     }
 
     /**
@@ -248,24 +257,14 @@ class SettingsRepository(context: Context) {
 
     // --- Appearance ---
 
-    val themeMode: Flow<ThemeMode> = dataStore.data.map { prefs ->
-        prefs[PreferencesKeys.THEME_MODE]
-            ?.let { name -> ThemeMode.entries.firstOrNull { it.name == name } }
-            ?: ThemeMode.SYSTEM
-    }
-
-    suspend fun setThemeMode(mode: ThemeMode) {
-        dataStore.edit { it[PreferencesKeys.THEME_MODE] = mode.name }
-    }
-
     /**
      * Whether to take colours from the wallpaper.
      *
-     * On by default, which is what the app already did — unconditionally, with no way to turn it
-     * off. The default preserves how it looks today; the setting is the part that is new.
+     * Off by default. It used to be on, unconditionally and with no way to change it, which meant
+     * the app had no appearance of its own on any phone new enough to support wallpaper colours.
      */
     val dynamicColour: Flow<Boolean> =
-        dataStore.data.map { it[PreferencesKeys.DYNAMIC_COLOUR] ?: true }
+        dataStore.data.map { it[PreferencesKeys.DYNAMIC_COLOUR] ?: false }
 
     suspend fun setDynamicColour(enabled: Boolean) {
         dataStore.edit { it[PreferencesKeys.DYNAMIC_COLOUR] = enabled }
@@ -377,17 +376,18 @@ class SettingsRepository(context: Context) {
         dataStore.edit { it[PreferencesKeys.EXPORT_DEFAULTS_MIGRATED] = true }
     }
 
+    /** The newest revision of the shipped preset list this install has been offered. */
+    suspend fun builtInPresetRevision(): Int =
+        dataStore.data.first()[PreferencesKeys.BUILT_IN_PRESET_REVISION] ?: 0
+
+    suspend fun setBuiltInPresetRevision(revision: Int) {
+        dataStore.edit { it[PreferencesKeys.BUILT_IN_PRESET_REVISION] = revision }
+    }
+
     companion object {
         const val DEFAULT_RESTING_BPM = 60
         const val DEFAULT_MAX_BPM = 190
     }
-}
-
-/** Which colour scheme to use, regardless of what the system is doing. */
-enum class ThemeMode(val label: String) {
-    SYSTEM("Follow system"),
-    LIGHT("Light"),
-    DARK("Dark")
 }
 
 /** The date formats on offer, as patterns so adding one is a single line. */

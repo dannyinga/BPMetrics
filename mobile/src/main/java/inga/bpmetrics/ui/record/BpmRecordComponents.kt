@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -28,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -39,6 +42,7 @@ import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDurationString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.components.FlowRow
+import inga.bpmetrics.ui.components.overCover
 import inga.bpmetrics.ui.theme.BpmAvg
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
@@ -70,6 +74,14 @@ fun BpmRecordTile(
      * recordings made before profiles existed, which fall back to the name they were stamped with.
      */
     wearer: PersonEntity? = null,
+    /**
+     * The picture that stands for this recording, resolved by the caller.
+     *
+     * Usually its event's or a collection's rather than its own — see `CoverResolver`. Null is the
+     * ordinary case and must stay ordinary: a library where two evenings have covers and the rest
+     * do not should look like a library, not like one with holes in it.
+     */
+    cover: inga.bpmetrics.library.Cover? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
@@ -90,70 +102,104 @@ fun BpmRecordTile(
         // the two never have to compete for the same outline.
         border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
     ) {
-        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            wearer?.let { person ->
-                Box(
-                    modifier = Modifier
-                        .width(6.dp)
-                        .fillMaxHeight()
-                        .background(Color(person.colorArgb))
-                )
+        // The cover sits behind the whole row rather than behind the body, so the wearer's colour
+        // stripe stays a solid edge against it instead of becoming another thing washed by the
+        // photo. Selection tinting is the Card's, and lands on top of both.
+        inga.bpmetrics.ui.components.CoverBackground(
+            cover = cover,
+            scrim = inga.bpmetrics.ui.components.CoverScrim.TILE
+        ) {
+            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                wearer?.let { person ->
+                    Box(
+                        modifier = Modifier
+                            .width(6.dp)
+                            .fillMaxHeight()
+                            .background(Color(person.colorArgb))
+                    )
+                }
+                    TileBody(record, watchName, wearer, hasCover = cover != null)
             }
-            TileBody(record, watchName, wearer)
         }
     }
 }
 
-/** The tile's contents, split out so the colour stripe can sit alongside them. */
+/** How many tag chips a tile shows before it stops and counts the rest. */
+private const val TILE_TAG_LIMIT = 3
+
+/**
+ * The tile's contents, split out so the colour stripe can sit alongside them.
+ *
+ * Deliberately spare. This carried a title, a person, a watch, a duration, a date, a time, three
+ * readings and three tags — eleven pieces of writing over the picture that is meant to say which
+ * evening this was at a glance. A scrim strong enough to keep all of that legible turns every cover
+ * into the same grey rectangle, which is the failure the cover was supposed to fix.
+ *
+ * So: the avatar and the title, then one line of when and how long, then the readings. The watch
+ * appears only when there is no person to name, which is exactly when it is the thing identifying
+ * the recording; otherwise it is on the detail page, one tap away.
+ */
 @Composable
 private fun TileBody(
     record: BpmRecord,
     watchName: String?,
-    wearer: PersonEntity?
+    wearer: PersonEntity?,
+    /** Whether a photograph is behind this, so the writing can be given a halo to sit in. */
+    hasCover: Boolean = false
 ) {
     Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // Their face, or their colour and initial. Says who at a glance without spending a
+                // line of the tile on their name — and it is the same colour their curve is drawn
+                // in everywhere else, so the association is already learned.
+                inga.bpmetrics.ui.components.PersonAvatar(person = wearer, size = 34.dp)
+
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         // Never a bare "Untitled 4" where a wearer is known — see
                         // RecordNameFormatter. A user's own title always wins.
                         text = record.displayName(wearer?.displayName, watchName),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        style = MaterialTheme.typography.titleMedium.overCover(hasCover),
+                        fontWeight = FontWeight.Bold,
+                        // One line now that the tile is spare. Two lines of a long title pushed the
+                        // rest of the row down and broke the even rhythm that makes a long list
+                        // scannable — which is the same rhythm the covers depend on.
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    // The live profile name wins over the frozen one, so a correction shows up
-                    // here; the frozen name remains for recordings with no profile behind them.
-                    val wearerLabel = wearer?.displayName
-                        ?: record.metadata.wearerName.takeIf { it.isNotBlank() }
-                    val deviceBadge = buildString {
-                        if (wearerLabel != null) append("👤 $wearerLabel  •  ")
-                        append("⌚ ${record.watchLabel(watchName)}")
+                    // When and how long, on one line. Three separate lines for date, time and
+                    // duration said no more than this does and cost two thirds of the tile.
+                    Text(
+                        text = buildString {
+                            append(getDateString(record.metadata.date))
+                            append(" · ")
+                            append(getTimeString(record.metadata.startTime))
+                            append(" · ")
+                            append(getDurationString(record.metadata.durationMs))
+                        },
+                        style = MaterialTheme.typography.bodySmall.overCover(hasCover),
+                        // Brighter over a picture. onSurfaceVariant is a deliberately quiet grey
+                        // against a flat surface and simply disappears against a photograph.
+                        color = if (hasCover) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    // Only when nobody is named. With a person on the tile the watch is a detail;
+                    // without one it is the only thing saying which recording this is.
+                    if (wearer == null && record.metadata.wearerName.isBlank()) {
+                        inga.bpmetrics.ui.components.BpmIconLabel(
+                            Icons.Default.Watch,
+                            record.watchLabel(watchName)
+                        )
                     }
-                    Text(
-                        text = deviceBadge,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = getDurationString(record.metadata.durationMs),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = getDateString(record.metadata.date),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = getTimeString(record.metadata.startTime),
-                        style = MaterialTheme.typography.bodySmall
-                    )
                 }
             }
 
@@ -162,7 +208,8 @@ private fun TileBody(
             BpmTrio(
                 low = record.minDataPoint?.bpm?.toInt() ?: 0,
                 avg = record.metadata.avg?.toInt() ?: 0,
-                max = record.maxDataPoint?.bpm?.toInt() ?: 0
+                max = record.maxDataPoint?.bpm?.toInt() ?: 0,
+                hasCover = hasCover
             )
 
             if (record.tags.isNotEmpty()) {
@@ -172,7 +219,10 @@ private fun TileBody(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    record.tags.forEach { tag ->
+                    // Three, then a count. Tags are cheap to add and someone with a tagging habit
+                    // had tiles where the chips were taller than everything above them — at which
+                    // point the tile is a tag list that happens to mention a heart rate.
+                    record.tags.take(TILE_TAG_LIMIT).forEach { tag ->
                         Surface(
                             shape = MaterialTheme.shapes.small,
                             color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
@@ -183,9 +233,21 @@ private fun TileBody(
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
+                    }
+                    val hidden = record.tags.size - TILE_TAG_LIMIT
+                    if (hidden > 0) {
+                        Text(
+                            text = "+$hidden",
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -208,7 +270,9 @@ fun BpmTrio(
     onLowClick: (() -> Unit)? = null,
     onMaxClick: (() -> Unit)? = null,
     iconSize: Dp = 16.dp,
-    fontSize: TextUnit = 14.sp
+    fontSize: TextUnit = 14.sp,
+    /** Whether these sit on a photograph, so the figures get the same halo the title does. */
+    hasCover: Boolean = false
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -221,6 +285,7 @@ fun BpmTrio(
             label = "Low", 
             iconSize = iconSize, 
             fontSize = fontSize,
+            hasCover = hasCover,
             onClick = onLowClick
         )
         
@@ -232,8 +297,9 @@ fun BpmTrio(
             value = avg, 
             color = BpmAvg, 
             label = "Avg", 
-            iconSize = iconSize, 
-            fontSize = fontSize
+            iconSize = iconSize,
+            fontSize = fontSize,
+            hasCover = hasCover
         )
 
         if (onLowClick == null && onMaxClick == null) {
@@ -246,6 +312,7 @@ fun BpmTrio(
             label = "Max", 
             iconSize = iconSize, 
             fontSize = fontSize,
+            hasCover = hasCover,
             onClick = onMaxClick
         )
     }
@@ -258,7 +325,9 @@ private fun BpmMetric(
     label: String,
     iconSize: Dp,
     fontSize: TextUnit,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    /** See BpmTrio. */
+    hasCover: Boolean = false
 ) {
     if (onClick != null) {
         Surface(
@@ -282,7 +351,7 @@ private fun BpmMetric(
                 Column(horizontalAlignment = Alignment.Start) {
                     Text(
                         text = value.toString(),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize).overCover(hasCover),
                         fontWeight = FontWeight.Bold,
                         color = color
                     )
@@ -309,7 +378,7 @@ private fun BpmMetric(
             Spacer(Modifier.width(4.dp))
             Text(
                 text = value.toString(),
-                style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize),
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = fontSize).overCover(hasCover),
                 fontWeight = FontWeight.Bold,
                 color = color
             )

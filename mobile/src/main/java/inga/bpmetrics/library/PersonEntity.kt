@@ -38,11 +38,38 @@ data class PersonEntity(
      * the fallback for anyone who has not given one.
      */
     @ColumnInfo(defaultValue = "NULL") val restingBpm: Int? = null,
-    @ColumnInfo(defaultValue = "NULL") val maxBpm: Int? = null
+    @ColumnInfo(defaultValue = "NULL") val maxBpm: Int? = null,
+
+    /**
+     * A photograph of them, as a file name inside `files/people/`.
+     *
+     * Null is the ordinary case and falls back to their colour and initial, which is what the app
+     * has always shown. A copy rather than a gallery reference, for the same reason covers are —
+     * see [CoverStore].
+     *
+     * Cropped like a cover, in fractions of the source image. A circle shows a small part of a
+     * photograph and centre-filling picks the middle of it, which for a group photo is whoever
+     * happened to be standing in the middle rather than the person this is.
+     */
+    @ColumnInfo(defaultValue = "NULL") val photoPath: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val photoCropLeft: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val photoCropTop: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val photoCropRight: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val photoCropBottom: Float? = null
 ) {
     /** How to refer to this person when their name has somehow been left blank. */
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Unnamed person"
 
     /** Whether this person has figures of their own, rather than inheriting the defaults. */
     val hasOwnZones: Boolean get() = restingBpm != null || maxBpm != null
+
+    /**
+     * Their photograph and how it is framed, or null if they have none.
+     *
+     * The same [Cover] type a library cover uses, so the avatar draws through the same path — one
+     * crop implementation rather than a second one for circles that rounds differently.
+     */
+    val ownPhoto: Cover? get() = Cover.of(
+        photoPath, photoCropLeft, photoCropTop, photoCropRight, photoCropBottom
+    )
 }

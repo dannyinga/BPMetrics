@@ -61,6 +61,34 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
         }
     }
 
+    /**
+     * Gives someone a photograph.
+     *
+     * Applied immediately rather than held until the dialog is saved. By this point the file has
+     * already been copied into app storage, so a Cancel that discarded the change would leave the
+     * image on disk with nothing pointing at it — a leak nobody could find to clean up.
+     */
+    fun setPhoto(
+        context: android.content.Context,
+        personId: Long,
+        source: android.net.Uri,
+        onResult: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            val name = repository.getPerson(personId)?.displayName ?: "person"
+            onResult(repository.setPersonPhoto(context, personId, source, name))
+        }
+    }
+
+    /** Re-frames the photograph they already have, leaving the file alone. */
+    fun setPhotoCrop(personId: Long, photo: inga.bpmetrics.library.Cover) {
+        viewModelScope.launch { repository.setPersonPhotoCrop(personId, photo) }
+    }
+
+    fun clearPhoto(context: android.content.Context, personId: Long) {
+        viewModelScope.launch { repository.clearPersonPhoto(context, personId) }
+    }
+
     fun save(personId: Long, name: String, colorArgb: Int, restingBpm: Int?, maxBpm: Int?) {
         viewModelScope.launch {
             repository.renamePerson(personId, name)

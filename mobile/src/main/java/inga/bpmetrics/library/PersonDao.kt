@@ -50,6 +50,25 @@ interface PersonDao {
     @Query("UPDATE people SET colorArgb = :colorArgb WHERE personId = :personId")
     suspend fun updateColor(personId: Long, colorArgb: Int)
 
+    /**
+     * Their photograph and how it is framed, or all null to go back to colour and initial.
+     *
+     * Written together for the same reason a cover's are: a path with someone else's crop still on
+     * it shows the wrong part of the new picture.
+     */
+    @Query(
+        "UPDATE people SET photoPath = :photoPath, photoCropLeft = :left, photoCropTop = :top, " +
+            "photoCropRight = :right, photoCropBottom = :bottom WHERE personId = :personId"
+    )
+    suspend fun updatePhoto(
+        personId: Long,
+        photoPath: String?,
+        left: Float?,
+        top: Float?,
+        right: Float?,
+        bottom: Float?
+    )
+
     @Query("DELETE FROM people WHERE personId = :personId")
     suspend fun deletePerson(personId: Long)
 

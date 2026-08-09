@@ -69,13 +69,6 @@ class SettingsViewModel(
 
     // --- Appearance ---
 
-    val themeMode: StateFlow<ThemeMode> = settingsRepository.themeMode
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ThemeMode.SYSTEM)
-
-    fun setThemeMode(mode: ThemeMode) {
-        viewModelScope.launch { settingsRepository.setThemeMode(mode) }
-    }
-
     val dynamicColour: StateFlow<Boolean> = settingsRepository.dynamicColour
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 

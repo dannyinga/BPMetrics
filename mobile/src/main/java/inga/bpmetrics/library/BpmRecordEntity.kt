@@ -73,8 +73,30 @@ data class BpmRecordEntity (
      * At most one, because a recording happened at one place at one time. Many-to-many would let a
      * recording appear under two sets, which corresponds to nothing.
      */
-    @ColumnInfo(defaultValue = "NULL") val eventId: Long? = null
+    @ColumnInfo(defaultValue = "NULL") val eventId: Long? = null,
+
+    /**
+     * A picture for this recording alone, overriding whatever its event would give it.
+     *
+     * The exception, not the rule. Covers live on the event because that is what makes "everything
+     * from that night looks the same" true without a bulk operation and without redoing it every
+     * time a recording arrives late from a watch — see [CoverResolver]. This is for the single
+     * recording that deserves its own picture anyway.
+     */
+    @ColumnInfo(defaultValue = "NULL") val coverPath: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
+    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
+    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
     ) {
+
+    /** This recording's own cover, if it was given one. */
+    val ownCover: Cover? get() = Cover.of(
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
+    )
+
 
     /**
      * Returns a human-readable summary of the record metadata, formatted for debugging or display.

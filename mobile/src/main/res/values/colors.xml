@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
+    <!--
+        The XML side of the palette in ui/theme/Color.kt. Only what the platform needs before
+        Compose is running: the splash screen and the adaptive icon. Everything else is themed in
+        Kotlin.
+
+        The template's purple_* and teal_* entries are gone — nothing referenced them, and leaving
+        a second unused palette in the project is how a stray one gets picked up later.
+    -->
+    <color name="bpm_teal">#00DCC2</color>
+
+    <!-- The app's surface. The splash uses this so the first frame after it is the same colour. -->
+    <color name="bpm_surface">#0E1513</color>
+
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="bpm_accent">#00DCC2</color>
 </resources>

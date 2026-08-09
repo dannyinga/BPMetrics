@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -117,28 +118,14 @@ fun SettingsScreen(
 
 @Composable
 private fun AppearanceSection(viewModel: SettingsViewModel) {
-    val theme by viewModel.themeMode.collectAsStateWithLifecycle()
     val dynamic by viewModel.dynamicColour.collectAsStateWithLifecycle()
     val use24 by viewModel.use24Hour.collectAsStateWithLifecycle()
     val dateFormat by viewModel.dateFormat.collectAsStateWithLifecycle()
 
-    SettingsGroup("Appearance", "Theme, colour and how times are written") {
-        Label("Theme")
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            ThemeMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = theme == mode,
-                    onClick = { viewModel.setThemeMode(mode) },
-                    label = { Text(mode.label) }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
+    SettingsGroup("Appearance", "Colour, and how times are written") {
+        // No theme choice: the app is dark, deliberately. The charts, the export panel and the
+        // metric ramp are designed against it, and offering light and system when only one of the
+        // three is supported is worse than not offering the choice.
         SwitchRow(
             "Wallpaper colours",
             // Android 12 is where the platform gained this. Below it the toggle would be a
@@ -475,7 +462,10 @@ private fun SettingsGroup(
     subtitle: String,
     content: @Composable () -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    // Collapsed on open, and saveable so that a rotation — or a trip into the preset editor and
+    // back — does not silently close the section someone was working in. Keyed by title because
+    // the sections are siblings in one Column and would otherwise share a slot.
+    var expanded by rememberSaveable(title) { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -732,10 +722,18 @@ private fun PresetEditorDialog(
     onDismiss: () -> Unit,
     onSave: (String, inga.bpmetrics.export.ExportPreset) -> Unit
 ) {
-    var draft by remember { mutableStateOf(initial) }
-    var name by remember { mutableStateOf(initial.name) }
-    var showSeveral by remember { mutableStateOf(false) }
-    var scrubAt by remember { mutableStateOf(0.45f) }
+    // Saveable, not remembered. A plain `remember` is discarded when the activity is recreated, and
+    // a rotation does exactly that — so every unsaved edit in this dialog vanished the moment the
+    // phone was turned, with the dialog still open and looking untouched. Nothing warns you; the
+    // sliders simply read what they read before you started.
+    //
+    // The preset goes through its JSON, which is what it is stored as anyway, so this cannot drift
+    // from what saving would write. Wrapped in a Saver rather than made Parcelable for that reason:
+    // a second serialisation of the same type is a second thing to keep in step.
+    var draft by rememberSaveable(stateSaver = ExportPresetSaver) { mutableStateOf(initial) }
+    var name by rememberSaveable { mutableStateOf(initial.name) }
+    var showSeveral by rememberSaveable { mutableStateOf(false) }
+    var scrubAt by rememberSaveable { mutableStateOf(0.45f) }
 
     val subject = if (showSeveral) severalPeople else onePerson
 
@@ -843,3 +841,22 @@ private fun PresetEditorDialog(
         }
     }
 }
+
+/**
+ * Keeps a preset across an activity being recreated.
+ *
+ * Through its own JSON, which is how a preset is stored anyway — so what survives a rotation and
+ * what would have been saved to the database are produced by the same code. A `Parcelable` would be
+ * a second serialisation of the same type and a second thing to remember to update when a field is
+ * added; this one cannot fall behind, because `toJson` is already the thing that must not.
+ *
+ * A payload that fails to read back gives null, and `rememberSaveable` then falls through to the
+ * initial value — the same state the dialog would have had before any of this existed.
+ */
+private val ExportPresetSaver = androidx.compose.runtime.saveable.Saver<
+    inga.bpmetrics.export.ExportPreset,
+    String
+>(
+    save = { it.toJson() },
+    restore = { inga.bpmetrics.export.ExportPreset.fromJson(it) }
+)

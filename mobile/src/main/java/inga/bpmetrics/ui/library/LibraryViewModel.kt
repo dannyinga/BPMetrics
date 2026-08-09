@@ -127,6 +127,73 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /**
+     * The cover for every recording, resolved once for the whole library.
+     *
+     * One map rather than a walk per row. Every tile needs to know which picture stands for it, and
+     * that answer involves its event, that event's collection and every parent above it — done per
+     * row it is a tree walk on every frame of a scroll, and done in two places it is two screens
+     * quietly disagreeing about the same recording.
+     */
+    val coversByRecord: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> = combine(
+        repository.records,
+        repository.getAllEvents(),
+        repository.getAllEventGroups()
+    ) { records, events, groups ->
+        val eventCovers = events.associate { it.eventId to it.ownCover }
+        val eventGroups = events.associate { it.eventId to it.groupId }
+        val groupCovers = groups.associate { it.groupId to it.ownCover }
+        val groupParents = groups.associate { it.groupId to it.parentGroupId }
+
+        records.mapNotNull { record ->
+            inga.bpmetrics.library.CoverResolver.forRecording(
+                directCover = record.metadata.ownCover,
+                eventId = record.metadata.eventId,
+                eventCovers = eventCovers,
+                eventGroups = eventGroups,
+                groupCovers = groupCovers,
+                groupParents = groupParents
+            )?.let { record.metadata.recordId to it.cover }
+        }.toMap()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /**
+     * The cover for every event and every collection, resolved the same way a recording's is.
+     *
+     * An event with no picture of its own shows its collection's, and a nested collection shows its
+     * parent's — otherwise "set a cover on Coachella" would decorate the Coachella card and leave
+     * every day inside it blank, which is not what inheritance means anywhere else in the app.
+     */
+    val coversByEvent: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> = combine(
+        repository.getAllEvents(),
+        repository.getAllEventGroups()
+    ) { events, groups ->
+        val groupCovers = groups.associate { it.groupId to it.ownCover }
+        val groupParents = groups.associate { it.groupId to it.parentGroupId }
+        events.mapNotNull { event ->
+            inga.bpmetrics.library.CoverResolver.resolve(
+                directCover = null,
+                eventCover = event.ownCover,
+                groupChainCovers = inga.bpmetrics.library.CoverResolver
+                    .ancestryOf(event.groupId, groupParents)
+                    .map { groupCovers[it] }
+            )?.let { event.eventId to it.cover }
+        }.toMap()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** The same for collections, walking up their parents. */
+    val coversByGroup: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> =
+        repository.getAllEventGroups().map { groups ->
+            val covers = groups.associate { it.groupId to it.ownCover }
+            val parents = groups.associate { it.groupId to it.parentGroupId }
+            groups.mapNotNull { group ->
+                inga.bpmetrics.library.CoverResolver
+                    .ancestryOf(group.groupId, parents)
+                    .firstNotNullOfOrNull { covers[it] }
+                    ?.let { group.groupId to it }
+            }.toMap()
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /**
      * Events with everything the list needs to describe them without a second query per row.
      *
      * A card wants the span, the recording count and who was there — all of which are joins. Doing
@@ -406,6 +473,112 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /**
+     * Clears the cover on the event the selected recordings share.
+     *
+     * The counterpart to [setCoverForSelection], acting on the same place it wrote to. Refuses on
+     * the same terms too: if the selection spans several events there is no one cover to remove,
+     * and clearing all of them from a multi-selection is not what anyone means by this.
+     */
+    fun clearCoverForSelection(context: android.content.Context, onResult: (String) -> Unit) {
+        val ids = _selectedRecordIds.value.toList()
+        viewModelScope.launch {
+            val eventId = repository.sharedEventOf(ids)
+            if (eventId == null) {
+                onResult("These recordings are not all in the same event.")
+                return@launch
+            }
+            val event = repository.getEvent(eventId)
+            if (event?.coverPath == null) {
+                // Its recordings may still show a picture — the collection's — and removing that
+                // is a decision about the collection, made where the collection is.
+                onResult("${event?.displayName ?: "That event"} has no cover of its own.")
+                return@launch
+            }
+            repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
+            onResult("Cover removed from ${event.displayName}")
+        }
+    }
+
+    /**
+     * A picture for a whole collection, inherited by every event and recording nested under it.
+     *
+     * The broadest place a cover can go: set on "Coachella", every day and every set inside it
+     * carries it until one of them sets its own. Nothing is written downward — see `CoverResolver`.
+     */
+    fun setGroupCover(
+        context: android.content.Context,
+        groupId: Long,
+        source: android.net.Uri,
+        onResult: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            val hint = repository.getEventGroup(groupId)?.displayName ?: "collection"
+            onResult(
+                repository.setCover(
+                    context = context,
+                    owner = LibraryRepository.CoverOwner.Collection(groupId),
+                    source = source,
+                    nameHint = hint
+                )
+            )
+        }
+    }
+
+    /** Re-frames the picture a collection already has, leaving the file alone. */
+    fun setGroupCoverCrop(groupId: Long, cover: inga.bpmetrics.library.Cover) {
+        viewModelScope.launch {
+            repository.setCoverCrop(LibraryRepository.CoverOwner.Collection(groupId), cover)
+        }
+    }
+
+    fun clearGroupCover(context: android.content.Context, groupId: Long) {
+        viewModelScope.launch {
+            repository.clearCover(context, LibraryRepository.CoverOwner.Collection(groupId))
+        }
+    }
+
+    /**
+     * Gives the selected recordings a cover, by putting it on the event they share.
+     *
+     * Not on each recording. Covers live on the event so that "everything from that night looks the
+     * same" stays true without repeating the operation every time a recording arrives late from a
+     * watch — see `CoverResolver`.
+     *
+     * That means this can only act when there *is* a shared event, and it says so rather than
+     * quietly falling back to setting the cover on each recording individually. A bulk action that
+     * does something other than what it says is worse than one that declines.
+     */
+    fun setCoverForSelection(
+        context: android.content.Context,
+        source: android.net.Uri,
+        onResult: (String) -> Unit
+    ) {
+        val ids = _selectedRecordIds.value.toList()
+        viewModelScope.launch {
+            val eventId = repository.sharedEventOf(ids)
+            if (eventId == null) {
+                onResult(
+                    "These recordings are not all in the same event. File them into one first, " +
+                        "and its cover will apply to every recording in it."
+                )
+                return@launch
+            }
+
+            val name = repository.getEvent(eventId)?.displayName ?: "cover"
+            val stored = repository.setCover(
+                context = context,
+                owner = LibraryRepository.CoverOwner.Event(eventId),
+                source = source,
+                nameHint = name
+            )
+            onResult(
+                if (stored) "Cover set on $name" else "That image could not be read"
+            )
+            if (stored) clearSelection()
+        }
+    }
+
+    /**
      * Selects all records.
      */
     fun selectAll(records: List<BpmRecord>) {
@@ -664,6 +837,23 @@ data class EventSummary(
 ) {
     val recordCount: Int get() = records.size
     val span: TimeSpan? get() = records.spanOrNull()
+
+    /**
+     * The peak anyone reached, and their average across the event.
+     *
+     * On the card because it is the one thing a heart rate app can say about a night that no other
+     * app can, and because "Coachella Day 1, 4 people, peaked at 186" is a reason to open a card —
+     * where a date and a count are only a label.
+     *
+     * Averaged over the recordings rather than over every data point: an event where one person
+     * wore a watch all day and another for twenty minutes should not have the long recording decide
+     * the number on its own.
+     */
+    val peakBpm: Int? get() = records.mapNotNull { it.maxDataPoint?.bpm }.maxOrNull()?.toInt()
+    val avgBpm: Int? get() = records.mapNotNull { it.metadata.avg }
+        .takeIf { it.isNotEmpty() }
+        ?.average()
+        ?.toInt()
 }
 
 /**
@@ -687,6 +877,13 @@ data class GroupSummary(
     val eventCount: Int get() = allEvents.size
     val recordCount: Int get() = allEvents.sumOf { it.recordCount }
     val people: List<PersonEntity> get() = allEvents.flatMap { it.people }.distinct()
+
+    /** The same figures as an event's, over everything nested inside this collection. */
+    val peakBpm: Int? get() = allEvents.mapNotNull { it.peakBpm }.maxOrNull()
+    val avgBpm: Int? get() = allEvents.mapNotNull { it.avgBpm }
+        .takeIf { it.isNotEmpty() }
+        ?.average()
+        ?.toInt()
     val span: TimeSpan?
         get() = allEvents.mapNotNull { it.span }.takeIf { it.isNotEmpty() }
             ?.let { spans -> TimeSpan(spans.minOf { it.startMs }, spans.maxOf { it.endMs }) }

@@ -1,6 +1,8 @@
 package inga.bpmetrics.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
@@ -111,8 +113,12 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
     /**
      * Opens the export utility already knowing what it is exporting.
      *
-     * Every existing entry point — a library tile, an event page, a saved analysis — arrives here
-     * having already chosen its recordings, so it lands on step 3 rather than being asked again.
+     * Lands on **Contents**, not Look. An entry point answers step 1 — *what is this of* — and
+     * nothing more; which clips to draw on, or which timelines become images, is a separate
+     * question that has not been asked yet. Skipping to step 3 meant the flow silently accepted
+     * defaults for a step the user never saw, and then previewed the result as though they had
+     * chosen it.
+     *
      * The label is passed through because a saved analysis exported from its own screen arrives as
      * a bare set of recordings, and would otherwise lose the name that was the point of saving it.
      */
@@ -121,7 +127,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             if (recs.isNotEmpty()) {
                 exportViewModel.startAt(
                     source = ExportSource.Recordings(recs.map { it.metadata.recordId }.toSet()),
-                    step = ExportStep.LOOK,
+                    step = ExportStep.CONTENTS,
                     label = label,
                     kind = kind
                 )
@@ -135,10 +141,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        // Swiping open is only offered on a top-level section, and never while the Library is in
-        // selection mode, where the gesture would fight multi-select.
-        gesturesEnabled = drawerState.isOpen ||
-            (currentDestination != null && selectedRecordIds.isEmpty()),
+        // Swipeable closed, never swipeable open. An edge swipe is a gesture people make by
+        // accident — against a horizontally scrolling row, or reaching for system back — and the
+        // drawer now holds five screens nobody visits mid-task. The menu button opens it.
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
             AppDrawerContent(
                 currentRoute = currentRoute,
@@ -169,9 +175,32 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             navController.navigateToSection(AppDestination.LIBRARY)
         }
 
+        // The bar wraps the NavHost rather than living inside each screen, so it does not
+        // re-enter on every navigation — and is absent on detail screens, which are pushed *on
+        // top* of a section and should not offer a sideways move out of it.
+        androidx.compose.material3.Scaffold(
+            bottomBar = {
+                // On every top-level section, not only the four in it. A management screen is a
+                // sibling of the others, not something pushed on top of one, so removing the
+                // way back would strand it. No item is selected there, which is honest.
+                if (currentDestination != null) {
+                    inga.bpmetrics.ui.navigation.AppNavigationBar(
+                        currentRoute = currentRoute,
+                        activeRenderCount = activeRenderCount,
+                        onNavigate = { navController.navigateToSection(it) }
+                    )
+                }
+            }
+        ) { barPadding ->
         NavHost(
             navController = navController,
-            startDestination = Routes.LIBRARY
+            startDestination = Routes.LIBRARY,
+            // Consumed as well as applied. Every screen still has its own Scaffold, and an inset-aware
+            // component nested inside another applies the system bars a second time unless it is
+            // told they have been handled — which showed up as a dead strip under every list.
+            modifier = androidx.compose.ui.Modifier
+                .padding(barPadding)
+                .consumeWindowInsets(barPadding)
         ) {
             composable(Routes.LIBRARY) {
                 LibraryScreen(
@@ -473,6 +502,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             composable(Routes.RENDER_QUEUE) {
                 inga.bpmetrics.ui.export.RenderQueueScreen(onOpenDrawer = openDrawer)
             }
+        }
         }
     }
 }

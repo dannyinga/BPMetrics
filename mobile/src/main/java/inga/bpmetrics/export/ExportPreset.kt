@@ -27,11 +27,19 @@ data class ExportPreset(
 
     // Graph
     val showLabels: Boolean = true,
-    val labelsColor: Int = 0xFFFFFFFF.toInt(),
+    val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
     val showGrid: Boolean = true,
-    val gridColor: Int = 0x33CCCCCC,
-    val lowBpmColor: Int = 0xFF42A5F5.toInt(),
-    val highBpmColor: Int = 0xFFF44336.toInt(),
+    val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
+    /**
+     * The ends of the ramp a curve is drawn along.
+     *
+     * Kept on the preset because they are part of a saved look and someone may want a different
+     * one — but the *defaults* are the app's own metric colours, so a new preset matches the charts
+     * it was made from. A colour meaning "peak" has to mean peak in the picture as well as on the
+     * screen. See `ui/theme/Color.kt`.
+     */
+    val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
+    val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
     val showTitle: Boolean = true,
     val showCurrentStats: Boolean = true,
     val headerXPercent: Float = 0.85f,
@@ -68,7 +76,79 @@ data class ExportPreset(
      * phone that filmed, not of one clip.
      */
     val syncOffsetMs: Long = 0L,
-    val timeZoneId: String = java.time.ZoneId.systemDefault().id
+    val timeZoneId: String = java.time.ZoneId.systemDefault().id,
+
+    // Live readouts
+    /**
+     * What each wearer's pill carries, and how large it is.
+     *
+     * A preset rather than a fixed design because the right answer genuinely changes with the
+     * export. A story clip of two people wants faces and names and room to read them; a landscape
+     * shot of six wants the numbers and nothing else, because six named pills is a third of the
+     * frame. Both of those were the *same* argument being had every time the pill was touched, and
+     * a setting is what ends it.
+     */
+    val pillShowPhoto: Boolean = true,
+    val pillShowName: Boolean = true,
+    /**
+     * Whether the reading takes the wearer's colour.
+     *
+     * On, because the number is the largest thing on the pill and colouring it is the strongest
+     * available tie back to the curve it belongs to. Off leaves it in the label colour, which reads
+     * more calmly when several pills sit close together.
+     */
+    val pillBpmInPersonColor: Boolean = true,
+    /**
+     * Overall pill size, as a multiplier on what the renderer works out for the graph.
+     *
+     * The renderer already sizes pills to the space and the number of wearers; this scales that
+     * result rather than replacing it, so a preset cannot produce pills that do not fit.
+     */
+    val pillScale: Float = 1f,
+    /** The face's size within the pill, as a multiplier. Independent of the text beside it. */
+    val pillPhotoScale: Float = 1f,
+    /** The reading's size within the pill, as a multiplier. */
+    val pillBpmScale: Float = 1f,
+    /** The name's size within the pill, as a multiplier. */
+    val pillNameScale: Float = 1f,
+    /**
+     * Where the readouts sit. The clock takes the opposite side of the same edge.
+     *
+     * Right by default, over the faded half of the graph.
+     *
+     * The playhead is centred and everything past it is drawn at `futureOpacity`, so the right of
+     * the plot is already deliberately quiet — which makes it the cheapest place on the frame to
+     * put something opaque. The solid, full-strength past stays clear.
+     */
+    val pillCorner: PillCorner = PillCorner.TOP_RIGHT,
+
+    /**
+     * Whether the graph says when it is, and how.
+     *
+     * A setting, and one that belongs with the other time settings. It used to appear only on
+     * multi-wearer exports — not by decision, but because it was written inside the multi-wearer
+     * HUD — so a solo export, the commonest kind there is, carried no time at all.
+     */
+    val clockMode: ClockMode = ClockMode.CLOCK,
+
+    // Identity
+    /**
+     * Whether to sign the export.
+     *
+     * Off, and staying off through development: an unfinished app putting its name on someone's
+     * footage is asking them to publish a version of the mark that is about to change. It exists
+     * now so the renderers, the preset editor and the preview all learn about it together, rather
+     * than being retrofitted later against three surfaces that have moved on.
+     */
+    val showWordmark: Boolean = false,
+    val wordmarkCorner: WordmarkCorner = WordmarkCorner.BOTTOM_RIGHT,
+    /**
+     * How present the mark is, 0..100.
+     *
+     * Defaulted well below full. A credit, not a watermark — the footage and the curve are the
+     * subject, and a mark competing with them is one someone will crop out.
+     */
+    val wordmarkOpacity: Int = 55
 ) {
     fun toJson(): String = BpmGson.instance.toJson(this)
 
@@ -130,7 +210,24 @@ data class ExportPreset(
             graphLeft = if (degenerate) shipped.graphLeft else graphLeft.coerceIn(0f, 1f),
             graphTop = if (degenerate) shipped.graphTop else graphTop.coerceIn(0f, 1f),
             graphRight = if (degenerate) shipped.graphRight else graphRight.coerceIn(0f, 1f),
-            graphBottom = if (degenerate) shipped.graphBottom else graphBottom.coerceIn(0f, 1f)
+            graphBottom = if (degenerate) shipped.graphBottom else graphBottom.coerceIn(0f, 1f),
+            // Gson leaves an absent enum as null, and the type says it cannot be — every preset
+            // written before the wordmark existed arrives that way.
+            wordmarkCorner = wordmarkCorner ?: shipped.wordmarkCorner,
+            wordmarkOpacity = wordmarkOpacity.coerceIn(0, 100),
+            pillCorner = pillCorner ?: shipped.pillCorner,
+            clockMode = clockMode ?: shipped.clockMode,
+            // A scale of zero is not a small pill, it is an absent one — and zero is exactly what a
+            // preset written before these existed would arrive with if Gson ever stops finding the
+            // no-arg constructor. Bounded rather than defaulted, because a deliberate 0.6 and an
+            // absent 0 both need to end up somewhere sane.
+            pillScale = pillScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f) ?: shipped.pillScale,
+            pillPhotoScale = pillPhotoScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f)
+                ?: shipped.pillPhotoScale,
+            pillBpmScale = pillBpmScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f)
+                ?: shipped.pillBpmScale,
+            pillNameScale = pillNameScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f)
+                ?: shipped.pillNameScale
         )
     }
 
@@ -158,6 +255,18 @@ data class ExportPreset(
                 headerXPercent = headerXPercent,
                 futureOpacity = futureOpacity,
                 timeZoneId = timeZoneId,
+                pillShowPhoto = pillShowPhoto,
+                pillShowName = pillShowName,
+                pillBpmInPersonColor = pillBpmInPersonColor,
+                pillScale = pillScale,
+                pillPhotoScale = pillPhotoScale,
+                pillBpmScale = pillBpmScale,
+                pillNameScale = pillNameScale,
+                pillCorner = pillCorner,
+                clockMode = clockMode,
+                showWordmark = showWordmark,
+                wordmarkCorner = wordmarkCorner,
+                wordmarkOpacity = wordmarkOpacity,
                 // Always clock-aligned. A recording happened at a particular time, and placing it
                 // at an arbitrary point in a video was never right — it only ever looked right when
                 // the recording happened to start when filming did.
@@ -184,11 +293,15 @@ data class ExportPreset(
          * silently ignoring fields it does not understand would produce an export that looks
          * nothing like the one it was shared from.
          *
-         * 2 covers graph framing, the sync offset and match-source frame rate, and the removal of
-         * the axes toggle. Files written at 1 still load: the check is one-directional, so raising
-         * this only stops *older* builds reading what they cannot render.
+         * 4 adds the live readout settings: what a pill carries and how large it is.
+         * 3 adds the wordmark.
+         * 2 covers graph framing, the sync offset, match-source frame rate, and the removal of the
+         * axes toggle.
+         *
+         * Files written at 1 still load: the check is one-directional, so raising this only stops
+         * *older* builds reading what they cannot render.
          */
-        const val CURRENT_VERSION = 2
+        const val CURRENT_VERSION = 4
 
         /**
          * Graph framings that shipped as the default in some earlier build.
@@ -257,14 +370,63 @@ data class ExportPreset(
         /**
          * The presets the app ships with.
          *
-         * Three shapes rather than three looks: landscape, story and square. What a preset is
-         * mostly for is the canvas, and having to type 1080×1920 to post something is the friction
-         * this removes.
+         * The first three are shapes rather than looks: landscape, story and square. What a preset
+         * is mostly for is the canvas, and having to type 1080×1920 to post something is the
+         * friction this removes.
+         *
+         * The last two are looks, and are the first presets here that differ in anything but size.
+         * They exist because the shape presets all draw the same full panel in the same place, and
+         * someone posting a clip has no starting point that is *quiet* — the whole apparatus of
+         * grid, panel and header on top of footage that is the actual subject. Both are still
+         * built from the app's own colours; what changes is how much of the frame they claim.
          */
+        /**
+         * Bumped whenever a preset is added to [BUILT_IN].
+         *
+         * An install that already has presets never runs the seed, so without this the two looks
+         * added here would only ever reach a fresh install. Compared against what the install has
+         * been offered, and offered exactly once — see `LibraryRepository.offerNewBuiltInPresets`.
+         */
+        const val BUILT_IN_REVISION = 2
+
         val BUILT_IN: List<ExportPreset> = listOf(
             ExportPreset(name = "Landscape 1080p", width = 1920, height = 1080),
             ExportPreset(name = "Story 9:16", width = 1080, height = 1920),
-            ExportPreset(name = "Square 1:1", width = 1080, height = 1080)
+            ExportPreset(name = "Square 1:1", width = 1080, height = 1080),
+
+            // A story with the graph as a caption rather than a panel. No background behind the
+            // curve at all, no grid, and a band across the lower third — above where a platform
+            // puts its own caption and buttons, which is why the framing is not simply centred.
+            ExportPreset(
+                name = "Story · minimal",
+                width = 1080,
+                height = 1920,
+                backgroundOpacity = 0,
+                showGrid = false,
+                showTitle = false,
+                graphLeft = 0.08f,
+                graphTop = 0.60f,
+                graphRight = 0.92f,
+                graphBottom = 0.78f,
+                // A shorter window than the 30s default. On a nine-second clip a half-minute
+                // window is nearly flat; ten seconds gives the curve something to do.
+                windowSizeMs = 10_000L
+            ),
+
+            // The landscape counterpart: a wide, low band along the bottom, panel kept but dimmed
+            // so the curve reads over bright footage without boxing off a quarter of the frame.
+            ExportPreset(
+                name = "Landscape · lower third",
+                width = 1920,
+                height = 1080,
+                backgroundOpacity = 35,
+                showGrid = false,
+                graphLeft = 0.06f,
+                graphTop = 0.68f,
+                graphRight = 0.94f,
+                graphBottom = 0.93f,
+                windowSizeMs = 20_000L
+            )
         )
     }
 }

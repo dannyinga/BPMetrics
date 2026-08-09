@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
@@ -52,6 +53,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import inga.bpmetrics.ui.components.BpmEmptyState
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
@@ -119,12 +122,30 @@ fun AnalysisScreen(
             Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {
                 TopAppBar(
                     title = {
-                        Text(
-                            title ?: uiState.scope.title,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
+                        // Two lines, because one was not enough to say what was being analysed.
+                        // A scope title is a collection or event name — "Coachella Day 1" — and at
+                        // headlineSmall on a 5-inch phone those clipped against the action icons
+                        // with no ellipsis, so the header silently stopped naming its subject at
+                        // exactly the widths where naming it mattered most.
+                        //
+                        // The kind line underneath is the guarantee: even when the name truncates,
+                        // the header still says what this is and how much of it there is.
+                        Column {
+                            Text(
+                                title ?: uiState.scope.title,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                uiState.scopeSubtitle(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     },
                     navigationIcon = {
                         if (onBack != null) {
@@ -1019,38 +1040,45 @@ private fun SectionTitle(title: String, subtitle: String?) {
  * The three scopes are empty for different reasons, and "No data available for current filter" was
  * wrong for two of them.
  */
+/**
+ * What is being analysed, and how much of it — the line under the scope name.
+ *
+ * Deliberately says the *kind* rather than repeating the name: the name is directly above, and when
+ * it truncates this is the only thing left saying whether "Coachella Day 1…" is a collection, an
+ * event or a saved snapshot.
+ */
+private fun AnalysisUiState.scopeSubtitle(): String {
+    val kind = when (scope) {
+        is AnalysisScope.Group -> "Collection"
+        is AnalysisScope.Saved -> "Saved analysis"
+        else -> "Filtered"
+    }
+    if (isEmpty) return kind
+    val recordings = if (recordCount == 1) "1 recording" else "$recordCount recordings"
+    val people = people.size
+    return if (people > 1) "$kind · $recordings · $people people" else "$kind · $recordings"
+}
+
 @Composable
 private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            modifier = Modifier.padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                when (uiState.scope) {
-                    is AnalysisScope.Group -> "Nothing in this collection yet"
-                    is AnalysisScope.Saved -> "This analysis has no recordings"
-                    else -> "Nothing matches this filter"
-                },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                when (uiState.scope) {
-                    is AnalysisScope.Group ->
-                        "Add events to this collection, and file recordings into them, and their " +
-                            "numbers will appear here."
-                    is AnalysisScope.Saved ->
-                        "It was saved without any, or its recordings have since been deleted."
-                    else ->
-                        "Narrow or widen the filter in the Library and analyse again."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+    BpmEmptyState(
+        modifier = modifier,
+        icon = Icons.Default.Insights,
+        title = when (uiState.scope) {
+            is AnalysisScope.Group -> "Nothing in this collection yet"
+            is AnalysisScope.Saved -> "This analysis has no recordings"
+            else -> "Nothing matches this filter"
+        },
+        body = when (uiState.scope) {
+            is AnalysisScope.Group ->
+                "Add events to this collection, and file recordings into them, and their " +
+                    "numbers will appear here."
+            is AnalysisScope.Saved ->
+                "It was saved without any, or its recordings have since been deleted."
+            else ->
+                "Narrow or widen the filter in the Library and analyse again."
         }
-    }
+    )
 }
 
 private fun metricLabel(metric: AnalysisViewModel.MetricType) = when (metric) {

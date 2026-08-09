@@ -56,7 +56,7 @@ fun ConcurrentChart(
 ) {
     if (analysis.isEmpty) return
 
-    val gridColor = Color(0x33CCCCCC)
+    val gridColor = inga.bpmetrics.ui.theme.ChartGrid
     val intensityColor = MaterialTheme.colorScheme.primary
     val scrubColor = MaterialTheme.colorScheme.onSurface
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -243,9 +243,12 @@ private fun DrawScope.drawTimeLabels(
     repeat(divisions + 1) { i ->
         val fraction = i.toFloat() / divisions
         val at = window.startMs + (fraction * window.spanMs).toLong()
-        val x = (AXIS_GUTTER_PX + fraction * plotWidth)
-            // Keep the first and last labels inside the canvas instead of half off it.
-            .coerceIn(AXIS_GUTTER_PX + 24f, size.width - 24f)
+        // Keep the first and last labels inside the canvas instead of half off it. The upper
+        // bound is held above the lower one: on a canvas narrower than the two insets combined
+        // these cross over, and `coerceIn` throws on an inverted range rather than clamping.
+        val leftLimit = AXIS_GUTTER_PX + 24f
+        val rightLimit = (size.width - 24f).coerceAtLeast(leftLimit)
+        val x = (AXIS_GUTTER_PX + fraction * plotWidth).coerceIn(leftLimit, rightLimit)
 
         drawContext.canvas.nativeCanvas.drawText(getTimeString(at), x, y, labelPaint)
     }

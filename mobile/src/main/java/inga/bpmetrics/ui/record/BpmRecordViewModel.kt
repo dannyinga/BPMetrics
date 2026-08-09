@@ -112,6 +112,28 @@ class BpmRecordViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecordPlacement())
 
     /**
+     * The picture that stands for this recording, whether it set one or inherited it.
+     *
+     * Resolved rather than read off the record, so the page shows the same cover the library tile
+     * does — including the event's, which the record itself knows nothing about.
+     */
+    val cover: StateFlow<inga.bpmetrics.library.Cover?> = combine(
+        _record,
+        repository.getAllEvents(),
+        repository.getAllEventGroups()
+    ) { rec, events, groups ->
+        if (rec == null) return@combine null
+        inga.bpmetrics.library.CoverResolver.forRecording(
+            directCover = rec.metadata.ownCover,
+            eventId = rec.metadata.eventId,
+            eventCovers = events.associate { it.eventId to it.ownCover },
+            eventGroups = events.associate { it.eventId to it.groupId },
+            groupCovers = groups.associate { it.groupId to it.ownCover },
+            groupParents = groups.associate { it.groupId to it.parentGroupId }
+        )?.cover
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
      * What this recording says about itself, and how it compares to that person's others.
      *
      * The comparison needs the rest of the library, which is why it lives here rather than on the
@@ -144,6 +166,52 @@ class BpmRecordViewModel(
         viewModelScope.launch {
             val fetchedRecord = repository.getRecordWithId(recordId)
             _record.value = fetchedRecord
+        }
+    }
+
+    /**
+     * Gives this recording a picture of its own.
+     *
+     * Works whether or not the recording is filed under anything. Covers normally live on the event
+     * so that everything from one night matches without repeating the operation — but a recording
+     * that is not part of anything has no event to hang one on, and "file it into an event first"
+     * is not an answer when the recording is a one-off.
+     *
+     * Set here it overrides whatever an event would have supplied, which is also what makes this
+     * the way to give one recording in a set its own picture.
+     */
+    fun setOwnCover(context: android.content.Context, source: android.net.Uri, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val hint = _record.value?.metadata?.title?.takeIf { it.isNotBlank() } ?: "recording"
+            val stored = repository.setCover(
+                context = context,
+                owner = LibraryRepository.CoverOwner.Recording(recordId),
+                source = source,
+                nameHint = hint
+            )
+            if (stored) loadRecord()
+            onResult(stored)
+        }
+    }
+
+    /** Re-frames this recording's own cover. */
+    fun setOwnCoverCrop(cover: inga.bpmetrics.library.Cover) {
+        viewModelScope.launch {
+            repository.setCoverCrop(LibraryRepository.CoverOwner.Recording(recordId), cover)
+            loadRecord()
+        }
+    }
+
+    /**
+     * Removes this recording's own picture.
+     *
+     * Hands it back to its event's cover rather than leaving it with none — which is why the column
+     * stores null rather than an empty string.
+     */
+    fun clearOwnCover(context: android.content.Context) {
+        viewModelScope.launch {
+            repository.clearCover(context, LibraryRepository.CoverOwner.Recording(recordId))
+            loadRecord()
         }
     }
 
