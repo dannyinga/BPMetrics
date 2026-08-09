@@ -100,14 +100,17 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * Read once at construction rather than collected: this is where the user left off, not a live
      * value, and treating it as a flow would fight their taps every time settings emitted.
      */
-    private val _viewMode = MutableStateFlow(LibraryViewMode.RECORDINGS)
+    private val _viewMode = MutableStateFlow(LibraryViewMode.TIMELINE)
     val viewMode: StateFlow<LibraryViewMode> = _viewMode.asStateFlow()
 
     init {
         viewModelScope.launch {
             val saved = repository.getLibraryViewMode()
+            // Falls back to TIMELINE, which also catches the stored "EVENTS" from before it was
+            // replaced — an unrecognised name should land on the primary view rather than on
+            // whichever one happens to be listed first.
             _viewMode.value = LibraryViewMode.entries.firstOrNull { it.name == saved }
-                ?: LibraryViewMode.RECORDINGS
+                ?: LibraryViewMode.TIMELINE
 
             // Read once, for the same reason as the view mode: this is where the user left off,
             // not a live value. Collecting it would re-sort the list under their hands every time
@@ -302,6 +305,61 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Who an event's window applies to, for the editor to show as already chosen. */
     fun windowPeople(eventId: Long): Flow<Set<Long>> = repository.windowPeople(eventId)
+
+    /** Containers the user has opened in the timeline. */
+    private val _expandedInTimeline = MutableStateFlow<Set<Long>>(emptySet())
+    val expandedInTimeline: StateFlow<Set<Long>> = _expandedInTimeline.asStateFlow()
+
+    fun toggleTimelineExpansion(eventId: Long) {
+        _expandedInTimeline.value = if (eventId in _expandedInTimeline.value) {
+            _expandedInTimeline.value - eventId
+        } else {
+            _expandedInTimeline.value + eventId
+        }
+    }
+
+    /**
+     * The library in chronological order, at whatever depth is open.
+     *
+     * Built by [LibraryTimeline], which is pure and is the only thing that decides this order.
+     * Assembled here only because the rows need the recordings and the tree together.
+     */
+    val timeline: StateFlow<List<inga.bpmetrics.library.TimelineRow>> = combine(
+        repository.allEventsInTree,
+        repository.records,
+        _expandedInTimeline
+    ) { events, records, expanded ->
+        inga.bpmetrics.library.LibraryTimeline.build(
+            events = events,
+            records = records.map { it.metadata },
+            expandedIds = expanded
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Everything a timeline row needs about an event, keyed by id.
+     *
+     * The rows carry entities; the cards want counts, spans, people and readings. Resolved once for
+     * the library rather than per row, and — importantly — through the same subtree walk the export
+     * and analysis scopes use, so a card saying "12 recordings" and an export of that card contain
+     * the same twelve.
+     */
+    val eventSummariesById: StateFlow<Map<Long, EventSummary>> = combine(
+        repository.allEventsInTree,
+        repository.records,
+        peopleById
+    ) { events, records, people ->
+        val byEvent = records.groupBy { it.metadata.eventId }
+        events.associate { event ->
+            val within = inga.bpmetrics.library.EventTree.descendantsOf(events, event.eventId)
+            val mine = within.flatMap { byEvent[it].orEmpty() }
+            event.eventId to EventSummary(
+                event = event,
+                records = mine,
+                people = mine.mapNotNull { r -> r.metadata.personId?.let { people[it] } }.distinct()
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
      * Everything a recording can be filed into, in reading order with its depth.
@@ -852,7 +910,18 @@ data class LibraryUIState(
  * The same recordings, organised three ways — flat, by what they were part of, and by the
  * collection that belonged to.
  */
-enum class LibraryViewMode { RECORDINGS, EVENTS, GROUPS }
+/**
+ * Which library view is showing.
+ *
+ * [TIMELINE] is first and is the default: everything that happened, in the order it happened, at
+ * whatever depth is open. It replaced an events list that sorted by container first and time
+ * second, so a recording nobody had filed dropped out of the chronology into a section at the
+ * bottom — even though the app knew exactly when it happened.
+ *
+ * The other two are ways of *not* reading chronologically: [RECORDINGS] is the flat list to filter
+ * and multi-select in, [GROUPS] is the arbitrary sets a timeline cannot express.
+ */
+enum class LibraryViewMode { TIMELINE, RECORDINGS, GROUPS }
 
 /**
  * An event with what a list row needs to describe it.

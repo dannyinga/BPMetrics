@@ -240,7 +240,21 @@ fun EventCard(
     onDelete: () -> Unit,
     /** Its own picture or the one it inherits, resolved by the caller. */
     cover: inga.bpmetrics.library.Cover? = null,
-    content: @Composable () -> Unit
+    /**
+     * Whether opening it would reveal anything.
+     *
+     * A chevron that expands into nothing reads as a broken row, and an event with no recordings
+     * is an ordinary state — one that has been created but not yet had a window drawn round it.
+     */
+    expandable: Boolean = true,
+    /**
+     * What the card reveals when opened, if it reveals it inline.
+     *
+     * Empty in the timeline, where children are rows of the outer list rather than of the card:
+     * a nested event has to be selectable, draggable and openable exactly like a top-level one,
+     * and something drawn inside another card is none of those.
+     */
+    content: @Composable () -> Unit = {}
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -304,11 +318,13 @@ fun EventCard(
                     }
                 }
 
-                IconButton(onClick = onToggleExpand) {
-                    Icon(
-                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (expanded) "Collapse" else "Show recordings"
-                    )
+                if (expandable) {
+                    IconButton(onClick = onToggleExpand) {
+                        Icon(
+                            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) "Collapse" else "Show contents"
+                        )
+                    }
                 }
                 EventOverflow(
                     renameLabel = "Edit",

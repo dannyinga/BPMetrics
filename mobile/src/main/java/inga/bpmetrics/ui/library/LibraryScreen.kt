@@ -215,6 +215,9 @@ fun LibraryScreen(
     val events by viewModel.events.collectAsStateWithLifecycle()
     val eventGroups by viewModel.eventGroups.collectAsStateWithLifecycle()
     val eventPickerRows by viewModel.eventPickerRows.collectAsStateWithLifecycle()
+    val timeline by viewModel.timeline.collectAsStateWithLifecycle()
+    val eventSummariesById by viewModel.eventSummariesById.collectAsStateWithLifecycle()
+    val timelineExpanded by viewModel.expandedInTimeline.collectAsStateWithLifecycle()
     val ungroupedEvents by viewModel.ungroupedEvents.collectAsStateWithLifecycle()
     val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
 
@@ -715,8 +718,8 @@ fun LibraryScreen(
                     ) {
                         Text(
                             when (mode) {
+                                LibraryViewMode.TIMELINE -> "Timeline"
                                 LibraryViewMode.RECORDINGS -> "Recordings"
-                                LibraryViewMode.EVENTS -> "Events"
                                 LibraryViewMode.GROUPS -> "Collections"
                             }
                         )
@@ -784,21 +787,20 @@ fun LibraryScreen(
                     }
                 }
 
-                LibraryViewMode.EVENTS -> EventsList(
-                    events = events,
-                    unfiled = unfiled,
-                    groupNames = remember(eventGroups) {
-                        eventGroups.associate { it.group.eventId to it.group.displayName }
+                LibraryViewMode.TIMELINE -> TimelineList(
+                    rows = timeline,
+                    summaries = eventSummariesById,
+                    // The rows carry entities; a tile wants the whole recording with its readings.
+                    recordsById = remember(uiState.records) {
+                        uiState.records.associateBy { it.metadata.recordId }
                     },
                     eventCovers = coversByEvent,
                     peopleById = peopleById,
-                    expandedIds = expandedIds,
-                    onToggleExpand = { id ->
-                        expandedIds = if (id in expandedIds) expandedIds - id else expandedIds + id
-                    },
+                    expandedIds = timelineExpanded,
+                    onToggleExpand = { viewModel.toggleTimelineExpansion(it) },
                     onCreateEvent = { showCreateEventDialog = true },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
-                    onRename = { renamingEvent = it },
+                    onEdit = { renamingEvent = it },
                     onMoveToGroup = { movingEvent = it },
                     onDelete = { deletingEvent = it },
                     tile = tile
@@ -1126,92 +1128,6 @@ fun LibraryScreen(
                 deletingGroup = null
             }
         )
-    }
-}
-
-/**
- * The events view: the events, then Unfiled.
- *
- * Events come first because they are what the view is for — the organised library, not the inbox.
- * Unfiled sits below as its own section rather than mixed in.
- * are what keeps it from being missed.
- */
-@Composable
-private fun EventsList(
-    events: List<EventSummary>,
-    unfiled: List<BpmRecord>,
-    groupNames: Map<Long, String>,
-    eventCovers: Map<Long, inga.bpmetrics.library.Cover>,
-    peopleById: Map<Long, inga.bpmetrics.library.PersonEntity>,
-    expandedIds: Set<Long>,
-    onToggleExpand: (Long) -> Unit,
-    onCreateEvent: () -> Unit,
-    onOpenEvent: (Long) -> Unit,
-    onRename: (EventSummary) -> Unit,
-    onMoveToGroup: (EventSummary) -> Unit,
-    onDelete: (EventSummary) -> Unit,
-    tile: @Composable (BpmRecord) -> Unit
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            OutlinedButton(onClick = onCreateEvent, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("New event")
-            }
-        }
-
-        // Keys are prefixed because record ids, event ids and group ids come from different tables
-        // and freely collide. LazyColumn requires them unique across the whole list, so an event
-        // numbered 3 sitting under a recording numbered 3 would crash the screen.
-
-        if (events.isNotEmpty()) {
-            item { SectionHeader("Events", "${events.size}") }
-        }
-        items(events, key = { "event-${it.event.eventId}" }) { summary ->
-            EventCard(
-                summary = summary,
-                groupName = summary.event.parentId?.let { groupNames[it] },
-                expanded = summary.event.eventId in expandedIds,
-                onOpen = { onOpenEvent(summary.event.eventId) },
-                onToggleExpand = { onToggleExpand(summary.event.eventId) },
-                onRename = { onRename(summary) },
-                onMoveToGroup = { onMoveToGroup(summary) },
-                onDelete = { onDelete(summary) },
-                cover = eventCovers[summary.event.eventId]
-            ) {
-                summary.records.forEach { record -> tile(record) }
-            }
-        }
-
-        if (unfiled.isNotEmpty()) {
-            item {
-                SectionHeader("Unfiled", "${unfiled.size}")
-            }
-            items(unfiled, key = { "unfiled-${it.metadata.recordId}" }) { record -> tile(record) }
-        }
-
-        if (events.isEmpty() && unfiled.isEmpty()) {
-            item {
-                inga.bpmetrics.ui.components.BpmEmptySection(
-                    "No events yet",
-                    "An event is one occasion — a set, a session, an evening. Recordings filed " +
-                        "under one are analysed together, one lane per person."
-                )
-            }
-        } else if (events.isEmpty()) {
-            item {
-                inga.bpmetrics.ui.components.BpmEmptySection(
-                    "No events yet",
-                    "Press and hold recordings below and choose Add to event, or give an event a " +
-                        "time window and anything recorded inside it files itself."
-                )
-            }
-        }
     }
 }
 
