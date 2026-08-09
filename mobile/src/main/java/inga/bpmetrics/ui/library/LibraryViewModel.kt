@@ -389,6 +389,62 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun collectionsHoldingEvent(eventId: Long): Flow<Set<Long>> =
         repository.collectionsHoldingEvent(eventId)
 
+    /**
+     * Events picked out in the timeline, for acting on several at once.
+     *
+     * Separate from [selectedRecordIds] rather than one set of "things": the actions differ. A
+     * recording can be filed, tagged, exported and merged; an event can be nested, put in a set and
+     * deleted. Merging them would mean a menu whose items are disabled half the time depending on
+     * what the mixture happens to be.
+     */
+    private val _selectedEventIds = MutableStateFlow<Set<Long>>(emptySet())
+    val selectedEventIds: StateFlow<Set<Long>> = _selectedEventIds.asStateFlow()
+
+    fun toggleEventSelection(eventId: Long) {
+        _selectedEventIds.value = if (eventId in _selectedEventIds.value) {
+            _selectedEventIds.value - eventId
+        } else {
+            _selectedEventIds.value + eventId
+        }
+    }
+
+    fun clearEventSelection() { _selectedEventIds.value = emptySet() }
+
+    /**
+     * Nests every selected event under one parent.
+     *
+     * Sequential rather than parallel, and each one guarded: moving A under B and B under A in the
+     * same gesture is possible to ask for, and the second move has to see the result of the first
+     * or the guard is checking a tree that no longer exists.
+     *
+     * @param onDone how many moved, and how many were refused as cycles.
+     */
+    fun moveSelectedEventsInto(parentId: Long?, onDone: (moved: Int, refused: Int) -> Unit = { _, _ -> }) {
+        viewModelScope.launch {
+            var moved = 0
+            var refused = 0
+            _selectedEventIds.value.forEach { eventId ->
+                if (eventId == parentId) {
+                    refused++
+                } else if (repository.setEventParent(eventId, parentId)) {
+                    moved++
+                } else {
+                    refused++
+                }
+            }
+            clearEventSelection()
+            onDone(moved, refused)
+        }
+    }
+
+    /** Puts every selected event in a set. */
+    fun addSelectedEventsToCollection(collectionId: Long) {
+        viewModelScope.launch {
+            _selectedEventIds.value.forEach { repository.addEventToCollection(collectionId, it) }
+            clearEventSelection()
+        }
+    }
+
     /** Containers the user has opened in the timeline. */
     private val _expandedInTimeline = MutableStateFlow<Set<Long>>(emptySet())
     val expandedInTimeline: StateFlow<Set<Long>> = _expandedInTimeline.asStateFlow()

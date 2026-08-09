@@ -223,6 +223,10 @@ fun LibraryScreen(
     var renamingCollection by remember { mutableStateOf<CollectionSummary?>(null) }
     var deletingCollection by remember { mutableStateOf<CollectionSummary?>(null) }
     var addingSelectionToCollection by remember { mutableStateOf(false) }
+    var addingEventToCollection by remember { mutableStateOf<EventSummary?>(null) }
+    val selectedEventIds by viewModel.selectedEventIds.collectAsStateWithLifecycle()
+    var movingSelectedEvents by remember { mutableStateOf(false) }
+    var addingSelectedEventsToCollection by remember { mutableStateOf(false) }
     val ungroupedEvents by viewModel.ungroupedEvents.collectAsStateWithLifecycle()
     val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
 
@@ -237,7 +241,6 @@ fun LibraryScreen(
     var deletingEvent by remember { mutableStateOf<EventSummary?>(null) }
     var deletingGroup by remember { mutableStateOf<GroupSummary?>(null) }
     var movingEvent by remember { mutableStateOf<EventSummary?>(null) }
-    var movingCollection by remember { mutableStateOf<GroupSummary?>(null) }
     var showAddToEventDialog by remember { mutableStateOf(false) }
     // Set when "New event…" is chosen from the bulk menu, so the name dialog knows to file the
     // current selection into whatever it creates rather than creating an empty event.
@@ -247,6 +250,12 @@ fun LibraryScreen(
         BackHandler {
             exitSelection()
         }
+    }
+
+    // Its own handler rather than a branch inside the one above: the two selections are separate,
+    // and back should undo whichever one is actually running.
+    if (selectedEventIds.isNotEmpty()) {
+        BackHandler { viewModel.clearEventSelection() }
     }
 
     // Launcher for importing CSV and JSON (.bpmjson) file(s)
@@ -809,7 +818,39 @@ fun LibraryScreen(
                     }
                 }
 
-                LibraryViewMode.TIMELINE -> TimelineList(
+                // Above the list rather than in the app bar: the app bar already belongs to the
+                // recording selection, and two selections competing for one bar is how you end up
+                // acting on the wrong one.
+                LibraryViewMode.TIMELINE -> if (selectedEventIds.isNotEmpty()) {
+                    Column(Modifier.fillMaxSize()) {
+                        EventSelectionBar(
+                            count = selectedEventIds.size,
+                            onMove = { movingSelectedEvents = true },
+                            onAddToCollection = { addingSelectedEventsToCollection = true },
+                            onClear = { viewModel.clearEventSelection() }
+                        )
+                        TimelineList(
+                            rows = timeline,
+                            summaries = eventSummariesById,
+                            recordsById = remember(uiState.records) {
+                                uiState.records.associateBy { it.metadata.recordId }
+                            },
+                            eventCovers = coversByEvent,
+                            peopleById = peopleById,
+                            expandedIds = timelineExpanded,
+                            onToggleExpand = { viewModel.toggleTimelineExpansion(it) },
+                            selectedEventIds = selectedEventIds,
+                            onToggleEventSelection = { viewModel.toggleEventSelection(it) },
+                            onCreateEvent = { showCreateEventDialog = true },
+                            onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
+                            onEdit = { renamingEvent = it },
+                            onMoveToGroup = { movingEvent = it },
+                            onAddToCollection = { addingEventToCollection = it },
+                            onDelete = { deletingEvent = it },
+                            tile = tile
+                        )
+                    }
+                } else TimelineList(
                     rows = timeline,
                     summaries = eventSummariesById,
                     // The rows carry entities; a tile wants the whole recording with its readings.
@@ -820,10 +861,13 @@ fun LibraryScreen(
                     peopleById = peopleById,
                     expandedIds = timelineExpanded,
                     onToggleExpand = { viewModel.toggleTimelineExpansion(it) },
+                    selectedEventIds = selectedEventIds,
+                    onToggleEventSelection = { viewModel.toggleEventSelection(it) },
                     onCreateEvent = { showCreateEventDialog = true },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onEdit = { renamingEvent = it },
                     onMoveToGroup = { movingEvent = it },
+                    onAddToCollection = { addingEventToCollection = it },
                     onDelete = { deletingEvent = it },
                     tile = tile
                 )
@@ -1065,46 +1109,17 @@ fun LibraryScreen(
     }
 
     movingEvent?.let { summary ->
-        GroupPickerDialog(
-            eventName = summary.event.displayName,
-            groups = eventGroups,
-            currentGroupId = summary.event.parentId,
+        EventParentPickerDialog(
+            moving = summary.event,
+            rows = eventPickerRows,
             onDismiss = { movingEvent = null },
-            onPick = { groupId ->
-                viewModel.setEventGroup(summary.event.eventId, groupId)
-                movingEvent = null
-            },
-            onCreateGroup = {
-                movingEvent = null
-                showCreateGroupDialog = true
-            }
-        )
-    }
-
-    movingCollection?.let { summary ->
-        val moving = summary.group.eventId
-        GroupPickerDialog(
-            eventName = summary.group.displayName,
-            // Only somewhere it could legally go. Offering a collection its own descendants would
-            // put a cycle one tap away, and a cycle does not throw — it hangs every walk of the
-            // tree. Refused in the repository too; this is so the option is never presented.
-            groups = eventGroups.filter { candidate ->
-                !inga.bpmetrics.library.EventTree.wouldCycle(
-                    eventGroups.map { it.group },
-                    eventId = moving,
-                    candidateParent = candidate.group.eventId
-                )
-            },
-            currentGroupId = summary.group.parentId,
-            topLevelLabel = "Not inside anything",
-            onDismiss = { movingCollection = null },
             onPick = { parentId ->
-                viewModel.setCollectionParent(moving, parentId)
-                movingCollection = null
+                viewModel.setEventGroup(summary.event.eventId, parentId)
+                movingEvent = null
             },
-            onCreateGroup = {
-                movingCollection = null
-                showCreateGroupDialog = true
+            onCreateEvent = {
+                movingEvent = null
+                showCreateEventDialog = true
             }
         )
     }
@@ -1190,6 +1205,111 @@ fun LibraryScreen(
             }
         )
     }
+
+    if (movingSelectedEvents) {
+        EventParentPickerDialog(
+            // A stand-in for the group being moved: the picker needs something to exclude, and with
+            // several events there is no single self. Nothing is excluded, and each move is guarded
+            // individually in the repository — which is where the real check has to live anyway.
+            moving = inga.bpmetrics.library.EventEntity(
+                eventId = -1L,
+                name = "${selectedEventIds.size} events"
+            ),
+            rows = eventPickerRows.filterNot { (event, _) -> event.eventId in selectedEventIds },
+            onDismiss = { movingSelectedEvents = false },
+            onPick = { parentId ->
+                movingSelectedEvents = false
+                viewModel.moveSelectedEventsInto(parentId) { moved, refused ->
+                    if (refused > 0) {
+                        Toast.makeText(
+                            context,
+                            "Moved $moved. $refused could not go there without nesting inside itself.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            },
+            onCreateEvent = {
+                movingSelectedEvents = false
+                showCreateEventDialog = true
+            }
+        )
+    }
+
+    if (addingSelectedEventsToCollection) {
+        AddToCollectionDialog(
+            count = selectedEventIds.size,
+            noun = "event",
+            collections = collections,
+            onDismiss = { addingSelectedEventsToCollection = false },
+            onPick = {
+                viewModel.addSelectedEventsToCollection(it)
+                addingSelectedEventsToCollection = false
+            },
+            onCreate = {
+                addingSelectedEventsToCollection = false
+                showCreateGroupDialog = true
+            }
+        )
+    }
+
+    addingEventToCollection?.let { summary ->
+        // Ticks rather than a single pick: an event can be in any number of sets at once, which is
+        // the whole difference between a set and where it lives. A picker that closed on the first
+        // tap would make "Festivals and 2026" three gestures instead of two.
+        val member by remember(summary.event.eventId) {
+            viewModel.collectionsHoldingEvent(summary.event.eventId)
+        }.collectAsStateWithLifecycle(initialValue = emptySet())
+
+        AlertDialog(
+            onDismissRequest = { addingEventToCollection = null },
+            title = { Text("Collections for ${summary.event.displayName}") },
+            text = {
+                Column(
+                    Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (collections.isEmpty()) {
+                        Text(
+                            "No collections yet. Make one and this event can go in it.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                        )
+                    }
+                    collections.forEach { set ->
+                        val inSet = set.collection.collectionId in member
+                        DropdownMenuItem(
+                            text = { Text(set.collection.displayName) },
+                            trailingIcon = {
+                                if (inSet) Icon(Icons.Default.Check, contentDescription = "In it")
+                            },
+                            onClick = {
+                                viewModel.toggleEventInCollection(
+                                    set.collection.collectionId,
+                                    summary.event.eventId,
+                                    member = !inSet
+                                )
+                            }
+                        )
+                    }
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("New collection…") },
+                        leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        onClick = {
+                            addingEventToCollection = null
+                            showCreateGroupDialog = true
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { addingEventToCollection = null }) { Text("Done") }
+            }
+        )
+    }
 }
 
 /**
@@ -1202,6 +1322,7 @@ fun LibraryScreen(
 @Composable
 private fun AddToCollectionDialog(
     count: Int,
+    noun: String = "recording",
     collections: List<CollectionSummary>,
     onDismiss: () -> Unit,
     onPick: (Long) -> Unit,
@@ -1209,7 +1330,7 @@ private fun AddToCollectionDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add $count recording${if (count == 1) "" else "s"} to…") },
+        title = { Text("Add $count $noun${if (count == 1) "" else "s"} to…") },
         text = {
             Column(
                 Modifier

@@ -43,10 +43,14 @@ fun TimelineList(
     peopleById: Map<Long, PersonEntity>,
     expandedIds: Set<Long>,
     onToggleExpand: (Long) -> Unit,
+    /** Events picked out for a bulk action, and the gesture that picks them. */
+    selectedEventIds: Set<Long> = emptySet(),
+    onToggleEventSelection: (Long) -> Unit = {},
     onCreateEvent: () -> Unit,
     onOpenEvent: (Long) -> Unit,
     onEdit: (EventSummary) -> Unit,
     onMoveToGroup: (EventSummary) -> Unit,
+    onAddToCollection: (EventSummary) -> Unit,
     onDelete: (EventSummary) -> Unit,
     tile: @Composable (BpmRecord) -> Unit
 ) {
@@ -98,12 +102,21 @@ fun TimelineList(
                                 // expands into nothing reads as a broken row.
                                 expanded = entry.event.eventId in expandedIds,
                                 expandable = row.hasChildren,
+                                isSelected = entry.event.eventId in selectedEventIds,
+                                onLongClick = { onToggleEventSelection(entry.event.eventId) },
                                 cover = eventCovers[entry.event.eventId],
                                 groupName = null,
-                                onOpen = { onOpenEvent(entry.event.eventId) },
+                                // While a selection is running, a tap adds to it rather than
+                                // navigating away — the same rule the recording tiles follow, and
+                                // the alternative is losing the selection by mistapping.
+                                onOpen = {
+                                    if (selectedEventIds.isEmpty()) onOpenEvent(entry.event.eventId)
+                                    else onToggleEventSelection(entry.event.eventId)
+                                },
                                 onToggleExpand = { onToggleExpand(entry.event.eventId) },
                                 onRename = { onEdit(summary) },
                                 onMoveToGroup = { onMoveToGroup(summary) },
+                                onAddToCollection = { onAddToCollection(summary) },
                                 onDelete = { onDelete(summary) }
                             )
                         }

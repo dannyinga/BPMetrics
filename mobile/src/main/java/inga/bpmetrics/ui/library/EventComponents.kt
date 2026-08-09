@@ -1,6 +1,7 @@
 package inga.bpmetrics.ui.library
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -228,10 +229,12 @@ private fun countLabel(count: Int, noun: String) =
  * answer different questions — "what happened here" wants the analysis, and "is this recording
  * already filed" wants a peek without losing your place in the list.
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun EventCard(
     summary: EventSummary,
     groupName: String?,
+    onAddToCollection: (() -> Unit)? = null,
     expanded: Boolean,
     onOpen: () -> Unit,
     onToggleExpand: () -> Unit,
@@ -248,6 +251,14 @@ fun EventCard(
      */
     expandable: Boolean = true,
     /**
+     * Whether this event is picked out for a bulk action.
+     *
+     * The same press-and-hold gesture as a recording tile, and the same tint, because it is the
+     * same idea — "these ones" — and teaching it twice would be teaching it badly.
+     */
+    isSelected: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+    /**
      * What the card reveals when opened, if it reveals it inline.
      *
      * Empty in the timeline, where children are rows of the outer list rather than of the card:
@@ -256,7 +267,16 @@ fun EventCard(
      */
     content: @Composable () -> Unit = {}
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = if (isSelected) {
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            )
+        } else {
+            CardDefaults.cardColors()
+        }
+    ) {
         Column {
             // Behind the header only, not the expanded list underneath. A picture behind a list of
             // nested rows competes with every one of them; behind the name it identifies the card.
@@ -268,7 +288,10 @@ fun EventCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onOpen)
+                    .combinedClickable(
+                        onClick = onOpen,
+                        onLongClick = { onLongClick?.invoke() }
+                    )
                     .padding(start = 16.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -330,6 +353,7 @@ fun EventCard(
                     renameLabel = "Edit",
                     onRename = onRename,
                     onMoveToGroup = onMoveToGroup,
+                    onAddToCollection = onAddToCollection,
                     onDelete = onDelete,
                     deleteLabel = "Delete event"
                 )
@@ -515,7 +539,10 @@ private fun EventOverflow(
     /** "Rename" for a collection, "Edit" for an event — the event dialog does rather more. */
     renameLabel: String = "Rename",
     onRename: () -> Unit,
+    /** Files this event inside another. Nesting is the tree; see EventParentPickerDialog. */
     onMoveToGroup: (() -> Unit)?,
+    /** Puts it in an arbitrary set, which is a different thing from where it lives. */
+    onAddToCollection: (() -> Unit)? = null,
     onDelete: () -> Unit,
     deleteLabel: String,
     /**
@@ -541,8 +568,14 @@ private fun EventOverflow(
             )
             onMoveToGroup?.let { move ->
                 DropdownMenuItem(
-                    text = { Text("Move…") },
+                    text = { Text("Move into…") },
                     onClick = { open = false; move() }
+                )
+            }
+            onAddToCollection?.let { add ->
+                DropdownMenuItem(
+                    text = { Text("Add to collection…") },
+                    onClick = { open = false; add() }
                 )
             }
             onSetCover?.let { set ->
@@ -620,63 +653,6 @@ fun NameDialog(
                 onClick = { onConfirm(name.trim()) }
             ) { Text(confirmLabel) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-/**
- * Chooses which group an event belongs to, including none.
- *
- * @param groups Every group, offered by name.
- * @param currentGroupId Marked so the current answer is visible rather than remembered.
- */
-@Composable
-fun GroupPickerDialog(
-    eventName: String,
-    groups: List<GroupSummary>,
-    currentGroupId: Long?,
-    onDismiss: () -> Unit,
-    onPick: (Long?) -> Unit,
-    onCreateGroup: () -> Unit,
-    /** What "nowhere" is called here: no collection for an event, top level for a collection. */
-    topLevelLabel: String = "No collection"
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Move $eventName") },
-        text = {
-            Column {
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            topLevelLabel,
-                            fontWeight = if (currentGroupId == null) FontWeight.Bold else null
-                        )
-                    },
-                    onClick = { onPick(null) }
-                )
-                groups.forEach { group ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                group.group.displayName,
-                                fontWeight = if (currentGroupId == group.group.eventId) {
-                                    FontWeight.Bold
-                                } else null
-                            )
-                        },
-                        onClick = { onPick(group.group.eventId) }
-                    )
-                }
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text("New collection…") },
-                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    onClick = onCreateGroup
-                )
-            }
-        },
-        confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
