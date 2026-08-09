@@ -31,7 +31,12 @@ class ExportScopeResetTest {
 
     private val recordsFlow = MutableStateFlow<List<BpmRecord>>(emptyList())
     private val eventsFlow = MutableStateFlow<List<EventEntity>>(emptyList())
-    private val groupsFlow = MutableStateFlow<List<EventEntity>>(emptyList())
+    private val collectionsFlow =
+        MutableStateFlow<List<inga.bpmetrics.library.CollectionEntity>>(emptyList())
+    private val collectionEventLinks =
+        MutableStateFlow<List<inga.bpmetrics.library.CollectionEventCrossRef>>(emptyList())
+    private val collectionRecordLinks =
+        MutableStateFlow<List<inga.bpmetrics.library.CollectionRecordCrossRef>>(emptyList())
     private val peopleFlow = MutableStateFlow<List<PersonEntity>>(emptyList())
     private val presetsFlow = MutableStateFlow<List<ExportPresetEntity>>(emptyList())
     private val tagsFlow = MutableStateFlow<Map<Long, List<EffectiveTag>>>(emptyMap())
@@ -43,7 +48,9 @@ class ExportScopeResetTest {
         // the test with a timeout that names nothing.
         every { repository.records } returns recordsFlow
         every { repository.getAllEvents() } returns eventsFlow
-        every { repository.getAllEventGroups() } returns groupsFlow
+        every { repository.getAllCollections() } returns collectionsFlow
+        every { repository.allCollectionEventLinks() } returns collectionEventLinks
+        every { repository.allCollectionRecordLinks() } returns collectionRecordLinks
         every { repository.getAllPeople() } returns peopleFlow
         every { repository.getExportPresets() } returns presetsFlow
         every { repository.effectiveTags } returns tagsFlow

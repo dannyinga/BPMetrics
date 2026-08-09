@@ -72,7 +72,9 @@ class EventDetailViewModel(
     val state: StateFlow<EventDetailState> = combine(
         eventFlow,
         recordsFlow,
-        repository.getAllEventGroups(),
+        // The whole tree. This read the collections flow, which returns nothing since sets
+        // arrived, so the breadcrumb never resolved and every event looked top-level.
+        repository.allEventsInTree,
         repository.getAllPeople(),
         repository.getAllWatches()
     ) { event, records, groups, people, watches ->

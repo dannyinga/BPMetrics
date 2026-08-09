@@ -496,7 +496,9 @@ private fun LibraryRepository.describeFilter(
     getAllPeople(),
     getAllWatches(),
     getAllEvents(),
-    getAllEventGroups()
+    // The whole tree. This read the collections flow, which since sets arrived returns nothing —
+    // so a filter naming a container described it as unknown.
+    allEventsInTree
 ) { categories, people, watches, events, groups ->
     // Tags are not held in one flow, so they are gathered from the categories in play. Only the
     // selected ones are looked up, which is a handful at most.

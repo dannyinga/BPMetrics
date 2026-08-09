@@ -12,26 +12,20 @@ import kotlinx.coroutines.flow.Flow
 interface EventDao {
 
     /**
-     * Events the library lists as events, most recent first by what they contain.
+     * Every event, most recent first by what it contains.
      *
      * Ordered by its latest recording rather than by `createdAt`, so the list reads chronologically
      * by *when things happened* — which is how anyone looks for a set they were at — rather than by
      * when someone got round to creating the entry.
      *
-     * Collections are excluded because the screens show them in their own section, from
-     * [getCollectionsFlow]. They are the same rows in the same table since the fold, so without
-     * this each one would appear twice on one screen.
-     *
-     * **Never walk the tree with this.** Ancestry, descendants, spans and membership all need
-     * [getAllEvents] or [getAllEventsFlowUnfiltered]: a chain with the collections cut out of it
-     * breaks in the middle, and a recording two levels down stops being found — which is the exact
-     * defect this whole initiative exists to end.
+     * This excluded `type = 'Collection'` while the tier marker existed. That marker is gone, and
+     * the filter had to go with it: `type` is free text, so anyone typing "Collection" as their
+     * own event type would have watched that event disappear from the library.
      */
     @Query(
         """
         SELECT e.* FROM events e
         LEFT JOIN bpm_records r ON r.eventId = e.eventId
-        WHERE e.type IS NOT 'Collection'
         GROUP BY e.eventId
         ORDER BY MAX(COALESCE(r.startTime, e.createdAt)) DESC
         """
@@ -50,10 +44,6 @@ interface EventDao {
      */
     @Query("SELECT * FROM events")
     fun getAllEventsFlowUnfiltered(): Flow<List<EventEntity>>
-
-    /** The events that were collections. Newest first, as the collections list always was. */
-    @Query("SELECT * FROM events WHERE type = 'Collection' ORDER BY createdAt DESC")
-    fun getCollectionsFlow(): Flow<List<EventEntity>>
 
     /** Who each window applies to. Empty for a window that names nobody, which is most of them. */
     @Query("SELECT * FROM event_window_people")
@@ -101,16 +91,8 @@ interface EventDao {
     // whatever it held before the migration.
     fun getEventsForGroupFlow(groupId: Long): Flow<List<EventEntity>>
 
-    /**
-     * Events not yet filed into a group.
-     *
-     * A collection has no `groupId` either, so it would read as ungrouped and show up beside the
-     * collections section that already lists it. Same exclusion as [getAllEventsFlow].
-     */
-    @Query(
-        "SELECT * FROM events WHERE groupId IS NULL AND type IS NOT 'Collection' " +
-            "ORDER BY createdAt DESC"
-    )
+    /** Events not yet filed into a group. */
+    @Query("SELECT * FROM events WHERE groupId IS NULL ORDER BY createdAt DESC")
     fun getUngroupedEventsFlow(): Flow<List<EventEntity>>
 
     @Insert

@@ -684,7 +684,9 @@ class LibraryRepository(
         is CoverOwner.Event -> eventDao.coverPathOf(owner.eventId)
         // A collection is an event, so both go to the same table. Two calls into two tables is
         // how a cover set on a collection came to be read back from an event and found missing.
-        is CoverOwner.Collection -> eventDao.coverPathOf(owner.groupId)
+        // The collections table, not events. A set has its own row; writing this through the event
+        // DAO would have stamped the cover onto whichever event happened to share the id.
+        is CoverOwner.Collection -> collectionDao.coverPathOf(owner.groupId)
         is CoverOwner.Recording -> eventDao.recordCoverPathOf(owner.recordId)
     }
 
@@ -697,7 +699,7 @@ class LibraryRepository(
         val blur = cover?.blur
         when (owner) {
             is CoverOwner.Event -> eventDao.updateCover(owner.eventId, p, l, t, r, b, blur)
-            is CoverOwner.Collection -> eventDao.updateCover(owner.groupId, p, l, t, r, b, blur)
+            is CoverOwner.Collection -> collectionDao.updateCover(owner.groupId, p, l, t, r, b, blur)
             is CoverOwner.Recording -> eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur)
         }
     }
@@ -946,7 +948,7 @@ class LibraryRepository(
 
     // --- Collections ---
     //
-    // A collection is an event with [COLLECTION_TYPE]. It was its own table until migration 23→24;
+    // A collection is a set with its own table. Not to be confused with the tier-collections that
     // everything below now reads and writes the one tree, so a count, a span or a roll-up has one
     // implementation instead of two that have to be kept agreeing. `event_groups` still exists and
     // is no longer read — see MIGRATION_23_24 for why it is still there.
@@ -1032,10 +1034,6 @@ class LibraryRepository(
             recordLinks = collectionDao.allRecordLinks()
         )
 
-    /** Every collection, newest first. */
-    fun getAllEventGroups(): Flow<List<EventEntity>> =
-        eventDao.getCollectionsFlow()
-
     /**
      * The whole tree, collections included.
      *
@@ -1044,55 +1042,24 @@ class LibraryRepository(
      */
     val allEventsInTree: Flow<List<EventEntity>> = eventDao.getAllEventsFlowUnfiltered()
 
-    suspend fun getEventGroup(groupId: Long): EventEntity? =
-        eventDao.getEvent(groupId)?.takeIf { it.isCollection }
+    suspend fun getEventGroup(groupId: Long): CollectionEntity? = collectionDao.get(groupId)
 
     /**
-     * Every recording anywhere beneath a collection.
+     * Recreates a pre-fold collection while restoring an old backup, as a plain event.
      *
-     * Through [EventTree.descendantsOf], so a recording three levels down counts. The query this
-     * replaced looked one level deep, which is the "0 recordings" defect that started all of this.
+     * Only [inga.bpmetrics.export.restoreBackup] calls this, and only for a file written at format
+     * 3 or earlier. Those collections were tiers — containers holding events — so a container is
+     * what they come back as. It carries no type: the tier marker meant something for one schema
+     * version and would now read as a user-chosen word.
      */
-    fun getRecordsForGroup(groupId: Long): Flow<List<BpmRecordEntity>> =
-        combine(eventDao.getAllEventsFlowUnfiltered(), recordDao.getAllRecordEntitiesFlow()) { events, records ->
-            val within = EventTree.descendantsOf(events, groupId)
-            records.filter { it.eventId in within }.sortedBy { it.startTime }
-        }
-
-    /** When a collection starts and ends: its window, or the span of everything beneath it. */
-    suspend fun getGroupSpan(groupId: Long): TimeSpan? {
-        val events = eventDao.getAllEvents()
-        val records = recordDao.getAllRecordEntities()
-        val membership = records.associate { it.recordId to it.eventId }
-        return EventTree.spanOf(events, groupId, records, membership)
-            ?.let { TimeSpan(it.startMs, it.endMs) }
-    }
-
-    /** How many events sit beneath a collection, at any depth. Excludes the collection itself. */
-    suspend fun countEventsForGroup(groupId: Long): Int =
-        EventTree.descendantsOf(eventDao.getAllEvents(), groupId).size - 1
-
-    /** How many recordings sit beneath a collection, at any depth. */
-    suspend fun countRecordsForGroup(groupId: Long): Int {
-        val within = EventTree.descendantsOf(eventDao.getAllEvents(), groupId)
-        return recordDao.getAllRecordEntities().count { it.eventId in within }
-    }
-
     suspend fun createEventGroup(name: String): Long {
         val id = eventDao.insertEvent(
-            EventEntity(
-                name = name.trim(),
-                type = COLLECTION_TYPE,
-                createdAt = System.currentTimeMillis()
-            )
+            EventEntity(name = name.trim(), createdAt = System.currentTimeMillis())
         )
-        Log.d(tag, "Created collection '${name.trim()}' as $id")
+        Log.d(tag, "Restored legacy collection '${name.trim()}' as event $id")
         reconcileMembership()
         return id
     }
-
-    suspend fun renameEventGroup(groupId: Long, name: String) =
-        eventDao.rename(groupId, name.trim())
 
     suspend fun setEventGroupNotes(groupId: Long, notes: String) =
         eventDao.updateNotes(groupId, notes)
@@ -1143,9 +1110,6 @@ class LibraryRepository(
         return newId
     }
 
-    /** Removes a collection and releases what it held. Its events and children survive. */
-    suspend fun deleteEventGroup(groupId: Long) = deleteEvent(groupId)
-
     /**
      * Files one collection inside another.
      *
@@ -1182,14 +1146,6 @@ class LibraryRepository(
         reconcileMembership()
         return true
     }
-
-    /**
-     * A collection and everything nested inside it, itself included.
-     *
-     * What "analyse Coachella" resolves to: the festival, its days, and every event in any of them.
-     */
-    suspend fun descendantGroupIds(groupId: Long): Set<Long> =
-        EventTree.descendantsOf(eventDao.getAllEvents(), groupId)
 
     /** Every saved analysis with its frozen rows, for a backup to carry. */
     suspend fun getSavedAnalysesForBackup(): List<inga.bpmetrics.export.SavedAnalysisDto> =

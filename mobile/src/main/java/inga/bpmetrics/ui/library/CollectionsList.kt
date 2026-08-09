@@ -52,6 +52,8 @@ fun CollectionsList(
     onCreate: () -> Unit,
     onOpen: (Long) -> Unit,
     onRename: (CollectionSummary) -> Unit,
+    onSetCover: (CollectionSummary) -> Unit,
+    onRemoveCover: (CollectionSummary) -> Unit,
     onDelete: (CollectionSummary) -> Unit
 ) {
     LazyColumn(
@@ -84,6 +86,8 @@ fun CollectionsList(
                 cover = covers[summary.collection.collectionId],
                 onOpen = { onOpen(summary.collection.collectionId) },
                 onRename = { onRename(summary) },
+                onSetCover = { onSetCover(summary) },
+                onRemoveCover = { onRemoveCover(summary) },
                 onDelete = { onDelete(summary) }
             )
         }
@@ -103,6 +107,8 @@ private fun CollectionCard(
     cover: inga.bpmetrics.library.Cover?,
     onOpen: () -> Unit,
     onRename: () -> Unit,
+    onSetCover: () -> Unit,
+    onRemoveCover: () -> Unit,
     onDelete: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -166,6 +172,16 @@ private fun CollectionCard(
                         text = { Text("Rename") },
                         onClick = { open = false; onRename() }
                     )
+                    DropdownMenuItem(
+                        text = { Text(if (cover != null) "Change cover…" else "Set cover…") },
+                        onClick = { open = false; onSetCover() }
+                    )
+                    if (cover != null) {
+                        DropdownMenuItem(
+                            text = { Text("Remove cover") },
+                            onClick = { open = false; onRemoveCover() }
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Delete collection") },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },

@@ -28,8 +28,8 @@ class OneTreeTest {
      * The shape that used to need both mechanisms at once, and the one every count got wrong.
      */
     private fun festival() = listOf(
-        EventEntity(eventId = 1, name = "Griztronics", type = COLLECTION_TYPE),
-        EventEntity(eventId = 2, name = "Day 1", parentId = 1, type = COLLECTION_TYPE),
+        EventEntity(eventId = 1, name = "Griztronics", type = "Collection"),
+        EventEntity(eventId = 2, name = "Day 1", parentId = 1, type = "Collection"),
         EventEntity(eventId = 3, name = "Subtronics", parentId = 2, windowStart = at(21), windowEnd = at(22)),
         EventEntity(eventId = 4, name = "Excision", parentId = 2, windowStart = at(23), windowEnd = at(24))
     )
@@ -57,8 +57,8 @@ class OneTreeTest {
 
     @Test
     fun `a collection is an event as far as every walk is concerned`() {
-        // No branch anywhere on `isCollection`. The label is for the screens; the tree does not
-        // care, which is the entire point of the fold.
+        // Nothing branches on what a container is called. The tree does not care, which is the
+        // entire point of the fold.
         assertEquals(setOf(1L, 2L, 3L, 4L), EventTree.descendantsOf(festival(), 1))
         assertEquals(listOf(3L, 2L, 1L), EventTree.ancestryOf(festival(), 3).map { it.eventId })
     }
@@ -153,7 +153,7 @@ class OneTreeTest {
         // that made it different was living in another table.
         val withWindow = listOf(
             EventEntity(
-                eventId = 1, name = "Griztronics", type = COLLECTION_TYPE,
+                eventId = 1, name = "Griztronics", type = "Collection",
                 windowStart = at(0), windowEnd = at(48)
             )
         )

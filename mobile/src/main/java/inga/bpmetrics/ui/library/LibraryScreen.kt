@@ -140,7 +140,7 @@ fun LibraryScreen(
     val peopleById by viewModel.peopleById.collectAsStateWithLifecycle()
     val coversByRecord by viewModel.coversByRecord.collectAsStateWithLifecycle()
     val coversByEvent by viewModel.coversByEvent.collectAsStateWithLifecycle()
-    val coversByGroup by viewModel.coversByGroup.collectAsStateWithLifecycle()
+    val coversByCollection by viewModel.coversByCollection.collectAsStateWithLifecycle()
 
     // Collected here rather than at the share call so a backup carries the profiles and category
     // names its records point at. Without them the file restores recordings attributed to nobody.
@@ -175,28 +175,6 @@ fun LibraryScreen(
     }
 
     // Which collection a cover is being chosen for. Held outside the picker because the launcher is
-    // registered once for the screen, not once per card — a picker per collection would be dozens
-    // of launchers on a library with dozens of collections.
-    var coveringGroup by remember { mutableStateOf<GroupSummary?>(null) }
-
-    /** Which collection's cover is open for framing, if any. */
-    var framingGroup by remember { mutableStateOf<GroupSummary?>(null) }
-
-    val pickGroupCover = rememberCoverPicker { uri ->
-        coveringGroup?.let { target ->
-            viewModel.setGroupCover(context, target.group.eventId, uri) { ok ->
-                if (ok) {
-                    // Straight into framing, as everywhere else a picture is chosen.
-                    framingGroup = target
-                } else {
-                    Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG)
-                        .show()
-                }
-            }
-        }
-        coveringGroup = null
-    }
-
     var showSortMenu by remember { mutableStateOf(false) }
     var showSelectionMenu by remember { mutableStateOf(false) }
     var showFilterDialog by remember { mutableStateOf(false) }
@@ -214,20 +192,32 @@ fun LibraryScreen(
 
     val viewMode by viewModel.viewMode.collectAsStateWithLifecycle()
     val events by viewModel.events.collectAsStateWithLifecycle()
-    val eventGroups by viewModel.eventGroups.collectAsStateWithLifecycle()
     val eventPickerRows by viewModel.eventPickerRows.collectAsStateWithLifecycle()
     val timeline by viewModel.timeline.collectAsStateWithLifecycle()
     val eventSummariesById by viewModel.eventSummariesById.collectAsStateWithLifecycle()
     val timelineExpanded by viewModel.expandedInTimeline.collectAsStateWithLifecycle()
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     var renamingCollection by remember { mutableStateOf<CollectionSummary?>(null) }
+    // Registered once for the screen rather than once per card: a launcher per collection would be
+    // dozens of them on a library with dozens of sets.
+    var coveringCollection by remember { mutableStateOf<CollectionSummary?>(null) }
+    val pickCollectionCover = rememberCoverPicker { uri ->
+        coveringCollection?.let { target ->
+            viewModel.setCollectionCover(context, target.collection.collectionId, uri) { ok ->
+                if (!ok) {
+                    Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG)
+                        .show()
+                }
+            }
+        }
+        coveringCollection = null
+    }
     var deletingCollection by remember { mutableStateOf<CollectionSummary?>(null) }
     var addingSelectionToCollection by remember { mutableStateOf(false) }
     var addingEventToCollection by remember { mutableStateOf<EventSummary?>(null) }
     val selectedEventIds by viewModel.selectedEventIds.collectAsStateWithLifecycle()
     var movingSelectedEvents by remember { mutableStateOf(false) }
     var addingSelectedEventsToCollection by remember { mutableStateOf(false) }
-    val ungroupedEvents by viewModel.ungroupedEvents.collectAsStateWithLifecycle()
     val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
 
     // Events and groups share one expansion set. Their ids come from different tables and could
@@ -237,9 +227,7 @@ fun LibraryScreen(
     var showCreateEventDialog by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var renamingEvent by remember { mutableStateOf<EventSummary?>(null) }
-    var renamingGroup by remember { mutableStateOf<GroupSummary?>(null) }
     var deletingEvent by remember { mutableStateOf<EventSummary?>(null) }
-    var deletingGroup by remember { mutableStateOf<GroupSummary?>(null) }
     var movingEvent by remember { mutableStateOf<EventSummary?>(null) }
     var showAddToEventDialog by remember { mutableStateOf(false) }
     // Set when "New event…" is chosen from the bulk menu, so the name dialog knows to file the
@@ -874,46 +862,17 @@ fun LibraryScreen(
 
                 LibraryViewMode.GROUPS -> CollectionsList(
                     collections = collections,
-                    covers = emptyMap(),
+                    covers = coversByCollection,
                     onCreate = { showCreateGroupDialog = true },
                     onOpen = { navController.navigate("${Routes.GROUP_DETAIL}/$it") },
                     onRename = { renamingCollection = it },
+                    onSetCover = { coveringCollection = it; pickCollectionCover() },
+                    onRemoveCover = {
+                        viewModel.clearCollectionCover(context, it.collection.collectionId)
+                    },
                     onDelete = { deletingCollection = it }
                 )
             }
-        }
-    }
-
-    // The live collection rather than the snapshot the menu was opened from — a cover set a moment
-    // ago is not on that snapshot, and framing would open on nothing.
-    framingGroup?.let { snapshot ->
-        val live = eventGroups
-            .firstOrNull { it.group.eventId == snapshot.group.eventId }
-            ?.group
-            ?: snapshot.group
-
-        live.ownCover?.let { cover ->
-            inga.bpmetrics.ui.components.CoverCropDialog(
-                cover = cover,
-                title = "Frame ${live.displayName}",
-                previewContent = {
-                    Text(
-                        live.displayName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                },
-                onDismiss = { framingGroup = null },
-                onConfirm = {
-                    viewModel.setGroupCoverCrop(live.eventId, it)
-                    framingGroup = null
-                },
-                onRemove = {
-                    viewModel.clearGroupCover(context, live.eventId)
-                    framingGroup = null
-                }
-            )
         }
     }
 
@@ -932,7 +891,14 @@ fun LibraryScreen(
             availablePeople = availablePeople,
             availableWatches = availableWatches,
             availableEvents = events.map { it.event },
-            availableGroups = eventGroups.map { it.group }
+            // Events that contain other events. This axis filters on `parentId`, so what it can
+            // usefully offer is containers — a festival, a day — not the sets from the collections
+            // view, which are a different relation entirely. Filtering by collection membership is
+            // sprint 4, with the rest of the filtering work.
+            availableGroups = remember(eventPickerRows) {
+                val containers = eventPickerRows.mapNotNull { (event, _) -> event.parentId }.toSet()
+                eventPickerRows.map { it.first }.filter { it.eventId in containers }
+            }
         )
     }
 
@@ -1095,19 +1061,6 @@ fun LibraryScreen(
         )
     }
 
-    renamingGroup?.let { summary ->
-        NameDialog(
-            title = "Rename collection",
-            label = "Collection name",
-            initial = summary.group.name,
-            onDismiss = { renamingGroup = null },
-            onConfirm = { name ->
-                viewModel.renameEventGroup(summary.group.eventId, name)
-                renamingGroup = null
-            }
-        )
-    }
-
     movingEvent?.let { summary ->
         EventParentPickerDialog(
             moving = summary.event,
@@ -1138,23 +1091,6 @@ fun LibraryScreen(
             onConfirm = {
                 viewModel.deleteEvent(summary.event.eventId)
                 deletingEvent = null
-            }
-        )
-    }
-
-    deletingGroup?.let { summary ->
-        DeleteConfirmDialog(
-            title = "Delete ${summary.group.displayName}?",
-            message = if (summary.eventCount > 0) {
-                "Its ${summary.eventCount} event${if (summary.eventCount == 1) "" else "s"} will " +
-                    "be kept and stop belonging to any collection. No recordings are deleted."
-            } else {
-                "This collection has nothing in it."
-            },
-            onDismiss = { deletingGroup = null },
-            onConfirm = {
-                viewModel.deleteEventGroup(summary.group.eventId)
-                deletingGroup = null
             }
         )
     }
@@ -1363,113 +1299,6 @@ private fun AddToCollectionDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
-}
-
-/** The groups view: groups, then the events that belong to none of them. */
-@Composable
-private fun GroupsList(
-    groups: List<GroupSummary>,
-    ungrouped: List<EventSummary>,
-    expandedIds: Set<Long>,
-    onToggleExpand: (Long) -> Unit,
-    onCreateGroup: () -> Unit,
-    onRenameGroup: (GroupSummary) -> Unit,
-    onDeleteGroup: (GroupSummary) -> Unit,
-    onMoveCollection: (GroupSummary) -> Unit,
-    onSetGroupCover: (GroupSummary) -> Unit,
-    onFrameGroupCover: (GroupSummary) -> Unit,
-    onRemoveGroupCover: (GroupSummary) -> Unit,
-    groupCovers: Map<Long, inga.bpmetrics.library.Cover>,
-    onOpenEvent: (Long) -> Unit,
-    onOpenGroup: (Long) -> Unit
-) {
-    // Flattened into reading order with each card's depth, so the list renders the tree without
-    // every row having to work the shape out again.
-    //
-    // Then filtered to what is actually revealed. Collapsing a collection used to hide only its
-    // events while its nested collections stayed in the list — so "Coachella" closed and "Day 1"
-    // and "Day 2" carried on sitting there, indented under nothing, which is worse than not
-    // collapsing at all. A card appears only when every collection above it is open.
-    val tree = remember(groups, expandedIds) {
-        val byId = groups.associateBy { it.group.eventId }
-        val entities = groups.map { it.group }
-
-        inga.bpmetrics.library.EventTree.flatten(entities)
-            .mapNotNull { node -> byId[node.event.eventId]?.let { it to node.depth } }
-            .filter { (summary, _) ->
-                val parentId = summary.group.parentId ?: return@filter true
-                // Every ancestor, not just the immediate parent: closing a grandparent has to hide
-                // the whole branch, not just the generation directly beneath it. EventTree walk is the cycle-guarded one
-                // and the same one membership uses, and this runs while a list is being drawn.
-                inga.bpmetrics.library.EventTree.ancestryOf(entities, parentId)
-                    .all { it.eventId in expandedIds }
-            }
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            OutlinedButton(onClick = onCreateGroup, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("New collection")
-            }
-        }
-
-        items(tree, key = { "group-${it.first.group.eventId}" }) { (summary, depth) ->
-            GroupCard(
-                summary = summary,
-                expanded = summary.group.eventId in expandedIds,
-                onOpen = { onOpenGroup(summary.group.eventId) },
-                onToggleExpand = { onToggleExpand(summary.group.eventId) },
-                onRename = { onRenameGroup(summary) },
-                onDelete = { onDeleteGroup(summary) },
-                onMoveToCollection = { onMoveCollection(summary) },
-                onSetCover = { onSetGroupCover(summary) },
-                onFrameCover = { onFrameGroupCover(summary) },
-                onRemoveCover = { onRemoveGroupCover(summary) },
-                cover = groupCovers[summary.group.eventId],
-                depth = depth
-            ) {
-                summary.events.forEach { event ->
-                    NestedEventRow(event) { onOpenEvent(event.event.eventId) }
-                }
-            }
-        }
-
-        if (ungrouped.isNotEmpty()) {
-            item { SectionHeader("Not in a collection", "${ungrouped.size}") }
-            items(ungrouped, key = { "ungrouped-${it.event.eventId}" }) { event ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Box(Modifier.padding(horizontal = 12.dp)) {
-                        NestedEventRow(event) { onOpenEvent(event.event.eventId) }
-                    }
-                }
-            }
-        }
-
-        if (groups.isEmpty() && ungrouped.isEmpty()) {
-            item {
-                inga.bpmetrics.ui.components.BpmEmptySection(
-                    "No collections yet",
-                    "A collection gathers events that belong together — a festival, a day of " +
-                        "one, a tour. Create some events first, then gather them."
-                )
-            }
-        } else if (groups.isEmpty()) {
-            item {
-                inga.bpmetrics.ui.components.BpmEmptySection(
-                    "No collections yet",
-                    "Tag a collection once and every recording under it inherits it, however " +
-                        "deeply nested. Use the overflow " +
-                        "on an event to move it into one."
-                )
-            }
-        }
-    }
 }
 
 // EmptySection moved to ui/components as BpmEmptySection: three screens were writing their own,

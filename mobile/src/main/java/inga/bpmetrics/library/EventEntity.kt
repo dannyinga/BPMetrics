@@ -92,28 +92,7 @@ data class EventEntity(
         coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
     )
 
-    /**
-     * Whether this event was, or is being used as, a collection.
-     *
-     * A collection is an event that groups other events without claiming a stretch of time — no
-     * window, and the recordings live in the things beneath it. It is a *label*, not a different
-     * kind of row: everything that walks the tree treats it identically, which is the whole point
-     * of migration 23→24. The screens still separate the two, so the distinction has to survive
-     * until the library is redesigned.
-     */
-    val isCollection: Boolean get() = type == COLLECTION_TYPE
-
-    /** The parent to show it under, whichever mechanism filed it. */
-    val containerId: Long? get() = parentId ?: groupId
 }
-
-/**
- * The [EventEntity.type] a folded collection carries.
- *
- * A string rather than an enum column because `type` is meant to be open — "Concert", "Festival",
- * "Gaming Session" are the user's words, not the app's. This one value is reserved.
- */
-const val COLLECTION_TYPE = "Collection"
 
 /**
  * A collection of events, and optionally of other collections — a festival, a day of one, a tour.

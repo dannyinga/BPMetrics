@@ -159,8 +159,8 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      *
      * This was three flows before the fold: one for recordings, one for events walking up to their
      * collection, and one for collections walking up their parents. Three walks, three chances to
-     * disagree. Collections are events, so it is one walk over one tree, and [coversByGroup] is now
-     * literally the same map read under its old name.
+     * disagree. It is now one walk over one tree. Sets keep their own covers, with no inheritance
+     * in either direction — see [coversByCollection].
      */
     val coversByEvent: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> =
         repository.allEventsInTree.map { events ->
@@ -172,8 +172,16 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             }.toMap()
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
-    /** Collections are events, so their covers come from the same map. */
-    val coversByGroup: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> get() = coversByEvent
+    /**
+     * A collection's own cover.
+     *
+     * No inheritance, unlike an event's: a set has no parent to inherit from, and inheriting from
+     * its members would mean a set of two festivals showing one of them arbitrarily.
+     */
+    val coversByCollection: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> =
+        repository.getAllCollections().map { sets ->
+            sets.mapNotNull { set -> set.ownCover?.let { set.collectionId to it } }.toMap()
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
      * Events with everything the list needs to describe them without a second query per row.
@@ -203,34 +211,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * A group is exactly its events, so its span, count and people are theirs added up. Deriving it
      * a second way from the records would be a second definition of the same number, free to drift.
      */
-    val eventGroups: StateFlow<List<GroupSummary>> = combine(
-        repository.getAllEventGroups(),
-        events
-    ) { groups, summaries ->
-        val byGroup = summaries.groupBy { it.event.parentId }
-        groups.map { group ->
-            // The whole subtree, not just what this collection holds directly. A festival that
-            // holds nothing but days has no events of its own, and reporting that as "0 events,
-            // 0 recordings" describes the row rather than the thing the row stands for.
-            val subtree = inga.bpmetrics.library.EventTree.descendantsOf(groups, group.eventId)
-            GroupSummary(
-                group = group,
-                // `eventId`, not `groupId`. A collection is an event, so its own id is `eventId`;
-                // `groupId` is the legacy column, null on every collection — and `byGroup` is keyed
-                // by parent, so looking up null handed every top-level event to every collection.
-                events = byGroup[group.eventId].orEmpty(),
-                allEvents = subtree.toList().flatMap { byGroup[it].orEmpty() },
-                // Itself excluded — a collection is not inside itself.
-                nestedCollectionCount = subtree.size - 1
-            )
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /** Events belonging to no group, shown alongside the groups so they are not lost. */
-    val ungroupedEvents: StateFlow<List<EventSummary>> = events
-        .map { summaries -> summaries.filter { it.event.parentId == null } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
     /**
      * Recordings filed under no event.
      *
@@ -521,10 +501,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         viewModelScope.launch { repository.setEventGroup(eventId, groupId) }
     }
 
-    fun createEventGroup(name: String) {
-        viewModelScope.launch { repository.createEventGroup(name) }
-    }
-
     /**
      * Files one collection inside another.
      *
@@ -533,17 +509,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * but the guard lives there rather than only in the UI, because a cycle does not throw, it
      * hangs every walk of the tree, and no screen should be the last thing preventing that.
      */
-    fun setCollectionParent(groupId: Long, parentGroupId: Long?) {
-        viewModelScope.launch { repository.setEventGroupParent(groupId, parentGroupId) }
-    }
-
-    fun renameEventGroup(groupId: Long, name: String) {
-        viewModelScope.launch { repository.renameEventGroup(groupId, name) }
-    }
-
-    fun deleteEventGroup(groupId: Long) {
-        viewModelScope.launch { repository.deleteEventGroup(groupId) }
-    }
 
     /** Files the current selection under an event, or unfiles it when [eventId] is null. */
     fun assignSelectedToEvent(eventId: Long?) {
@@ -727,12 +692,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /**
-     * A picture for a whole collection, inherited by every event and recording nested under it.
+     * A picture for a collection.
      *
-     * The broadest place a cover can go: set on "Coachella", every day and every set inside it
-     * carries it until one of them sets its own. Nothing is written downward — see `CoverResolver`.
+     * Its own only. A set has no parent to inherit from and nothing inherits *from* it either: the
+     * events it names live on the timeline and take their covers from the tree, so a set showing
+     * its picture on its members would override what those members already inherit.
      */
-    fun setGroupCover(
+    fun setCollectionCover(
         context: android.content.Context,
         groupId: Long,
         source: android.net.Uri,
@@ -752,13 +718,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /** Re-frames the picture a collection already has, leaving the file alone. */
-    fun setGroupCoverCrop(groupId: Long, cover: inga.bpmetrics.library.Cover) {
+    fun setCollectionCoverCrop(groupId: Long, cover: inga.bpmetrics.library.Cover) {
         viewModelScope.launch {
             repository.setCoverCrop(LibraryRepository.CoverOwner.Collection(groupId), cover)
         }
     }
 
-    fun clearGroupCover(context: android.content.Context, groupId: Long) {
+    fun clearCollectionCover(context: android.content.Context, groupId: Long) {
         viewModelScope.launch {
             repository.clearCover(context, LibraryRepository.CoverOwner.Collection(groupId))
         }
@@ -1129,29 +1095,6 @@ data class EventSummary(
  * Keeping only the direct list is what made a festival holding nothing but days report "0 events,
  * 0 recordings": every count was true of the collection itself and false of what it represents.
  */
-data class GroupSummary(
-    val group: EventEntity,
-    val events: List<EventSummary>,
-    /** Everything in the subtree, this collection's own events included. */
-    val allEvents: List<EventSummary> = events,
-    /** How many collections sit inside this one, at any depth. */
-    val nestedCollectionCount: Int = 0
-) {
-    val eventCount: Int get() = allEvents.size
-    val recordCount: Int get() = allEvents.sumOf { it.recordCount }
-    val people: List<PersonEntity> get() = allEvents.flatMap { it.people }.distinct()
-
-    /** The same figures as an event's, over everything nested inside this collection. */
-    val peakBpm: Int? get() = allEvents.mapNotNull { it.peakBpm }.maxOrNull()
-    val avgBpm: Int? get() = allEvents.mapNotNull { it.avgBpm }
-        .takeIf { it.isNotEmpty() }
-        ?.average()
-        ?.toInt()
-    val span: TimeSpan?
-        get() = allEvents.mapNotNull { it.span }.takeIf { it.isNotEmpty() }
-            ?.let { spans -> TimeSpan(spans.minOf { it.startMs }, spans.maxOf { it.endMs }) }
-}
-
 /** The span a set of recordings covers, or null when there are none. */
 fun List<BpmRecord>.spanOrNull(): TimeSpan? =
     if (isEmpty()) null
