@@ -306,6 +306,89 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /** Who an event's window applies to, for the editor to show as already chosen. */
     fun windowPeople(eventId: Long): Flow<Set<Long>> = repository.windowPeople(eventId)
 
+    // --- Collections, as sets ---
+
+    /**
+     * Every collection with what it resolves to today.
+     *
+     * Resolved rather than stored, through the same [inga.bpmetrics.library.EventTree] walk the
+     * timeline and the export scope use. A set naming a festival covers whatever that festival
+     * holds now — file a recording into one of its days and the set grows, with nothing re-added.
+     */
+    val collections: StateFlow<List<CollectionSummary>> = combine(
+        repository.getAllCollections(),
+        repository.allEventsInTree,
+        repository.records,
+        repository.allCollectionEventLinks(),
+        repository.allCollectionRecordLinks(),
+        peopleById
+    ) { args ->
+        @Suppress("UNCHECKED_CAST")
+        val sets = args[0] as List<inga.bpmetrics.library.CollectionEntity>
+        @Suppress("UNCHECKED_CAST")
+        val events = args[1] as List<EventEntity>
+        @Suppress("UNCHECKED_CAST")
+        val records = args[2] as List<BpmRecord>
+        @Suppress("UNCHECKED_CAST")
+        val eventLinks = args[3] as List<inga.bpmetrics.library.CollectionEventCrossRef>
+        @Suppress("UNCHECKED_CAST")
+        val recordLinks = args[4] as List<inga.bpmetrics.library.CollectionRecordCrossRef>
+        @Suppress("UNCHECKED_CAST")
+        val people = args[5] as Map<Long, PersonEntity>
+        val byId = records.associateBy { it.metadata.recordId }
+        sets.map { set ->
+            val within = inga.bpmetrics.library.CollectionScope.recordsIn(
+                collectionId = set.collectionId,
+                events = events,
+                records = records.map { it.metadata },
+                eventLinks = eventLinks,
+                recordLinks = recordLinks
+            )
+            CollectionSummary(
+                collection = set,
+                people = within.mapNotNull { r -> r.personId?.let { people[it] } }.distinct(),
+                events = inga.bpmetrics.library.CollectionScope.eventsIn(
+                    set.collectionId, events, eventLinks
+                ),
+                records = within.mapNotNull { byId[it.recordId] }
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun createCollection(name: String, withRecords: Set<Long> = emptySet()) {
+        viewModelScope.launch {
+            val id = repository.createCollection(name)
+            if (withRecords.isNotEmpty()) repository.addRecordsToCollection(id, withRecords)
+            clearSelection()
+        }
+    }
+
+    fun renameCollection(collectionId: Long, name: String) {
+        viewModelScope.launch { repository.renameCollection(collectionId, name) }
+    }
+
+    fun deleteCollection(collectionId: Long) {
+        viewModelScope.launch { repository.deleteCollection(collectionId) }
+    }
+
+    fun addSelectionToCollection(collectionId: Long) {
+        viewModelScope.launch {
+            repository.addRecordsToCollection(collectionId, _selectedRecordIds.value)
+            clearSelection()
+        }
+    }
+
+    /** Puts an event in a set, or takes it out. The timeline is unaffected either way. */
+    fun toggleEventInCollection(collectionId: Long, eventId: Long, member: Boolean) {
+        viewModelScope.launch {
+            if (member) repository.addEventToCollection(collectionId, eventId)
+            else repository.removeEventFromCollection(collectionId, eventId)
+        }
+    }
+
+    fun collectionsHoldingEvent(eventId: Long): Flow<Set<Long>> =
+        repository.collectionsHoldingEvent(eventId)
+
     /** Containers the user has opened in the timeline. */
     private val _expandedInTimeline = MutableStateFlow<Set<Long>>(emptySet())
     val expandedInTimeline: StateFlow<Set<Long>> = _expandedInTimeline.asStateFlow()
@@ -922,6 +1005,31 @@ data class LibraryUIState(
  * and multi-select in, [GROUPS] is the arbitrary sets a timeline cannot express.
  */
 enum class LibraryViewMode { TIMELINE, RECORDINGS, GROUPS }
+
+/**
+ * A collection with what it resolves to, for a card to describe it without a second query.
+ *
+ * [events] are the ones the set *names*; [records] is everything those references reach, descendants
+ * included. A card says "2 events · 47 recordings" from these, and both numbers come from the one
+ * tree walk — so the card and an export of the same set contain the same forty-seven.
+ */
+data class CollectionSummary(
+    val collection: inga.bpmetrics.library.CollectionEntity,
+    val events: List<EventEntity>,
+    val records: List<BpmRecord>,
+    val people: List<PersonEntity> = emptyList()
+) {
+    val eventCount: Int get() = events.size
+    val recordCount: Int get() = records.size
+    /** May span months, which is the point of a set rather than a problem with one. */
+    val span: TimeSpan? get() = records.spanOrNull()
+
+    // Derived exactly as an event card derives them, so a set of one festival and that festival
+    // report the same numbers.
+    val peakBpm: Int? get() = records.mapNotNull { it.maxDataPoint?.bpm }.maxOrNull()?.toInt()
+    val avgBpm: Int? get() = records.mapNotNull { it.metadata.avg }
+        .takeIf { it.isNotEmpty() }?.average()?.toInt()
+}
 
 /**
  * An event with what a list row needs to describe it.

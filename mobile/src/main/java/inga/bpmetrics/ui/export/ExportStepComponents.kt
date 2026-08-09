@@ -80,7 +80,7 @@ private enum class SourceKind(val label: String) {
 @Composable
 fun SourceStep(
     events: List<EventEntity>,
-    groups: List<EventEntity>,
+    collections: List<inga.bpmetrics.library.CollectionEntity>,
     recordings: List<BpmRecord>,
     peopleById: Map<Long, PersonEntity>,
     selected: ExportSource,
@@ -147,13 +147,19 @@ fun SourceStep(
                     )
                 }
 
-                SourceKind.GROUPS -> items(groups, key = { "group-${it.eventId}" }) { group ->
-                    val eventCount = events.count { it.parentId == group.eventId }
+                SourceKind.GROUPS -> items(
+                    collections,
+                    key = { "collection-${it.collectionId}" }
+                ) { collection ->
                     SourceRow(
-                        title = group.displayName,
-                        subtitle = "$eventCount event${if (eventCount == 1) "" else "s"}",
-                        isSelected = selected == ExportSource.Group(group.eventId),
-                        onClick = { onSelect(ExportSource.Group(group.eventId)) }
+                        title = collection.displayName,
+                        // Deliberately not a count here. What a set resolves to needs the tree
+                        // walk, and doing it per row while scrolling — or worse, guessing it from
+                        // the link table — is exactly how the picker came to promise one number
+                        // and the export deliver another.
+                        subtitle = "Collection",
+                        isSelected = selected == ExportSource.Group(collection.collectionId),
+                        onClick = { onSelect(ExportSource.Group(collection.collectionId)) }
                     )
                 }
 
@@ -192,7 +198,7 @@ fun SourceStep(
 
             val isEmpty = when (kind) {
                 SourceKind.EVENTS -> events.isEmpty()
-                SourceKind.GROUPS -> groups.isEmpty()
+                SourceKind.GROUPS -> collections.isEmpty()
                 SourceKind.RECORDINGS -> recordings.isEmpty()
             }
             if (isEmpty) {

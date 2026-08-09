@@ -377,15 +377,24 @@ class AnalysisViewModel(
                         ::Library
                     ),
                     repository.effectiveTags,
-                    repository.allEventsInTree
-                ) { library, tags, tree ->
-                    // The whole subtree, over the whole tree, container included. Analysing
-                    // "Coachella" has to mean the festival, its days, every set inside them, and
-                    // anything filed straight onto the festival itself. Walking a collections-only
-                    // list gave a plausible smaller number, which is the worst kind of wrong.
-                    val inScope = inga.bpmetrics.library.EventTree.descendantsOf(tree, groupId)
+                    combine(
+                        repository.allEventsInTree,
+                        repository.allCollectionEventLinks(),
+                        repository.allCollectionRecordLinks()
+                    ) { tree, eventLinks, recordLinks -> Triple(tree, eventLinks, recordLinks) }
+                ) { library, tags, (tree, eventLinks, recordLinks) ->
+                    // A collection, resolved through the same walk its card counts with. References
+                    // are followed now rather than frozen when they were made, so a recording filed
+                    // into one of its events afterwards is in the analysis.
+                    val ids = inga.bpmetrics.library.CollectionScope.recordsIn(
+                        collectionId = groupId,
+                        events = tree,
+                        records = library.records.map { it.metadata },
+                        eventLinks = eventLinks,
+                        recordLinks = recordLinks
+                    ).mapTo(mutableSetOf()) { it.recordId }
                     AnalysisRecord.from(
-                        library.records.filter { it.metadata.eventId in inScope },
+                        library.records.filter { it.metadata.recordId in ids },
                         library.categories,
                         library.watches,
                         library.people,
@@ -394,14 +403,26 @@ class AnalysisViewModel(
                     )
                 }
 
-                val scope = repository.allEventsInTree.map { tree ->
-                    // The count the picker shows and the recordings the analysis uses now come from
-                    // one walk over one list. They were two walks over two different lists, which
-                    // is how the header could say "4 events" over an analysis of six.
-                    val inScope = inga.bpmetrics.library.EventTree.descendantsOf(tree, groupId)
-                    tree.firstOrNull { it.eventId == groupId }
-                        ?.let { group -> AnalysisScope.Group(group, inScope.size - 1) }
-                        ?: AnalysisScope.Unknown
+                // The header and the analysis read the same walk. They were two walks over two
+                // different lists, which is how the header could say "4 events" over an analysis
+                // of six.
+                val scope = combine(
+                    repository.getAllCollections(),
+                    repository.allEventsInTree,
+                    repository.records,
+                    repository.allCollectionEventLinks(),
+                    repository.allCollectionRecordLinks()
+                ) { sets, tree, records, eventLinks, recordLinks ->
+                    sets.firstOrNull { it.collectionId == groupId }?.let { set ->
+                        AnalysisScope.Group(
+                            name = set.displayName,
+                            eventCount = inga.bpmetrics.library.CollectionScope
+                                .eventsIn(groupId, tree, eventLinks).size,
+                            recordCount = inga.bpmetrics.library.CollectionScope.recordsIn(
+                                groupId, tree, records.map { it.metadata }, eventLinks, recordLinks
+                            ).size
+                        )
+                    } ?: AnalysisScope.Unknown
                 }
 
                 return AnalysisViewModel(

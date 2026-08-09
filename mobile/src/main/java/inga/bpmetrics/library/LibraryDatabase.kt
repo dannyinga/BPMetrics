@@ -162,7 +162,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 24
+internal const val LIBRARY_DB_VERSION = 25
 
 @Database(
     entities = [
@@ -177,6 +177,9 @@ internal const val LIBRARY_DB_VERSION = 24
         EventGroupEntity::class,
         EventTagCrossRef::class,
         EventGroupTagCrossRef::class,
+        CollectionEntity::class,
+        CollectionEventCrossRef::class,
+        CollectionRecordCrossRef::class,
         EventWindowPersonCrossRef::class,
         SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class,
@@ -192,6 +195,7 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun watchDao(): WatchDao
     abstract fun personDao(): PersonDao
     abstract fun eventDao(): EventDao
+    abstract fun collectionDao(): CollectionDao
     abstract fun savedAnalysisDao(): SavedAnalysisDao
     abstract fun exportPresetDao(): ExportPresetDao
     abstract fun renderJobDao(): RenderJobDao
@@ -1073,6 +1077,64 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Collections, as arbitrary sets this time.
+         *
+         * Different from what 23→24 folded away, and the difference is the point. Those were
+         * *tiers* — a second container type being used for hierarchy — so they became events,
+         * which is what the tree is for. This is a set: it holds events and recordings by
+         * reference, many-to-many, with no window, no parent and no claim on where anything lives.
+         * "Festivals" holds two festivals months apart while both stay put on the timeline.
+         *
+         * The `type = 'Collection'` marker is cleared from the folded events. It was scaffolding to
+         * keep them listed separately while the old screens caught up, and leaving it would put two
+         * meanings of one word in front of the same user — which is the confusion this whole rework
+         * exists to remove. Their names and their nesting carry everything that mattered; the label
+         * carried nothing.
+         *
+         * No set is created for them. They were containers and they still are, one rung of the
+         * tree each; turning them into sets would throw away the hierarchy 23→24 just rebuilt.
+         */
+        val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `collections` (" +
+                        "`collectionId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`notes` TEXT NOT NULL DEFAULT '', " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`coverPath` TEXT DEFAULT NULL, " +
+                        "`coverCropLeft` REAL DEFAULT NULL, " +
+                        "`coverCropTop` REAL DEFAULT NULL, " +
+                        "`coverCropRight` REAL DEFAULT NULL, " +
+                        "`coverCropBottom` REAL DEFAULT NULL, " +
+                        "`coverBlur` REAL DEFAULT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `collection_events` (" +
+                        "`collectionId` INTEGER NOT NULL, `eventId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`collectionId`, `eventId`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_collection_events_eventId` " +
+                        "ON `collection_events` (`eventId`)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `collection_records` (" +
+                        "`collectionId` INTEGER NOT NULL, `recordId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`collectionId`, `recordId`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_collection_records_recordId` " +
+                        "ON `collection_records` (`recordId`)"
+                )
+
+                db.execSQL("UPDATE events SET type = NULL WHERE type = 'Collection'")
+
+                android.util.Log.i(TAG, "MIGRATION_24_25: collections are sets; tier marker cleared")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -1140,7 +1202,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_20_21,
                         MIGRATION_21_22,
                         MIGRATION_22_23,
-                        MIGRATION_23_24
+                        MIGRATION_23_24,
+                        MIGRATION_24_25
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

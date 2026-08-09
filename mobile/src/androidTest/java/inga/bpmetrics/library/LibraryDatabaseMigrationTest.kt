@@ -1309,6 +1309,112 @@ class LibraryDatabaseMigrationTest {
         db.close()
     }
 
+    // --- 24 -> 25: collections become sets ---
+
+    /**
+     * The tier marker is cleared, so one word does not mean two things.
+     *
+     * 23→24 folded tier-collections into the event tree and marked them `type = 'Collection'` so
+     * the old screens could keep listing them separately. 24→25 introduces a genuinely different
+     * thing under that name — an arbitrary set — and leaving the marker would put both in front of
+     * the same person.
+     */
+    @Test
+    fun migrate24To25_clearsTheTierMarker() {
+        helper.createDatabase(TEST_DB, 24).apply {
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, type) " +
+                    "VALUES (1, 'Griztronics', 100, 'Collection')"
+            )
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, type) " +
+                    "VALUES (2, 'Subtronics', 200, 'Concert')"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, LibraryDatabase.MIGRATION_24_25)
+
+        db.query("SELECT type FROM events WHERE eventId = 1").use {
+            assertTrue(it.moveToFirst())
+            assertTrue(it.isNull(0))
+        }
+        // A type someone actually chose is left alone.
+        db.query("SELECT type FROM events WHERE eventId = 2").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Concert", it.getString(0))
+        }
+
+        db.close()
+    }
+
+    /** Clearing the marker must not disturb the tree those events form. */
+    @Test
+    fun migrate24To25_keepsTheNestingIntact() {
+        helper.createDatabase(TEST_DB, 24).apply {
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, type) " +
+                    "VALUES (1, 'Griztronics', 100, 'Collection')"
+            )
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, parentId, type) " +
+                    "VALUES (2, 'Day 1', 200, 1, 'Collection')"
+            )
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, parentId) " +
+                    "VALUES (3, 'Subtronics', 300, 2)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, LibraryDatabase.MIGRATION_24_25)
+
+        db.query("SELECT parentId FROM events WHERE eventId = 2").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1L, it.getLong(0))
+        }
+        db.query("SELECT parentId FROM events WHERE eventId = 3").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(2L, it.getLong(0))
+        }
+
+        db.close()
+    }
+
+    /** The set tables arrive empty. Nothing is converted into a set; they were containers. */
+    @Test
+    fun migrate24To25_createsEmptyCollectionTables() {
+        helper.createDatabase(TEST_DB, 24).apply {
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, type) " +
+                    "VALUES (1, 'Griztronics', 100, 'Collection')"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, LibraryDatabase.MIGRATION_24_25)
+
+        listOf("collections", "collection_events", "collection_records").forEach { table ->
+            db.query("SELECT COUNT(*) FROM $table").use {
+                it.moveToFirst()
+                assertEquals("$table should start empty", 0, it.getInt(0))
+            }
+        }
+
+        db.close()
+    }
+
+    @Test
+    fun migrate24To25_isIdempotent() {
+        helper.createDatabase(TEST_DB, 24).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, LibraryDatabase.MIGRATION_24_25)
+
+        LibraryDatabase.MIGRATION_24_25.migrate(db)
+
+        assertNotNull(db)
+        db.close()
+    }
+
     /** A library with no collections migrates to a library with no collections. */
     @Test
     fun migrate23To24_withNothingToFold() {

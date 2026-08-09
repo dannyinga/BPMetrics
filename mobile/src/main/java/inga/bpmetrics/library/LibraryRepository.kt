@@ -77,6 +77,7 @@ class LibraryRepository(
     private val watchDao = database.watchDao()
     private val personDao = database.personDao()
     private val eventDao = database.eventDao()
+    private val collectionDao = database.collectionDao()
     private val savedAnalysisDao = database.savedAnalysisDao()
     private val presetDao = database.exportPresetDao()
 
@@ -193,6 +194,7 @@ class LibraryRepository(
         Log.d(tag, "Deleting record and data points for ID: $id")
         recordDao.deleteRecordById(id)
         recordDao.deleteDataPointsByRecordId(id)
+        collectionDao.forgetRecord(id)
         reconcileMembership()
     }
 
@@ -908,6 +910,9 @@ class LibraryRepository(
     suspend fun deleteEvent(eventId: Long) {
         eventDao.unfileRecordsForEvent(eventId)
         eventDao.deleteEvent(eventId)
+        // A set naming it must forget it, or the set keeps a reference to nothing and quietly
+        // resolves to fewer recordings than it says it holds.
+        collectionDao.forgetEvent(eventId)
         reconcileMembership()
         Log.d(tag, "Deleted event $eventId; its recordings are unfiled, not removed")
     }
@@ -948,6 +953,84 @@ class LibraryRepository(
     //
     // The names are unchanged so the screens did not all have to move at once. They read a little
     // oddly against `EventEntity`, and go when the library screen is redesigned in Sprint 3.
+
+    // --- Collections, as sets ---
+    //
+    // A set holds events and recordings by reference, many-to-many, with no window and no parent.
+    // Everything derived — what it contains, its span, its people — comes from [CollectionScope]
+    // walking the same [EventTree] the timeline and the export scope walk. A set is a different
+    // question asked of one walk, not a second walk.
+
+    fun getAllCollections(): Flow<List<CollectionEntity>> = collectionDao.getAllFlow()
+
+    suspend fun getCollection(collectionId: Long): CollectionEntity? =
+        collectionDao.get(collectionId)
+
+    fun allCollectionEventLinks(): Flow<List<CollectionEventCrossRef>> =
+        collectionDao.allEventLinksFlow()
+
+    fun allCollectionRecordLinks(): Flow<List<CollectionRecordCrossRef>> =
+        collectionDao.allRecordLinksFlow()
+
+    suspend fun createCollection(name: String): Long =
+        collectionDao.insert(
+            CollectionEntity(name = name.trim(), createdAt = System.currentTimeMillis())
+        ).also { Log.d(tag, "Created collection '${name.trim()}' as $it") }
+
+    suspend fun renameCollection(collectionId: Long, name: String) =
+        collectionDao.rename(collectionId, name.trim())
+
+    suspend fun setCollectionNotes(collectionId: Long, notes: String) =
+        collectionDao.updateNotes(collectionId, notes)
+
+    /**
+     * Removes a set. Nothing it named goes with it.
+     *
+     * The whole difference from deleting an event: a set was a second view over things that live
+     * elsewhere, so this removes a grouping and no data. No reconcile either — membership in a set
+     * has never had anything to do with where a recording lives.
+     */
+    suspend fun deleteCollection(collectionId: Long) {
+        collectionDao.clearEvents(collectionId)
+        collectionDao.clearRecords(collectionId)
+        collectionDao.delete(collectionId)
+        Log.d(tag, "Deleted collection $collectionId; what it held is untouched")
+    }
+
+    suspend fun addEventToCollection(collectionId: Long, eventId: Long) =
+        collectionDao.addEvent(CollectionEventCrossRef(collectionId, eventId))
+
+    suspend fun removeEventFromCollection(collectionId: Long, eventId: Long) =
+        collectionDao.removeEvent(collectionId, eventId)
+
+    suspend fun addRecordsToCollection(collectionId: Long, recordIds: Collection<Long>) {
+        recordIds.forEach { collectionDao.addRecord(CollectionRecordCrossRef(collectionId, it)) }
+    }
+
+    suspend fun removeRecordFromCollection(collectionId: Long, recordId: Long) =
+        collectionDao.removeRecord(collectionId, recordId)
+
+    fun collectionsHoldingEvent(eventId: Long): Flow<Set<Long>> =
+        collectionDao.collectionsHoldingEventFlow(eventId).map { it.toSet() }
+
+    fun collectionsHoldingRecord(recordId: Long): Flow<Set<Long>> =
+        collectionDao.collectionsHoldingRecordFlow(recordId).map { it.toSet() }
+
+    /**
+     * Every recording in a collection, references followed.
+     *
+     * Through [CollectionScope], which resolves the tree at the point of asking rather than storing
+     * descendants — so a recording filed into a day tomorrow is in "compare every festival"
+     * tomorrow, without anyone re-adding anything.
+     */
+    suspend fun recordsInCollection(collectionId: Long): List<BpmRecordEntity> =
+        CollectionScope.recordsIn(
+            collectionId = collectionId,
+            events = eventDao.getAllEvents(),
+            records = recordDao.getAllRecordEntities(),
+            eventLinks = collectionDao.allEventLinks(),
+            recordLinks = collectionDao.allRecordLinks()
+        )
 
     /** Every collection, newest first. */
     fun getAllEventGroups(): Flow<List<EventEntity>> =

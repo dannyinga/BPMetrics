@@ -22,14 +22,25 @@ sealed interface AnalysisScope {
     /** One line under the title saying what was included. Empty when there is nothing to add. */
     val detail: String
 
-    /** A group of events. */
+    /**
+     * A collection: an arbitrary set of events and recordings.
+     *
+     * "Compare every festival" is the same machinery as analysing one event, pointed at a set
+     * whose members did not happen together. What it resolves to is decided by
+     * [inga.bpmetrics.library.CollectionScope], so the count here and the recordings analysed come
+     * from one walk.
+     */
     data class Group(
-        val group: EventEntity,
-        val eventCount: Int
+        val name: String,
+        val eventCount: Int,
+        val recordCount: Int
     ) : AnalysisScope {
-        override val title: String get() = group.displayName
+        override val title: String get() = name
         override val detail: String
-            get() = "$eventCount event${if (eventCount == 1) "" else "s"}"
+            get() = buildString {
+                if (eventCount > 0) append("$eventCount event${if (eventCount == 1) "" else "s"}, ")
+                append("$recordCount recording${if (recordCount == 1) "" else "s"}")
+            }
     }
 
     /**

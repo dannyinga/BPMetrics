@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -218,6 +219,10 @@ fun LibraryScreen(
     val timeline by viewModel.timeline.collectAsStateWithLifecycle()
     val eventSummariesById by viewModel.eventSummariesById.collectAsStateWithLifecycle()
     val timelineExpanded by viewModel.expandedInTimeline.collectAsStateWithLifecycle()
+    val collections by viewModel.collections.collectAsStateWithLifecycle()
+    var renamingCollection by remember { mutableStateOf<CollectionSummary?>(null) }
+    var deletingCollection by remember { mutableStateOf<CollectionSummary?>(null) }
+    var addingSelectionToCollection by remember { mutableStateOf(false) }
     val ungroupedEvents by viewModel.ungroupedEvents.collectAsStateWithLifecycle()
     val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
 
@@ -442,6 +447,23 @@ fun LibraryScreen(
                                 onClick = {
                                     showSelectionMenu = false
                                     showAddToEventDialog = true
+                                }
+                            )
+
+                            // Distinct from filing, and worth two menu items rather than one:
+                            // an event is where a recording *lives* and it has exactly one, a
+                            // collection is a grouping it can be in any number of at once.
+                            DropdownMenuItem(
+                                text = { Text("Add to collection") },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.LibraryBooks,
+                                        contentDescription = null
+                                    )
+                                },
+                                onClick = {
+                                    showSelectionMenu = false
+                                    addingSelectionToCollection = true
                                 }
                             )
 
@@ -806,23 +828,13 @@ fun LibraryScreen(
                     tile = tile
                 )
 
-                LibraryViewMode.GROUPS -> GroupsList(
-                    groups = eventGroups,
-                    ungrouped = ungroupedEvents,
-                    expandedIds = expandedIds,
-                    onToggleExpand = { id ->
-                        expandedIds = if (id in expandedIds) expandedIds - id else expandedIds + id
-                    },
-                    onCreateGroup = { showCreateGroupDialog = true },
-                    onRenameGroup = { renamingGroup = it },
-                    onDeleteGroup = { deletingGroup = it },
-                    onMoveCollection = { movingCollection = it },
-                    onSetGroupCover = { coveringGroup = it; pickGroupCover() },
-                    onFrameGroupCover = { framingGroup = it },
-                    onRemoveGroupCover = { viewModel.clearGroupCover(context, it.group.eventId) },
-                    groupCovers = coversByGroup,
-                    onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
-                    onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
+                LibraryViewMode.GROUPS -> CollectionsList(
+                    collections = collections,
+                    covers = emptyMap(),
+                    onCreate = { showCreateGroupDialog = true },
+                    onOpen = { navController.navigate("${Routes.GROUP_DETAIL}/$it") },
+                    onRename = { renamingCollection = it },
+                    onDelete = { deletingCollection = it }
                 )
             }
         }
@@ -996,10 +1008,12 @@ fun LibraryScreen(
             title = "New collection",
             label = "Collection name",
             confirmLabel = "Create",
-            supporting = "A collection gathers events that belong together — a festival, a day of one, a tour. Collections can hold other collections.",
+            supporting = "A collection gathers things that belong together but did not happen " +
+                "together — every festival, or everything with Kyle. Whatever you add stays " +
+                "exactly where it is on the timeline.",
             onDismiss = { showCreateGroupDialog = false },
             onConfirm = { name ->
-                viewModel.createEventGroup(name)
+                viewModel.createCollection(name)
                 showCreateGroupDialog = false
             }
         )
@@ -1129,6 +1143,105 @@ fun LibraryScreen(
             }
         )
     }
+
+    // --- Collections, as sets ---
+
+    renamingCollection?.let { summary ->
+        NameDialog(
+            title = "Rename collection",
+            label = "Collection name",
+            initial = summary.collection.name,
+            onDismiss = { renamingCollection = null },
+            onConfirm = { name ->
+                viewModel.renameCollection(summary.collection.collectionId, name)
+                renamingCollection = null
+            }
+        )
+    }
+
+    deletingCollection?.let { summary ->
+        DeleteConfirmDialog(
+            title = "Delete ${summary.collection.displayName}?",
+            // Worth stating plainly: this is the one delete in the app that removes no data, and
+            // people reasonably assume otherwise from every other one.
+            message = "This removes the grouping only. Its " +
+                "${summary.recordCount} recording${if (summary.recordCount == 1) "" else "s"} " +
+                "stay exactly where they are on the timeline.",
+            onDismiss = { deletingCollection = null },
+            onConfirm = {
+                viewModel.deleteCollection(summary.collection.collectionId)
+                deletingCollection = null
+            }
+        )
+    }
+
+    if (addingSelectionToCollection) {
+        AddToCollectionDialog(
+            count = selectedRecordIds.size,
+            collections = collections,
+            onDismiss = { addingSelectionToCollection = false },
+            onPick = {
+                viewModel.addSelectionToCollection(it)
+                addingSelectionToCollection = false
+            },
+            onCreate = {
+                addingSelectionToCollection = false
+                showCreateGroupDialog = true
+            }
+        )
+    }
+}
+
+/**
+ * Puts the current selection into a set.
+ *
+ * Deliberately additive: no "remove from collection" here, because a recording can be in several at
+ * once and this dialog has no way to know which one someone meant. Removing is done from the set,
+ * where the question is unambiguous.
+ */
+@Composable
+private fun AddToCollectionDialog(
+    count: Int,
+    collections: List<CollectionSummary>,
+    onDismiss: () -> Unit,
+    onPick: (Long) -> Unit,
+    onCreate: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add $count recording${if (count == 1) "" else "s"} to…") },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                DropdownMenuItem(
+                    text = { Text("New collection…") },
+                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    onClick = onCreate
+                )
+                if (collections.isNotEmpty()) HorizontalDivider()
+                collections.forEach { summary ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(summary.collection.displayName)
+                                Text(
+                                    countLabelPublic(summary.recordCount, "recording"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
+                        onClick = { onPick(summary.collection.collectionId) }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 /** The groups view: groups, then the events that belong to none of them. */

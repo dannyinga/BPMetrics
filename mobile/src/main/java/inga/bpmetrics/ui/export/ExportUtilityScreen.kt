@@ -101,7 +101,7 @@ fun ExportUtilityScreen(
     }
     val events by remember { repository.getAllEvents() }
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val groups by remember { repository.getAllEventGroups() }
+    val collections by remember { repository.getAllCollections() }
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val people by remember { repository.getAllPeople() }
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -346,7 +346,7 @@ fun ExportUtilityScreen(
             when (step) {
                 ExportStep.SOURCE -> SourceStep(
                     events = events,
-                    groups = groups,
+                    collections = collections,
                     recordings = allRecords,
                     peopleById = peopleById,
                     selected = source,

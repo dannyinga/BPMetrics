@@ -430,21 +430,27 @@ class ExportUtilityViewModel(
     val records: StateFlow<List<BpmRecord>> = combine(
         repository.records,
         _source,
-        repository.allEventsInTree
-    ) { library, source, events ->
+        repository.allEventsInTree,
+        repository.allCollectionEventLinks(),
+        repository.allCollectionRecordLinks()
+    ) { library, source, events, eventLinks, recordLinks ->
         when (source) {
             is ExportSource.None -> emptyList()
             is ExportSource.Recordings -> library.filter { it.metadata.recordId in source.recordIds }
             is ExportSource.Event -> library.filter { it.metadata.eventId == source.eventId }
             is ExportSource.Group -> {
-                // The whole subtree, walked over the whole tree, and including the container
-                // itself. Both halves matter, and both were wrong: walking a collections-only list
-                // missed any event nested under another event, and taking only the events beneath
-                // the container missed recordings filed straight onto it. Either way the export
-                // came out short without saying so.
-                val inScope = inga.bpmetrics.library.EventTree
-                    .descendantsOf(events, source.groupId)
-                library.filter { it.metadata.eventId in inScope }
+                // A collection, resolved through the same walk its card counts with — so a set
+                // reporting 47 recordings exports those 47. References are followed now rather
+                // than frozen when they were made, so a recording filed into one of its events
+                // last night is in this export without anyone re-adding anything.
+                val ids = inga.bpmetrics.library.CollectionScope.recordsIn(
+                    collectionId = source.groupId,
+                    events = events,
+                    records = library.map { it.metadata },
+                    eventLinks = eventLinks,
+                    recordLinks = recordLinks
+                ).mapTo(mutableSetOf()) { it.recordId }
+                library.filter { it.metadata.recordId in ids }
             }
             // Resolved by id against the library, so a recording deleted since the analysis was
             // saved simply is not offered — an export cannot render a curve that is gone.
@@ -459,9 +465,9 @@ class ExportUtilityViewModel(
     val sourceLabel: StateFlow<String> = combine(
         _source,
         repository.getAllEvents(),
-        repository.getAllEventGroups(),
+        repository.getAllCollections(),
         labelOverride
-    ) { source, events, groups, override ->
+    ) { source, events, collections, override ->
         override ?: when (source) {
             is ExportSource.None -> ""
             is ExportSource.Recordings ->
@@ -469,7 +475,7 @@ class ExportUtilityViewModel(
             is ExportSource.Event ->
                 events.firstOrNull { it.eventId == source.eventId }?.displayName.orEmpty()
             is ExportSource.Group ->
-                groups.firstOrNull { it.eventId == source.groupId }?.displayName.orEmpty()
+                collections.firstOrNull { it.collectionId == source.groupId }?.displayName.orEmpty()
             is ExportSource.SavedAnalysis -> savedAnalysisName.value
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
@@ -488,15 +494,15 @@ class ExportUtilityViewModel(
         _source,
         records,
         repository.getAllEvents(),
-        repository.getAllEventGroups(),
+        repository.getAllCollections(),
         combine(repository.getAllPeople(), labelOverride) { people, override -> people to override }
-    ) { source, records, events, groups, (people, override) ->
+    ) { source, records, events, collections, (people, override) ->
         override?.takeIf { it.isNotBlank() } ?: when (source) {
             is ExportSource.None -> ""
             is ExportSource.Event ->
                 events.firstOrNull { it.eventId == source.eventId }?.displayName.orEmpty()
             is ExportSource.Group ->
-                groups.firstOrNull { it.eventId == source.groupId }?.displayName.orEmpty()
+                collections.firstOrNull { it.collectionId == source.groupId }?.displayName.orEmpty()
             is ExportSource.SavedAnalysis -> savedAnalysisName.value
             is ExportSource.Recordings -> {
                 val single = records.singleOrNull()
