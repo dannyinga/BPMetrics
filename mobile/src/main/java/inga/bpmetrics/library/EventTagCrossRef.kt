@@ -37,32 +37,3 @@ data class EventTagCrossRef(
     val tagId: Long
 )
 
-/**
- * A tag applied to a group, inherited by every event in it and every recording in those.
- *
- * Same read-time resolution as [EventTagCrossRef]. This is the level a festival name belongs at:
- * applied once, true of everything underneath, and correct again the moment an event is moved out.
- */
-@Entity(
-    tableName = "event_group_tag_cross_ref",
-    primaryKeys = ["groupId", "tagId"],
-    foreignKeys = [
-        ForeignKey(
-            entity = EventGroupEntity::class,
-            parentColumns = ["groupId"],
-            childColumns = ["groupId"],
-            onDelete = ForeignKey.CASCADE
-        ),
-        ForeignKey(
-            entity = TagEntity::class,
-            parentColumns = ["tagId"],
-            childColumns = ["tagId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
-    indices = [Index(value = ["tagId"])]
-)
-data class EventGroupTagCrossRef(
-    val groupId: Long,
-    val tagId: Long
-)

@@ -45,9 +45,10 @@ class BpmRecordTileTest {
         val min = BpmDataPointEntity(1, 1, 1000, 60.0)
         val max = BpmDataPointEntity(2, 1, 5000, 90.0)
 
+        // A tile draws no curve, so the summary form is what it takes — the readings are not in
+        // the library stream that feeds it.
         return BpmRecord(
             metadata = metadata,
-            dataPoints = listOf(min, max),
             minDataPoint = min,
             maxDataPoint = max,
             tags = tags

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EffectiveTagsResolver
 import inga.bpmetrics.library.EventEntity
@@ -18,6 +19,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -30,7 +33,8 @@ import kotlinx.coroutines.launch
 data class EventDetailState(
     val event: EventEntity? = null,
     val group: EventEntity? = null,
-    val records: List<BpmRecord> = emptyList(),
+    /** With readings, because this page draws a merged curve over them. */
+    val records: List<BpmRecordWithPoints> = emptyList(),
     val people: Map<Long, PersonEntity> = emptyMap(),
     val analysis: ConcurrentAnalysis = ConcurrentAnalysis(),
     val isLoading: Boolean = true
@@ -66,8 +70,21 @@ class EventDetailViewModel(
     private val eventFlow = repository.getAllEvents()
         .map { events -> events.firstOrNull { it.eventId == eventId } }
 
+    /**
+     * This event's recordings, with their readings.
+     *
+     * The event page draws a merged curve, so it is one of the four places that genuinely needs
+     * them. Which recordings is answered from the library stream — a question about rows — and
+     * only then are the readings for those rows loaded. Loading the library's readings to find one
+     * evening's is what §9 of the product doc is about.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val recordsFlow = repository.records
-        .map { records -> records.filter { it.metadata.eventId == eventId } }
+        .map { records ->
+            records.filter { it.metadata.eventId == eventId }.map { it.metadata.recordId }
+        }
+        .distinctUntilChanged()
+        .mapLatest { ids -> repository.recordsWithPoints(ids) }
 
     val state: StateFlow<EventDetailState> = combine(
         eventFlow,

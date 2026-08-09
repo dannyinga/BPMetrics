@@ -167,7 +167,6 @@ class EffectiveTagsResolverTest {
             durationMs = 1000L,
             eventId = eventId
         ),
-        dataPoints = emptyList(),
         minDataPoint = null,
         maxDataPoint = null,
         tags = tags

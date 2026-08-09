@@ -1,7 +1,7 @@
 package inga.bpmetrics.export
 
 import android.graphics.RectF
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,7 +31,7 @@ class ExportPresetTest {
         every { android.net.Uri.parse(any()) } returns io.mockk.mockk(relaxed = true)
     }
 
-    private fun record(id: Long) = BpmRecord(
+    private fun record(id: Long) = BpmRecordWithPoints(
         metadata = BpmRecordEntity(
             recordId = id,
             title = "Record $id",

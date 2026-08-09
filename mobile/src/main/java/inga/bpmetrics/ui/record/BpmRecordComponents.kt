@@ -397,3 +397,9 @@ fun BpmRecord.watchLabel(watchName: String?): String =
     watchName?.takeIf { it.isNotBlank() }
         ?: metadata.deviceId.takeIf { it.isNotBlank() }
         ?: "Watch"
+
+/** The same, for a recording carrying its readings. See [BpmRecord.watchLabel]. */
+fun inga.bpmetrics.library.BpmRecordWithPoints.watchLabel(watchName: String?): String =
+    watchName?.takeIf { it.isNotBlank() }
+        ?: metadata.deviceId.takeIf { it.isNotBlank() }
+        ?: "Watch"

@@ -218,7 +218,6 @@ fun AnalysisScreen(
             when (section) {
                 AnalysisSection.SUMMARY -> SummarySection(
                     uiState = uiState,
-                    tagging = viewModel.tagging,
                     axes = availableAxes,
                     selectedAxis = selectedAxis,
                     lanes = lanes,
@@ -379,7 +378,6 @@ private fun SectionBar(
 @Composable
 private fun SummarySection(
     uiState: AnalysisUiState,
-    tagging: ScopeTagging?,
     axes: List<SplitAxis>,
     selectedAxis: SplitAxis?,
     lanes: List<SplitLane>,
@@ -429,69 +427,10 @@ private fun SummarySection(
         }
         // Only a group can carry tags. A filter describes a selection rather than an occasion, and
         // a saved analysis is frozen — offering the action there would have nowhere to write.
-        tagging?.let { item { GroupTags(it) } }
         item { Highlights(uiState) }
     }
 }
 
-/**
- * Tags on the group, which reach every event in it and every recording in those.
- *
- * This is the level a festival name belongs at: applied once, true of everything underneath, and
- * correct again the moment an event is moved out — because nothing was written downward.
- */
-@Composable
-private fun GroupTags(tagging: ScopeTagging) {
-    val tags by tagging.tags.collectAsStateWithLifecycle(initialValue = emptyList())
-    val scope = rememberCoroutineScope()
-    var showDialog by remember { mutableStateOf(false) }
-
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Tags", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            IconButton(onClick = { showDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Tag this collection")
-            }
-        }
-        if (tags.isEmpty()) {
-            Text(
-                "A tag here applies to everything inside this collection, however deeply it is nested.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                tags.forEach { effective ->
-                    EffectiveTagChip(
-                        effective = effective,
-                        onRemove = { scope.launch { tagging.removeTag(effective.tag.tagId) } }
-                    )
-                }
-            }
-        }
-    }
-
-    if (showDialog) {
-        val categories by tagging.categories.collectAsStateWithLifecycle(initialValue = emptyList())
-        TagSelectionDialog(
-            onDismiss = { showDialog = false },
-            onSave = { selected ->
-                scope.launch { tagging.setTags(selected) }
-                showDialog = false
-            },
-            categories = categories,
-            getTagsByCategoryFlow = { tagging.tagsInCategory(it) },
-            onCreateTag = { axis, name, onMade ->
-                scope.launch { tagging.createTag(axis, name)?.let(onMade) }
-            },
-            initialSelectedTagIds = tags.map { it.tag.tagId }
-        )
-    }
-}
 
 /**
  * The two or three facts worth knowing before looking at anything else.

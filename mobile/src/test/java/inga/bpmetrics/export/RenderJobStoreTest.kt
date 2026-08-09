@@ -1,6 +1,6 @@
 package inga.bpmetrics.export
 
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -16,7 +16,7 @@ import org.junit.Test
  */
 class RenderJobStoreTest {
 
-    private fun record(id: Long) = BpmRecord(
+    private fun record(id: Long) = BpmRecordWithPoints(
         metadata = BpmRecordEntity(
             recordId = id,
             title = "Recording $id",

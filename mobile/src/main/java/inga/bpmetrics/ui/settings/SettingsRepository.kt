@@ -55,10 +55,8 @@ class SettingsRepository(context: Context) {
         val DEFAULT_TIME_ZONE = stringPreferencesKey("default_timezone")
 
         /** Which of the library's three views was last open. */
-        val LIBRARY_VIEW_MODE = stringPreferencesKey("library_view_mode")
 
         /** Whether saved same-time analyses have already been turned into events. */
-        val CONCURRENT_ANALYSES_CONVERTED = booleanPreferencesKey("concurrent_analyses_converted")
 
         /** Recordings the user has said, permanently, not to suggest an event for. */
         // "dismissed_suggestion_records" lived here until event suggestions retired in TX-2.1.
@@ -107,32 +105,6 @@ class SettingsRepository(context: Context) {
         )
     }
 
-    /**
-     * The library view last used, so the app reopens where it was left.
-     *
-     * Stored as the enum's name rather than its ordinal: reordering or inserting a mode later would
-     * silently reassign everyone's saved choice to a different view.
-     */
-    val libraryViewMode: Flow<String> = dataStore.data
-        .map { it[PreferencesKeys.LIBRARY_VIEW_MODE] ?: "RECORDINGS" }
-
-    suspend fun setLibraryViewMode(mode: String) {
-        dataStore.edit { it[PreferencesKeys.LIBRARY_VIEW_MODE] = mode }
-    }
-
-    /**
-     * Whether the one-time conversion of saved same-time analyses into events has run.
-     *
-     * A preference rather than a schema version because the conversion is not a schema change and
-     * must be allowed to fail and retry. A Room migration gets one attempt, and failing it means an
-     * app that will not open.
-     */
-    suspend fun hasConvertedConcurrentAnalyses(): Boolean =
-        dataStore.data.first()[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] ?: false
-
-    suspend fun setConvertedConcurrentAnalyses() {
-        dataStore.edit { it[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] = true }
-    }
 
     /**
      * The export appearance last used, as a serialized preset.

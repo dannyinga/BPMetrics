@@ -167,12 +167,12 @@ fun EventAnalysisScreen(
                 actions = {
                     if (state.records.isNotEmpty()) {
                         IconButton(
-                            onClick = { onExportImage(state.records, state.event?.displayName) }
+                            onClick = { onExportImage(state.records.map { it.summary }, state.event?.displayName) }
                         ) {
                             Icon(Icons.Default.Image, contentDescription = "Export as image")
                         }
                         IconButton(
-                            onClick = { onExportVideo(state.records, state.event?.displayName) }
+                            onClick = { onExportVideo(state.records.map { it.summary }, state.event?.displayName) }
                         ) {
                             Icon(Icons.Default.Movie, contentDescription = "Export as video")
                         }
@@ -391,12 +391,12 @@ fun EventAnalysisScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) {
                         BpmRecordTile(
-                            record = record,
+                            record = record.summary,
                             wearer = record.metadata.personId?.let { state.people[it] },
                             onClick = { onOpenRecord(record.metadata.recordId) }
                         )
                     }
-                    IconButton(onClick = { removing = record }) {
+                    IconButton(onClick = { removing = record.summary }) {
                         Icon(Icons.Default.Close, contentDescription = "Remove from event")
                     }
                 }

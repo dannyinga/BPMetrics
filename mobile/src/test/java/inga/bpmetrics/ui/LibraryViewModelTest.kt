@@ -28,6 +28,12 @@ class LibraryViewModelTest {
     private val eventsFlow = MutableStateFlow<List<EventEntity>>(emptyList())
     private val locationsFlow =
         MutableStateFlow<List<inga.bpmetrics.library.LocationEntity>>(emptyList())
+    private val collectionsFlow =
+        MutableStateFlow<List<inga.bpmetrics.library.CollectionEntity>>(emptyList())
+    private val collectionEventsFlow =
+        MutableStateFlow<List<inga.bpmetrics.library.CollectionEventCrossRef>>(emptyList())
+    private val collectionRecordsFlow =
+        MutableStateFlow<List<inga.bpmetrics.library.CollectionRecordCrossRef>>(emptyList())
 
     @Before
     fun setup() {
@@ -43,6 +49,11 @@ class LibraryViewModelTest {
         // `filteredRecords` reads has to be stubbed, even where this test does not care about it.
         every { repository.allEventsInTree } returns eventsFlow
         every { repository.getAllLocations() } returns locationsFlow
+        // The collection graph, which the filter now reads so its collection term resolves through
+        // Scope rather than deriving membership a second time.
+        every { repository.getAllCollections() } returns collectionsFlow
+        every { repository.allCollectionEventLinks() } returns collectionEventsFlow
+        every { repository.allCollectionRecordLinks() } returns collectionRecordsFlow
     }
 
     @Test
@@ -52,7 +63,6 @@ class LibraryViewModelTest {
         val testRecords = listOf(
             BpmRecord(
                 metadata = BpmRecordEntity(recordId = 1, title = "Test", date = 0, startTime = 0, endTime = 0, durationMs = 0),
-                dataPoints = emptyList(),
                 minDataPoint = null,
                 maxDataPoint = null
             )

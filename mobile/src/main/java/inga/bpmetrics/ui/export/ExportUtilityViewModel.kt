@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.export.ExportPreset
 import inga.bpmetrics.export.TimelineImageExporter
 import inga.bpmetrics.export.VideoExporter
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -82,7 +84,7 @@ data class ImageCrop(
 /** One image, and what goes on it. */
 data class ImagePlanEntry(
     val label: String,
-    val records: List<inga.bpmetrics.library.BpmRecord>,
+    val records: List<inga.bpmetrics.library.BpmRecordWithPoints>,
     val eventId: Long? = null
 ) {
     val peopleCount: Int get() = records.mapNotNull { it.metadata.personId }.distinct().size
@@ -97,7 +99,7 @@ data class ImagePlanEntry(
          * case wrong means either an image nobody asked for or a person silently missing from one.
          */
         fun plan(
-            records: List<inga.bpmetrics.library.BpmRecord>,
+            records: List<inga.bpmetrics.library.BpmRecordWithPoints>,
             events: List<inga.bpmetrics.library.EventEntity>,
             splitByEvent: Boolean,
             /** What the scope is called: the recording, the event, or the group. */
@@ -427,13 +429,36 @@ class ExportUtilityViewModel(
      * Live rather than captured, so filing one more recording into the chosen event includes it
      * without the user starting again.
      */
-    val records: StateFlow<List<BpmRecord>> = combine(
-        repository.records,
-        _source,
-        repository.allEventsInTree,
-        repository.allCollectionEventLinks(),
-        repository.allCollectionRecordLinks()
-    ) { library, source, events, eventLinks, recordLinks ->
+    /**
+     * The recordings the chosen source resolves to, without their readings.
+     *
+     * Scope resolution is a question about rows — which recordings — and answering it does not need
+     * a single reading. [records] loads those, once, for whatever this settles on.
+     */
+    private val scopeSummaries: StateFlow<List<BpmRecord>> = combine(
+        combine(
+            repository.records,
+            _source,
+            repository.allEventsInTree,
+            repository.allCollectionEventLinks(),
+            repository.allCollectionRecordLinks()
+        ) { library, source, events, eventLinks, recordLinks ->
+            listOf(library, source, events, eventLinks, recordLinks)
+        },
+        // The sets themselves, so a smart collection resolves its rule rather than exporting
+        // nothing. Membership comes from Scope here as it does everywhere else.
+        repository.getAllCollections()
+    ) { parts, collections ->
+        @Suppress("UNCHECKED_CAST")
+        val library = parts[0] as List<BpmRecord>
+        val source = parts[1] as ExportSource
+        @Suppress("UNCHECKED_CAST")
+        val events = parts[2] as List<inga.bpmetrics.library.EventEntity>
+        @Suppress("UNCHECKED_CAST")
+        val eventLinks = parts[3] as List<inga.bpmetrics.library.CollectionEventCrossRef>
+        @Suppress("UNCHECKED_CAST")
+        val recordLinks = parts[4] as List<inga.bpmetrics.library.CollectionRecordCrossRef>
+
         when (source) {
             is ExportSource.None -> emptyList()
             is ExportSource.Recordings -> library.filter { it.metadata.recordId in source.recordIds }
@@ -443,13 +468,16 @@ class ExportUtilityViewModel(
                 // reporting 47 recordings exports those 47. References are followed now rather
                 // than frozen when they were made, so a recording filed into one of its events
                 // last night is in this export without anyone re-adding anything.
-                val ids = inga.bpmetrics.library.CollectionScope.recordsIn(
-                    collectionId = source.groupId,
-                    events = events,
-                    records = library.map { it.metadata },
-                    eventLinks = eventLinks,
-                    recordLinks = recordLinks
-                ).mapTo(mutableSetOf()) { it.recordId }
+                val ids = inga.bpmetrics.library.Scope.recordsIn(
+                    inga.bpmetrics.library.ScopeRef.Collection(source.groupId),
+                    inga.bpmetrics.library.Library(
+                        records = library,
+                        events = events,
+                        collections = collections,
+                        collectionEvents = eventLinks,
+                        collectionRecords = recordLinks
+                    )
+                ).mapTo(mutableSetOf()) { it.metadata.recordId }
                 library.filter { it.metadata.recordId in ids }
             }
             // Resolved by id against the library, so a recording deleted since the analysis was
@@ -458,6 +486,20 @@ class ExportUtilityViewModel(
                 .let { ids -> library.filter { it.metadata.recordId in ids } }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * The recordings the chosen source resolves to, with their readings.
+     *
+     * The readings are loaded here and only here on this screen, for the scope that was actually
+     * chosen — an export draws curves, so it is one of the four places that genuinely needs them.
+     * Reading the whole library to render three recordings is what §9 of the product doc is about.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val records: StateFlow<List<BpmRecordWithPoints>> = scopeSummaries
+        .mapLatest { chosen ->
+            repository.recordsWithPoints(chosen.map { it.metadata.recordId })
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val savedAnalysisRecordIds = MutableStateFlow<Set<Long>>(emptySet())
 
@@ -706,7 +748,7 @@ class ExportUtilityViewModel(
      * one-off cannot drift apart.
      */
     fun buildConfig(
-        forRecords: List<BpmRecord>,
+        forRecords: List<BpmRecordWithPoints>,
         overlay: android.net.Uri?,
         colours: Map<Long, Int>,
         /** Wearers' faces for the pills, already decoded and cropped. See `recordPhotos`. */
@@ -1057,7 +1099,7 @@ class ExportUtilityViewModel(
      */
     private fun sparkFor(
         selection: ClipSelection,
-        allRecords: List<BpmRecord>,
+        allRecords: List<BpmRecordWithPoints>,
         watches: List<inga.bpmetrics.library.WatchEntity>,
         people: List<inga.bpmetrics.library.PersonEntity>
     ): List<ClipSpark> {

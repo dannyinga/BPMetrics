@@ -2,7 +2,7 @@ package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.library.clock
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmZones
 import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.library.PersonColors
@@ -192,7 +192,7 @@ data class ConcurrentAnalysis(
          * @param window Restricts the analysis to part of the span, for looking at a single set.
          */
         fun from(
-            records: List<BpmRecord>,
+            records: List<BpmRecordWithPoints>,
             watches: List<WatchEntity> = emptyList(),
             people: List<PersonEntity> = emptyList(),
             window: LongRange? = null
@@ -264,10 +264,10 @@ data class ConcurrentAnalysis(
          * There is nothing to compare across recordings made on different days, so this gates the
          * action rather than letting it open onto a chart of unrelated curves.
          */
-        fun anyOverlap(records: List<BpmRecord>): Boolean {
+        fun anyOverlap(records: List<inga.bpmetrics.library.BpmRecordEntity>): Boolean {
             if (records.size < 2) return false
             val spans = records
-                .map { it.metadata.startTime to it.metadata.startTime + it.metadata.durationMs }
+                .map { it.startTime to it.startTime + it.durationMs }
                 .sortedBy { it.first }
             // Sorted by start, an overlap exists if any recording begins before the furthest end
             // seen so far.
@@ -279,7 +279,7 @@ data class ConcurrentAnalysis(
             return false
         }
 
-        fun overlapping(record: BpmRecord, candidates: List<BpmRecord>): List<BpmRecord> {
+        fun overlapping(record: BpmRecordWithPoints, candidates: List<BpmRecordWithPoints>): List<BpmRecordWithPoints> {
             val start = record.metadata.startTime
             val end = start + record.metadata.durationMs
             return candidates.filter { other ->
@@ -367,7 +367,7 @@ data class ConcurrentAnalysis(
          * before profiles existed, else the watch.
          */
         private fun labelFor(
-            record: BpmRecord,
+            record: BpmRecordWithPoints,
             people: Map<Long, PersonEntity>,
             watchNames: Map<String, String>
         ): String =
@@ -382,7 +382,7 @@ data class ConcurrentAnalysis(
          * recording with no wearer already falls back to naming the watch.
          */
         private fun watchLabelFor(
-            record: BpmRecord,
+            record: BpmRecordWithPoints,
             people: Map<Long, PersonEntity>,
             watchNames: Map<String, String>
         ): String? {

@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.library.FilterState
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.ui.library.LibraryViewModel
 import java.text.SimpleDateFormat
@@ -27,19 +28,24 @@ sealed interface AnalysisScope {
      *
      * "Compare every festival" is the same machinery as analysing one event, pointed at a set
      * whose members did not happen together. What it resolves to is decided by
-     * [inga.bpmetrics.library.CollectionScope], so the count here and the recordings analysed come
-     * from one walk.
+     * [inga.bpmetrics.library.Scope], so the count here and the recordings analysed come from one
+     * walk.
      */
     data class Group(
         val name: String,
         val eventCount: Int,
-        val recordCount: Int
+        val recordCount: Int,
+        /** Whether membership answers a question, which changes what the count means. */
+        val isSmart: Boolean = false
     ) : AnalysisScope {
         override val title: String get() = name
         override val detail: String
             get() = buildString {
                 if (eventCount > 0) append("$eventCount event${if (eventCount == 1) "" else "s"}, ")
                 append("$recordCount recording${if (recordCount == 1) "" else "s"}")
+                // Says the count will move. A smart collection reporting "12 recordings" reads like
+                // a fixed set, and next month it will quietly be fourteen.
+                if (isSmart) append(" · smart, re-asked each time")
             }
     }
 
@@ -51,7 +57,7 @@ sealed interface AnalysisScope {
      * of a header.
      */
     data class Filter(
-        val filter: LibraryViewModel.FilterState,
+        val filter: FilterState,
         val labels: FilterLabels = FilterLabels()
     ) : AnalysisScope {
         override val title: String
@@ -113,7 +119,7 @@ sealed interface AnalysisScope {
          * informative exactly when it is not.
          */
         private fun describe(
-            filter: LibraryViewModel.FilterState,
+            filter: FilterState,
             labels: FilterLabels
         ): String {
             val parts = buildList {

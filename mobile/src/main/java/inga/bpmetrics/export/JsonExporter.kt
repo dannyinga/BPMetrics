@@ -9,9 +9,9 @@ import com.google.gson.reflect.TypeToken
 import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.Cover
 import inga.bpmetrics.library.TagEntity
@@ -62,7 +62,9 @@ data class LibraryBackup(
     val settings: List<PreferenceSnapshot> = emptyList(),
     val eventGroups: List<EventGroupDto> = emptyList(),
     val locations: List<LocationDto> = emptyList(),
-    val events: List<EventDto> = emptyList()
+    val events: List<EventDto> = emptyList(),
+    /** Collections, views and frozen analyses — one kind of thing since format 5. */
+    val collections: List<CollectionDto> = emptyList()
 ) {
     companion object {
         /**
@@ -83,12 +85,19 @@ data class LibraryBackup(
          *    — which is worse than an obvious failure, because it looks like it worked. The round
          *    trip is now asserted by a test for exactly that reason.
          *
+         * 5: collections — which had never been carried at all. Not the sets, not their membership,
+         *    and not the saved views or saved analyses that turned out to be the same object. The
+         *    coverage test that exists to catch a gap like this was pointed at `EventGroupEntity`,
+         *    the table the 23→24 fold left dead, so it passed while asserting nothing about the one
+         *    in use. `savedAnalyses` stays *readable* so a format 4 file still restores its frozen
+         *    numbers, but nothing writes it any more: a frozen analysis is a collection now.
+         *
          * Export presets are still absent, deliberately: they describe how an export looks rather
          * than what the library contains, they are shareable as their own files, and a preset from
          * a newer build refuses to load on an older one — which a whole-library restore should
          * never do.
          */
-        const val FORMAT_VERSION = 4
+        const val FORMAT_VERSION = 5
     }
 }
 
@@ -161,6 +170,32 @@ data class EventGroupDto(
  * [SavedAnalysisRecordDto.recordId] is remapped during restore. The rest of each row is a snapshot
  * and travels as-is: that is the whole point of a frozen analysis.
  */
+/**
+ * A selection, as a backup carries it.
+ *
+ * Everything a collection is after the fold: hand-picked members, an optional rule, an optional
+ * frozen answer. Format 5 writes this; formats 1-4 had no collections at all, which is why a backup
+ * taken then restored a library with every recording intact and every set gone.
+ */
+data class CollectionDto(
+    val name: String = "",
+    val notes: String = "",
+    val createdAt: Long = 0L,
+    /** The rule, if it is a smart collection. Serialised `FilterState`. */
+    val filterJson: String? = null,
+    val excludedRecordJson: String = "",
+    val isPinned: Boolean = false,
+    /** Set when its numbers are frozen — what a saved analysis was before the fold. */
+    val frozenAt: Long? = null,
+    val cover: CoverDto? = null,
+    /** Events it names, by name. Ids are reassigned on import. */
+    val eventNames: List<String> = emptyList(),
+    /** Recordings it names, by their id in the library this backup came from. */
+    val recordIds: List<Long> = emptyList(),
+    /** The frozen rows, when [frozenAt] is set. */
+    val frozenRecords: List<SavedAnalysisRecordDto> = emptyList()
+)
+
 data class SavedAnalysisDto(
     val name: String = "",
     val createdAt: Long = 0L,
@@ -281,18 +316,22 @@ object JsonExporter {
      * everyone involved, with their colours.
      */
     fun toBackupJson(
-        records: List<BpmRecord>,
+        // With readings: a backup carries every one of them, which is the whole point of it.
+        records: List<BpmRecordWithPoints>,
         people: List<PersonEntity> = emptyList(),
         watches: List<WatchEntity> = emptyList(),
         categories: List<CategoryEntity> = emptyList(),
-        savedAnalyses: List<SavedAnalysisDto> = emptyList(),
         settings: List<PreferenceSnapshot> = emptyList(),
         events: List<EventEntity> = emptyList(),
-        eventGroups: List<EventGroupEntity> = emptyList(),
+        /**
+         * Every selection, with its members and any frozen rows.
+         *
+         * Collections had never been carried. `savedAnalyses` is gone from this signature: a
+         * frozen analysis is a collection now, and nothing writes the old shape.
+         */
+        collections: List<inga.bpmetrics.library.CollectionBackup> = emptyList(),
         /** Tags applied to each event, by event id. */
         eventTags: Map<Long, List<TagEntity>> = emptyMap(),
-        /** Tags applied to each collection, by collection id. */
-        groupTags: Map<Long, List<TagEntity>> = emptyMap(),
         /**
          * Reads a stored image by its file name, for inlining.
          *
@@ -410,19 +449,47 @@ object JsonExporter {
                 people = usedPeople,
                 watches = usedWatches,
                 records = dtos,
-                savedAnalyses = savedAnalyses,
-                settings = settings
-                // Nothing writes `eventGroups` since the fold — collections travel as events with
-                // `type: "Collection"`. The field stays in the format so a file written before
-                // then still restores.
-                , eventGroups = emptyList()
-                , events = usedEventDtos
+                settings = settings,
+                events = usedEventDtos,
+                // `savedAnalyses` and `eventGroups` are left empty on purpose. Nothing writes
+                // either since the folds — a frozen analysis is a collection, and a collection
+                // travels below rather than as a tier. Both stay in the format so a file written
+                // before then still restores.
+                collections = collections.map { backup ->
+                    val set = backup.collection
+                    CollectionDto(
+                        name = set.name,
+                        notes = set.notes,
+                        createdAt = set.createdAt,
+                        filterJson = set.filterJson,
+                        excludedRecordJson = set.excludedRecordJson,
+                        isPinned = set.isPinned,
+                        frozenAt = set.frozenAt,
+                        cover = set.ownCover?.toDto(readImage),
+                        eventNames = backup.eventNames,
+                        recordIds = backup.recordIds,
+                        frozenRecords = backup.frozenRecords.map { row ->
+                            SavedAnalysisRecordDto(
+                                recordId = row.recordId,
+                                title = row.title,
+                                date = row.date,
+                                minBpm = row.minBpm,
+                                avgBpm = row.avgBpm,
+                                maxBpm = row.maxBpm,
+                                activeDurationMs = row.activeDurationMs,
+                                tagsEncoded = row.tagsEncoded,
+                                wearerName = row.wearerName,
+                                watchName = row.watchName
+                            )
+                        }
+                    )
+                }
             )
         )
     }
 
     /** Kept for callers that only want the records array. */
-    fun toJsonString(records: List<BpmRecord>): String = toBackupJson(records)
+    fun toJsonString(records: List<BpmRecordWithPoints>): String = toBackupJson(records)
 
     /**
      * Reads a backup file, accepting both shapes.
@@ -503,7 +570,8 @@ object JsonExporter {
      */
     fun shareJson(
         context: Context,
-        records: List<BpmRecord>,
+        // With readings: sharing a recording means sharing what it recorded.
+        records: List<BpmRecordWithPoints>,
         people: List<PersonEntity> = emptyList(),
         watches: List<WatchEntity> = emptyList(),
         categories: List<CategoryEntity> = emptyList()

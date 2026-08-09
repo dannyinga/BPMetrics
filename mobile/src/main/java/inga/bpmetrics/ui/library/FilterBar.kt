@@ -13,6 +13,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -58,16 +60,30 @@ fun FilterBar(
     onRemoveChip: (FilterChip) -> Unit,
     onAdd: (FilterDimension, String) -> Unit,
     onClearAll: () -> Unit,
-    /** Filters someone kept. Pinned here because a view you have to find is barely a view. */
-    savedViews: List<inga.bpmetrics.library.SavedViewEntity> = emptyList(),
+    /**
+     * Analyses whatever the bar currently says.
+     *
+     * The fourth way to name a scope — §8.5 has a recording, an event, a collection and a
+     * question, and this is the question. Without it the only live analysis reachable is
+     * "everything", which is the one nobody needs a filter for.
+     */
+    onAnalyse: () -> Unit = {},
+    /**
+     * Selections someone pinned — collections and smart collections alike.
+     *
+     * Pinned here because a set you have to go and find is barely better than rebuilding the
+     * filter, which is the whole reason saved views existed before they turned out to be the same
+     * object as a collection.
+     */
+    savedViews: List<inga.bpmetrics.library.CollectionEntity> = emptyList(),
     activeViewId: Long? = null,
-    onApplyView: (inga.bpmetrics.library.SavedViewEntity) -> Unit = {},
+    onApplyView: (inga.bpmetrics.library.CollectionEntity) -> Unit = {},
     onSaveView: (String) -> Unit = {},
-    onDeleteView: (Long) -> Unit = {},
+    onUnpinView: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var naming by remember { mutableStateOf(false) }
-    var managing by remember { mutableStateOf<inga.bpmetrics.library.SavedViewEntity?>(null) }
+    var managing by remember { mutableStateOf<inga.bpmetrics.library.CollectionEntity?>(null) }
     var adding by remember { mutableStateOf<FilterDimension?>(null) }
     var choosingDimension by remember { mutableStateOf(false) }
 
@@ -126,6 +142,17 @@ fun FilterBar(
                 if (activeViewId == null) {
                     AssistChip(onClick = { naming = true }, label = { Text("Save view") })
                 }
+                AssistChip(
+                    onClick = onAnalyse,
+                    label = { Text("Analyse") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Insights,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                )
             }
         }
 
@@ -136,10 +163,21 @@ fun FilterBar(
             ) {
                 savedViews.forEach { view ->
                     androidx.compose.material3.FilterChip(
-                        selected = view.viewId == activeViewId,
+                        selected = view.collectionId == activeViewId,
                         onClick = { onApplyView(view) },
                         label = { Text(view.displayName) },
-                        modifier = Modifier.padding(end = 0.dp)
+                        // A rule and a hand-made list read differently and behave differently —
+                        // one keeps answering, the other stays as you left it — so the chip says
+                        // which it is rather than leaving it to be discovered.
+                        leadingIcon = if (!view.isSmart) null else {
+                            {
+                                Icon(
+                                    Icons.Default.AutoAwesome,
+                                    contentDescription = "Smart collection",
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
                     )
                 }
                 AssistChip(
@@ -186,17 +224,20 @@ fun FilterBar(
     if (managing != null) {
         AlertDialog(
             onDismissRequest = { managing = null },
-            title = { Text("Saved views") },
+            title = { Text("Pinned") },
             text = {
                 Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
                     savedViews.forEach { view ->
                         DropdownMenuItem(
                             text = { Text(view.displayName) },
                             trailingIcon = {
+                                // Unpins. Deleting a set someone assembled by hand from a row of
+                                // chips is far too easy to do by accident; the collections screen
+                                // is where deleting belongs.
                                 androidx.compose.material3.IconButton(onClick = {
-                                    onDeleteView(view.viewId)
+                                    onUnpinView(view.collectionId)
                                 }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Delete")
+                                    Icon(Icons.Default.Close, contentDescription = "Unpin")
                                 }
                             },
                             onClick = { onApplyView(view); managing = null }

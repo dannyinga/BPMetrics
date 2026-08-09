@@ -520,7 +520,7 @@ private fun queueBatch(
     context: android.content.Context,
     viewModel: ExportUtilityViewModel,
     jobs: List<ClipSelection>,
-    allRecords: List<inga.bpmetrics.library.BpmRecord>,
+    allRecords: List<inga.bpmetrics.library.BpmRecordWithPoints>,
     colours: Map<Long, Int>,
     photos: Map<Long, android.graphics.Bitmap>,
     manualOverlay: Uri?,
@@ -657,7 +657,7 @@ private fun formatMinutes(ms: Long): String {
  */
 @Composable
 private fun LookStep(
-    records: List<inga.bpmetrics.library.BpmRecord>,
+    records: List<inga.bpmetrics.library.BpmRecordWithPoints>,
     isImage: Boolean,
     renderImagePreview: () -> android.graphics.Bitmap?,
     imageRevision: Any,

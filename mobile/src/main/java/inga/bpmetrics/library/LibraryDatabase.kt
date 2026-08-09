@@ -70,6 +70,45 @@ interface BpmRecordDao {
      */
     @Query("UPDATE bpm_records SET minId = :minId, maxId = :maxId, avg = :avg WHERE recordId = :id")
     suspend fun updateAnalysis(id: Long, minId: Long?, maxId: Long?, avg: Double?)
+
+    /**
+     * The two figures that used to be recomputed from the readings on every read.
+     *
+     * Written at ingest and by the backfill. See [BpmRecordEntity.activeDurationMs].
+     */
+    @Query(
+        "UPDATE bpm_records SET activeDurationMs = :activeDurationMs, zonesEncoded = :zonesEncoded " +
+            "WHERE recordId = :id"
+    )
+    suspend fun updateDerivedFigures(id: Long, activeDurationMs: Long, zonesEncoded: String)
+
+    /**
+     * Recordings whose derived figures have never been computed, oldest first.
+     *
+     * The gate for the backfill: a query rather than a preference, so it is self-healing. A pass
+     * that dies halfway leaves the rest still null and simply finishes next launch, and a row
+     * arriving by some path that forgets to compute them is repaired rather than wrong forever.
+     */
+    @Query("SELECT recordId FROM bpm_records WHERE activeDurationMs IS NULL LIMIT :limit")
+    suspend fun recordIdsMissingDerivedFigures(limit: Int): List<Long>
+
+    /** The readings for one recording, in time order. */
+    @Query(
+        "SELECT * FROM bpm_data_points WHERE recordOwnerId = :recordId ORDER BY timestamp ASC"
+    )
+    suspend fun dataPointsFor(recordId: Long): List<BpmDataPointEntity>
+
+    /**
+     * The readings for a set of recordings, in one query.
+     *
+     * What a chart or an export asks for once it knows its scope. Chunked by the caller against
+     * [LibraryRepository.SQL_VARIABLE_LIMIT], as every other multi-id query here is.
+     */
+    @Query(
+        "SELECT * FROM bpm_data_points WHERE recordOwnerId IN (:recordIds) " +
+            "ORDER BY recordOwnerId ASC, timestamp ASC"
+    )
+    suspend fun dataPointsForAll(recordIds: List<Long>): List<BpmDataPointEntity>
     
     /**
      * Counts how many records have a title starting with the specified prefix.
@@ -118,16 +157,27 @@ interface BpmRecordDao {
     @Query("SELECT * FROM bpm_records WHERE recordId = :id")
     suspend fun getRecordEntity(id: Long) : BpmRecordEntity
 
-    /**
-     * Retrieves a complete [BpmRecord] (including all associated data points and tags) by its ID.
-     */
+    /** One recording with its readings, for a chart or an export. */
     @Transaction
     @Query("SELECT * FROM bpm_records WHERE recordId = :id")
-    suspend fun getRecord(id: Long) : BpmRecord
+    suspend fun getRecord(id: Long) : BpmRecordWithPoints?
 
     /**
-     * Returns a [Flow] that emits an updated list of all complete [BpmRecord]s
-     * whenever the database content changes.
+     * The recordings in a scope, with their readings.
+     *
+     * The only bulk path that loads readings, and it is bounded by the scope that asked. Chunk
+     * against [LibraryRepository.SQL_VARIABLE_LIMIT].
+     */
+    @Transaction
+    @Query("SELECT * FROM bpm_records WHERE recordId IN (:ids) ORDER BY date DESC")
+    suspend fun getRecordsWithPoints(ids: List<Long>): List<BpmRecordWithPoints>
+
+    /**
+     * Every recording, **without** its readings, as a flow.
+     *
+     * What the library is. This used to join `bpm_data_points`, so the always-on stream held every
+     * reading in the library and Room rebuilt all of them on any write — see §9 of the product
+     * doc. Everything a list, a filter or a summary needs is a column on the row.
      */
     @Transaction
     @Query("SELECT * FROM bpm_records ORDER BY date DESC")
@@ -174,7 +224,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 27
+internal const val LIBRARY_DB_VERSION = 29
 
 @Database(
     entities = [
@@ -186,16 +236,12 @@ internal const val LIBRARY_DB_VERSION = 27
         WatchEntity::class,
         PersonEntity::class,
         EventEntity::class,
-        EventGroupEntity::class,
         EventTagCrossRef::class,
-        EventGroupTagCrossRef::class,
         CollectionEntity::class,
         CollectionEventCrossRef::class,
         CollectionRecordCrossRef::class,
         LocationEntity::class,
-        SavedViewEntity::class,
         EventWindowPersonCrossRef::class,
-        SavedAnalysisEntity::class,
         SavedAnalysisRecordEntity::class,
         ExportPresetEntity::class,
         RenderJobEntity::class
@@ -211,8 +257,6 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun eventDao(): EventDao
     abstract fun collectionDao(): CollectionDao
     abstract fun locationDao(): LocationDao
-    abstract fun savedViewDao(): SavedViewDao
-    abstract fun savedAnalysisDao(): SavedAnalysisDao
     abstract fun exportPresetDao(): ExportPresetDao
     abstract fun renderJobDao(): RenderJobDao
 
@@ -1212,6 +1256,182 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Collections, saved views and saved analyses become one thing.
+         *
+         * They were three tables holding the same idea — a named set of recordings — differing only
+         * in how membership was decided: enumerated, computed, or frozen. That is one property of a
+         * selection, not three kinds of object, and keeping them apart had already produced two
+         * live defects. See §8 of the product doc.
+         *
+         * A saved view folds in as a collection with a rule and no members. A saved analysis folds
+         * in as a collection with `frozenAt` set, its snapshot rows re-keyed from `analysisId` to
+         * `collectionId`.
+         *
+         * **The re-key is done in Kotlin, row by row.** Both tables autoincrement from 1, so their
+         * ids collide and no SQL join can tell which new collection a snapshot row belongs to. The
+         * arithmetic alternative — assume the nth insert landed at `max(id) + n` — is true right up
+         * until it is not, and it fails silently by attaching someone's numbers to the wrong set.
+         *
+         * Also drops `event_groups` and `event_group_tag_cross_ref`, which the 23→24 fold left with
+         * no readers, and the now-empty `saved_views` and `saved_analyses`.
+         */
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE collections ADD COLUMN filterJson TEXT DEFAULT NULL")
+                db.execSQL(
+                    "ALTER TABLE collections ADD COLUMN excludedRecordJson TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL("ALTER TABLE collections ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE collections ADD COLUMN frozenAt INTEGER DEFAULT NULL")
+
+                // Saved views: a rule, no members, pinned as they were.
+                db.execSQL(
+                    "INSERT INTO collections (name, notes, createdAt, filterJson, isPinned) " +
+                        "SELECT name, '', createdAt, filterJson, isPinned FROM saved_views"
+                )
+
+                // saved_analysis_records is rebuilt rather than altered: SQLite cannot change a
+                // foreign key in place, and the column is being renamed as well as re-pointed.
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `saved_analysis_records_new` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`collectionId` INTEGER NOT NULL, " +
+                        "`recordId` INTEGER NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`date` INTEGER NOT NULL, " +
+                        "`minBpm` REAL, `avgBpm` REAL, `maxBpm` REAL, " +
+                        "`activeDurationMs` INTEGER NOT NULL, " +
+                        "`tagsEncoded` TEXT NOT NULL DEFAULT '', " +
+                        "`wearerName` TEXT NOT NULL DEFAULT '', " +
+                        "`watchName` TEXT NOT NULL DEFAULT '', " +
+                        "`personId` INTEGER DEFAULT NULL, " +
+                        "`personColorArgb` INTEGER DEFAULT NULL, " +
+                        "`eventId` INTEGER DEFAULT NULL, " +
+                        "`eventName` TEXT NOT NULL DEFAULT '', " +
+                        "`zonesEncoded` TEXT NOT NULL DEFAULT '', " +
+                        "FOREIGN KEY(`collectionId`) REFERENCES `collections`(`collectionId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+
+                // One collection per saved analysis, carrying its own id forward so the snapshot
+                // rows can follow it.
+                //
+                // The two kinds fold differently, because they were never the same thing:
+                //
+                // - A **group** analysis was a snapshot. It becomes a frozen collection with no
+                //   members, which is exactly what it was.
+                // - A **same-time** analysis was not frozen at all. It stored *which* recordings
+                //   and re-read them from the library on open — so it becomes a live collection
+                //   whose members are those recordings. That is a hand-made set, which is what it
+                //   always was underneath.
+                //
+                // This replaces `convertConcurrentAnalysesToEvents`, which turned them into events
+                // and then deleted them. Its own reasoning said that rewriting `bpm_records.eventId`
+                // on a correlation the schema does not express was too dangerous for a migration,
+                // and it was right — so this does not do that. Nothing is deleted and nothing is
+                // re-filed; a set that would rather be an event can be promoted by hand.
+                db.query(
+                    "SELECT analysisId, name, createdAt, filterDescription, kind FROM saved_analyses"
+                )
+                    .use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val analysisId = cursor.getLong(0)
+                            val name = cursor.getString(1) ?: ""
+                            val createdAt = cursor.getLong(2)
+                            val note = cursor.getString(3) ?: ""
+                            val wasConcurrent = cursor.getString(4) == "CONCURRENT"
+
+                            db.execSQL(
+                                "INSERT INTO collections (name, notes, createdAt, frozenAt) " +
+                                    "VALUES (?, ?, ?, ?)",
+                                arrayOf(name, note, createdAt, createdAt.takeUnless { wasConcurrent })
+                            )
+
+                            // Read back rather than assumed. last_insert_rowid() is the only thing
+                            // that actually knows where the row landed.
+                            val collectionId = db.query("SELECT last_insert_rowid()").use {
+                                if (it.moveToFirst()) it.getLong(0) else -1L
+                            }
+                            if (collectionId <= 0) continue
+
+                            if (wasConcurrent) {
+                                // Members, not a snapshot. Only recordings still in the library: a
+                                // membership row pointing at a deleted one refers to nothing. Its
+                                // captured numbers are deliberately dropped — they were never
+                                // authoritative, since the screen recomputed them from the library
+                                // every time it opened.
+                                db.execSQL(
+                                    "INSERT OR IGNORE INTO collection_records " +
+                                        "(collectionId, recordId) " +
+                                        "SELECT ?, recordId FROM saved_analysis_records " +
+                                        "WHERE analysisId = ? " +
+                                        "  AND recordId IN (SELECT recordId FROM bpm_records)",
+                                    arrayOf<Any>(collectionId, analysisId)
+                                )
+                            } else {
+                                db.execSQL(
+                                    "INSERT INTO saved_analysis_records_new (" +
+                                        "collectionId, recordId, title, date, minBpm, avgBpm, " +
+                                        "maxBpm, activeDurationMs, tagsEncoded, wearerName, " +
+                                        "watchName, personId, personColorArgb, eventId, " +
+                                        "eventName, zonesEncoded) " +
+                                        "SELECT ?, recordId, title, date, minBpm, avgBpm, maxBpm, " +
+                                        "activeDurationMs, tagsEncoded, wearerName, watchName, " +
+                                        "personId, personColorArgb, eventId, eventName, " +
+                                        "zonesEncoded " +
+                                        "FROM saved_analysis_records WHERE analysisId = ?",
+                                    arrayOf<Any>(collectionId, analysisId)
+                                )
+                            }
+                        }
+                    }
+
+                db.execSQL("DROP TABLE saved_analysis_records")
+                db.execSQL("ALTER TABLE saved_analysis_records_new RENAME TO saved_analysis_records")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_saved_analysis_records_collectionId` " +
+                        "ON `saved_analysis_records` (`collectionId`)"
+                )
+
+                db.execSQL("DROP TABLE IF EXISTS saved_views")
+                db.execSQL("DROP TABLE IF EXISTS saved_analyses")
+
+                // Left with no readers by the 23→24 fold. Dropped now rather than left to look like
+                // something still in use.
+                db.execSQL("DROP TABLE IF EXISTS event_group_tag_cross_ref")
+                db.execSQL("DROP TABLE IF EXISTS event_groups")
+
+                android.util.Log.i(TAG, "MIGRATION_27_28: selections folded into collections")
+            }
+        }
+
+        /**
+         * The two derived figures a summary needs, moved out of the readings.
+         *
+         * `bpm_records` already stored min, avg and max. Active duration and the zone split were
+         * recomputed from the readings every time, which is why the library stream loaded every
+         * reading in the library and rebuilt them on every write — see §9 of the product doc.
+         *
+         * **Adds the columns and nothing else.** Existing rows are left null and empty, and filled
+         * by [LibraryRepository.backfillDerivedFigures] on the next launch, in Kotlin, against the
+         * same functions the app has always used. Computing them here would mean a second
+         * implementation of the gap rule in SQL, and two definitions of one number is the failure
+         * this initiative exists to unwind. It also keeps a pass over every reading in the library
+         * out of a migration, where failing means an app that will not open.
+         */
+        val MIGRATION_28_29 = object : Migration(28, 29) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE bpm_records ADD COLUMN activeDurationMs INTEGER DEFAULT NULL"
+                )
+                db.execSQL(
+                    "ALTER TABLE bpm_records ADD COLUMN zonesEncoded TEXT NOT NULL DEFAULT ''"
+                )
+                android.util.Log.i(TAG, "MIGRATION_28_29: derived figures move onto the record")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -1282,7 +1502,9 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_23_24,
                         MIGRATION_24_25,
                         MIGRATION_25_26,
-                        MIGRATION_26_27
+                        MIGRATION_26_27,
+                        MIGRATION_27_28,
+                        MIGRATION_28_29
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

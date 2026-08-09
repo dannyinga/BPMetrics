@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.core.BpmWatchRecord
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EventEntity
@@ -43,11 +43,11 @@ class BpmRecordViewModel(
     private val recordId: Long
 ) : ViewModel() {
 
-    private val _record = MutableStateFlow<BpmRecord?>(null)
+    private val _record = MutableStateFlow<BpmRecordWithPoints?>(null)
     /**
-     * A [kotlinx.coroutines.flow.StateFlow] emitting the current [BpmRecord] details, or null if the record is still loading.
+     * A [kotlinx.coroutines.flow.StateFlow] emitting the current [BpmRecordWithPoints] details, or null if the record is still loading.
      */
-    val record: StateFlow<BpmRecord?> = _record
+    val record: StateFlow<BpmRecordWithPoints?> = _record
 
     /**
      * The given name of the watch this recording came from, or null if it has none.
@@ -185,7 +185,9 @@ class BpmRecordViewModel(
                 it.metadata.personId == personId && it.metadata.recordId != rec.metadata.recordId
             }
         }.orEmpty()
-        RecordAnalysis.from(current.series.firstOrNull(), rec, theirs)
+        // Comparison reads peaks and averages, which are columns — no readings needed on either
+        // side, so the summary form is what goes in.
+        RecordAnalysis.from(current.series.firstOrNull(), rec.summary, theirs)
     }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecordInsights())

@@ -268,6 +268,103 @@ class LibraryTimelineTest {
         assertEquals(emptyList<TimelineRow>(), LibraryTimeline.build(emptyList(), emptyList()))
     }
 
+    // --- Reversing, which is what the sort control's "reverse" means for a chronology ---
+
+    @Test
+    fun `reversing reads the library from the beginning`() {
+        val events = listOf(
+            event(1, "Older", from = at(0), to = at(2)),
+            event(2, "Newer", from = at(40), to = at(42))
+        )
+
+        assertEquals(
+            listOf("Older", "Newer"),
+            names(LibraryTimeline.build(events, emptyList(), newestFirst = false))
+        )
+    }
+
+    @Test
+    fun `reversing does not turn a festival inside out`() {
+        // Only the top level flips. Day 1 before Day 2 is not a preference, it is what the
+        // container is — reversing it would read a festival backwards through itself.
+        val rows = LibraryTimeline.build(festival(), emptyList(), setOf(1L), newestFirst = false)
+
+        assertEquals(listOf("Griztronics", "Day 1", "Day 2"), names(rows))
+    }
+
+    @Test
+    fun `reversing still puts an orphan somewhere it can be reached`() {
+        val orphaned = listOf(
+            event(1, "Lost", parent = 99, from = at(10), to = at(11)),
+            event(2, "Also lost", parent = 99, from = at(50), to = at(51))
+        )
+
+        assertEquals(
+            listOf("Lost", "Also lost"),
+            names(LibraryTimeline.build(orphaned, emptyList(), newestFirst = false))
+        )
+    }
+
+    // --- Pruning, for when a filter is narrowing the library ---
+
+    @Test
+    fun `an event holding nothing that matched is dropped`() {
+        // Filter to Kyle and the timeline must show where Kyle actually recorded. Leaving the rest
+        // in place gives a full tree of empty containers with three recordings buried in it.
+        val matched = listOf(recording(10, at(21, 15), filedAs = 3))
+
+        val rows = LibraryTimeline.build(festival(), matched, setOf(1L, 2L), pruneEmpty = true)
+
+        assertEquals(listOf("Griztronics", "Day 1", "Subtronics"), names(rows))
+    }
+
+    @Test
+    fun `a festival survives when only something deep inside it matched`() {
+        // Pruning on direct contents alone would cut a festival whose recordings all live in sets.
+        val matched = listOf(recording(10, at(21, 15), filedAs = 3))
+
+        val rows = LibraryTimeline.build(festival(), matched, emptySet(), pruneEmpty = true)
+
+        assertEquals(listOf("Griztronics"), names(rows))
+    }
+
+    @Test
+    fun `pruning never orphans a survivor to the top`() {
+        // A surviving child always has a surviving parent, because the test is over the subtree.
+        // Were it over direct contents, Day 1 would be cut and Subtronics rescued to depth 0.
+        val matched = listOf(recording(10, at(21, 15), filedAs = 3))
+
+        val rows = LibraryTimeline.build(festival(), matched, setOf(1L, 2L), pruneEmpty = true)
+
+        assertEquals(listOf(0, 1, 2), rows.map { it.depth })
+    }
+
+    @Test
+    fun `a loose recording that matched still appears`() {
+        val rows = LibraryTimeline.build(
+            festival(), listOf(recording(14, at(100))), emptySet(), pruneEmpty = true
+        )
+
+        assertEquals(listOf("Record 14"), names(rows))
+    }
+
+    @Test
+    fun `nothing matching leaves an empty list rather than a bare tree`() {
+        // The screen shows "nothing matches this filter" off the back of this, so a tree of empty
+        // containers coming back here would present as a library that had simply lost its records.
+        assertTrue(
+            LibraryTimeline.build(festival(), emptyList(), setOf(1L), pruneEmpty = true).isEmpty()
+        )
+    }
+
+    @Test
+    fun `without pruning an empty event still shows`() {
+        // What a window you have just drawn looks like before anything lands in it.
+        val rows = LibraryTimeline.build(festival(), emptyList(), emptySet())
+
+        assertEquals(listOf("Griztronics"), names(rows))
+    }
+
     // --- Opening to a depth ---
 
     @Test

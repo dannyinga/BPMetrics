@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -116,4 +117,54 @@ interface CollectionDao {
 
     @Query("DELETE FROM collection_records WHERE recordId = :recordId")
     suspend fun forgetRecord(recordId: Long)
+
+    // --- The rule, and pinning: what saved views were before the fold ---
+
+    @Query("UPDATE collections SET filterJson = :filterJson WHERE collectionId = :collectionId")
+    suspend fun updateRule(collectionId: Long, filterJson: String?)
+
+    @Query(
+        "UPDATE collections SET excludedRecordJson = :excluded WHERE collectionId = :collectionId"
+    )
+    suspend fun updateExclusions(collectionId: Long, excluded: String)
+
+    @Query("UPDATE collections SET isPinned = :pinned WHERE collectionId = :collectionId")
+    suspend fun setPinned(collectionId: Long, pinned: Boolean)
+
+    /** Pinned selections, oldest first, so the bar does not reshuffle as more are added. */
+    @Query("SELECT * FROM collections WHERE isPinned = 1 ORDER BY createdAt ASC")
+    fun pinnedFlow(): Flow<List<CollectionEntity>>
+
+    // --- Frozen numbers: what saved analyses were before the fold ---
+
+    @Query("UPDATE collections SET frozenAt = :frozenAt WHERE collectionId = :collectionId")
+    suspend fun setFrozenAt(collectionId: Long, frozenAt: Long?)
+
+    @Transaction
+    @Query("SELECT * FROM collections WHERE collectionId = :collectionId")
+    suspend fun getWithFrozenRecords(collectionId: Long): FrozenSelection?
+
+    @Insert
+    suspend fun insertFrozenRecords(records: List<SavedAnalysisRecordEntity>)
+
+    @Query("DELETE FROM saved_analysis_records WHERE collectionId = :collectionId")
+    suspend fun clearFrozenRecords(collectionId: Long)
+
+    @Query("SELECT COUNT(*) FROM saved_analysis_records WHERE collectionId = :collectionId")
+    suspend fun countFrozenRecords(collectionId: Long): Int
+
+    /**
+     * How many of a frozen selection's recordings are still in the library.
+     *
+     * Frozen numbers stay valid when their recordings are deleted, but the screen should say so
+     * rather than silently offering links that go nowhere.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM saved_analysis_records
+        WHERE collectionId = :collectionId
+          AND recordId IN (SELECT recordId FROM bpm_records)
+        """
+    )
+    suspend fun countFrozenRecordsStillPresent(collectionId: Long): Int
 }

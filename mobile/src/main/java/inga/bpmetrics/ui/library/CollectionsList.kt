@@ -31,6 +31,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -54,7 +56,11 @@ fun CollectionsList(
     onRename: (CollectionSummary) -> Unit,
     onSetCover: (CollectionSummary) -> Unit,
     onRemoveCover: (CollectionSummary) -> Unit,
-    onDelete: (CollectionSummary) -> Unit
+    onDelete: (CollectionSummary) -> Unit,
+    /** Pins or unpins it on the library bar, which is where saved views used to live. */
+    onTogglePin: (CollectionSummary) -> Unit = {},
+    /** Turns a smart collection back into a hand-made one, keeping whatever it already names. */
+    onClearRule: (CollectionSummary) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -88,7 +94,9 @@ fun CollectionsList(
                 onRename = { onRename(summary) },
                 onSetCover = { onSetCover(summary) },
                 onRemoveCover = { onRemoveCover(summary) },
-                onDelete = { onDelete(summary) }
+                onDelete = { onDelete(summary) },
+                onTogglePin = { onTogglePin(summary) },
+                onClearRule = { onClearRule(summary) }
             )
         }
     }
@@ -109,7 +117,9 @@ private fun CollectionCard(
     onRename: () -> Unit,
     onSetCover: () -> Unit,
     onRemoveCover: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onTogglePin: () -> Unit,
+    onClearRule: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         inga.bpmetrics.ui.components.CoverBackground(
@@ -140,6 +150,23 @@ private fun CollectionCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1
                     )
+
+                    // What kind of set this is, said plainly. A smart collection's count moves
+                    // on its own and a frozen one never moves at all, and neither is guessable
+                    // from a name and a number.
+                    if (summary.collection.isSmart || summary.collection.isFrozen) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            when {
+                                summary.collection.isFrozen ->
+                                    "Frozen — these numbers stay as they were"
+                                else -> "Smart — whatever matches, whenever you look"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1
+                        )
+                    }
 
                     Spacer(Modifier.height(8.dp))
 
@@ -172,6 +199,30 @@ private fun CollectionCard(
                         text = { Text("Rename") },
                         onClick = { open = false; onRename() }
                     )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (summary.collection.isPinned) "Unpin from library"
+                                else "Pin to library"
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                if (summary.collection.isPinned) Icons.Default.PushPin
+                                else Icons.Outlined.PushPin,
+                                contentDescription = null
+                            )
+                        },
+                        onClick = { open = false; onTogglePin() }
+                    )
+                    if (summary.collection.isSmart) {
+                        DropdownMenuItem(
+                            // Keeps whatever it names by hand and stops re-asking. The alternative
+                            // — deleting and rebuilding — throws away members the rule never found.
+                            text = { Text("Stop using a rule") },
+                            onClick = { open = false; onClearRule() }
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(if (cover != null) "Change cover…" else "Set cover…") },
                         onClick = { open = false; onSetCover() }

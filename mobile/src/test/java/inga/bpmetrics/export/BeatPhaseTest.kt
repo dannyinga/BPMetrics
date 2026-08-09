@@ -1,7 +1,7 @@
 package inga.bpmetrics.export
 
 import inga.bpmetrics.library.BpmDataPointEntity
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -28,7 +28,7 @@ class BeatPhaseTest {
     fun clearCache() = BeatPhase.clear()
 
     /** A record whose readings are [bpms], one per second from zero. */
-    private fun record(id: Long, bpms: List<Double>): BpmRecord {
+    private fun record(id: Long, bpms: List<Double>): BpmRecordWithPoints {
         val points = bpms.mapIndexed { i, bpm ->
             BpmDataPointEntity(
                 dataPointId = id * 100_000 + i,
@@ -37,7 +37,7 @@ class BeatPhaseTest {
                 bpm = bpm
             )
         }
-        return BpmRecord(
+        return BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = id,
                 title = "Record $id",

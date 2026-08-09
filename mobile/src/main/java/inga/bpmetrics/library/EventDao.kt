@@ -45,6 +45,10 @@ interface EventDao {
     @Query("SELECT * FROM events")
     fun getAllEventsFlowUnfiltered(): Flow<List<EventEntity>>
 
+    /** The same, read once. What [Scope] needs when it is answering a single question. */
+    @Query("SELECT * FROM events")
+    suspend fun getAllEventsUnfiltered(): List<EventEntity>
+
     /** Who each window applies to. Empty for a window that names nobody, which is most of them. */
     @Query("SELECT * FROM event_window_people")
     suspend fun getAllWindowPeople(): List<EventWindowPersonCrossRef>

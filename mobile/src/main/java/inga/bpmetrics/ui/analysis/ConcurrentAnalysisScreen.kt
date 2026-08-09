@@ -62,7 +62,8 @@ import kotlin.math.roundToInt
 fun ConcurrentAnalysisScreen(
     analysis: ConcurrentAnalysis,
     title: String,
-    records: List<BpmRecord> = emptyList(),
+    /** With readings: this screen draws overlaid curves. */
+    records: List<inga.bpmetrics.library.BpmRecordWithPoints> = emptyList(),
     /**
      * Heading for an exported video. A saved analysis passes its name; an unsaved one has none
      * to give, so the export falls back to its generic label.
@@ -89,7 +90,7 @@ fun ConcurrentAnalysisScreen(
                 },
                 actions = {
                     if (!analysis.isEmpty && onExportVideo != null && records.isNotEmpty()) {
-                        IconButton(onClick = { onExportVideo(records, graphTitle) }) {
+                        IconButton(onClick = { onExportVideo(records.map { it.summary }, graphTitle) }) {
                             Icon(Icons.Default.Movie, contentDescription = "Export as video")
                         }
                     }

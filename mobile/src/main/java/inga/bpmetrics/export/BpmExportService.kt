@@ -132,11 +132,18 @@ class BpmExportService : Service() {
                     // the authority on what someone's heart rate did, and the queue should not hold
                     // a second copy that drifts from it. Recordings deleted since it was queued
                     // fail the job rather than rendering whatever is left.
-                    val hydrated = RenderJobStore.rehydrate(nextJob, repository.records.value)
+                    // Readings for the queued recordings only. The library stream no longer
+                    // carries them, and a render is exactly the case that needs them — but only
+                    // for what this job names.
+                    val queued = repository.recordsWithPoints(nextJob.recordIds)
+                    val hydrated = RenderJobStore.rehydrate(nextJob, queued)
                         ?: throw IOException(
                             "The recordings this export was queued for are no longer in the library"
                         )
                     val record = repository.getRecordWithId(hydrated.recordId)
+                        ?: throw IOException(
+                            "The recording this export was queued for is no longer in the library"
+                        )
 
                     // Update notification with title
                     notificationManager.notify(

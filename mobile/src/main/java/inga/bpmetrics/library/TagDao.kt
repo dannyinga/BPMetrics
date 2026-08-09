@@ -96,19 +96,6 @@ interface TagDao {
     """)
     fun getTagsForEventFlow(eventId: Long): Flow<List<TagEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertGroupTagCrossRef(crossRef: EventGroupTagCrossRef)
-
-    @Query("DELETE FROM event_group_tag_cross_ref WHERE groupId = :groupId AND tagId = :tagId")
-    suspend fun untagGroup(groupId: Long, tagId: Long)
-
-    @Query("""
-        SELECT tags.* FROM tags
-        INNER JOIN event_group_tag_cross_ref ON tags.tagId = event_group_tag_cross_ref.tagId
-        WHERE event_group_tag_cross_ref.groupId = :groupId
-    """)
-    fun getTagsForGroupFlow(groupId: Long): Flow<List<TagEntity>>
-
     /**
      * Every event's tags at once, for resolving a whole library in one query.
      *
@@ -121,13 +108,6 @@ interface TagDao {
         INNER JOIN event_tag_cross_ref ON tags.tagId = event_tag_cross_ref.tagId
     """)
     fun getAllEventTagsFlow(): Flow<List<OwnedTag>>
-
-    @Query("""
-        SELECT event_group_tag_cross_ref.groupId AS ownerId, tags.*
-        FROM tags
-        INNER JOIN event_group_tag_cross_ref ON tags.tagId = event_group_tag_cross_ref.tagId
-    """)
-    fun getAllGroupTagsFlow(): Flow<List<OwnedTag>>
 
     // --- Group Analysis Operations ---
 

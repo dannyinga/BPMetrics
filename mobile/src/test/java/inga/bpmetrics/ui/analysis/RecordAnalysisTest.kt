@@ -1,7 +1,7 @@
 package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.library.BpmDataPointEntity
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -20,7 +20,7 @@ class RecordAnalysisTest {
     private val tenPm = 1_700_000_000_000L
 
     /** @param bpms One reading per second from [startTime]. */
-    private fun record(id: Long, startTime: Long, bpms: List<Double>, personId: Long? = 1): BpmRecord {
+    private fun record(id: Long, startTime: Long, bpms: List<Double>, personId: Long? = 1): BpmRecordWithPoints {
         val points = bpms.mapIndexed { i, bpm ->
             BpmDataPointEntity(
                 dataPointId = id * 10_000 + i,
@@ -29,7 +29,7 @@ class RecordAnalysisTest {
                 bpm = bpm
             )
         }
-        return BpmRecord(
+        return BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = id,
                 title = "Record $id",
@@ -47,11 +47,11 @@ class RecordAnalysisTest {
     }
 
     private fun insightsFor(
-        record: BpmRecord,
-        others: List<BpmRecord> = emptyList()
+        record: BpmRecordWithPoints,
+        others: List<BpmRecordWithPoints> = emptyList()
     ): RecordInsights {
         val series = EventAnalysis.from(listOf(record)).series.firstOrNull()
-        return RecordAnalysis.from(series, record, others)
+        return RecordAnalysis.from(series, record.summary, others.map { it.summary })
     }
 
     @Test

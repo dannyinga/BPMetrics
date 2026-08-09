@@ -27,6 +27,7 @@ import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -85,7 +86,7 @@ object VideoExporter {
          * working it out separately is precisely how they came to disagree.
          */
         val overlayStartedAtMs: Long? = null,
-        val records: List<BpmRecord> = emptyList()
+        val records: List<BpmRecordWithPoints> = emptyList()
     )
 
     /**
@@ -93,7 +94,7 @@ object VideoExporter {
      */
     suspend fun exportVideo(
         context: Context,
-        record: BpmRecord,
+        record: BpmRecordWithPoints,
         config: VideoExportConfig,
         onProgress: (Float) -> Unit
     ): File = withContext(Dispatchers.IO) {
@@ -451,7 +452,7 @@ object VideoExporter {
      */
     fun calculateVideoAlignment(
         context: Context,
-        record: BpmRecord,
+        record: BpmRecordWithPoints,
         videoUri: Uri,
         globalSyncOffsetMs: Long
     ): Pair<Long, Long> = calculateVideoAlignment(
@@ -528,7 +529,7 @@ object VideoExporter {
         val endedAtMs: Long get() = startedAtMs + durationMs
 
         /** Whether a recording was running at any point while this was filming. */
-        fun overlaps(record: BpmRecord): Boolean {
+        fun overlaps(record: BpmRecordWithPoints): Boolean {
             val recordStart = record.metadata.startTime
             val recordEnd = recordStart + record.metadata.durationMs
             return recordStart <= endedAtMs && recordEnd >= startedAtMs
@@ -558,7 +559,7 @@ object VideoExporter {
         val spanMs: Long get() = (endMs - startMs).coerceAtLeast(1L)
     }
 
-    fun getOverlappingVideos(context: Context, record: BpmRecord): List<Uri> =
+    fun getOverlappingVideos(context: Context, record: BpmRecordWithPoints): List<Uri> =
         getOverlappingVideos(context, listOf(record))
 
     /**
@@ -567,7 +568,7 @@ object VideoExporter {
      * A multi-record export spans from the earliest session to the latest, so a video worth
      * suggesting may overlap only one of them — searching a single record's window would miss it.
      */
-    fun getOverlappingVideos(context: Context, records: List<BpmRecord>): List<Uri> =
+    fun getOverlappingVideos(context: Context, records: List<BpmRecordWithPoints>): List<Uri> =
         getOverlappingClips(context, records).map { it.uri }
 
     /**
@@ -578,7 +579,7 @@ object VideoExporter {
      * was recording during *that clip's* few minutes, not during the whole event, and a clip filmed
      * after someone's watch stopped must not offer their curve.
      */
-    fun getOverlappingClips(context: Context, records: List<BpmRecord>): List<VideoClip> {
+    fun getOverlappingClips(context: Context, records: List<BpmRecordWithPoints>): List<VideoClip> {
         if (records.isEmpty()) return emptyList()
 
         val clips = mutableListOf<VideoClip>()

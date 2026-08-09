@@ -70,7 +70,7 @@ import inga.bpmetrics.export.ImageExporter
 import inga.bpmetrics.export.WordmarkCorner
 import inga.bpmetrics.export.PillCorner
 import inga.bpmetrics.export.VideoExporter
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.ui.components.ExpandableSection
 import inga.bpmetrics.ui.components.FlowRow
 import kotlinx.coroutines.Dispatchers
@@ -89,7 +89,7 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 fun ExportPreview(
-    records: List<BpmRecord>,
+    records: List<BpmRecordWithPoints>,
     preset: ExportPreset,
     clip: VideoExporter.VideoClip?,
     placement: GraphPlacement,
@@ -256,7 +256,7 @@ fun ExportPreview(
  */
 @Composable
 private fun FullScreenPreview(
-    records: List<BpmRecord>,
+    records: List<BpmRecordWithPoints>,
     preset: ExportPreset,
     clip: VideoExporter.VideoClip?,
     overlay: Uri?,
@@ -624,7 +624,7 @@ private fun handleAt(
  */
 private fun renderPreviewFrame(
     context: android.content.Context,
-    records: List<BpmRecord>,
+    records: List<BpmRecordWithPoints>,
     preset: ExportPreset,
     clip: VideoExporter.VideoClip?,
     overlay: Uri?,

@@ -53,7 +53,7 @@ data class SnapshotZone(val name: String, val durationMs: Long)
  * say that some are gone rather than offering links that lead nowhere.
  */
 data class LoadedAnalysis(
-    val metadata: SavedAnalysisEntity,
+    val metadata: CollectionEntity,
     val records: List<AnalysisSnapshotRecord>,
     val recordsStillInLibrary: Int
 )

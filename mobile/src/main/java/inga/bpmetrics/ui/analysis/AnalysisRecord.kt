@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.library.DerivedFigures
 import inga.bpmetrics.library.AnalysisSnapshotRecord
 import inga.bpmetrics.library.AnalysisSnapshotTag
 import inga.bpmetrics.library.BpmZones
@@ -131,9 +132,10 @@ data class AnalysisRecord(
                 minBpm = record.minDataPoint?.bpm,
                 avgBpm = record.metadata.avg,
                 maxBpm = record.maxDataPoint?.bpm,
-                // Computed now rather than stored, because it depends on the data points and a
-                // saved analysis will not have them.
-                activeDurationMs = record.calculateActiveDurationMs(),
+                // Read, not recomputed. Stored at ingest precisely so a summary needs no readings
+                // at all — see §9. Zero for the seconds between migrating and the backfill
+                // finishing, which is honest: it has not been worked out yet.
+                activeDurationMs = record.activeDurationMs,
                 tags = (effectiveTags?.map { it.tag } ?: record.tags).map { tag ->
                     AnalysisTag(
                         tagName = tag.name,
@@ -164,13 +166,11 @@ data class AnalysisRecord(
                     ?.let { eventLocations[it] }
                     ?.displayName
                     .orEmpty(),
-                // Same walk over the data points that produced the active duration, and the same
-                // gap rule, so the bands and the measured total always agree.
-                zoneTimes = BpmZones.split(
-                    record.dataPoints.map {
-                        (record.metadata.startTime + it.timestamp) to it.bpm
-                    }
-                )
+                // Stored by the same pass that produced the duration, under the same gap rule.
+                // They do not sum to the same number and never have: a band is built from
+                // consecutive pairs, so the final reading contributes none, while the duration
+                // closes that interval with the recording's length. See DerivedFiguresTest.
+                zoneTimes = record.zoneTimes
             )
 
         /** Convenience for mapping a whole list against the category, watch and event tables. */

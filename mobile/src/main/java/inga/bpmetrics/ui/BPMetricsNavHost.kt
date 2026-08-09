@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui
 
+import inga.bpmetrics.library.FilterState
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
@@ -38,11 +39,10 @@ import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysisScreen
 import inga.bpmetrics.ui.analysis.EventAnalysisScreen
 import inga.bpmetrics.ui.analysis.EventDetailViewModel
-import inga.bpmetrics.ui.analysis.SavedAnalysesScreen
 import inga.bpmetrics.ui.record.BpmRecordScreen
 import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.library.LibraryScreen
-import inga.bpmetrics.ui.library.LibraryViewMode
+import inga.bpmetrics.ui.library.CollectionsScreen
 import inga.bpmetrics.ui.library.LibraryViewModel
 import inga.bpmetrics.ui.navigation.AppDestination
 import inga.bpmetrics.ui.navigation.AppDrawerContent
@@ -100,7 +100,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
 
     // What a new analysis covers. Held here rather than in the Library's own filter so the two
     // are independent: analysing a subset should not re-filter the library underneath the user.
-    var analysisFilter by remember { mutableStateOf(LibraryViewModel.FilterState()) }
+    var analysisFilter by remember { mutableStateOf(FilterState()) }
 
     // Same-time analysis is chosen by hand rather than filtered. A filter describes a kind of
     // recording; comparing people at one moment means naming the exact recordings that overlap,
@@ -215,43 +215,19 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     onExportSelection = { recs, exportKind ->
                         libraryViewModel.clearSelection()
                         openExportAs(recs, null, exportKind)
+                    },
+                    onAnalyseFilter = { filter ->
+                        // Carries its own scope, so analysing never re-filters the library
+                        // underneath the person who asked for it.
+                        analysisFilter = filter
+                        navController.navigate(Routes.ANALYSIS_LIVE)
                     }
                 )
             }
 
-            // The drawer lands on the shelf of stored analyses rather than a live one, because a
-            // saved analysis is the thing worth coming back to.
-            composable(Routes.ANALYSIS) {
-                // Room hands back a new Flow per call, and collection is keyed on the instance --
-                // rebuilding it each recomposition would restart the query and blink the empty
-                // state on the way back.
-                val savedAnalyses = remember { repository.getSavedAnalyses() }
-                val availablePeople by libraryViewModel.availablePeople.collectAsState()
-                val availableWatches by libraryViewModel.availableWatches.collectAsState()
-
-                SavedAnalysesScreen(
-                    savedAnalyses = savedAnalyses,
-                    repository = repository,
-                    availablePeople = availablePeople,
-                    availableWatches = availableWatches,
-                    onOpenDrawer = openDrawer,
-                    onOpen = { navController.navigate("${Routes.ANALYSIS_SAVED}/$it") },
-                    onNewAnalysis = { filter ->
-                        // The analysis carries its own scope, so starting one never changes what
-                        // the Library is filtered to.
-                        analysisFilter = filter
-                        navController.navigate(Routes.ANALYSIS_LIVE)
-                    },
-                    onPickForConcurrentAnalysis = {
-                        // No filter dialog for this one: the user picks the exact recordings in
-                        // the Library, because "these three, which overlapped" is not a filter.
-                        awaitingConcurrentSelection = true
-                        navController.navigateToSection(AppDestination.LIBRARY)
-                    },
-                    onDelete = { id -> scope.launch { repository.deleteSavedAnalysis(id) } }
-                )
-            }
-
+            // A live analysis of a question: the library's filter, or the whole library. Reached
+            // from the filter bar and from Collections, never from a tab — analysis is what a
+            // scope shows, not somewhere to go.
             composable(Routes.ANALYSIS_LIVE) {
                 val viewModel: AnalysisViewModel = viewModel(
                     key = analysisFilter.hashCode().toString(),
@@ -271,7 +247,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                                 filterDescription = "${records.size} recordings",
                                 records = records.map { it.toSnapshot() }
                             )
-                            navController.navigateToSection(AppDestination.ANALYSIS)
+                            navController.navigateToSection(AppDestination.COLLECTIONS)
                         }
                     }
                 )
@@ -283,54 +259,20 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             ) { backStackEntry ->
                 val analysisId = backStackEntry.arguments?.getLong("analysisId") ?: return@composable
 
-                // The two kinds of saved analysis open onto different screens, and only the
-                // stored row knows which this is.
-                val saved by produceState<LoadedAnalysis?>(initialValue = null, analysisId) {
-                    value = repository.loadSavedAnalysis(analysisId)
-                }
-                val metadata = saved?.metadata
-
-                if (metadata?.isConcurrent == true) {
-                    val allRecords by repository.records.collectAsState()
-                    val watches by libraryViewModel.availableWatches.collectAsState()
-                    val people by libraryViewModel.availablePeople.collectAsState()
-                    val savedIds = remember(saved) { saved!!.records.map { it.recordId }.toSet() }
-
-                    val stillPresent = remember(allRecords, savedIds) {
-                        allRecords.filter { it.metadata.recordId in savedIds }
-                    }
-                    val analysis = remember(stillPresent, watches, people, metadata) {
-                        ConcurrentAnalysis.from(
-                            records = stillPresent,
-                            watches = watches,
-                            people = people,
-                            window = metadata.windowStartMs?.let { start ->
-                                metadata.windowEndMs?.let { end -> start..end }
-                            }
-                        )
-                    }
-
-                    ConcurrentAnalysisScreen(
-                        analysis = analysis,
-                        title = metadata.name,
-                        records = stillPresent,
-                        graphTitle = metadata.name,
-                        // Already saved, so the action would only create a duplicate.
-                        onSave = null,
-                        onExportVideo = { recs, graphTitle -> openExport(recs, graphTitle) },
-                        onOpenDrawer = openDrawer
-                    )
-                } else {
-                    val viewModel: AnalysisViewModel = viewModel(
-                        factory = AnalysisViewModel.savedFactory(repository, analysisId)
-                    )
-                    AnalysisScreen(
-                        navController = navController,
-                        viewModel = viewModel,
-                        onOpenDrawer = openDrawer,
-                        title = metadata?.name ?: "Saved Analysis"
-                    )
-                }
+                // A frozen selection, rendered entirely from what was captured. The same-time
+                // branch that used to live here is gone: migration 27→28 folded those in as
+                // ordinary collections with hand-picked members, which is what they always were —
+                // they never stored their curves, they re-read them from the library on open.
+                val viewModel: AnalysisViewModel = viewModel(
+                    key = "frozen-$analysisId",
+                    factory = AnalysisViewModel.savedFactory(repository, analysisId)
+                )
+                AnalysisScreen(
+                    navController = navController,
+                    viewModel = viewModel,
+                    onOpenDrawer = openDrawer,
+                    title = "Saved Analysis"
+                )
             }
 
             composable(Routes.WATCHES) {
@@ -342,28 +284,33 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             }
 
             composable(Routes.ANALYSIS_CONCURRENT) {
-                val allRecords by repository.records.collectAsState()
                 val watches by libraryViewModel.availableWatches.collectAsState()
                 val people by libraryViewModel.availablePeople.collectAsState()
 
+                // Readings for the chosen recordings only, loaded when the choice changes.
+                val concurrentRecords by produceState(
+                    initialValue = emptyList<inga.bpmetrics.library.BpmRecordWithPoints>(),
+                    concurrentRecordIds
+                ) {
+                    value = repository.recordsWithPoints(concurrentRecordIds)
+                }
+
                 // Curves are heavy, so the analysis is rebuilt only when its inputs actually
                 // change rather than on every recomposition.
-                val analysis = remember(allRecords, watches, people, concurrentRecordIds) {
+                val analysis = remember(concurrentRecords, watches, people) {
                     ConcurrentAnalysis.from(
-                        records = allRecords.filter { it.metadata.recordId in concurrentRecordIds },
+                        // Only the picked recordings carry readings here. A same-time comparison
+                        // is a handful of overlapping curves, not the library.
+                        records = concurrentRecords,
                         watches = watches,
                         people = people
                     )
                 }
 
-                val selected = remember(allRecords, concurrentRecordIds) {
-                    allRecords.filter { it.metadata.recordId in concurrentRecordIds }
-                }
-
                 ConcurrentAnalysisScreen(
                     analysis = analysis,
                     title = "Same-time analysis",
-                    records = selected,
+                    records = concurrentRecords,
                     // Keeping a set of same-time recordings now makes an event rather than a saved
                     // analysis. It is the same thing named better: it survives in the Library, it
                     // merges a person's split recordings into one lane, and it can be grouped —
@@ -403,8 +350,27 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 )
             }
 
+            composable(Routes.COLLECTIONS) {
+                CollectionsScreen(
+                    viewModel = libraryViewModel,
+                    onOpenDrawer = openDrawer,
+                    onOpen = { navController.navigate("/") },
+                    // The whole library is a scope too, and the only one that always exists.
+                    onAnalyseEverything = {
+                        analysisFilter = inga.bpmetrics.library.FilterState()
+                        navController.navigate(Routes.ANALYSIS_LIVE)
+                    },
+                    // "These three, which overlapped" is not a filter, so it is picked by hand in
+                    // the library — the same door the selection menu already offers.
+                    onPickForSameTime = {
+                        awaitingConcurrentSelection = true
+                        navController.navigateToSection(AppDestination.LIBRARY)
+                    }
+                )
+            }
+
             composable(
-                route = "${Routes.GROUP_DETAIL}/{groupId}",
+                route = "/{groupId}",
                 arguments = listOf(navArgument("groupId") { type = NavType.LongType })
             ) { backStackEntry ->
                 val groupId = backStackEntry.arguments?.getLong("groupId") ?: return@composable
@@ -424,7 +390,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                                 filterDescription = "Group",
                                 records = records.map { it.toSnapshot() }
                             )
-                            navController.navigateToSection(AppDestination.ANALYSIS)
+                            navController.navigateToSection(AppDestination.COLLECTIONS)
                         }
                     },
                     onExportImage = {
@@ -487,10 +453,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     onBack = { navController.popBackStack() },
                     onDeleted = { navController.popBackStack() },
                     onExportImage = {
-                        openExportAs(listOfNotNull(thisRecord), null, ExportKind.IMAGE)
+                        openExportAs(listOfNotNull(thisRecord?.summary), null, ExportKind.IMAGE)
                     },
                     onExportVideo = {
-                        openExportAs(listOfNotNull(thisRecord), null, ExportKind.VIDEO)
+                        openExportAs(listOfNotNull(thisRecord?.summary), null, ExportKind.VIDEO)
                     },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                     onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
@@ -532,7 +498,6 @@ private fun NavHostController.navigateToSection(destination: AppDestination) {
  */
 object Routes {
     /** Combined analysis route. */
-    const val ANALYSIS = "analysis"
     /**
      * Where tags are reviewed, renamed and tidied.
      *
@@ -546,6 +511,9 @@ object Routes {
     /** The venue registry — where things happened, and what the clock says there. */
     const val LOCATIONS = "locations"
     const val LIBRARY = "library"
+
+    /** Collections, reached from the library app bar. See [inga.bpmetrics.ui.library.CollectionsScreen]. */
+    const val COLLECTIONS = "collections"
     const val DETAIL = "detail"
     const val SETTINGS = "settings"
 

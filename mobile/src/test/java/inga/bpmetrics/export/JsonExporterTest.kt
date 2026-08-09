@@ -2,7 +2,7 @@ package inga.bpmetrics.export
 
 import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.library.BpmDataPointEntity
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.PersonEntity
@@ -16,7 +16,7 @@ class JsonExporterTest {
 
     @Test
     fun `toJsonString serializes record metadata, deviceId, wearerName, and category tags`() {
-        val record = BpmRecord(
+        val record = BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = 10L,
                 title = "Concert Session",
@@ -59,7 +59,7 @@ class JsonExporterTest {
     fun `a backup carries the people and watches its records point at`() {
         val person = PersonEntity(personId = 3L, name = "Kyle", colorArgb = 0xFF00E5FF.toInt())
         val watch = WatchEntity(watchId = "watch-uuid", deviceName = "Watch A")
-        val record = BpmRecord(
+        val record = BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = 11L,
                 title = "Subtronics",

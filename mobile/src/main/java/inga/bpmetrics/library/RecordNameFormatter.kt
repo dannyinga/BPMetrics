@@ -72,3 +72,13 @@ object RecordNameFormatter {
  */
 fun BpmRecord.displayName(wearerName: String? = null, watchName: String? = null): String =
     RecordNameFormatter.displayName(metadata, wearerName, watchName)
+
+/**
+ * The same, for a recording carrying its readings.
+ *
+ * Both delegate to [RecordNameFormatter.displayName] over the row, so a chart's title and the tile
+ * that opened it cannot disagree. A forwarder rather than an interface: the two types differ only
+ * in whether the readings came along, which is a fact about the query, not about the recording.
+ */
+fun BpmRecordWithPoints.displayName(wearerName: String? = null, watchName: String? = null): String =
+    RecordNameFormatter.displayName(metadata, wearerName, watchName)

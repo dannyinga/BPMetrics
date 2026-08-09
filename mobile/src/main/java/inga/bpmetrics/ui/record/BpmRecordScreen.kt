@@ -895,7 +895,7 @@ private fun ordinal(n: Int): String {
  */
 @Composable
 private fun SplitRecordDialog(
-    record: inga.bpmetrics.library.BpmRecord,
+    record: inga.bpmetrics.library.BpmRecordWithPoints,
     onDismiss: () -> Unit,
     onSplit: (startMs: Long, endMs: Long) -> Unit
 ) {

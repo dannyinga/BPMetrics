@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
@@ -28,7 +28,7 @@ object EventAnalysis {
      * @param window Restricts to part of the span, for looking at one stretch.
      */
     fun from(
-        records: List<BpmRecord>,
+        records: List<BpmRecordWithPoints>,
         watches: List<WatchEntity> = emptyList(),
         people: List<PersonEntity> = emptyList(),
         window: LongRange? = null
@@ -111,7 +111,7 @@ object EventAnalysis {
      * non-monotonic — and a chart drawing two y-values at one x produces a vertical spike that
      * looks like a heart rate event.
      */
-    private fun mergePoints(records: List<BpmRecord>, window: LongRange?): List<TimedBpm> {
+    private fun mergePoints(records: List<BpmRecordWithPoints>, window: LongRange?): List<TimedBpm> {
         val all = records
             .flatMap { record ->
                 record.dataPoints.map { TimedBpm(record.metadata.startTime + it.timestamp, it.bpm) }
@@ -145,7 +145,7 @@ object EventAnalysis {
      * Naming only the first would be wrong in a way that is hard to notice, so a lane that spans
      * two watches says so instead.
      */
-    private fun watchLabelFor(records: List<BpmRecord>, watchNames: Map<String, String>): String? {
+    private fun watchLabelFor(records: List<BpmRecordWithPoints>, watchNames: Map<String, String>): String? {
         val ids = records.mapNotNull { it.metadata.watchId }.distinct()
         return when (ids.size) {
             0 -> records.firstNotNullOfOrNull {
@@ -158,7 +158,7 @@ object EventAnalysis {
 
     private data class LaneSource(
         val id: String,
-        val records: List<BpmRecord>,
+        val records: List<BpmRecordWithPoints>,
         val label: String,
         val watchLabel: String?,
         val personId: Long?

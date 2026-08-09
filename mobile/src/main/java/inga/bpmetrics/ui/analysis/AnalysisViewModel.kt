@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.library.FilterState
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -179,9 +180,6 @@ class AnalysisViewModel(
      * and a saved analysis is frozen. Null on both, and the screen omits the section rather than
      * offering an action that would have nowhere to write.
      */
-    var tagging: ScopeTagging? = null
-        internal set
-
     /** True when viewing a stored analysis, which cannot be re-saved or re-filtered. */
     val isFrozen: Boolean = savedAnalysisId != null
 
@@ -445,7 +443,7 @@ class AnalysisViewModel(
          */
         fun liveFactory(
             repository: LibraryRepository,
-            filter: LibraryViewModel.FilterState
+            filter: FilterState
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
@@ -453,7 +451,11 @@ class AnalysisViewModel(
                     // Tags passed to the filter as well as to the reduction, so filtering by a
                     // group's tag selects everything underneath it — §2.5.
                     allInScope = repository.analysisRecords { library, tags ->
-                        LibraryViewModel.applyFilter(library, filter, tags)
+                        inga.bpmetrics.library.LibraryFilter.apply(
+                            library,
+                            filter,
+                            inga.bpmetrics.library.FilterContext(effectiveTags = tags)
+                        )
                     },
                     savedAnalysisId = null,
                     scope = repository.describeFilter(filter),
@@ -462,12 +464,16 @@ class AnalysisViewModel(
         }
 
         /**
-         * A live analysis of everything filed under a group.
+         * A live analysis of everything in a collection.
          *
-         * Deliberately the same ViewModel as a filtered analysis. A group and a filter are two ways
-         * of naming a set of recordings, and the questions worth asking of that set — who went
+         * Deliberately the same ViewModel as a filtered analysis. A collection and a filter are two
+         * ways of naming a set of recordings, and the questions worth asking of that set — who went
          * hardest, which event was the peak, how do the tags compare — do not change with how it
          * was named. Two implementations would be two chances to answer differently.
+         *
+         * Membership comes from [inga.bpmetrics.library.Scope], which is also what the library
+         * filter's collection term now calls. They were two walks before, and one of them compared
+         * a collection id against an event's parent id.
          */
         fun groupFactory(
             repository: LibraryRepository,
@@ -475,42 +481,65 @@ class AnalysisViewModel(
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val library = combine(
+                    combine(
+                        repository.records,
+                        repository.allEventsInTree,
+                        repository.getAllCollections(),
+                        repository.allCollectionEventLinks(),
+                        repository.allCollectionRecordLinks()
+                    ) { records, tree, sets, eventLinks, recordLinks ->
+                        inga.bpmetrics.library.Library(
+                            records = records,
+                            events = tree,
+                            collections = sets,
+                            collectionEvents = eventLinks,
+                            collectionRecords = recordLinks
+                        )
+                    },
+                    repository.effectiveTags
+                ) { snapshot, tags ->
+                    // The rule of a smart collection reads tags too, so they go into the context
+                    // rather than only into the reduction below — filtering a collection by an
+                    // event's tag has to pick up everything under it, same as anywhere else.
+                    snapshot.copy(
+                        filterContext = inga.bpmetrics.library.FilterContext(effectiveTags = tags)
+                    )
+                }
+
                 // Membership is resolved before the mapping, not after. Reducing a record computes
                 // its active duration, which walks every data point it has — doing that for the
                 // whole library to keep a dozen recordings would be most of the work wasted.
                 val records = combine(
+                    library,
                     combine(
-                        repository.records,
                         repository.getAllCategories(),
                         repository.getAllWatches(),
                         repository.getAllPeople(),
-                        repository.allEventsInTree,
-                        ::Library
-                    ),
-                    repository.effectiveTags,
-                    combine(
-                        repository.allEventsInTree,
-                        repository.allCollectionEventLinks(),
-                        repository.allCollectionRecordLinks()
-                    ) { tree, eventLinks, recordLinks -> Triple(tree, eventLinks, recordLinks) },
-                    repository.getAllLocations()
-                ) { library, tags, (tree, eventLinks, recordLinks), places ->
-                    // A collection, resolved through the same walk its card counts with. References
-                    // are followed now rather than frozen when they were made, so a recording filed
-                    // into one of its events afterwards is in the analysis.
-                    val ids = inga.bpmetrics.library.CollectionScope.recordsIn(
-                        collectionId = groupId,
-                        events = tree,
-                        records = library.records.map { it.metadata },
-                        eventLinks = eventLinks,
-                        recordLinks = recordLinks
-                    ).mapTo(mutableSetOf()) { it.recordId }
+                        repository.getAllLocations()
+                    ) { categories, watches, people, places ->
+                        listOf(categories, watches, people, places)
+                    },
+                    repository.effectiveTags
+                ) { snapshot, registries, tags ->
+                    @Suppress("UNCHECKED_CAST")
+                    val categories = registries[0] as List<inga.bpmetrics.library.CategoryEntity>
+                    @Suppress("UNCHECKED_CAST")
+                    val watches = registries[1] as List<inga.bpmetrics.library.WatchEntity>
+                    @Suppress("UNCHECKED_CAST")
+                    val people = registries[2] as List<inga.bpmetrics.library.PersonEntity>
+                    @Suppress("UNCHECKED_CAST")
+                    val places = registries[3] as List<inga.bpmetrics.library.LocationEntity>
+
                     AnalysisRecord.from(
-                        library.records.filter { it.metadata.recordId in ids },
-                        library.categories,
-                        library.watches,
-                        library.people,
-                        library.events,
+                        inga.bpmetrics.library.Scope.recordsIn(
+                            inga.bpmetrics.library.ScopeRef.Collection(groupId),
+                            snapshot
+                        ),
+                        categories,
+                        watches,
+                        people,
+                        snapshot.events,
                         tags,
                         places
                     )
@@ -519,21 +548,16 @@ class AnalysisViewModel(
                 // The header and the analysis read the same walk. They were two walks over two
                 // different lists, which is how the header could say "4 events" over an analysis
                 // of six.
-                val scope = combine(
-                    repository.getAllCollections(),
-                    repository.allEventsInTree,
-                    repository.records,
-                    repository.allCollectionEventLinks(),
-                    repository.allCollectionRecordLinks()
-                ) { sets, tree, records, eventLinks, recordLinks ->
-                    sets.firstOrNull { it.collectionId == groupId }?.let { set ->
+                val scope = library.map { snapshot ->
+                    snapshot.collections.firstOrNull { it.collectionId == groupId }?.let { set ->
                         AnalysisScope.Group(
                             name = set.displayName,
-                            eventCount = inga.bpmetrics.library.CollectionScope
-                                .eventsIn(groupId, tree, eventLinks).size,
-                            recordCount = inga.bpmetrics.library.CollectionScope.recordsIn(
-                                groupId, tree, records.map { it.metadata }, eventLinks, recordLinks
-                            ).size
+                            eventCount = inga.bpmetrics.library.Scope
+                                .eventsIn(groupId, snapshot.events, snapshot.collectionEvents).size,
+                            recordCount = inga.bpmetrics.library.Scope.recordsIn(
+                                inga.bpmetrics.library.ScopeRef.Collection(groupId), snapshot
+                            ).size,
+                            isSmart = set.isSmart
                         )
                     } ?: AnalysisScope.Unknown
                 }
@@ -543,7 +567,7 @@ class AnalysisViewModel(
                     savedAnalysisId = null,
                     scope = scope,
                     tree = repository.allEventsInTree
-                ).apply { tagging = ScopeTagging(repository, groupId) } as T
+                ) as T
             }
         }
 
@@ -606,7 +630,7 @@ private fun LibraryRepository.analysisRecords(
  * them — the filter stores ids precisely so that renaming does not break it.
  */
 private fun LibraryRepository.describeFilter(
-    filter: LibraryViewModel.FilterState
+    filter: FilterState
 ): Flow<AnalysisScope> = combine(
     getAllCategories(),
     getAllPeople(),
@@ -652,37 +676,6 @@ private data class Library(
 /** A tag category present in the analysed records. */
 data class AnalysisCategory(val categoryId: Long, val name: String)
 
-/**
- * Reading and writing a group's tags, for the scopes where that means something.
- *
- * A group is the top of the hierarchy, so everything on it is direct and removable here — the
- * resolver is not needed. Kept separate from [AnalysisViewModel] so the shared screen can simply
- * ask whether tagging is available rather than knowing which scope it is showing.
- */
-class ScopeTagging(
-    private val repository: LibraryRepository,
-    private val groupId: Long
-) {
-    val tags: Flow<List<EffectiveTag>> = repository.getTagsForGroup(groupId)
-        .map { list -> list.map { EffectiveTag(it, TagSource.DIRECT) } }
-
-    val categories: Flow<List<CategoryEntity>> = repository.getAllCategories()
-
-    fun tagsInCategory(categoryId: Long): Flow<List<TagEntity>> =
-        repository.getTagsByCategory(categoryId)
-
-    /** Makes a tag on an axis, creating the axis if it is new. See [LibraryRepository.findOrCreateTag]. */
-    suspend fun createTag(categoryName: String, tagName: String): Long? =
-        repository.findOrCreateTag(categoryName, tagName)
-
-    suspend fun setTags(tagIds: List<Long>) {
-        val current = repository.getTagsForGroup(groupId).first().map { it.tagId }
-        current.filterNot { it in tagIds }.forEach { repository.removeTagFromGroup(groupId, it) }
-        tagIds.filterNot { it in current }.forEach { repository.addTagToGroup(groupId, it) }
-    }
-
-    suspend fun removeTag(tagId: Long) = repository.removeTagFromGroup(groupId, tagId)
-}
 
 /**
  * Data representing the UI state of the Analysis Screen.

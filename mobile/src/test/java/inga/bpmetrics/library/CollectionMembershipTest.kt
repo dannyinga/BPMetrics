@@ -18,7 +18,7 @@ import org.junit.Test
  * here reads or writes membership of an event. Those are [EventMembership]'s business and a set has
  * no opinion about them.
  */
-class CollectionScopeTest {
+class CollectionMembershipTest {
 
     private val day = 1_700_000_000_000L
     private fun at(hours: Int) = day + hours * 3_600_000L
@@ -63,13 +63,43 @@ class CollectionScopeTest {
     private fun eventLink(c: Long, e: Long) = CollectionEventCrossRef(c, e)
     private fun recordLink(c: Long, r: Long) = CollectionRecordCrossRef(c, r)
 
+    /**
+     * The old `CollectionScope.recordsIn` signature, over [Scope].
+     *
+     * These cases were written against the collection walk before it was folded into the one
+     * resolver, and they are worth keeping exactly as they are — the rules they pin down did not
+     * change, only where they live. [ScopeTest] covers what the fold *added*.
+     */
+    private fun recordsIn(
+        collectionId: Long,
+        events: List<EventEntity>,
+        records: List<BpmRecordEntity>,
+        eventLinks: List<CollectionEventCrossRef>,
+        recordLinks: List<CollectionRecordCrossRef>
+    ): List<BpmRecordEntity> = Scope.recordsIn(
+        ScopeRef.Collection(collectionId),
+        Library(
+            records = records.map {
+                BpmRecord(
+                    metadata = it,
+                    minDataPoint = null,
+                    maxDataPoint = null
+                )
+            },
+            events = events,
+            collections = listOf(CollectionEntity(collectionId = collectionId, name = "Set")),
+            collectionEvents = eventLinks,
+            collectionRecords = recordLinks
+        )
+    ).map { it.metadata }
+
     // --- The verify step from the product doc, as an assertion ---
 
     @Test
     fun `a set of two festivals months apart resolves to everything in both`() {
         val links = listOf(eventLink(1, 1), eventLink(1, 10))
 
-        val found = CollectionScope.recordsIn(1, library(), records(), links, emptyList())
+        val found = recordsIn(1, library(), records(), links, emptyList())
 
         assertEquals(setOf(100L, 200L, 101L), found.map { it.recordId }.toSet())
     }
@@ -80,7 +110,7 @@ class CollectionScopeTest {
         // level down is the defect this app has had four times.
         val links = listOf(eventLink(1, 1))
 
-        assertEquals(2, CollectionScope.recordsIn(1, library(), records(), links, emptyList()).size)
+        assertEquals(2, recordsIn(1, library(), records(), links, emptyList()).size)
     }
 
     @Test
@@ -88,7 +118,7 @@ class CollectionScopeTest {
         // Both festivals stay exactly where they are on the timeline. A set is a second view over
         // the same objects, not a second home for them.
         val links = listOf(eventLink(1, 1), eventLink(1, 10))
-        CollectionScope.recordsIn(1, library(), records(), links, emptyList())
+        recordsIn(1, library(), records(), links, emptyList())
 
         assertEquals(3L, records().first { it.recordId == 100L }.eventId)
         assertEquals(1L, library().first { it.eventId == 2L }.parentId)
@@ -99,12 +129,12 @@ class CollectionScopeTest {
     @Test
     fun `a recording filed later is in the set without anything being re-added`() {
         val links = listOf(eventLink(1, 1))
-        val before = CollectionScope.recordsIn(1, library(), records(), links, emptyList())
+        val before = recordsIn(1, library(), records(), links, emptyList())
 
         // Somebody files the loose recording into Day 1 afterwards.
         val after = records().map { if (it.recordId == 300L) it.copy(eventId = 2) else it }
 
-        assertEquals(before.size + 1, CollectionScope.recordsIn(1, library(), after, links, emptyList()).size)
+        assertEquals(before.size + 1, recordsIn(1, library(), after, links, emptyList()).size)
     }
 
     @Test
@@ -112,7 +142,7 @@ class CollectionScopeTest {
         val links = listOf(eventLink(1, 1))
         val moved = library().map { if (it.eventId == 2L) it.copy(parentId = null) else it }
 
-        assertTrue(CollectionScope.recordsIn(1, moved, records(), links, emptyList()).isEmpty())
+        assertTrue(recordsIn(1, moved, records(), links, emptyList()).isEmpty())
     }
 
     // --- Many-to-many ---
@@ -124,7 +154,7 @@ class CollectionScopeTest {
         val links = listOf(eventLink(1, 1), eventLink(2, 1), eventLink(3, 1))
 
         listOf(1L, 2L, 3L).forEach { collection ->
-            assertEquals(2, CollectionScope.recordsIn(collection, library(), records(), links, emptyList()).size)
+            assertEquals(2, recordsIn(collection, library(), records(), links, emptyList()).size)
         }
     }
 
@@ -134,7 +164,7 @@ class CollectionScopeTest {
 
         assertEquals(
             setOf(100L, 101L),
-            CollectionScope.recordsIn(1, library(), records(), links, emptyList())
+            recordsIn(1, library(), records(), links, emptyList())
                 .map { it.recordId }.toSet()
         )
     }
@@ -143,7 +173,7 @@ class CollectionScopeTest {
 
     @Test
     fun `a loose recording can be in a set on its own`() {
-        val found = CollectionScope.recordsIn(
+        val found = recordsIn(
             1, library(), records(), emptyList(), listOf(recordLink(1, 300))
         )
 
@@ -154,7 +184,7 @@ class CollectionScopeTest {
     fun `a recording reachable twice is counted once`() {
         // An event in a set alongside one of its own recordings. Counting it twice would make the
         // set report more than the library holds.
-        val found = CollectionScope.recordsIn(
+        val found = recordsIn(
             1, library(), records(), listOf(eventLink(1, 3)), listOf(recordLink(1, 100))
         )
 
@@ -165,14 +195,14 @@ class CollectionScopeTest {
 
     @Test
     fun `an empty set contains nothing`() {
-        assertTrue(CollectionScope.recordsIn(1, library(), records(), emptyList(), emptyList()).isEmpty())
+        assertTrue(recordsIn(1, library(), records(), emptyList(), emptyList()).isEmpty())
     }
 
     @Test
     fun `a reference to a deleted event contributes nothing rather than everything`() {
         val links = listOf(eventLink(1, 999))
 
-        assertTrue(CollectionScope.recordsIn(1, library(), records(), links, emptyList()).isEmpty())
+        assertTrue(recordsIn(1, library(), records(), links, emptyList()).isEmpty())
     }
 
     @Test
@@ -184,7 +214,7 @@ class CollectionScopeTest {
         )
         val links = listOf(eventLink(1, 1))
 
-        assertEquals(0, CollectionScope.recordsIn(1, cyclic, emptyList(), links, emptyList()).size)
+        assertEquals(0, recordsIn(1, cyclic, emptyList(), links, emptyList()).size)
     }
 
     // --- What the card shows ---
@@ -197,16 +227,16 @@ class CollectionScopeTest {
 
         assertEquals(
             setOf("Griztronics", "Bass Canyon"),
-            CollectionScope.eventsIn(1, library(), links).map { it.name }.toSet()
+            Scope.eventsIn(1, library(), links).map { it.name }.toSet()
         )
     }
 
     @Test
     fun `a set spanning months reports both ends`() {
         val links = listOf(eventLink(1, 1), eventLink(1, 10))
-        val found = CollectionScope.recordsIn(1, library(), records(), links, emptyList())
+        val found = recordsIn(1, library(), records(), links, emptyList())
 
-        val span = CollectionScope.spanOf(found)!!
+        val span = Scope.spanOf(found)!!
 
         assertEquals(at(21), span.startMs)
         assertEquals(at(2000) + 600_000L, span.endMs)
@@ -214,15 +244,15 @@ class CollectionScopeTest {
 
     @Test
     fun `a set holding nothing has no span`() {
-        assertNull(CollectionScope.spanOf(emptyList()))
+        assertNull(Scope.spanOf(emptyList()))
     }
 
     @Test
     fun `a picker can tell whether a set already names an event`() {
         val links = listOf(eventLink(1, 1))
 
-        assertTrue(CollectionScope.holdsEvent(1, 1, links))
-        assertTrue(!CollectionScope.holdsEvent(1, 10, links))
-        assertTrue(!CollectionScope.holdsEvent(2, 1, links))
+        assertTrue(Scope.holdsEvent(1, 1, links))
+        assertTrue(!Scope.holdsEvent(1, 10, links))
+        assertTrue(!Scope.holdsEvent(2, 1, links))
     }
 }

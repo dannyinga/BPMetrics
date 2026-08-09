@@ -2,7 +2,7 @@ package inga.bpmetrics.export
 
 import android.net.Uri
 import android.util.Log
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

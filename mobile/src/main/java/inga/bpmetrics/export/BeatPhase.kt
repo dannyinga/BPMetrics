@@ -1,6 +1,6 @@
 package inga.bpmetrics.export
 
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import kotlin.math.floor
 
 /**
@@ -32,7 +32,7 @@ internal object BeatPhase {
      * Trapezoidal, matching the linear interpolation the rest of the renderer reads the rate with —
      * so the pulse and the curve are describing the same recording.
      */
-    fun beatsAt(record: BpmRecord, atMs: Long): Double {
+    fun beatsAt(record: BpmRecordWithPoints, atMs: Long): Double {
         val table = tableFor(record) ?: return 0.0
         val times = table.timestamps
         if (atMs <= times.first()) return 0.0
@@ -58,7 +58,7 @@ internal object BeatPhase {
     }
 
     /** How far through the current beat, 0..1. */
-    fun phaseAt(record: BpmRecord, atMs: Long): Float {
+    fun phaseAt(record: BpmRecordWithPoints, atMs: Long): Float {
         val beats = beatsAt(record, atMs)
         return (beats - floor(beats)).toFloat()
     }
@@ -104,7 +104,7 @@ internal object BeatPhase {
 
     private const val MAX_CACHED = 8
 
-    private fun tableFor(record: BpmRecord): Table? {
+    private fun tableFor(record: BpmRecordWithPoints): Table? {
         val points = record.dataPoints
         if (points.size < 2) return null
 

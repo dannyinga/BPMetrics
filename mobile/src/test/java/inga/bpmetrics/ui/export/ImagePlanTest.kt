@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.export
 
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import inga.bpmetrics.library.EventEntity
 import org.junit.Assert.assertEquals
@@ -16,7 +16,7 @@ import org.junit.Test
 class ImagePlanTest {
 
     private fun record(id: Long, startTime: Long, eventId: Long? = null, personId: Long? = null) =
-        BpmRecord(
+        BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = id,
                 title = "Recording $id",

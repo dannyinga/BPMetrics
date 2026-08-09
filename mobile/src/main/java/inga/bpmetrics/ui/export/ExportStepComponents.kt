@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.clock
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.displayName
@@ -82,6 +83,7 @@ private enum class SourceKind(val label: String) {
 fun SourceStep(
     events: List<EventEntity>,
     collections: List<inga.bpmetrics.library.CollectionEntity>,
+    /* A picker lists names and dates; it draws no curve, so the summary form is what it takes. */
     recordings: List<BpmRecord>,
     peopleById: Map<Long, PersonEntity>,
     selected: ExportSource,
@@ -271,7 +273,7 @@ private fun SourceRow(
 @Composable
 fun ContentsStep(
     clips: List<ClipSelection>,
-    records: List<BpmRecord>,
+    records: List<BpmRecordWithPoints>,
     peopleById: Map<Long, PersonEntity>,
     loading: Boolean,
     hasNoClips: Boolean,
@@ -398,8 +400,8 @@ private fun ClipCard(
      */
     clock: java.time.ZoneId,
     selection: ClipSelection,
-    candidates: List<BpmRecord>,
-    recordsById: Map<Long, BpmRecord>,
+    candidates: List<BpmRecordWithPoints>,
+    recordsById: Map<Long, BpmRecordWithPoints>,
     peopleById: Map<Long, PersonEntity>,
     onToggleClip: () -> Unit,
     onToggleRecord: (Long) -> Unit

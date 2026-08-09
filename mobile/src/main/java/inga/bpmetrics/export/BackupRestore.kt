@@ -190,6 +190,20 @@ suspend fun restoreBackup(
         }
 
         var analysesRestored = 0
+
+        // Selections: collections, smart collections and frozen analyses alike. Members are
+        // re-linked through the maps built above, because ids are reassigned on import.
+        backup.collections.forEach { set ->
+            val newId = repository.restoreCollection(set, eventIdsByName, idMap)
+            restoreCover(
+                repository, context,
+                LibraryRepository.CoverOwner.Collection(newId), set.cover, set.name
+            )
+            analysesRestored++
+        }
+
+        // Pre-format-5 frozen analyses, restored as frozen collections. Nothing writes this any
+        // more; it is here so an older file does not lose numbers that cannot be recomputed.
         backup.savedAnalyses.forEach { analysis ->
             val remapped = analysis.records.map { row ->
                 // An unmapped id means that recording was not in this backup. The row is kept — it

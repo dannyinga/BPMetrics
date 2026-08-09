@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.library
 
+import inga.bpmetrics.library.FilterState
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.LocationEntity
@@ -32,7 +33,7 @@ class FilterChipsTest {
     private val gorge = LocationEntity(locationId = 5, name = "The Gorge", createdAt = 1)
     private val watch = WatchEntity(watchId = "abc", deviceName = "Pixel Watch")
 
-    private fun chips(filter: LibraryViewModel.FilterState) = FilterChips.of(
+    private fun chips(filter: FilterState) = FilterChips.of(
         filter = filter,
         people = listOf(kyle, ben),
         tags = listOf(hulk, rain),
@@ -45,14 +46,14 @@ class FilterChipsTest {
 
     @Test
     fun `an empty filter has no chips`() {
-        assertTrue(chips(LibraryViewModel.FilterState()).isEmpty())
-        assertTrue(LibraryViewModel.FilterState().isEmpty)
+        assertTrue(chips(FilterState()).isEmpty())
+        assertTrue(FilterState().isEmpty)
     }
 
     @Test
     fun `Kyle at Coachella in the rain reads as three terms`() {
         // The sentence the whole redesign exists to make readable.
-        val filter = LibraryViewModel.FilterState(
+        val filter = FilterState(
             selectedPersonIds = setOf(1),
             selectedEventIds = setOf(100),
             selectedTagIds = setOf(20)
@@ -67,14 +68,14 @@ class FilterChipsTest {
     @Test
     fun `a tag is qualified by its axis`() {
         // "Hulk" alone does not say what is being compared, and two categories can hold one word.
-        val filter = LibraryViewModel.FilterState(selectedTagIds = setOf(10))
+        val filter = FilterState(selectedTagIds = setOf(10))
 
         assertEquals("Character › Hulk", chips(filter).single().label)
     }
 
     @Test
     fun `a person chip carries their colour`() {
-        val filter = LibraryViewModel.FilterState(selectedPersonIds = setOf(1))
+        val filter = FilterState(selectedPersonIds = setOf(1))
 
         assertEquals(-65536, chips(filter).single().colorArgb)
     }
@@ -82,11 +83,11 @@ class FilterChipsTest {
     @Test
     fun `the order is stable regardless of what was added first`() {
         // A bar that reshuffles as terms are added is one nobody can scan.
-        val a = LibraryViewModel.FilterState(
+        val a = FilterState(
             selectedPersonIds = setOf(1),
             selectedLocationIds = setOf(5)
         )
-        val b = LibraryViewModel.FilterState(
+        val b = FilterState(
             selectedLocationIds = setOf(5),
             selectedPersonIds = setOf(1)
         )
@@ -98,20 +99,20 @@ class FilterChipsTest {
     @Test
     fun `a rate band only appears when it narrows something`() {
         // A minimum of zero is the default and describes nothing.
-        assertTrue(chips(LibraryViewModel.FilterState(minBpm = 0.0)).isEmpty())
+        assertTrue(chips(FilterState(minBpm = 0.0)).isEmpty())
         assertEquals(
             "120–max bpm",
-            chips(LibraryViewModel.FilterState(minBpm = 120.0)).single().label
+            chips(FilterState(minBpm = 120.0)).single().label
         )
         assertEquals(
             "0–180 bpm",
-            chips(LibraryViewModel.FilterState(maxBpm = 180.0)).single().label
+            chips(FilterState(maxBpm = 180.0)).single().label
         )
     }
 
     @Test
     fun `a date range reads as a range`() {
-        val filter = LibraryViewModel.FilterState(dateRange = 1L to 2L)
+        val filter = FilterState(dateRange = 1L to 2L)
 
         assertEquals("d1 – d2", chips(filter).single().label)
     }
@@ -120,7 +121,7 @@ class FilterChipsTest {
     fun `something no longer in the library drops out rather than showing an id`() {
         // A person deleted while their chip was applied. Showing "person 7" would be worse than
         // showing nothing, and crashing worse still.
-        val filter = LibraryViewModel.FilterState(selectedPersonIds = setOf(7))
+        val filter = FilterState(selectedPersonIds = setOf(7))
 
         assertTrue(chips(filter).isEmpty())
     }
@@ -129,7 +130,7 @@ class FilterChipsTest {
 
     @Test
     fun `removing a chip removes only that term`() {
-        val filter = LibraryViewModel.FilterState(
+        val filter = FilterState(
             selectedPersonIds = setOf(1, 2),
             selectedTagIds = setOf(10)
         )
@@ -143,7 +144,7 @@ class FilterChipsTest {
 
     @Test
     fun `every dimension can be removed`() {
-        val filter = LibraryViewModel.FilterState(
+        val filter = FilterState(
             selectedPersonIds = setOf(1),
             selectedTagIds = setOf(10),
             selectedEventIds = setOf(100),
@@ -164,7 +165,7 @@ class FilterChipsTest {
     fun `a watch is removed by its string id, not a number`() {
         // Watch ids are UUIDs, so the numeric shortcut every other dimension uses would silently
         // fail to match and leave the chip on screen.
-        val filter = LibraryViewModel.FilterState(selectedWatchIds = setOf("abc"))
+        val filter = FilterState(selectedWatchIds = setOf("abc"))
         val chip = chips(filter).single()
 
         assertTrue(FilterChips.without(filter, chip).selectedWatchIds.isEmpty())
@@ -172,7 +173,7 @@ class FilterChipsTest {
 
     @Test
     fun `removing a chip that is already gone changes nothing`() {
-        val filter = LibraryViewModel.FilterState(selectedPersonIds = setOf(2))
+        val filter = FilterState(selectedPersonIds = setOf(2))
         val stale = FilterChip(FilterDimension.PERSON, "person-1", "Kyle")
 
         assertEquals(filter, FilterChips.without(filter, stale))
@@ -182,7 +183,7 @@ class FilterChipsTest {
     fun `the query is not a chip`() {
         // It lives in the search field, which is already visible. A chip for it would be the same
         // text twice, and removing one of the two would be ambiguous.
-        val filter = LibraryViewModel.FilterState(query = "gorge")
+        val filter = FilterState(query = "gorge")
 
         assertTrue(chips(filter).isEmpty())
     }

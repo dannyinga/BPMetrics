@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,13 +52,6 @@ class SettingsViewModel(
                 settingsRepository.setDefaultNamingCategory(categoryId)
             }
         }
-    }
-
-    val defaultViewMode: StateFlow<String> = settingsRepository.libraryViewMode
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "RECORDINGS")
-
-    fun setDefaultViewMode(mode: String) {
-        viewModelScope.launch { settingsRepository.setLibraryViewMode(mode) }
     }
 
     val defaultSort: StateFlow<String?> = settingsRepository.defaultSort
@@ -161,13 +155,35 @@ class SettingsViewModel(
      *
      * Real recordings when there are any, since judging a look against your own data is the point.
      */
-    val previewSubjects: StateFlow<Pair<List<inga.bpmetrics.library.BpmRecord>, List<inga.bpmetrics.library.BpmRecord>>> =
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val previewSubjects: StateFlow<Pair<
+        List<inga.bpmetrics.library.BpmRecordWithPoints>,
+        List<inga.bpmetrics.library.BpmRecordWithPoints>
+    >> =
         repository.records
-            .map { library -> PreviewSubjects.onePerson(library) to PreviewSubjects.severalPeople(library) }
+            .mapLatest { library ->
+                // A preview is a drawing, so it needs readings — but only for the handful it
+                // picks. Which recordings is decided from the rows first, and the readings are
+                // loaded for those alone.
+                val subjects = repository.recordsWithPoints(
+                    (PreviewSubjects.onePerson(library) + PreviewSubjects.severalPeople(library))
+                        .map { it.metadata.recordId }
+                ).associateBy { it.metadata.recordId }
+
+                fun hydrate(chosen: List<inga.bpmetrics.library.BpmRecord>) =
+                    chosen.mapNotNull { subjects[it.metadata.recordId] }
+
+                // Made-up curves only when the library genuinely has nothing to show, which is a
+                // fresh install. Judging a look against your own data is the point of this.
+                hydrate(PreviewSubjects.onePerson(library))
+                    .ifEmpty { PreviewSubjects.syntheticOne() } to
+                    hydrate(PreviewSubjects.severalPeople(library))
+                        .ifEmpty { PreviewSubjects.syntheticSeveral() }
+            }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5000),
-                emptyList<inga.bpmetrics.library.BpmRecord>() to emptyList()
+                emptyList<inga.bpmetrics.library.BpmRecordWithPoints>() to emptyList()
             )
 
     val peopleById: StateFlow<Map<Long, inga.bpmetrics.library.PersonEntity>> =

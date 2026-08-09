@@ -2,7 +2,8 @@ package inga.bpmetrics.export
 
 import com.google.gson.Gson
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
+import inga.bpmetrics.library.BpmRecordEntity
+import inga.bpmetrics.library.CollectionEntity
 import inga.bpmetrics.library.PersonEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -37,6 +38,26 @@ class BackupCoverageTest {
      * field does not need to survive a restore, so each entry says why.
      */
     private val excused: Map<Class<*>, Map<String, String>> = mapOf(
+        BpmRecordEntity::class.java to mapOf(
+            "recordId" to "Reassigned on insert; carried anyway so frozen rows can be re-pointed.",
+            "durationMs" to "Derived from startTime and endTime on restore.",
+            "minId" to "A data point id, reassigned on insert; recomputed from the readings.",
+            "maxId" to "As minId.",
+            "avg" to "Recomputed from the readings at ingest.",
+            "activeDurationMs" to
+                "Recomputed at ingest from the readings, which the backup does carry.",
+            "zonesEncoded" to "As activeDurationMs.",
+            "personId" to "Carried as wearerName; people are renumbered on import.",
+            "eventId" to "Carried as eventName.",
+            "locationId" to "Carried as locationName.",
+            "timeZoneId" to "Reconciled from the restored location tree.",
+            "coverPath" to "A name inside this install's storage. The image travels as bytes.",
+            "coverCropLeft" to "Carried inside cover.",
+            "coverCropTop" to "Carried inside cover.",
+            "coverCropRight" to "Carried inside cover.",
+            "coverCropBottom" to "Carried inside cover.",
+            "coverBlur" to "Carried inside cover."
+        ),
         EventEntity::class.java to mapOf(
             "eventId" to "Reassigned on insert; the backup keys events by name.",
             "groupId" to "Carried as groupName; ids are reassigned.",
@@ -49,9 +70,8 @@ class BackupCoverageTest {
             "coverCropBottom" to "Carried inside cover.",
             "coverBlur" to "Carried inside cover."
         ),
-        EventGroupEntity::class.java to mapOf(
-            "groupId" to "Reassigned on insert; the backup keys collections by name.",
-            "parentGroupId" to "Carried as parentName.",
+        CollectionEntity::class.java to mapOf(
+            "collectionId" to "Reassigned on insert; members are re-linked through the id maps.",
             "coverPath" to "A name inside this install's storage. The image travels as bytes.",
             "coverCropLeft" to "Carried inside cover.",
             "coverCropTop" to "Carried inside cover.",
@@ -96,13 +116,24 @@ class BackupCoverageTest {
     }
 
     @Test
+    fun `a recording's every column reaches the backup`() {
+        // The most important row in the app, and the one this file had never asserted. It is where
+        // §9's two derived columns landed, and they are excused rather than carried — the readings
+        // travel, so both are recomputed at ingest from the same functions that wrote them.
+        assertCovered(BpmRecordEntity::class.java, BpmRecordJsonDto::class.java)
+    }
+
+    @Test
     fun `an event's every column reaches the backup`() {
         assertCovered(EventEntity::class.java, EventDto::class.java)
     }
 
     @Test
     fun `a collection's every column reaches the backup`() {
-        assertCovered(EventGroupEntity::class.java, EventGroupDto::class.java)
+        // Pointed at the table actually in use. It used to assert against `EventGroupEntity`, the
+        // one the 23→24 fold left dead — so it passed for three sprints while collections were not
+        // backed up at all, which is precisely the failure this file exists to catch.
+        assertCovered(CollectionEntity::class.java, CollectionDto::class.java)
     }
 
     @Test
@@ -163,7 +194,7 @@ class BackupCoverageTest {
         val read = gson.fromJson(gson.toJson(backup), LibraryBackup::class.java)
 
         assertEquals(backup, read)
-        assertEquals(4, read.formatVersion)
+        assertEquals(5, read.formatVersion)
     }
 
     @Test

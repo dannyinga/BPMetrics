@@ -139,3 +139,16 @@ val BpmRecordEntity.clockDiffersFromReader: Boolean
  */
 val List<BpmRecord>.clock: java.time.ZoneId
     get() = firstOrNull()?.clock ?: java.time.ZoneId.systemDefault()
+
+/**
+ * The same, for a recording carrying its readings.
+ *
+ * Both forms delegate to [BpmRecordEntity.clock], so a chart and the tile above it read the same
+ * clock. Separate extensions rather than one over an interface: the two types differ only in
+ * whether the readings came along, and an interface for that would be ceremony around a join.
+ */
+val BpmRecordWithPoints.clock: java.time.ZoneId get() = metadata.clock
+
+@get:JvmName("clockOfRecordsWithPoints")
+val List<BpmRecordWithPoints>.clock: java.time.ZoneId
+    get() = firstOrNull()?.clock ?: java.time.ZoneId.systemDefault()

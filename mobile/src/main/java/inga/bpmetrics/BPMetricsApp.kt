@@ -65,10 +65,10 @@ class BPMetricsApp : Application() {
         runCatching { ExportUtils.clearStagedExports(this) }
             .onFailure { Log.e("BPMetricsApp", "Could not reclaim staged exports", it) }
 
-        // Saved same-time analyses become events, once. They were events in all but name — a set
-        // of recordings that happened together, under a name — and leaving both would be two half
-        // features that do not know about each other.
-        libraryRepository.convertConcurrentAnalysesOnce()
+        // Recordings from before the derived figures were columns get them computed once, off the
+        // main thread. Self-healing: the gate is "still null", so this also repairs anything that
+        // later arrives without them.
+        libraryRepository.backfillDerivedFiguresOnce()
 
         // The export presets the app ships with. Seeded from Kotlin rather than the migration so
         // a fresh install and an upgrade take the same path and there is one definition of what

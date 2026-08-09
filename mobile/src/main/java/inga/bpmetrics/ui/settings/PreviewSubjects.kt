@@ -2,6 +2,8 @@ package inga.bpmetrics.ui.settings
 
 import inga.bpmetrics.library.BpmDataPointEntity
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
+import inga.bpmetrics.library.hasReadings
 import inga.bpmetrics.library.BpmRecordEntity
 import inga.bpmetrics.library.PersonColors
 import kotlin.math.sin
@@ -34,10 +36,12 @@ object PreviewSubjects {
      * recognise, which is what makes the preview worth having over a synthetic curve.
      */
     fun onePerson(library: List<BpmRecord>): List<BpmRecord> =
-        library.filter { it.dataPoints.size > 2 }
+        // "Has readings" is read from the stored figures rather than by counting them, so
+        // choosing a subject does not load the library's readings to reject most of them.
+        library.filter { it.hasReadings }
             .maxByOrNull { it.metadata.startTime }
             ?.let { listOf(it) }
-            ?: listOf(synthetic(id = -1, personId = -1, seed = 0.0, restingBpm = 68.0))
+            .orEmpty()
 
     /**
      * Several people over one stretch, or a made-up trio.
@@ -47,7 +51,7 @@ object PreviewSubjects {
      */
     fun severalPeople(library: List<BpmRecord>): List<BpmRecord> {
         val byEvent = library
-            .filter { it.metadata.eventId != null && it.dataPoints.size > 2 }
+            .filter { it.metadata.eventId != null && it.hasReadings }
             .groupBy { it.metadata.eventId }
             .values
             .filter { group -> group.mapNotNull { it.metadata.personId }.distinct().size > 1 }
@@ -55,18 +59,27 @@ object PreviewSubjects {
 
         // Capped at three: a preview crowded with eight lanes says more about the sample than
         // about the preset.
-        if (byEvent != null) return byEvent.take(3)
-
-        return listOf(
-            synthetic(id = -1, personId = -1, seed = 0.0, restingBpm = 66.0),
-            synthetic(id = -2, personId = -2, seed = 1.7, restingBpm = 74.0),
-            synthetic(id = -3, personId = -3, seed = 3.1, restingBpm = 81.0)
-        )
+        return byEvent?.take(3).orEmpty()
     }
+
+    /**
+     * Made-up curves, for a library with nothing suitable in it yet.
+     *
+     * Kept apart from the selectors because these are the one case that has to *invent* readings,
+     * and the selectors deliberately never touch any — they choose rows.
+     */
+    fun syntheticOne(): List<BpmRecordWithPoints> =
+        listOf(synthetic(id = -1, personId = -1, seed = 0.0, restingBpm = 68.0))
+
+    fun syntheticSeveral(): List<BpmRecordWithPoints> = listOf(
+        synthetic(id = -1, personId = -1, seed = 0.0, restingBpm = 66.0),
+        synthetic(id = -2, personId = -2, seed = 1.7, restingBpm = 74.0),
+        synthetic(id = -3, personId = -3, seed = 3.1, restingBpm = 81.0)
+    )
 
     /** Colours for whatever the subject turned out to be, real people included. */
     fun coloursFor(
-        records: List<BpmRecord>,
+        records: List<BpmRecordWithPoints>,
         people: Map<Long, inga.bpmetrics.library.PersonEntity>
     ): Map<Long, Int> = records.mapIndexed { index, record ->
         record.metadata.recordId to PersonColors.colorFor(record.metadata.personId, people, index)
@@ -83,7 +96,7 @@ object PreviewSubjects {
         personId: Long,
         seed: Double,
         restingBpm: Double
-    ): BpmRecord {
+    ): BpmRecordWithPoints {
         // A fixed instant rather than "now": the sample is not a recording of anything, and
         // stamping it with the current time would put a real-looking date on the preview.
         val start = 1_700_000_000_000L
@@ -103,7 +116,7 @@ object PreviewSubjects {
             )
         }
 
-        return BpmRecord(
+        return BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = id,
                 title = "Sample",

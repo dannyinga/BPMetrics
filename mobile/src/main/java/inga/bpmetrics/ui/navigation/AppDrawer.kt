@@ -12,7 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Movie
@@ -69,9 +69,12 @@ enum class AppDestination(
     // middle: it is the one opened most, and the middle of a bottom bar is the easiest place on
     // the screen to reach with a thumb.
     //
-    // Insights rather than Sort: Sort is what the Library's sort control uses, and two places
-    // meaning different things with one glyph is worse than either choice on its own.
-    ANALYSIS(inga.bpmetrics.ui.Routes.ANALYSIS, "Analysis", Icons.Default.Insights, true),
+    // Collections rather than Analysis. They were two lists over one table: a frozen analysis is
+    // a collection with its numbers kept, so the Analysis tab was showing a filtered subset of
+    // what this shows all of. And analysis is not a *place* — §8.5 of the product doc: a detail
+    // screen is a scope, its numbers and a split, so you analyse by opening a recording, an event
+    // or a collection. Naming a tab after the verb implied a fourth kind of thing to go and find.
+    COLLECTIONS(inga.bpmetrics.ui.Routes.COLLECTIONS, "Collections", Icons.Default.Bookmarks, true),
     LIBRARY(inga.bpmetrics.ui.Routes.LIBRARY, "Library", Icons.AutoMirrored.Filled.LibraryBooks, true),
     EXPORT(inga.bpmetrics.ui.Routes.EXPORT, "Export", Icons.Default.VideoLibrary, true),
 

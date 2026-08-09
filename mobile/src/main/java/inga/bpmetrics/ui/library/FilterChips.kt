@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.library
 
+import inga.bpmetrics.library.FilterState
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.LocationEntity
@@ -53,7 +54,7 @@ object FilterChips {
      * same way — a bar that reshuffles as you add terms is one nobody can scan.
      */
     fun of(
-        filter: LibraryViewModel.FilterState,
+        filter: FilterState,
         people: List<PersonEntity> = emptyList(),
         tags: List<TagEntity> = emptyList(),
         categories: List<CategoryEntity> = emptyList(),
@@ -127,7 +128,7 @@ object FilterChips {
      * By id rather than by index, because the list is rebuilt on every change and an index would
      * remove whatever happened to slide into that position.
      */
-    fun without(filter: LibraryViewModel.FilterState, chip: FilterChip): LibraryViewModel.FilterState =
+    fun without(filter: FilterState, chip: FilterChip): FilterState =
         when (chip.dimension) {
             FilterDimension.PERSON -> filter.copy(
                 selectedPersonIds = filter.selectedPersonIds - chip.numericId()

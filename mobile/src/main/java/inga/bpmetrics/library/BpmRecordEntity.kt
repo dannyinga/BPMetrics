@@ -114,7 +114,38 @@ data class BpmRecordEntity (
      * a watch left on the wrong clock. Kept apart from [timeZoneId] so a reconcile can overwrite
      * the resolved answer without destroying a deliberate one.
      */
-    @ColumnInfo(defaultValue = "NULL") val locationId: Long? = null
+    @ColumnInfo(defaultValue = "NULL") val locationId: Long? = null,
+
+    /**
+     * Measured time with the dropouts taken out, or null on a row that predates the column.
+     *
+     * Stored because it is the only per-reading number a summary needs, and because a recording's
+     * readings never change: they are written once at ingest, and merge and split create new
+     * records rather than editing old ones. Deriving it live meant loading every reading in the
+     * library to answer "how long was this" — see §9 of the product doc.
+     *
+     * Null is "nobody has computed it yet", which the backfill in
+     * [LibraryRepository.backfillDerivedFigures] fixes. Distinct from `0`, which is a real answer
+     * for a recording with no readings, and the reason this is not simply defaulted.
+     *
+     * There is one definition of the calculation, [BpmRecord.calculateActiveDurationMs], and this
+     * column holds its output rather than a second implementation of it in SQL.
+     */
+    @ColumnInfo(defaultValue = "NULL") val activeDurationMs: Long? = null,
+
+    /**
+     * Time in each heart rate band, as `name:ms`, one per line.
+     *
+     * The other per-reading number, stored for the same reason and in the same encoding
+     * `saved_analysis_records` already used — that path had to store it because a frozen analysis
+     * has no readings to recompute from, which is the same problem a points-free library stream
+     * has.
+     *
+     * **Depends on [BpmZones.DEFAULT] being constant.** The bands are absolute and hard-coded, so
+     * this never goes stale. Making them configurable would mean recomputing every row, and that
+     * repass has to be built at the same time or the numbers quietly describe the old bands.
+     */
+    @ColumnInfo(defaultValue = "") val zonesEncoded: String = ""
     ) {
 
     /** This recording's own cover, if it was given one. */

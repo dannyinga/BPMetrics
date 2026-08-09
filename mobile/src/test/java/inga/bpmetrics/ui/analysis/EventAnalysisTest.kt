@@ -1,7 +1,7 @@
 package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.library.BpmDataPointEntity
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
@@ -33,7 +33,7 @@ class EventAnalysisTest {
         personId: Long? = null,
         watchId: String? = null,
         wearer: String = ""
-    ): BpmRecord {
+    ): BpmRecordWithPoints {
         val points = bpms.mapIndexed { i, bpm ->
             BpmDataPointEntity(
                 dataPointId = id * 10_000 + i,
@@ -42,7 +42,7 @@ class EventAnalysisTest {
                 bpm = bpm
             )
         }
-        return BpmRecord(
+        return BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = id,
                 title = "Record $id",

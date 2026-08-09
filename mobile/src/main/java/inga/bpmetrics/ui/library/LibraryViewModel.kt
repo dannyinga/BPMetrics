@@ -9,6 +9,10 @@ import inga.bpmetrics.export.LibraryBackup
 import inga.bpmetrics.export.RestoreResult
 import inga.bpmetrics.export.restoreBackup
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.CollectionEntity
+import inga.bpmetrics.library.FilterCodec
+import inga.bpmetrics.library.FilterState
+import inga.bpmetrics.library.rule
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.EffectiveTag
@@ -52,34 +56,59 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     val selectedRecordIds = _selectedRecordIds.asStateFlow()
 
     /**
-     * A flow that emits the list of records after applying the current filter state.
-     * This is shared to avoid redundant filtering when consumed by multiple components (like Analysis).
+     * The library after the current filter, shared so Analysis can read it without re-filtering.
      */
     val filteredRecords: Flow<List<BpmRecord>> = combine(
-        repository.records,
-        _filterState,
-        repository.effectiveTags,
-        // The whole tree and the venue registry, because free text matches event and place names
-        // too — someone types "gorge" without knowing or caring which dimension holds it.
-        repository.allEventsInTree,
-        repository.getAllLocations()
-    ) { records, filter, tags, events, places ->
-        val byId = places.associateBy { it.locationId }
-        val resolved = events.associate { event ->
+        combine(
+            repository.records,
+            _filterState,
+            repository.effectiveTags,
+            // The whole tree and the venue registry, because free text matches event and place
+            // names too — someone types "gorge" without knowing or caring which dimension holds it.
+            repository.allEventsInTree,
+            repository.getAllLocations(),
+            ::FilterInputs
+        ),
+        // Collections and their membership, so the collection term resolves through Scope instead
+        // of being derived a second time here. It used to compare a collection id against the
+        // event's *parent event* id — different tables, different id spaces — which narrowed the
+        // library by an unrelated rule and drew no chip to undo it.
+        repository.getAllCollections(),
+        repository.allCollectionEventLinks(),
+        repository.allCollectionRecordLinks()
+    ) { inputs, sets, eventLinks, recordLinks ->
+        val byId = inputs.places.associateBy { it.locationId }
+        val resolved = inputs.events.associate { event ->
             event.eventId to inga.bpmetrics.library.LocationResolver
-                .forEvent(event.eventId, events, byId)
+                .forEvent(event.eventId, inputs.events, byId)
                 ?.location
         }
-        applyFilter(
-            records = records,
-            filter = filter,
-            effectiveTags = tags,
-            groupIdByEvent = events.associate { it.eventId to it.parentId },
-            eventNames = events.associate { it.eventId to it.displayName },
+
+        val context = inga.bpmetrics.library.FilterContext(
+            effectiveTags = inputs.tags,
+            eventNames = inputs.events.associate { it.eventId to it.displayName },
             placeNames = resolved.mapNotNull { (id, place) ->
                 place?.let { id to it.displayName }
             }.toMap(),
             locationIdByEvent = resolved.mapValues { it.value?.locationId }
+        )
+
+        val library = inga.bpmetrics.library.Library(
+            records = inputs.records,
+            events = inputs.events,
+            collections = sets,
+            collectionEvents = eventLinks,
+            collectionRecords = recordLinks,
+            filterContext = context
+        )
+
+        inga.bpmetrics.library.LibraryFilter.apply(
+            records = inputs.records,
+            filter = inputs.filter,
+            context = context.copy(
+                recordIdsByCollection = inga.bpmetrics.library.Scope
+                    .recordIdsByCollection(library)
+            )
         )
     }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
 
@@ -196,92 +225,93 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     fun clearFilter() { _filterState.value = FilterState() }
 
-    // --- Saved views (TX-4.3) ---
+    // --- Pinned selections ---
 
     /**
-     * Filters someone kept, pinned to the library.
+     * The selections pinned to the bar.
      *
-     * What makes the bar worth building: a filter that has to be rebuilt each time is a form, and
-     * one that can be pinned is a view. It stores the *question*, so a recording added tomorrow
-     * appears in it — freezing the answer would make it a saved analysis, which already exists.
+     * Saved views and collections are the same object now: a named set of recordings, whose
+     * membership is a rule, a list, or both. Either can be pinned, so the bar shows both — tapping
+     * one narrows the library to it, which is what a saved view always did and what opening a
+     * collection always did. §8 of the product doc.
      */
-    val savedViews: StateFlow<List<inga.bpmetrics.library.SavedViewEntity>> =
-        repository.getSavedViews()
+    val pinnedSelections: StateFlow<List<CollectionEntity>> =
+        repository.getPinnedSelections()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Whichever saved view the current filter exactly matches, or null. */
-    val activeViewId: StateFlow<Long?> = combine(savedViews, _filterState) { views, filter ->
-        // Compared as filters rather than as text: two JSON strings can differ by key order and
-        // mean the same thing, and a pinned view that fails to light up when it is applied looks
-        // broken.
-        views.firstOrNull { FilterSerialisation.fromJson(it.filterJson) == filter }?.viewId
+    /** Whichever pinned selection the current filter is showing, or null. */
+    val activeViewId: StateFlow<Long?> = combine(pinnedSelections, _filterState) { pinned, filter ->
+        pinned.firstOrNull { set ->
+            // A smart one lights up when its own question is applied; a hand-made one when the
+            // filter is exactly "this collection". Compared as filters rather than as text, since
+            // two JSON strings can differ by key order and mean the same thing — and a pinned chip
+            // that fails to light when it is applied looks broken.
+            set.rule()?.let { it == filter }
+                ?: (filter == FilterState(selectedGroupIds = setOf(set.collectionId)))
+        }?.collectionId
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /**
+     * Keeps the current question as a pinned, smart collection.
+     *
+     * It stores the question, so a recording added tomorrow appears in it. Freezing the answer
+     * instead is "Save analysis" — the same object with its numbers copied.
+     */
     fun saveCurrentAsView(name: String) {
         viewModelScope.launch {
-            repository.saveView(name, FilterSerialisation.toJson(_filterState.value))
+            repository.saveSelection(name, FilterCodec.toJson(_filterState.value))
         }
     }
 
     /**
-     * Applies a view, or clears it when it is already applied.
+     * Shows a pinned selection, or clears it when it is already showing.
      *
-     * Tapping the lit one turns it off, so a pinned view is a toggle rather than a one-way door
-     * that needs the separate Clear to escape.
+     * Tapping the lit one turns it off, so a chip is a toggle rather than a one-way door needing
+     * the separate Clear to escape. A hand-made collection becomes a filter term rather than a
+     * navigation — one resolver answers both, so the library narrows to exactly what the
+     * collection's own screen would list.
      */
-    fun applyView(view: inga.bpmetrics.library.SavedViewEntity) {
-        val stored = FilterSerialisation.fromJson(view.filterJson)
-        _filterState.value = if (_filterState.value == stored) FilterState() else stored
+    fun applyView(set: CollectionEntity) {
+        val target = set.rule() ?: FilterState(selectedGroupIds = setOf(set.collectionId))
+        _filterState.value = if (_filterState.value == target) FilterState() else target
     }
 
-    /** Replaces what a view asks with whatever is applied now. */
-    fun updateViewToCurrent(viewId: Long) {
+    /** Replaces what a smart selection asks with whatever is applied now. */
+    fun updateViewToCurrent(collectionId: Long) {
         viewModelScope.launch {
-            repository.updateViewFilter(viewId, FilterSerialisation.toJson(_filterState.value))
+            repository.setCollectionRule(collectionId, FilterCodec.toJson(_filterState.value))
         }
     }
 
-    fun renameView(viewId: Long, name: String) {
-        viewModelScope.launch { repository.renameView(viewId, name) }
+    fun renameView(collectionId: Long, name: String) {
+        viewModelScope.launch { repository.renameCollection(collectionId, name) }
     }
 
-    fun deleteView(viewId: Long) {
-        viewModelScope.launch { repository.deleteView(viewId) }
+    /**
+     * Unpins rather than deletes.
+     *
+     * The chip row is a shelf, not the collection itself. Deleting from a bar of chips would be far
+     * too easy to do by accident now that a hand-made set — one somebody assembled by hand — can be
+     * sitting there beside a one-line rule.
+     */
+    fun unpinView(collectionId: Long) {
+        viewModelScope.launch { repository.setCollectionPinned(collectionId, false) }
     }
 
 
     // --- Events and groups ---
 
-    /**
-     * Which of the three library views is showing, restored from settings.
-     *
-     * Read once at construction rather than collected: this is where the user left off, not a live
-     * value, and treating it as a flow would fight their taps every time settings emitted.
-     */
-    private val _viewMode = MutableStateFlow(LibraryViewMode.TIMELINE)
-    val viewMode: StateFlow<LibraryViewMode> = _viewMode.asStateFlow()
-
     init {
         viewModelScope.launch {
-            val saved = repository.getLibraryViewMode()
-            // Falls back to TIMELINE, which also catches the stored "EVENTS" from before it was
-            // replaced — an unrecognised name should land on the primary view rather than on
-            // whichever one happens to be listed first.
-            _viewMode.value = LibraryViewMode.entries.firstOrNull { it.name == saved }
-                ?: LibraryViewMode.TIMELINE
-
-            // Read once, for the same reason as the view mode: this is where the user left off,
-            // not a live value. Collecting it would re-sort the list under their hands every time
-            // the preference emitted.
+            // Read once rather than collected: this is where the user left off, not a live value.
+            // Collecting it would re-sort the list under their hands every time the preference
+            // emitted. An unrecognised name falls back to [SortOption.DATE], which is also the one
+            // that keeps the events — landing on the flat list because a stored name went stale
+            // would look like the library had lost its structure.
             repository.getDefaultSort()
                 ?.let { name -> SortOption.entries.firstOrNull { it.name == name } }
                 ?.let { _sortOption.value = it }
         }
-    }
-
-    fun setViewMode(mode: LibraryViewMode) {
-        _viewMode.value = mode
-        viewModelScope.launch { repository.setLibraryViewMode(mode.name) }
     }
 
     /**
@@ -526,25 +556,44 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         val recordLinks = args[4] as List<inga.bpmetrics.library.CollectionRecordCrossRef>
         @Suppress("UNCHECKED_CAST")
         val people = args[5] as Map<Long, PersonEntity>
-        val byId = records.associateBy { it.metadata.recordId }
+        val library = inga.bpmetrics.library.Library(
+            records = records,
+            events = events,
+            collections = sets,
+            collectionEvents = eventLinks,
+            collectionRecords = recordLinks
+        )
         sets.map { set ->
-            val within = inga.bpmetrics.library.CollectionScope.recordsIn(
-                collectionId = set.collectionId,
-                events = events,
-                records = records.map { it.metadata },
-                eventLinks = eventLinks,
-                recordLinks = recordLinks
+            val within = inga.bpmetrics.library.Scope.recordsIn(
+                inga.bpmetrics.library.ScopeRef.Collection(set.collectionId),
+                library
             )
             CollectionSummary(
                 collection = set,
-                people = within.mapNotNull { r -> r.personId?.let { people[it] } }.distinct(),
-                events = inga.bpmetrics.library.CollectionScope.eventsIn(
+                people = within.mapNotNull { r -> r.metadata.personId?.let { people[it] } }
+                    .distinct(),
+                events = inga.bpmetrics.library.Scope.eventsIn(
                     set.collectionId, events, eventLinks
                 ),
-                records = within.mapNotNull { byId[it.recordId] }
+                records = within
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Pins a set to the library bar, or takes it off. */
+    fun setCollectionPinned(collectionId: Long, pinned: Boolean) {
+        viewModelScope.launch { repository.setCollectionPinned(collectionId, pinned) }
+    }
+
+    /**
+     * Turns a smart collection back into a hand-made one.
+     *
+     * Whatever it names by hand stays; it simply stops re-asking. Deleting and rebuilding would
+     * throw away members the rule never found.
+     */
+    fun clearCollectionRule(collectionId: Long) {
+        viewModelScope.launch { repository.setCollectionRule(collectionId, null) }
+    }
 
     fun createCollection(name: String, withRecords: Set<Long> = emptySet()) {
         viewModelScope.launch {
@@ -695,13 +744,21 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     val timeline: StateFlow<List<inga.bpmetrics.library.TimelineRow>> = combine(
         repository.allEventsInTree,
-        repository.records,
-        _expandedInTimeline
-    ) { events, records, expanded ->
+        // The *filtered* records, not the whole library. This read `repository.records` while the
+        // flat list read the filtered ones, so the filter bar did nothing at all in the default
+        // view — two lists over one set of data, one of them quietly ignoring the filter. That
+        // divergence is why the two views were merged.
+        filteredRecords,
+        _expandedInTimeline,
+        _filterState,
+        _isReversed
+    ) { events, records, expanded, filter, reversed ->
         inga.bpmetrics.library.LibraryTimeline.build(
             events = events,
             records = records.map { it.metadata },
-            expandedIds = expanded
+            expandedIds = expanded,
+            pruneEmpty = !filter.isEmpty,
+            newestFirst = !reversed
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -798,9 +855,19 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     )
 
     /**
-     * Updates the sorting option.
+     * Sorts the library, and remembers it.
+     *
+     * Persisted because the sort now decides the shape too — grouped into events, or flat — so
+     * forgetting it means reopening on a different-looking library than the one that was left.
      */
-    fun setSortOption(option: SortOption) { _sortOption.value = option }
+    fun setSortOption(option: SortOption) {
+        _sortOption.value = option
+        // An ordering with no tree in it has no events to act on, and a selection you cannot see is
+        // one that swallows the back button and then acts on rows nobody remembers picking.
+        // Expansion is left alone deliberately: that survives a round trip through another sort.
+        if (!option.isGrouped) _selectedEventIds.value = emptySet()
+        viewModelScope.launch { repository.setDefaultSort(option.name) }
+    }
 
     /**
      * Toggles the reversal of the sorted list.
@@ -855,7 +922,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * would keep two more queries running for the life of the screen.
      */
     fun buildBackupJson(
-        records: List<BpmRecord>,
         people: List<PersonEntity>,
         watches: List<WatchEntity>,
         categories: List<CategoryEntity>,
@@ -865,23 +931,30 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         viewModelScope.launch {
             onReady(
                 JsonExporter.toBackupJson(
-                    records = records,
+                    // Loaded here, not passed in. A backup is the one thing that genuinely wants
+                    // every reading in the library, and it wants them for a few seconds at the
+                    // moment of writing the file — not resident for the life of the screen.
+                    records = repository.recordsWithPoints(
+                        repository.records.value.map { it.metadata.recordId }
+                    ),
                     people = people,
                     watches = watches,
                     categories = categories,
-                    savedAnalyses = repository.getSavedAnalysesForBackup(),
                     settings = repository.getSettingsForBackup(),
+                    // Collections, smart collections and frozen analyses — all one thing since
+                    // the fold, and none of them had ever been carried at all. `savedAnalyses` is
+                    // left empty: nothing writes it now, and it survives in the format only so a
+                    // file taken before format 5 still restores its frozen numbers.
+                    collections = repository.getCollectionsForBackup(),
                     // The whole tree, collections included — they are events carrying
                     // `type: "Collection"`, so they restore through the same path as everything
                     // else. `eventGroups` stays in the format only to read files written before
                     // the fold; nothing writes it any more.
                     events = repository.allEventsInTree.first(),
-                    eventGroups = emptyList(),
                     // Tags on events, which since the fold includes tags on collections. These were
                     // never exported, so a restored library came back with every recording and none
                     // of the organisation above it.
                     eventTags = repository.getEventTagsForBackup(),
-                    groupTags = emptyMap(),
                     // Cover and photograph bytes, inlined. A stored file name means nothing on the
                     // device a backup is restored onto.
                     readImage = { name ->
@@ -1041,8 +1114,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * @param onDone called with what happened, since a refusal has a reason worth reading.
      */
     fun mergeSelectedRecords(deleteOriginals: Boolean, onDone: (String) -> Unit) {
-        val chosen = repository.records.value.filter { it.metadata.recordId in _selectedRecordIds.value }
-        val refusal = RecordMerge.refusal(chosen)
+        val chosen = _selectedRecordIds.value
+        // Refused on the metadata alone, before any readings are read: whether these are one
+        // person's recordings is a question the row answers, and loading tens of thousands of
+        // readings to be told no would be the wrong order.
+        val refusal = RecordMerge.refusal(
+            repository.records.value.filter { it.metadata.recordId in chosen }.map { it.metadata }
+        )
         if (refusal != null) {
             onDone(refusal)
             return
@@ -1118,164 +1196,27 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /**
      * Options for sorting the record list.
      */
-    enum class SortOption { DATE, MAX_BPM, AVG_BPM, LOW_BPM, DURATION }
-    
     /**
-     * Represents the criteria used to filter the record list.
+     * How the library is ordered — and therefore what shape it takes.
+     *
+     * **[DATE] groups; everything else flattens.** A tree is only meaningful when the ordering key
+     * is the one that nests: chronology nests, because a festival is a stretch of time containing
+     * stretches of time. Peak rate does not. "Which set went hardest" is a different question, and
+     * the analysis split answers it properly — so sorting the library by peak gives a flat list of
+     * recordings rather than a tree ordered by something its structure knows nothing about.
+     *
+     * [shapeLabel] is on the control rather than left implicit, because the list changing shape
+     * under you is the one surprising thing about this and naming it costs nothing.
      */
-    data class FilterState(
-        /**
-         * Free text, matched against a recording's title, its person, its event and its venue.
-         *
-         * The thing a filter dialog could never be: you know what you are looking for before you
-         * know which of the app's dimensions it lives in. Typing "gorge" should find it whether
-         * that is a venue, an event name or something someone typed in a title.
-         */
-        val query: String = "",
-        val dateRange: Pair<Long, Long>? = null,
-        val selectedTagIds: Set<Long> = emptySet(),
-        val minBpm: Double = 0.0,
-        val maxBpm: Double? = null,
-        /**
-         * People to include, matched against who was wearing the watch at the time.
-         *
-         * Answers "show me Kyle's recordings" — and because each record settled on a person when it
-         * arrived, it keeps answering correctly after that watch has been handed to someone else.
-         * Renaming Kyle does not disturb it either, since the match is on the profile rather than
-         * on a copy of the name.
-         */
-        val selectedPersonIds: Set<Long> = emptySet(),
-        /**
-         * Watches to include, matched on the physical device rather than the name.
-         *
-         * Answers the other question: "show me everything this watch ever recorded", whoever was
-         * wearing it and whatever it was called at the time.
-         */
-        val selectedWatchIds: Set<String> = emptySet(),
-        /**
-         * Events to include, matched on the event a recording is filed under.
-         *
-         * Distinct from filtering by a tag the event carries: this asks "what was at this
-         * occasion", which is true regardless of how anything was tagged.
-         */
-        val selectedEventIds: Set<Long> = emptySet(),
-        /** Groups to include, matched through the event each recording is filed under. */
-        val selectedGroupIds: Set<Long> = emptySet(),
-        /** Venues to include, matched on the location a recording resolves to. */
-        val selectedLocationIds: Set<Long> = emptySet()
-    ) {
-        /** Whether anything is narrowing the library at all. */
-        val isEmpty: Boolean
-            get() = this == FilterState()
-    }
+    enum class SortOption(val label: String, val shapeLabel: String) {
+        DATE("By time", "grouped"),
+        MAX_BPM("By peak", "all recordings"),
+        AVG_BPM("By average", "all recordings"),
+        LOW_BPM("By lowest", "all recordings"),
+        DURATION("By length", "all recordings");
 
-    companion object {
-        /**
-         * Applies a filter to a set of records.
-         *
-         * Lives here rather than inside [filteredRecords] because Analysis filters independently:
-         * choosing what to analyse must not disturb what the Library is showing.
-         */
-        /**
-         * @param effectiveTags Each recording's tags including the ones inherited from its event
-         *   and group, keyed by record id. Empty means fall back to the recording's own tags,
-         *   which is correct for callers that have not resolved inheritance.
-         */
-        /**
-         * @param groupIdByEvent Which group each event belongs to, so a recording can be matched
-         *   against a group through its event rather than storing a second link.
-         */
-        fun applyFilter(
-            records: List<BpmRecord>,
-            filter: FilterState,
-            effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap(),
-            groupIdByEvent: Map<Long, Long?> = emptyMap(),
-            /** Event names and venues, so free text can match them without a second lookup. */
-            eventNames: Map<Long, String> = emptyMap(),
-            placeNames: Map<Long, String> = emptyMap(),
-            locationIdByEvent: Map<Long?, Long?> = emptyMap()
-        ): List<BpmRecord> {
-            // Tag ids resolved through the hierarchy, so filtering by a group's tag returns every
-            // recording underneath it — the point of §2.5. Falls back to the recording's own tags
-            // where inheritance has not been resolved.
-            fun tagIdsFor(record: BpmRecord): Set<Long> =
-                effectiveTags[record.metadata.recordId]
-                    ?.map { it.tag.tagId }
-                    ?.toSet()
-                    ?: record.tags.map { it.tagId }.toSet()
-
-            // Category comes from the tags in play, which now include inherited ones — a tag that
-            // only ever appears via a group would otherwise have no category and be skipped,
-            // silently matching everything.
-            val tagToCategoryMap = buildMap {
-                records.forEach { record ->
-                    record.tags.forEach { put(it.tagId, it.parentCategoryId) }
-                    effectiveTags[record.metadata.recordId]?.forEach {
-                        put(it.tag.tagId, it.tag.parentCategoryId)
-                    }
-                }
-            }
-
-            return records.filter { record ->
-                // 1. Date Filter
-                val dateMatch = filter.dateRange?.let { (start, end) ->
-                    record.metadata.startTime in start..end
-                } ?: true
-
-                // 2. Cross-Category Tag Filter (Requirement: OR within categories, AND between categories)
-                val tagMatch = if (filter.selectedTagIds.isNotEmpty()) {
-                    val selectedTagsByCategory = filter.selectedTagIds
-                        .mapNotNull { tagId -> tagToCategoryMap[tagId]?.let { catId -> catId to tagId } }
-                        .groupBy({ it.first }, { it.second })
-
-                    val recordTagIds = tagIdsFor(record)
-
-                    selectedTagsByCategory.all { (_, selectedTagIds) ->
-                        selectedTagIds.any { it in recordTagIds }
-                    }
-                } else true
-
-                // 3. BPM Filter
-                val avg = record.metadata.avg ?: 0.0
-                val bpmMatch = (avg >= filter.minBpm) &&
-                        (filter.maxBpm == null || avg <= filter.maxBpm)
-
-                // 4. Wearer Filter — matched on who was wearing the watch when the recording was
-                // made, so past recordings stay attributed to whoever actually made them.
-                val wearerMatch = filter.selectedPersonIds.isEmpty() ||
-                        record.metadata.personId in filter.selectedPersonIds
-
-                // 5. Watch Filter — the physical device, independent of naming.
-                val watchMatch = filter.selectedWatchIds.isEmpty() ||
-                        record.metadata.watchId in filter.selectedWatchIds
-
-                // 6. Event and group — the occasion rather than the hardware or the person.
-                val eventMatch = filter.selectedEventIds.isEmpty() ||
-                        record.metadata.eventId in filter.selectedEventIds
-
-                // Reached through the event, not stored on the recording, so moving an event
-                // between groups reclassifies everything in it with nothing to rewrite.
-                val groupMatch = filter.selectedGroupIds.isEmpty() ||
-                        record.metadata.eventId?.let { groupIdByEvent[it] } in filter.selectedGroupIds
-
-                // Free text across everything a person might remember about a recording. They
-                // know what they are looking for before they know which of the app's dimensions
-                // it lives in, which is the thing a sectioned dialog could never do.
-                val queryMatch = filter.query.isBlank() || listOfNotNull(
-                    record.metadata.title,
-                    record.metadata.description,
-                    record.metadata.wearerName,
-                    record.metadata.eventId?.let { eventNames[it] },
-                    record.metadata.eventId?.let { placeNames[it] }
-                ).any { it.contains(filter.query.trim(), ignoreCase = true) }
-
-                val locationMatch = filter.selectedLocationIds.isEmpty() ||
-                    locationIdByEvent[record.metadata.eventId] in filter.selectedLocationIds
-
-                dateMatch && tagMatch && bpmMatch && wearerMatch && watchMatch &&
-                        eventMatch && groupMatch && queryMatch && locationMatch
-            }
-        }
+        /** Whether this ordering can carry the tree. Only chronology can. */
+        val isGrouped: Boolean get() = this == DATE
     }
 
     /**
@@ -1320,7 +1261,6 @@ data class LibraryUIState(
  * The other two are ways of *not* reading chronologically: [RECORDINGS] is the flat list to filter
  * and multi-select in, [GROUPS] is the arbitrary sets a timeline cannot express.
  */
-enum class LibraryViewMode { TIMELINE, RECORDINGS, GROUPS }
 
 /**
  * A collection with what it resolves to, for a card to describe it without a second query.
@@ -1393,3 +1333,19 @@ data class EventSummary(
 fun List<BpmRecord>.spanOrNull(): TimeSpan? =
     if (isEmpty()) null
     else TimeSpan(minOf { it.metadata.startTime }, maxOf { it.metadata.endTime })
+
+/**
+ * The five library streams the filter reads, bundled so they fit one [combine].
+ *
+ * Kotlin's `combine` tops out at five sources, and the filter now needs eight — the collection
+ * graph arrived when membership moved into [inga.bpmetrics.library.Scope]. Nesting one combine
+ * inside another needs a name for the inner result, and a named shape beats a `Quintuple` nobody
+ * can read at the call site.
+ */
+private data class FilterInputs(
+    val records: List<BpmRecord>,
+    val filter: FilterState,
+    val tags: Map<Long, List<inga.bpmetrics.library.EffectiveTag>>,
+    val events: List<inga.bpmetrics.library.EventEntity>,
+    val places: List<inga.bpmetrics.library.LocationEntity>
+)
