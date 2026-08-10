@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedButton
+import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Save
@@ -144,6 +146,7 @@ fun AnalysisScreen(
     val lanes by viewModel.lanes.collectAsStateWithLifecycle()
     val exclusions by viewModel.exclusions.collectAsStateWithLifecycle()
     val curves by viewModel.curves.collectAsStateWithLifecycle()
+    val drawsChart by viewModel.chartDrawsItself.collectAsStateWithLifecycle()
     val scopeEntries by viewModel.scopeEntries.collectAsStateWithLifecycle()
     var showScopeRefinement by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(false)
@@ -283,7 +286,9 @@ fun AnalysisScreen(
                     onRefineScope = { showScopeRefinement = true },
                     isRefined = !exclusions.isEmpty,
                     curves = curves,
-                    extra = summaryExtra
+                    extra = summaryExtra,
+                    drawsChart = drawsChart,
+                    onDrawChart = { viewModel.requestChart() }
                 )
 
                 AnalysisSection.COMPARE -> CompareSection(
@@ -323,7 +328,7 @@ fun AnalysisScreen(
                     themeColor = themeColor,
                     isolatedPersonId = isolatedPersonId,
                     onToggleReverse = { viewModel.toggleRecordsReverse() },
-                    onOpen = { navController.navigate("/") },
+                    onOpen = { navController.navigate("${Routes.DETAIL}/$it") },
                     onRemoveFromScope = onRemoveFromScope
                 )
             }
@@ -454,7 +459,10 @@ private fun SummarySection(
     /** The curves for this scope, or empty when there are none to draw. */
     curves: ConcurrentAnalysis = ConcurrentAnalysis(),
     /** Whatever the subject wants to add here. See [AnalysisScreen]. */
-    extra: (@Composable () -> Unit)? = null
+    extra: (@Composable () -> Unit)? = null,
+    /** False when the scope is large enough that the chart waits to be asked for. */
+    drawsChart: Boolean = true,
+    onDrawChart: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -472,8 +480,14 @@ private fun SummarySection(
         //
         // Absent for a frozen selection, whose readings may be gone. That is not a gap: its
         // numbers were copied precisely because the curves could not be.
-        if (!curves.isEmpty) {
-            item { ScopeCurves(curves) }
+        when {
+            !curves.isEmpty -> item { ScopeCurves(curves) }
+            // Too much to draw unasked. Offered rather than omitted: a missing chart with no
+            // explanation reads as a page that failed, and the reason — how much there is —
+            // is the same reason someone might still want it.
+            !drawsChart && !uiState.isEmpty -> item {
+                OfferChart(uiState.totalActiveDurationMs, uiState.recordCount, onDrawChart)
+            }
         }
 
         // Above the totals, because choosing to compare changes what every figure below means.
@@ -673,7 +687,7 @@ private fun RecordingsSection(
                 }
             }
         }
-        items(records, key = { "record-" }) { record ->
+        items(records, key = { "record-${it.recordId}" }) { record ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     RecordRow(
@@ -1230,6 +1244,27 @@ private fun ScopeCurves(analysis: ConcurrentAnalysis) {
             onIsolate = { isolatedId = it },
             modifier = Modifier.fillMaxWidth().height(220.dp)
         )
+
+        // The moments everyone spiked at once. Only meaningful with more than one lane, which is
+        // why it lived on the same-time screen — but that screen was this chart with a heading,
+        // and a scope of overlapping recordings is just a scope.
+        if (analysis.peaks.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            SectionTitle(
+                "Moments you reacted together",
+                "Ranked by how far each person was into their own range, so one being fitter " +
+                    "than another does not decide it."
+            )
+            Spacer(Modifier.height(4.dp))
+            analysis.peaks.forEach { moment ->
+                MomentRow(
+                    clock = analysis.clock,
+                    moment = moment,
+                    isSelected = scrubbedMs == moment.wallClockMs,
+                    onClick = { scrubbedMs = moment.wallClockMs }
+                )
+            }
+        }
     }
 }
 
@@ -1266,4 +1301,83 @@ private fun ExportKindDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+/**
+ * The chart, offered rather than drawn.
+ *
+ * For a scope big enough that fetching and merging every reading in it is a visible wait — a
+ * festival is tens of hours across several people, which is hundreds of thousands of readings.
+ * Drawing that unasked made opening the page slow for everyone, including the people who came to
+ * read the numbers.
+ *
+ * Says how much there is, because that is both the reason it is not drawn and the reason someone
+ * might still want it.
+ */
+@Composable
+private fun OfferChart(activeMs: Long, recordCount: Int, onDraw: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            SectionTitle(
+                "Over time",
+                "$recordCount recording${if (recordCount == 1) "" else "s"}, " +
+                    "${shortDuration(activeMs)} of readings"
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onDraw) { Text("Draw the chart") }
+        }
+    }
+}
+
+/**
+ * One moment everyone spiked at.
+ *
+ * Lifted from the same-time screen when that screen turned out to be this chart with a heading.
+ * Tapping puts the scrub line on it, which is the point: the number is only interesting next to the
+ * curves that produced it.
+ */
+@Composable
+private fun MomentRow(
+    moment: GroupMoment,
+    isSelected: Boolean,
+    clock: java.time.ZoneId,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = if (isSelected) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        } else {
+            CardDefaults.cardColors()
+        }
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    getTimeString(moment.wallClockMs, clock),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "${moment.participants} wearing watches",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Text(
+                "${moment.intensityPercent}%",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
 }

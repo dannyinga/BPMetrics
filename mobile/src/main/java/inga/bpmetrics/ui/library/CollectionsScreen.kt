@@ -54,7 +54,7 @@ fun CollectionsScreen(
     onOpen: (Long) -> Unit,
     /** The whole library as a scope — the one that always exists, however empty this list is. */
     onAnalyseEverything: () -> Unit = {},
-    /** Picking overlapping recordings by hand, which no filter expresses. */
+    /** Picking recordings by hand, which no filter expresses. */
     onPickForSameTime: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -96,9 +96,10 @@ fun CollectionsScreen(
                     }
                 },
                 actions = {
-                    // Two scopes that are not collections and never will be: the whole library,
-                    // and a hand-picked set of overlapping recordings. Offered here because this
-                    // is where someone comes looking to compare something.
+                    // Two scopes that are not collections: the whole library, and a set picked by
+                    // hand. Offered here because this is where someone comes looking to compare
+                    // something — and a hand-picked set opens the same page a collection does,
+                    // which is why it no longer needs a screen or a rule of its own.
                     Box {
                         var menu by remember { mutableStateOf(false) }
                         IconButton(onClick = { menu = true }) {
@@ -110,7 +111,7 @@ fun CollectionsScreen(
                                 onClick = { menu = false; onAnalyseEverything() }
                             )
                             DropdownMenuItem(
-                                text = { Text("Compare at the same time…") },
+                                text = { Text("Compare chosen recordings…") },
                                 onClick = { menu = false; onPickForSameTime() }
                             )
                         }

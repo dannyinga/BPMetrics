@@ -31,7 +31,10 @@ import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CallMerge
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FilterAltOff
@@ -121,11 +124,12 @@ fun LibraryScreen(
      * say what it is waiting for rather than looking like it navigated somewhere arbitrary.
      */
     awaitingConcurrentSelection: Boolean = false,
-    onAnalyseTogether: (Set<Long>) -> Unit = {},
     /** Opens the export utility for the current multi-selection, as a video or an image. */
     onExportSelection: (List<BpmRecord>, ExportKind) -> Unit = { _, _ -> },
     /** Analyses the library as currently filtered — the question, as its own scope. */
-    onAnalyseFilter: (inga.bpmetrics.library.FilterState) -> Unit = {}
+    onAnalyseFilter: (inga.bpmetrics.library.FilterState) -> Unit = {},
+    /** Analyses a hand-picked set, which is a scope like any other. */
+    onAnalyseSelection: (Set<Long>) -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
@@ -179,6 +183,7 @@ fun LibraryScreen(
     // Which collection a cover is being chosen for. Held outside the picker because the launcher is
     var showSortMenu by remember { mutableStateOf(false) }
     var showSelectionMenu by remember { mutableStateOf(false) }
+    var showBulkEdit by remember { mutableStateOf(false) }
     // The filter is a bar now, not a dialog. Kept only as "is the bar open" — the terms themselves
     // live in the ViewModel, so closing the bar no longer hides what is applied.
     var showFilterBar by rememberSaveable { mutableStateOf(false) }
@@ -373,218 +378,108 @@ fun LibraryScreen(
                         val selectedRecords = uiState.records.filter {
                             it.metadata.recordId in selectedRecordIds
                         }
+                        val hasSelection = selectedRecordIds.isNotEmpty()
 
-                        // Only Select All stays on the bar. Six icons left no room for a label,
-                        // so every one of them was a guess from an unfamiliar glyph.
                         IconButton(onClick = { viewModel.selectAll(uiState.records) }) {
                             Icon(Icons.Default.SelectAll, contentDescription = "Select All")
                         }
 
-                        IconButton(onClick = { showSelectionMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More actions")
+                        // Editing the recordings, all of it, behind one door. This menu held
+                        // thirteen items, most of which were not actions on a selection but edits
+                        // to the things in it — each having earned a row as it was added.
+                        if (hasSelection) {
+                            IconButton(onClick = { showBulkEdit = true }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit selected")
+                            }
                         }
 
-                        DropdownMenu(
-                            expanded = showSelectionMenu,
-                            onDismissRequest = { showSelectionMenu = false }
-                        ) {
-                            // Same-time analysis needs recordings that actually ran together, so
-                            // the action says why it is unavailable rather than simply refusing.
-                            val overlaps = remember(selectedRecords) {
-                                ConcurrentAnalysis.anyOverlap(selectedRecords.map { it.metadata })
+                        // One Analyse, whatever was picked. A hand-chosen set is a scope like any
+                        // other now — §8.3 — so it opens the same detail page an event or a
+                        // collection does, and the old rule about refusing unless the recordings
+                        // overlapped went with the screen that needed it.
+                        if (hasSelection) {
+                            IconButton(onClick = { onAnalyseSelection(selectedRecordIds) }) {
+                                Icon(Icons.Default.Insights, contentDescription = "Analyse")
                             }
-                            DropdownMenuItem(
-                                enabled = overlaps,
-                                text = {
-                                    Column {
-                                        Text("Analyse together")
-                                        if (!overlaps) {
-                                            Text(
-                                                if (selectedRecords.size < 2) {
-                                                    "Select two or more recordings"
-                                                } else {
-                                                    "These were not recorded at the same time"
-                                                },
-                                                style = MaterialTheme.typography.bodySmall
-                                            )
-                                        }
+                        }
+
+                        Box {
+                            IconButton(onClick = { showSelectionMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "More")
+                            }
+                            DropdownMenu(
+                                expanded = showSelectionMenu,
+                                onDismissRequest = { showSelectionMenu = false }
+                            ) {
+                                // What is left is what is not an edit: joining recordings into
+                                // one, getting them out of the app, and destroying them.
+                                DropdownMenuItem(
+                                    text = { Text("Merge into one") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.CallMerge, contentDescription = null)
+                                    },
+                                    enabled = selectedRecordIds.size > 1,
+                                    onClick = {
+                                        showSelectionMenu = false
+                                        showMergeDialog = true
                                     }
-                                },
-                                leadingIcon = { Icon(Icons.Default.Timeline, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    onAnalyseTogether(selectedRecordIds)
-                                }
-                            )
+                                )
 
-                            DropdownMenuItem(
-                                text = { Text("Add tags") },
-                                leadingIcon = { Icon(Icons.Default.Sell, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    showBulkTagDialog = true
-                                }
-                            )
+                                HorizontalDivider()
 
-                            DropdownMenuItem(
-                                text = { Text("Attribute to…") },
-                                leadingIcon = { Icon(Icons.Default.People, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    showBulkWearerDialog = true
-                                }
-                            )
-
-                            DropdownMenuItem(
-                                text = { Text("Add to event") },
-                                leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    showAddToEventDialog = true
-                                }
-                            )
-
-                            // Distinct from filing, and worth two menu items rather than one:
-                            // an event is where a recording *lives* and it has exactly one, a
-                            // collection is a grouping it can be in any number of at once.
-                            DropdownMenuItem(
-                                text = { Text("Add to collection") },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.LibraryBooks,
-                                        contentDescription = null
-                                    )
-                                },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    addingSelectionToCollection = true
-                                }
-                            )
-
-                            HorizontalDivider()
-
-                            DropdownMenuItem(
-                                text = { Text("Export video") },
-                                leadingIcon = { Icon(Icons.Default.Movie, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    onExportSelection(selectedRecords, ExportKind.VIDEO)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Set cover…") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Image, contentDescription = null)
-                                },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    pickCoverForSelection()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Remove cover") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Delete, contentDescription = null)
-                                },
-                                // The counterpart to Set. It clears the cover on the event these
-                                // recordings share — the same place Set put it, so the pair are
-                                // symmetrical rather than one of them acting somewhere else.
-                                onClick = {
-                                    showSelectionMenu = false
-                                    viewModel.clearCoverForSelection(context) { message ->
-                                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                // Two formats, both files. Video and image left this menu when the
+                                // detail page gained a single Export button — a picture of a
+                                // recording is made from the page showing that recording, where
+                                // what it will look like is on screen.
+                                DropdownMenuItem(
+                                    text = { Text("Export CSV") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Save, contentDescription = null)
+                                    },
+                                    enabled = hasSelection,
+                                    onClick = {
+                                        showSelectionMenu = false
+                                        recordIdsToExport =
+                                            selectedRecords.map { it.metadata.recordId }
+                                        chooseFolderLauncher.launch(null)
                                     }
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Merge into one") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Timeline, contentDescription = null)
-                                },
-                                // Two or more of one person. The menu says why when it cannot,
-                                // rather than offering an item that silently does nothing.
-                                enabled = selectedRecords.size > 1,
-                                onClick = {
-                                    showSelectionMenu = false
-                                    showMergeDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Export image") },
-                                leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    onExportSelection(selectedRecords, ExportKind.IMAGE)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Export CSV") },
-                                leadingIcon = { Icon(Icons.Default.Save, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    recordIdsToExport =
-                                        selectedRecords.map { it.metadata.recordId }
-                                    chooseFolderLauncher.launch(null)
-                                    exitSelection()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Save backup (.bpmjson)") },
-                                leadingIcon = { Icon(Icons.Default.Save, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    recordsToBackUp = selectedRecords
-                                    val stamp = java.text.SimpleDateFormat(
-                                        "yyyyMMdd_HHmm",
-                                        java.util.Locale.US
-                                    ).format(java.util.Date())
-                                    saveBackupLauncher.launch("BPMetrics_Backup_$stamp.bpmjson")
-                                    exitSelection()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Share as .bpmjson") },
-                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    // People, watches and categories go with the records, or the
-                                    // file restores recordings that belong to nobody.
-                                    // Readings loaded for the chosen recordings at the moment of
-                                    // sharing. A share is the file's whole content, so it needs
-                                    // them — but only for what was picked.
-                                    val chosen = selectedRecords.map { it.metadata.recordId }
-                                    exportScope.launch {
-                                        JsonExporter.shareJson(
-                                            context = context,
-                                            records = viewModel.repository
-                                                .recordsWithPoints(chosen),
-                                            people = availablePeopleForBackup,
-                                            watches = watches,
-                                            categories = categoriesForBackup
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Save backup (.bpmjson)") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Save, contentDescription = null)
+                                    },
+                                    enabled = hasSelection,
+                                    onClick = {
+                                        showSelectionMenu = false
+                                        recordsToBackUp = selectedRecords
+                                        saveBackupLauncher.launch(
+                                            "BPMetrics_Backup_" +
+                                                System.currentTimeMillis() + ".bpmjson"
                                         )
                                     }
-                                    exitSelection()
-                                }
-                            )
+                                )
 
-                            HorizontalDivider()
+                                HorizontalDivider()
 
-                            DropdownMenuItem(
-                                text = {
-                                    Text("Delete", color = MaterialTheme.colorScheme.error)
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Delete,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                },
-                                onClick = {
-                                    showSelectionMenu = false
-                                    showBulkDeleteDialog = true
-                                }
-                            )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    },
+                                    enabled = hasSelection,
+                                    onClick = {
+                                        showSelectionMenu = false
+                                        showBulkDeleteDialog = true
+                                    }
+                                )
+                            }
                         }
                     }
                 )
@@ -723,8 +618,8 @@ fun LibraryScreen(
                     )
                 ) {
                     Text(
-                        "Tap Select in the bar above — or press and hold a recording — to pick the " +
-                            "ones made at the same time, then choose Analyse together.",
+                        "Tap Select in the bar above — or press and hold a recording — to pick " +
+                            "the ones you want to compare, then tap Analyse.",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(12.dp)
                     )
@@ -892,6 +787,28 @@ fun LibraryScreen(
                 }
                 showMergeDialog = false
             }
+        )
+    }
+
+    // The edits, behind one door. Each row opens the picker that already exists for it — the
+    // selection menu used to hold all of them flat, and grew a row every time a recording gained
+    // a property.
+    if (showBulkEdit) {
+        BulkEditDialog(
+            count = selectedRecordIds.size,
+            hasCover = selectedRecordsForBulk.any { coversByRecord[it.metadata.recordId] != null },
+            onTags = { showBulkEdit = false; showBulkTagDialog = true },
+            onAttribute = { showBulkEdit = false; showBulkWearerDialog = true },
+            onFileIntoEvent = { showBulkEdit = false; showAddToEventDialog = true },
+            onAddToCollection = { showBulkEdit = false; addingSelectionToCollection = true },
+            onSetCover = { showBulkEdit = false; pickCoverForSelection() },
+            onRemoveCover = {
+                showBulkEdit = false
+                viewModel.clearCoverForSelection(context) { message ->
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                }
+            },
+            onDismiss = { showBulkEdit = false }
         )
     }
 

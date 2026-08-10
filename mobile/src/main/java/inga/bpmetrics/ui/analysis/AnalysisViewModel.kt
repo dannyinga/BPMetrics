@@ -17,6 +17,7 @@ import inga.bpmetrics.library.TagSource
 import inga.bpmetrics.library.BpmZones
 import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.ui.library.LibraryViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 
 /**
@@ -206,31 +207,67 @@ class AnalysisViewModel(
 
 
     /**
+     * Whether the curves have been asked for.
+     *
+     * Only consulted for a scope big enough to be worth asking about — see [AUTO_DRAW_LIMIT_MS].
+     */
+    private val _chartRequested = MutableStateFlow(false)
+
+    fun requestChart() { _chartRequested.value = true }
+
+    /**
+     * How much measured time is in scope, from the stored figures.
+     *
+     * Free: §9.2 put active duration on the row precisely so a summary needs no readings. That
+     * makes it the right thing to decide *whether to load readings* by — the decision costs
+     * nothing, which a decision about avoiding work has to.
+     */
+    private val scopeActiveMs: Flow<Long> = analysisRecords
+        .map { rows -> rows.sumOf { it.activeDurationMs } }
+        .distinctUntilChanged()
+
+    /** Whether the chart is drawn without being asked. */
+    val chartDrawsItself: StateFlow<Boolean> = combine(
+        scopeActiveMs,
+        _chartRequested
+    ) { active, requested -> requested || active <= AUTO_DRAW_LIMIT_MS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /**
      * The curves, for the scope as refined.
      *
      * The one part of a detail page that genuinely needs the readings, so it is the one part that
-     * loads them — for whatever the scope settled on, and never for the library. That is §9.3, and
-     * it is why the load work had to land before this sprint rather than after it.
+     * loads them — for whatever the scope settled on, and never for the library. That is §9.3.
+     *
+     * **Not drawn unasked for a large scope.** A festival's subtree is tens of hours across several
+     * people, which is hundreds of thousands of readings to fetch and merge for a chart two inches
+     * tall that nobody may have come to look at. Under [AUTO_DRAW_LIMIT_MS] it simply draws, which
+     * covers every single recording and most single sets; over it, the page offers.
+     *
+     * **Off the main thread.** Merging and sampling is real work, and doing it on the dispatcher
+     * that draws the screen stalls the screen it is meant to draw. The event page used to say so in
+     * a comment on a `flowOn` that this fold dropped — the freeze that came back was that, not the
+     * loading.
      *
      * Driven by [analysisRecords] rather than the raw scope, so unticking a recording in the
-     * refinement sheet takes its lane off the chart too. A chart describing a different set of
-     * recordings from the numbers beside it is the failure this whole initiative keeps finding.
+     * refinement sheet takes its lane off the chart too.
      *
      * Empty for a frozen selection: its readings may be gone, which is why its numbers were copied
-     * in the first place. [readings] defaults to returning nothing, so that path needs no special
-     * case here.
+     * in the first place.
      */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val curves: StateFlow<ConcurrentAnalysis> = combine(
         analysisRecords
             .map { rows -> rows.map { it.recordId } }
             .distinctUntilChanged(),
-        chartContext
-    ) { ids, context -> ids to context }
-        .mapLatest { (ids, context) ->
-            if (ids.isEmpty()) ConcurrentAnalysis()
+        chartContext,
+        chartDrawsItself
+    ) { ids, context, draw -> Triple(ids, context, draw) }
+        .mapLatest { (ids, context, draw) ->
+            if (ids.isEmpty() || !draw) ConcurrentAnalysis()
             else EventAnalysis.from(readings(ids), context.watches, context.people)
         }
+        .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConcurrentAnalysis())
 
     /**
@@ -449,6 +486,17 @@ class AnalysisViewModel(
          * Negative so they can never collide with a real category, whose ids are generated
          * positive by Room.
          */
+        /**
+         * How much measured time a scope may hold before its chart waits to be asked for.
+         *
+         * Six hours, which at roughly a reading a second is about twenty thousand of them. That
+         * covers any single recording and most single sets, so the common case simply draws. A
+         * festival subtree — tens of hours across several people — does not, and would otherwise
+         * fetch and merge hundreds of thousands of readings for a chart nobody may have opened the
+         * page to see.
+         */
+        const val AUTO_DRAW_LIMIT_MS = 6L * 60 * 60 * 1000
+
         const val WATCH_CATEGORY_ID = -2L
         const val EVENT_CATEGORY_ID = -3L
 
@@ -613,6 +661,15 @@ private fun LibraryRepository.liveRecordsInScope(ref: ScopeRef): Flow<List<Analy
  */
 private fun LibraryRepository.describeScope(ref: ScopeRef): Flow<AnalysisScope> = when (ref) {
     is ScopeRef.Query -> describeFilter(ref.filter)
+
+    is ScopeRef.Selection -> records.map { rows ->
+        val chosen = rows.count { it.metadata.recordId in ref.recordIds }
+        AnalysisScope.Group(
+            name = " recording" + if (chosen == 1) "" else "s",
+            eventCount = 0,
+            recordCount = chosen
+        )
+    }
 
     is ScopeRef.Recording -> records.map { rows ->
         rows.firstOrNull { it.metadata.recordId == ref.recordId }

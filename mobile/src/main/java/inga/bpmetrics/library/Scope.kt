@@ -22,6 +22,16 @@ sealed interface ScopeRef {
 
     /** A question not yet saved — whatever the filter bar currently says. */
     data class Query(val filter: FilterState) : ScopeRef
+
+    /**
+     * Recordings picked out by hand.
+     *
+     * "These three, which overlapped" is not a filter and never will be, so it gets its own way of
+     * being named. Everything downstream treats it like any other scope — which is the point: once
+     * a detail page is a scope, its numbers and a split, comparing a hand-picked set stops being a
+     * separate feature with a separate screen.
+     */
+    data class Selection(val recordIds: Set<Long>) : ScopeRef
 }
 
 /**
@@ -69,6 +79,9 @@ object Scope {
     ): List<BpmRecord> = when (ref) {
         is ScopeRef.Recording ->
             library.records.filter { it.metadata.recordId == ref.recordId }
+
+        is ScopeRef.Selection ->
+            library.records.filter { it.metadata.recordId in ref.recordIds }
 
         is ScopeRef.Event -> {
             val within = EventTree.descendantsOf(library.events, ref.eventId)

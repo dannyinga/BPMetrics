@@ -562,35 +562,6 @@ object JsonExporter {
         } else null
     }
 
-    /**
-     * Shares records as a backup file.
-     *
-     * Pass the people, watches and categories to produce a restorable backup; without them this
-     * degrades to the old record-only export.
-     */
-    fun shareJson(
-        context: Context,
-        // With readings: sharing a recording means sharing what it recorded.
-        records: List<BpmRecordWithPoints>,
-        people: List<PersonEntity> = emptyList(),
-        watches: List<WatchEntity> = emptyList(),
-        categories: List<CategoryEntity> = emptyList()
-    ) {
-        if (records.isEmpty()) return
-        val fileName = if (records.size == 1) {
-            val title = records.first().metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
-            "${title}_export.bpmjson"
-        } else {
-            "BPMetrics_Backup_${System.currentTimeMillis()}.bpmjson"
-        }
-        val tempFile = File(context.cacheDir, fileName)
-        try {
-            FileWriter(tempFile).use { it.write(toBackupJson(records, people, watches, categories)) }
-            ExportUtils.shareFile(context, tempFile, "application/json")
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
 }
 
 /** How far up a chain of collections to walk before assuming a cycle. */
