@@ -37,6 +37,7 @@ import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysisScreen
+import inga.bpmetrics.ui.detail.CollectionDetailScreen
 import inga.bpmetrics.ui.detail.EventDetailScreen
 import inga.bpmetrics.ui.detail.RecordingDetailScreen
 import inga.bpmetrics.ui.record.BpmRecordViewModel
@@ -373,27 +374,21 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             }
 
             composable(
-                route = "/{groupId}",
+                route = "${Routes.GROUP_DETAIL}/{groupId}",
                 arguments = listOf(navArgument("groupId") { type = NavType.LongType })
             ) { backStackEntry ->
                 val groupId = backStackEntry.arguments?.getLong("groupId") ?: return@composable
-                val groupViewModel: AnalysisViewModel = viewModel(
-                    key = "group-$groupId",
-                    factory = AnalysisViewModel.forScope(
-                        repository,
-                        inga.bpmetrics.library.ScopeRef.Collection(groupId)
-                    )
-                )
-                AnalysisScreen(
+                CollectionDetailScreen(
                     navController = navController,
-                    viewModel = groupViewModel,
-                    onOpenDrawer = openDrawer,
+                    repository = repository,
+                    libraryViewModel = libraryViewModel,
+                    collectionId = groupId,
                     onBack = { navController.popBackStack() },
                     onSave = { name, records ->
                         scope.launch {
                             repository.saveAnalysis(
                                 name = name,
-                                filterDescription = "Group",
+                                filterDescription = "Collection",
                                 records = records.map { it.toSnapshot() }
                             )
                             navController.navigateToSection(AppDestination.COLLECTIONS)

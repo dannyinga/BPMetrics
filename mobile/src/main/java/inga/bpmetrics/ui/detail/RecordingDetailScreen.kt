@@ -14,7 +14,7 @@ import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -100,6 +100,20 @@ fun RecordingDetailScreen(
         }
     }
 
+    // One recording's readings as a file, from the page that recording is on. It was in the old
+    // app bar and the fold dropped it; the library's multi-select still has the bulk version.
+    val saveCsv = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri: android.net.Uri? ->
+        uri?.let { target ->
+            record?.let { rec ->
+                context.contentResolver.openOutputStream(target)?.use { out ->
+                    out.write(inga.bpmetrics.export.CsvExporter.getCsvString(rec).toByteArray())
+                }
+            }
+        }
+    }
+
     var editing by remember { mutableStateOf(false) }
     var tagging by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
@@ -178,6 +192,14 @@ fun RecordingDetailScreen(
                     // Tags and the venue moved into the editor with the rest of what a recording
                     // is. What is left here are the two things that are not edits: making a new
                     // recording out of part of this one, and destroying it.
+                    DropdownMenuItem(
+                        text = { Text("Save CSV…") },
+                        leadingIcon = { Icon(Icons.Default.Save, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            r?.let { saveCsv.launch(it.metadata.title.replace(" ", "_") + ".csv") }
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("Split…") },
                         leadingIcon = { Icon(Icons.Default.CallSplit, contentDescription = null) },

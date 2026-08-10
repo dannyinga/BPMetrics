@@ -186,15 +186,18 @@ fun EventDetailScreen(
                 Icon(Icons.Default.Edit, contentDescription = "Edit event")
             }
         },
+        // Filing something wrongly is easy, and undoing it should not mean opening the recording
+        // to change which event it is in.
+        onRemoveFromScope = { subject.removeRecord(it) },
         subjectOverflow = {
             Box {
                 IconButton(onClick = { menuOpen = true }) {
                     Icon(Icons.Default.MoreVert, contentDescription = "More")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    // Tags and the venue moved into the editor, where the rest of what an event is
-                    // already lives. A menu of one-field editors is a menu that grows a row every
-                    // time the thing gains a property.
+                    // Tags, the venue and the photo moved into the editor, where the rest of what
+                    // an event is already lives. A menu of one-field editors is a menu that grows
+                    // a row every time the thing gains a property.
                     DropdownMenuItem(
                         text = { Text("Delete event") },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },

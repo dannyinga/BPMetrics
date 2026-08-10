@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.DropdownMenuItem
@@ -124,7 +125,15 @@ fun AnalysisScreen(
      *
      * Null for every other subject, which has nothing extra to say.
      */
-    summaryExtra: (@Composable () -> Unit)? = null
+    summaryExtra: (@Composable () -> Unit)? = null,
+    /**
+     * Takes a recording out of the subject, where the subject is something it can be *in*.
+     *
+     * An event, in practice. A collection's membership is edited from the collection, and a
+     * filter's is not membership at all — so this is null everywhere else and the row simply has
+     * no button.
+     */
+    onRemoveFromScope: ((Long) -> Unit)? = null
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
     var choosingExport by remember { mutableStateOf(false) }
@@ -314,7 +323,8 @@ fun AnalysisScreen(
                     themeColor = themeColor,
                     isolatedPersonId = isolatedPersonId,
                     onToggleReverse = { viewModel.toggleRecordsReverse() },
-                    onOpen = { navController.navigate("${Routes.DETAIL}/$it") }
+                    onOpen = { navController.navigate("/") },
+                    onRemoveFromScope = onRemoveFromScope
                 )
             }
         }
@@ -641,7 +651,9 @@ private fun RecordingsSection(
     themeColor: Color,
     isolatedPersonId: Long?,
     onToggleReverse: () -> Unit,
-    onOpen: (Long) -> Unit
+    onOpen: (Long) -> Unit,
+    /** Takes a recording out of the thing being analysed, where that means anything. */
+    onRemoveFromScope: ((Long) -> Unit)? = null
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -661,14 +673,29 @@ private fun RecordingsSection(
                 }
             }
         }
-        items(records, key = { "record-${it.recordId}" }) { record ->
-            RecordRow(
-                record = record,
-                metric = metric,
-                themeColor = themeColor,
-                dimmed = isolatedPersonId != null && isolatedPersonId != record.personId,
-                onClick = { onOpen(record.recordId) }
-            )
+        items(records, key = { "record-" }) { record ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    RecordRow(
+                        record = record,
+                        metric = metric,
+                        themeColor = themeColor,
+                        dimmed = isolatedPersonId != null && isolatedPersonId != record.personId,
+                        onClick = { onOpen(record.recordId) }
+                    )
+                }
+                // Only where the scope is something a recording can be *taken out of*. A
+                // collection or a filter holds recordings by asking a question; an event holds
+                // them by being where they were filed, and misfiling one is easy.
+                onRemoveFromScope?.let { remove ->
+                    IconButton(onClick = { remove(record.recordId) }) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Remove from this event"
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -1029,3 +1029,67 @@ Four things worth knowing:
    but 162,000 readings is the first honest test of it, and that happens on device.
 3. **Nothing caches, and nothing should yet.** §9.4 still holds: measure again once this has
    landed. The remaining per-scope loads are bounded by the scope, and a scope is a few recordings.
+
+---
+
+## 10. Polish
+
+A running list, kept here rather than discovered one message at a time.
+
+Sprints 4b through 5 moved several thousand lines of UI in a short stretch. The structure that came
+out of it is right — one library, one selection, one resolver, one detail screen — but the *surface*
+has not been looked at with fresh eyes, and a fold that is correct can still leave a page that reads
+badly. This section is where that goes.
+
+**The rule for this list:** an item earns a place by being a thing someone would notice, and it
+carries the reason it is wrong. "Tidy the header" is not an item. "The collection page shows a
+counts card while every other subject shows its cover" is.
+
+Ordered by whether the app is *wrong*, *incomplete*, or *unlovely* — in that order, because a page
+that lies is worse than one that is missing something, which is worse than one that merely looks
+unfinished.
+
+### 10.1 Wrong
+
+Nothing outstanding. The two defects §8.6 found are fixed, and the one this stretch introduced —
+tapping a collection navigating nowhere — was caught before it shipped.
+
+### 10.2 Incomplete
+
+| | Why it matters |
+|---|---|
+| **No rule editor for a smart collection** (§8.9). Built from the filter bar, edited by re-applying and re-saving. | Enough to use, not enough to call finished. |
+| **Exclusions have no UI** (§8.9). Column, resolver and tests exist. | "Not that one" is one context-menu item away. |
+| **Freezing is only reachable from Save.** | It is a property of a selection now, so it belongs on the collection too — and so does thawing. |
+
+### 10.3 Unlovely
+
+| | Why it matters |
+|---|---|
+| **Empty states across the new pages are untested.** A recording with no readings, an event with nothing in it, a collection whose rule matches nothing. | The three states most likely to be someone's first experience of a page. |
+| **Compare and Recordings each render their own metric selector.** Correct — it sorts both — but they have not been seen side by side. | Two selectors that disagree about which is selected would be worse than the pinned one it replaced. |
+| **The subject header's height varies a lot by subject.** An event with a trail, a place and six tags is much taller than a bare recording. | The chart's position on screen moves between pages, which makes flicking between them feel unsteady. |
+| **`RecordingSubject.kt` is 591 lines.** Lifted wholesale so the fold's diff stayed honest about what changed. | Now that it has landed, the split dialog and the insights section each want their own file. |
+| **Sprint 6 — colour discipline** is polish of exactly this kind and is already written. | Worth doing as part of this rather than after it. |
+
+### 10.4 Not on this list
+
+Things deliberately left alone, so they do not get "fixed" by accident:
+
+- **The zone bands and the active duration do not sum to the same number** (§9.6). Long-standing,
+  understood, pinned by a test. Changing it moves every zone breakdown in the app.
+- **`gapMs` counts a reading-less recording toward the span** in the merge preview (§9.7). A
+  degenerate case in a dialog that describes an action rather than performing it.
+- **The frozen path keeps its own snapshot table.** It looks like duplication and is not: a frozen
+  selection's readings may be gone, which is the whole reason it was frozen.
+
+### 10.5 Cleared
+
+| | What was done |
+|---|---|
+| **A collection had no subject header** | `CollectionDetailScreen`, with the cover as its header like the other two. Its trail points *downward* into the events it names — a set does not nest, so it has nothing above it, and the way out of the page is inward. |
+| **No breadcrumb from a collection** | The same trail. §2.4 satisfied for the third subject. |
+| **"Remove from event" was gone** | Back, as an optional per-row action on the shared Recordings section. Offered only where the scope is something a recording can be *taken out of* — an event. A collection's membership is edited from the collection; a filter's is not membership at all. |
+| **"Save CSV" was gone** | Back, in the recording's overflow. |
+| **The library's duplicate event editor** | Deleted. It now opens `EventEditorLauncher`, the same one the event's page uses. Tags and the photo are deliberately *not* offered from the timeline row: both need the thing they describe on screen to be worth editing, and opening the event is one tap from the same row. |
+| **The collection route was registered at `"/{groupId}"`** | Fixed. A Kotlin string template eaten by a shell substitution — the fourth of that kind this stretch, and the reason string templates now go through the editor rather than through `perl`. |

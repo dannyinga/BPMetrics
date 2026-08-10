@@ -997,48 +997,19 @@ fun LibraryScreen(
     }
 
     renamingEvent?.let { summary ->
-        // Name, type and window together. They used to be a rename dialog and nothing else, so a
-        // window — the thing that actually decides what the event contains — could not be set at all.
-        val knownTypes by viewModel.eventTypesInUse.collectAsStateWithLifecycle()
-        val windowError by viewModel.windowError.collectAsStateWithLifecycle()
-        val windowPeople by remember(summary.event.eventId) {
-            viewModel.windowPeople(summary.event.eventId)
-        }.collectAsStateWithLifecycle(initialValue = emptySet())
-        val inheritedForEditing by remember(summary.event.eventId) {
-            viewModel.inheritedLocationName(summary.event.eventId, null)
-        }.collectAsStateWithLifecycle(initialValue = null)
-        val editingZone by remember(summary.event.eventId) {
-            viewModel.windowZone(summary.event.eventId)
-        }.collectAsStateWithLifecycle(initialValue = java.util.TimeZone.getDefault())
-
-        EventEditorDialog(
-            initialName = summary.event.name,
-            initialType = summary.event.type,
-            initialStart = summary.event.windowStart,
-            initialEnd = summary.event.windowEnd,
-            initialPeople = windowPeople,
-            // The span of what it already holds, so switching a window on starts from the truth
-            // rather than from today.
-            suggestedStart = summary.span?.startMs,
-            suggestedEnd = summary.span?.endMs,
-            initialLocationId = summary.event.locationId,
-            locations = knownLocations,
-            inheritedLocationName = inheritedForEditing,
-            zone = editingZone,
-            knownTypes = knownTypes,
-            people = availablePeopleForBackup,
-            collisionError = windowError,
-            onDismiss = {
-                renamingEvent = null
-                viewModel.clearWindowError()
-            },
-            onConfirm = { edit ->
-                // Stays open when the window is refused, so the message lands next to the dates
-                // that caused it rather than after the dialog has gone.
-                viewModel.applyEventEdit(summary.event.eventId, edit) { done ->
-                    if (done) renamingEvent = null
-                }
-            }
+        // The one implementation, shared with the event's own page. This screen used to carry its
+        // own copy of the same wiring — name, type, window, the people a window applies to, the
+        // venue and the clock it implies — which is two answers to "edit an event" waiting to
+        // drift apart. Sprint 5 gave the event a page; this is the page's editor, opened here.
+        inga.bpmetrics.ui.detail.EventEditorLauncher(
+            libraryViewModel = viewModel,
+            event = summary.event,
+            span = summary.span,
+            // Tags and the photo are edited on the event's own page, where the effective set —
+            // including what it inherits — and the picture itself are both visible. Offering them
+            // from a timeline row would show a count and a button with nothing to check them
+            // against. Opening the event is one tap from the same row.
+            onDismiss = { renamingEvent = null }
         )
     }
 
