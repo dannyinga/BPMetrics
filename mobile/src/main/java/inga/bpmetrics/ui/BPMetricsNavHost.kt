@@ -37,9 +37,8 @@ import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysisScreen
-import inga.bpmetrics.ui.analysis.EventAnalysisScreen
-import inga.bpmetrics.ui.analysis.EventDetailViewModel
-import inga.bpmetrics.ui.record.BpmRecordScreen
+import inga.bpmetrics.ui.detail.EventDetailScreen
+import inga.bpmetrics.ui.detail.RecordingDetailScreen
 import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.library.LibraryScreen
 import inga.bpmetrics.ui.library.CollectionsScreen
@@ -231,9 +230,9 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
             composable(Routes.ANALYSIS_LIVE) {
                 val viewModel: AnalysisViewModel = viewModel(
                     key = analysisFilter.hashCode().toString(),
-                    factory = AnalysisViewModel.liveFactory(
-                        repository = repository,
-                        filter = analysisFilter
+                    factory = AnalysisViewModel.forScope(
+                        repository,
+                        inga.bpmetrics.library.ScopeRef.Query(analysisFilter)
                     )
                 )
                 AnalysisScreen(
@@ -265,7 +264,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 // they never stored their curves, they re-read them from the library on open.
                 val viewModel: AnalysisViewModel = viewModel(
                     key = "frozen-$analysisId",
-                    factory = AnalysisViewModel.savedFactory(repository, analysisId)
+                    factory = AnalysisViewModel.forScope(
+                        repository,
+                        inga.bpmetrics.library.ScopeRef.Collection(analysisId)
+                    )
                 )
                 AnalysisScreen(
                     navController = navController,
@@ -334,19 +336,20 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 arguments = listOf(navArgument("eventId") { type = NavType.LongType })
             ) { backStackEntry ->
                 val eventId = backStackEntry.arguments?.getLong("eventId") ?: return@composable
-                val eventViewModel: EventDetailViewModel = viewModel(
-                    // Keyed on the event, or navigating from one event to another through a group
-                    // would reuse the first one's ViewModel and show the wrong chart.
-                    key = "event-$eventId",
-                    factory = EventDetailViewModel.Factory(repository, eventId)
-                )
-                EventAnalysisScreen(
-                    viewModel = eventViewModel,
+                EventDetailScreen(
+                    navController = navController,
+                    repository = repository,
+                    libraryViewModel = libraryViewModel,
+                    eventId = eventId,
                     onBack = { navController.popBackStack() },
-                    onOpenRecord = { navController.navigate("${Routes.DETAIL}/$it") },
-                    onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") },
-                    onExportVideo = { recs, graphTitle -> openExport(recs, graphTitle) },
-                    onExportImage = { recs, graphTitle -> openExportAs(recs, graphTitle, ExportKind.IMAGE) }
+                    onExport = { kind ->
+                        exportViewModel.startAt(
+                            source = ExportSource.Event(eventId),
+                            step = ExportStep.CONTENTS,
+                            kind = kind
+                        )
+                        navController.navigateToSection(AppDestination.EXPORT)
+                    }
                 )
             }
 
@@ -354,7 +357,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 CollectionsScreen(
                     viewModel = libraryViewModel,
                     onOpenDrawer = openDrawer,
-                    onOpen = { navController.navigate("/") },
+                    onOpen = { navController.navigate("${Routes.GROUP_DETAIL}/$it") },
                     // The whole library is a scope too, and the only one that always exists.
                     onAnalyseEverything = {
                         analysisFilter = inga.bpmetrics.library.FilterState()
@@ -376,7 +379,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 val groupId = backStackEntry.arguments?.getLong("groupId") ?: return@composable
                 val groupViewModel: AnalysisViewModel = viewModel(
                     key = "group-$groupId",
-                    factory = AnalysisViewModel.groupFactory(repository, groupId)
+                    factory = AnalysisViewModel.forScope(
+                        repository,
+                        inga.bpmetrics.library.ScopeRef.Collection(groupId)
+                    )
                 )
                 AnalysisScreen(
                     navController = navController,
@@ -393,14 +399,14 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                             navController.navigateToSection(AppDestination.COLLECTIONS)
                         }
                     },
-                    onExportImage = {
-                        // Scoped as the *group* rather than as its recordings, so the utility can
-                        // still offer one image per event. Flattening it to a bare set of records
-                        // here would throw away the structure that choice depends on.
+                    onExport = { kind ->
+                        // Scoped as the *collection* rather than as its recordings, so the
+                        // utility can still offer one image per event. Flattening it to a bare
+                        // set of records would throw away the structure that choice depends on.
                         exportViewModel.startAt(
                             source = ExportSource.Group(groupId),
                             step = ExportStep.CONTENTS,
-                            kind = ExportKind.IMAGE
+                            kind = kind
                         )
                         navController.navigateToSection(AppDestination.EXPORT)
                     }
@@ -444,22 +450,21 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 arguments = listOf(navArgument("recordId") { type = NavType.LongType })
             ) { backStackEntry ->
                 val recordId = backStackEntry.arguments?.getLong("recordId") ?: return@composable
-                val viewModel: BpmRecordViewModel = viewModel(
-                    factory = BpmRecordViewModel.Factory(repository, recordId)
-                )
-                val thisRecord by viewModel.record.collectAsState()
-                BpmRecordScreen(
-                    viewModel = viewModel,
+                RecordingDetailScreen(
+                    navController = navController,
+                    repository = repository,
+                    recordId = recordId,
                     onBack = { navController.popBackStack() },
                     onDeleted = { navController.popBackStack() },
-                    onExportImage = {
-                        openExportAs(listOfNotNull(thisRecord?.summary), null, ExportKind.IMAGE)
+                    onExport = { kind ->
+                        exportViewModel.startAt(
+                            source = ExportSource.Recordings(setOf(recordId)),
+                            step = ExportStep.CONTENTS,
+                            kind = kind
+                        )
+                        navController.navigateToSection(AppDestination.EXPORT)
                     },
-                    onExportVideo = {
-                        openExportAs(listOfNotNull(thisRecord?.summary), null, ExportKind.VIDEO)
-                    },
-                    onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
-                    onOpenGroup = { navController.navigate("${Routes.GROUP_DETAIL}/$it") }
+                    onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") }
                 )
             }
 

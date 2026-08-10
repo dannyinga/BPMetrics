@@ -93,7 +93,7 @@ fun BulkWearerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Set wearer") },
+        title = { Text("Attribute to") },
         text = {
             Column {
                 Text(

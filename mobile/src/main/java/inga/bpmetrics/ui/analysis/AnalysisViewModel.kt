@@ -1,6 +1,10 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.library.FilterContext
 import inga.bpmetrics.library.FilterState
+import inga.bpmetrics.library.Scope
+import inga.bpmetrics.library.ScopeRef
+import inga.bpmetrics.library.displayName
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -25,7 +29,15 @@ import kotlinx.coroutines.flow.*
 class AnalysisViewModel(
     /** Everything the scope resolves to, before this analysis leaves anything out. */
     private val allInScope: Flow<List<AnalysisRecord>>,
-    private val savedAnalysisId: Long? = null,
+    /**
+     * Whether these numbers are frozen, so the screen knows not to offer to save them again.
+     *
+     * A flow rather than a constructor flag: frozen-ness is a property of the *selection*
+     * ([inga.bpmetrics.library.CollectionEntity.frozenAt]), not of how somebody referred to it, so
+     * only the data can answer it. A caller passing the wrong answer would render a frozen
+     * selection's live members — which is nothing at all — and look like an empty screen.
+     */
+    private val frozen: Flow<Boolean> = flowOf(false),
     scope: Flow<AnalysisScope> = flowOf(AnalysisScope.Unknown),
     /**
      * The tree, so excluding an event can exclude its subtree.
@@ -33,7 +45,17 @@ class AnalysisViewModel(
      * Empty for a saved analysis, which has no live tree to walk — its rows are a snapshot, and
      * anything excluded was excluded when it was saved.
      */
-    private val tree: Flow<List<inga.bpmetrics.library.EventEntity>> = flowOf(emptyList())
+    private val tree: Flow<List<inga.bpmetrics.library.EventEntity>> = flowOf(emptyList()),
+    /**
+     * Loads the readings for a set of recordings, for the chart and nothing else.
+     *
+     * A lambda rather than a repository, so this ViewModel stays able to render a frozen selection
+     * with no database behind it at all. Defaults to none, which is exactly right for that case.
+     */
+    private val readings: suspend (List<Long>) -> List<inga.bpmetrics.library.BpmRecordWithPoints> =
+        { emptyList() },
+    /** Who and what the lanes are labelled and coloured by. */
+    private val chartContext: Flow<ChartContext> = flowOf(ChartContext())
 ) : ViewModel() {
 
     // --- What this analysis leaves out (TX-3.6 to 3.8) ---
@@ -181,7 +203,35 @@ class AnalysisViewModel(
      * offering an action that would have nowhere to write.
      */
     /** True when viewing a stored analysis, which cannot be re-saved or re-filtered. */
-    val isFrozen: Boolean = savedAnalysisId != null
+
+
+    /**
+     * The curves, for the scope as refined.
+     *
+     * The one part of a detail page that genuinely needs the readings, so it is the one part that
+     * loads them — for whatever the scope settled on, and never for the library. That is §9.3, and
+     * it is why the load work had to land before this sprint rather than after it.
+     *
+     * Driven by [analysisRecords] rather than the raw scope, so unticking a recording in the
+     * refinement sheet takes its lane off the chart too. A chart describing a different set of
+     * recordings from the numbers beside it is the failure this whole initiative keeps finding.
+     *
+     * Empty for a frozen selection: its readings may be gone, which is why its numbers were copied
+     * in the first place. [readings] defaults to returning nothing, so that path needs no special
+     * case here.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val curves: StateFlow<ConcurrentAnalysis> = combine(
+        analysisRecords
+            .map { rows -> rows.map { it.recordId } }
+            .distinctUntilChanged(),
+        chartContext
+    ) { ids, context -> ids to context }
+        .mapLatest { (ids, context) ->
+            if (ids.isEmpty()) ConcurrentAnalysis()
+            else EventAnalysis.from(readings(ids), context.watches, context.people)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConcurrentAnalysis())
 
     /**
      * Internal data class to bundle UI options for the combine transformation.
@@ -205,8 +255,9 @@ class AnalysisViewModel(
         combine(_selectedMetric, _isRecordsReversed, _isRankingsReversed, _selectedCategoryTabId) { metric, recRev, rankRev, catId ->
             AnalysisOptions(metric, recRev, rankRev, catId)
         },
-        scope
-    ) { records, options, currentScope ->
+        scope,
+        frozen
+    ) { records, options, currentScope, isFrozen ->
 
         if (records.isEmpty()) {
             return@combine AnalysisUiState(isEmpty = true, isFrozen = isFrozen, scope = currentScope)
@@ -240,12 +291,12 @@ class AnalysisViewModel(
                 tagRecordPairs.groupBy({ it.first.tagName }, { it.second })
             }
 
-        // Who, what recorded and what occasion are comparisons in their own right, not tags, so
-        // they are offered as categories alongside them — this is how one wearer is ranked against
-        // another, and one event against the next.
-        val wearerGroups = records
-            .filter { it.wearerName.isNotBlank() }
-            .groupBy { it.wearerName }
+        // What recorded it and what occasion it was are comparisons in their own right rather than
+        // tags, so they are offered as categories alongside them.
+        //
+        // **Person is not among them.** It was, and it produced a "Wearer" tab that ranked people
+        // against each other — which is what the Per person section already does, from the same
+        // records, with more to say. Two answers to one question, on two tabs of one screen.
         val watchGroups = records
             .filter { it.watchName.isNotBlank() }
             .groupBy { it.watchName }
@@ -261,7 +312,6 @@ class AnalysisViewModel(
 
         val categoryGroups = buildMap {
             putAll(tagGroups)
-            if (wearerGroups.size > 1) put(WEARER_CATEGORY_ID, wearerGroups)
             if (watchGroups.size > 1) put(WATCH_CATEGORY_ID, watchGroups)
             if (eventGroups.size > 1) put(EVENT_CATEGORY_ID, eventGroups)
         }
@@ -283,10 +333,9 @@ class AnalysisViewModel(
             .map { (id, name) -> AnalysisCategory(id, name) }
             .sortedBy { it.name }
 
-        // Wearer and Event lead, being the comparisons a group is usually about; Watch is
-        // provenance and matters less often; tags last, since there can be many.
+        // Event leads, being the comparison a scope is usually about; Watch is provenance and
+        // matters less often; tags last, since there can be many. People are their own section.
         val filteredCategories = buildList {
-            if (wearerGroups.size > 1) add(AnalysisCategory(WEARER_CATEGORY_ID, "Wearer"))
             if (eventGroups.size > 1) add(AnalysisCategory(EVENT_CATEGORY_ID, "Event"))
             if (watchGroups.size > 1) add(AnalysisCategory(WATCH_CATEGORY_ID, "Watch"))
             addAll(tagCategories)
@@ -366,7 +415,7 @@ class AnalysisViewModel(
             isEmpty = false,
             isFrozen = isFrozen
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AnalysisUiState(isFrozen = isFrozen))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AnalysisUiState())
 
     /**
      * Updates the selected metric for analysis.
@@ -400,7 +449,6 @@ class AnalysisViewModel(
          * Negative so they can never collide with a real category, whose ids are generated
          * positive by Room.
          */
-        const val WEARER_CATEGORY_ID = -1L
         const val WATCH_CATEGORY_ID = -2L
         const val EVENT_CATEGORY_ID = -3L
 
@@ -436,164 +484,181 @@ class AnalysisViewModel(
                 .sortedByDescending { it.maxBpm }
 
         /**
-         * A live analysis of the records matching [filter].
+         * An analysis of whatever [ref] names.
          *
-         * Filtering happens here rather than reusing the Library's filtered stream, so choosing
-         * what to analyse does not disturb what the Library is showing.
+         * **The one factory.** There were three here — a filter, a collection, a frozen snapshot —
+         * plus a separate ViewModel for an event and another for a recording: five ways of building
+         * one object, because each arrived when its subject did. They differed only in how the
+         * recordings were chosen, which is precisely what [ScopeRef] is.
+         *
+         * Sprint 5 folds the screens; this folds what feeds them. "A detail page is a scope, its
+         * numbers and a split" is only true if every subject gets here the same way.
          */
-        fun liveFactory(
+        fun forScope(
             repository: LibraryRepository,
-            filter: FilterState
+            ref: ScopeRef
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                AnalysisViewModel(
-                    // Tags passed to the filter as well as to the reduction, so filtering by a
-                    // group's tag selects everything underneath it — §2.5.
-                    allInScope = repository.analysisRecords { library, tags ->
-                        inga.bpmetrics.library.LibraryFilter.apply(
-                            library,
-                            filter,
-                            inga.bpmetrics.library.FilterContext(effectiveTags = tags)
-                        )
-                    },
-                    savedAnalysisId = null,
-                    scope = repository.describeFilter(filter),
-                    tree = repository.allEventsInTree
-                ) as T
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = AnalysisViewModel(
+                allInScope = repository.recordsInScope(ref),
+                frozen = repository.scopeIsFrozen(ref),
+                scope = repository.describeScope(ref),
+                // A frozen selection has no live tree to walk: its rows are a snapshot, and
+                // anything left out of it was left out when it was taken.
+                tree = repository.scopeIsFrozen(ref).flatMapLatest { isFrozen ->
+                    if (isFrozen) flowOf(emptyList()) else repository.allEventsInTree
+                },
+                // The readings, for the chart, for this scope only. A frozen selection asks for
+                // none: it has none to ask for, which is why its numbers were copied.
+                readings = { ids -> repository.recordsWithPoints(ids) },
+                chartContext = combine(
+                    repository.getAllWatches(),
+                    repository.getAllPeople()
+                ) { watches, people -> ChartContext(watches, people) }
+            ) as T
         }
+    }
+}
 
-        /**
-         * A live analysis of everything in a collection.
-         *
-         * Deliberately the same ViewModel as a filtered analysis. A collection and a filter are two
-         * ways of naming a set of recordings, and the questions worth asking of that set — who went
-         * hardest, which event was the peak, how do the tags compare — do not change with how it
-         * was named. Two implementations would be two chances to answer differently.
-         *
-         * Membership comes from [inga.bpmetrics.library.Scope], which is also what the library
-         * filter's collection term now calls. They were two walks before, and one of them compared
-         * a collection id against an event's parent id.
-         */
-        fun groupFactory(
-            repository: LibraryRepository,
-            groupId: Long
-        ) = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val library = combine(
-                    combine(
-                        repository.records,
-                        repository.allEventsInTree,
-                        repository.getAllCollections(),
-                        repository.allCollectionEventLinks(),
-                        repository.allCollectionRecordLinks()
-                    ) { records, tree, sets, eventLinks, recordLinks ->
-                        inga.bpmetrics.library.Library(
-                            records = records,
-                            events = tree,
-                            collections = sets,
-                            collectionEvents = eventLinks,
-                            collectionRecords = recordLinks
-                        )
-                    },
-                    repository.effectiveTags
-                ) { snapshot, tags ->
-                    // The rule of a smart collection reads tags too, so they go into the context
-                    // rather than only into the reduction below — filtering a collection by an
-                    // event's tag has to pick up everything under it, same as anywhere else.
-                    snapshot.copy(
-                        filterContext = inga.bpmetrics.library.FilterContext(effectiveTags = tags)
+/**
+ * The recordings a scope resolves to, reduced to what an analysis needs.
+ *
+ * One path for every subject. A recording, an event, a collection and a question differ in *which*
+ * rows they select and in nothing else, so they share the reduction, the name resolution and the
+ * tag inheritance below.
+ *
+ * A **frozen** selection is the one exception, and it is not really an exception: its numbers were
+ * copied when it was frozen precisely because they cannot be recomputed — the readings may be gone.
+ * So it reads its own rows rather than the library's. The branch lives here, on the data, rather
+ * than in a caller that would have to be told.
+ */
+private fun LibraryRepository.recordsInScope(ref: ScopeRef): Flow<List<AnalysisRecord>> =
+    if (ref !is ScopeRef.Collection) liveRecordsInScope(ref) else
+        getAllCollections()
+            .map { sets -> sets.firstOrNull { it.collectionId == ref.collectionId }?.isFrozen == true }
+            .distinctUntilChanged()
+            .flatMapLatest { isFrozen ->
+                if (!isFrozen) liveRecordsInScope(ref)
+                else flow {
+                    emit(
+                        loadSavedAnalysis(ref.collectionId)
+                            ?.records.orEmpty()
+                            .map { AnalysisRecord.from(it) }
                     )
                 }
-
-                // Membership is resolved before the mapping, not after. Reducing a record computes
-                // its active duration, which walks every data point it has — doing that for the
-                // whole library to keep a dozen recordings would be most of the work wasted.
-                val records = combine(
-                    library,
-                    combine(
-                        repository.getAllCategories(),
-                        repository.getAllWatches(),
-                        repository.getAllPeople(),
-                        repository.getAllLocations()
-                    ) { categories, watches, people, places ->
-                        listOf(categories, watches, people, places)
-                    },
-                    repository.effectiveTags
-                ) { snapshot, registries, tags ->
-                    @Suppress("UNCHECKED_CAST")
-                    val categories = registries[0] as List<inga.bpmetrics.library.CategoryEntity>
-                    @Suppress("UNCHECKED_CAST")
-                    val watches = registries[1] as List<inga.bpmetrics.library.WatchEntity>
-                    @Suppress("UNCHECKED_CAST")
-                    val people = registries[2] as List<inga.bpmetrics.library.PersonEntity>
-                    @Suppress("UNCHECKED_CAST")
-                    val places = registries[3] as List<inga.bpmetrics.library.LocationEntity>
-
-                    AnalysisRecord.from(
-                        inga.bpmetrics.library.Scope.recordsIn(
-                            inga.bpmetrics.library.ScopeRef.Collection(groupId),
-                            snapshot
-                        ),
-                        categories,
-                        watches,
-                        people,
-                        snapshot.events,
-                        tags,
-                        places
-                    )
-                }
-
-                // The header and the analysis read the same walk. They were two walks over two
-                // different lists, which is how the header could say "4 events" over an analysis
-                // of six.
-                val scope = library.map { snapshot ->
-                    snapshot.collections.firstOrNull { it.collectionId == groupId }?.let { set ->
-                        AnalysisScope.Group(
-                            name = set.displayName,
-                            eventCount = inga.bpmetrics.library.Scope
-                                .eventsIn(groupId, snapshot.events, snapshot.collectionEvents).size,
-                            recordCount = inga.bpmetrics.library.Scope.recordsIn(
-                                inga.bpmetrics.library.ScopeRef.Collection(groupId), snapshot
-                            ).size,
-                            isSmart = set.isSmart
-                        )
-                    } ?: AnalysisScope.Unknown
-                }
-
-                return AnalysisViewModel(
-                    allInScope = records,
-                    savedAnalysisId = null,
-                    scope = scope,
-                    tree = repository.allEventsInTree
-                ) as T
             }
-        }
 
-        /**
-         * A stored analysis, rendered entirely from what was captured when it was saved.
-         */
-        fun savedFactory(
-            repository: LibraryRepository,
-            analysisId: Long
-        ) = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val saved = flow { emit(repository.loadSavedAnalysis(analysisId)) }
-                return AnalysisViewModel(
-                    allInScope = saved.map { loaded ->
-                        loaded?.records.orEmpty().map { AnalysisRecord.from(it) }
-                    },
-                    savedAnalysisId = analysisId,
-                    scope = saved.map { loaded ->
-                        loaded?.metadata?.name
-                            ?.let { AnalysisScope.Saved(it) }
-                            ?: AnalysisScope.Unknown
-                    }
-                ) as T
+/** Whether [ref] names a selection whose numbers were frozen. */
+private fun LibraryRepository.scopeIsFrozen(ref: ScopeRef): Flow<Boolean> =
+    if (ref !is ScopeRef.Collection) flowOf(false) else
+        getAllCollections()
+            .map { sets -> sets.firstOrNull { it.collectionId == ref.collectionId }?.isFrozen == true }
+            .distinctUntilChanged()
+
+/**
+ * The live resolution, through [Scope] — the same walk the library filter and the export use.
+ *
+ * Names are resolved here rather than stored, so renaming a person or a venue relabels every screen
+ * that mentions them.
+ */
+private fun LibraryRepository.liveRecordsInScope(ref: ScopeRef): Flow<List<AnalysisRecord>> = combine(
+    combine(
+        records,
+        allEventsInTree,
+        getAllCollections(),
+        allCollectionEventLinks(),
+        allCollectionRecordLinks()
+    ) { rows, tree, sets, eventLinks, recordLinks ->
+        inga.bpmetrics.library.Library(
+            records = rows,
+            events = tree,
+            collections = sets,
+            collectionEvents = eventLinks,
+            collectionRecords = recordLinks
+        )
+    },
+    combine(getAllCategories(), getAllWatches(), getAllPeople(), getAllLocations()) {
+        categories, watches, people, places -> listOf(categories, watches, people, places)
+    },
+    effectiveTags
+) { snapshot, registries, tags ->
+    @Suppress("UNCHECKED_CAST")
+    val categories = registries[0] as List<inga.bpmetrics.library.CategoryEntity>
+    @Suppress("UNCHECKED_CAST")
+    val watches = registries[1] as List<inga.bpmetrics.library.WatchEntity>
+    @Suppress("UNCHECKED_CAST")
+    val people = registries[2] as List<inga.bpmetrics.library.PersonEntity>
+    @Suppress("UNCHECKED_CAST")
+    val places = registries[3] as List<inga.bpmetrics.library.LocationEntity>
+
+    AnalysisRecord.from(
+        // A smart collection's rule reads tags too, so they go into the context rather than only
+        // into the reduction — filtering by an event's tag has to reach everything under it here
+        // as it does everywhere else.
+        Scope.recordsIn(ref, snapshot.copy(filterContext = FilterContext(effectiveTags = tags))),
+        categories,
+        watches,
+        people,
+        snapshot.events,
+        tags,
+        places
+    )
+}
+
+/**
+ * What the header calls this scope, and what it says underneath.
+ *
+ * Live, because the point of storing ids rather than names is that a rename reaches every screen
+ * mentioning the thing renamed.
+ */
+private fun LibraryRepository.describeScope(ref: ScopeRef): Flow<AnalysisScope> = when (ref) {
+    is ScopeRef.Query -> describeFilter(ref.filter)
+
+    is ScopeRef.Recording -> records.map { rows ->
+        rows.firstOrNull { it.metadata.recordId == ref.recordId }
+            ?.let { AnalysisScope.Group(name = it.metadata.title, eventCount = 0, recordCount = 1) }
+            ?: AnalysisScope.Unknown
+    }
+
+    is ScopeRef.Event -> combine(allEventsInTree, records) { tree, rows ->
+        tree.firstOrNull { it.eventId == ref.eventId }?.let { event ->
+            val within = inga.bpmetrics.library.EventTree.descendantsOf(tree, ref.eventId)
+            AnalysisScope.Group(
+                name = event.displayName,
+                // The subtree minus itself: "3 events" under a festival means its days and sets,
+                // not the festival counting itself as one of them.
+                eventCount = within.size - 1,
+                recordCount = rows.count { it.metadata.eventId in within }
+            )
+        } ?: AnalysisScope.Unknown
+    }
+
+    is ScopeRef.Collection -> combine(
+        getAllCollections(),
+        allEventsInTree,
+        records,
+        allCollectionEventLinks(),
+        allCollectionRecordLinks()
+    ) { sets, tree, rows, eventLinks, recordLinks ->
+        sets.firstOrNull { it.collectionId == ref.collectionId }?.let { set ->
+            if (set.isFrozen) AnalysisScope.Saved(set.displayName) else {
+                val snapshot = inga.bpmetrics.library.Library(
+                    records = rows,
+                    events = tree,
+                    collections = sets,
+                    collectionEvents = eventLinks,
+                    collectionRecords = recordLinks
+                )
+                AnalysisScope.Group(
+                    name = set.displayName,
+                    eventCount = Scope.eventsIn(ref.collectionId, tree, eventLinks).size,
+                    // The same walk the card counts with, so a header cannot say "4 events" over
+                    // an analysis of six.
+                    recordCount = Scope.recordsIn(ref, snapshot).size,
+                    isSmart = set.isSmart
+                )
             }
-        }
+        } ?: AnalysisScope.Unknown
     }
 }
 
@@ -739,4 +804,15 @@ data class TagRankingWithRecord(
     /** Where this row's time went, so a ranking answers "who stayed up there", not only "who spiked". */
     val zoneTimes: List<ZoneTime> = emptyList(),
     val activeDurationMs: Long = 0L
+)
+
+/**
+ * The registries a chart needs to label and colour its lanes.
+ *
+ * Bundled so [AnalysisViewModel] takes one parameter rather than two, and so the frozen case can
+ * default the whole thing away.
+ */
+data class ChartContext(
+    val watches: List<inga.bpmetrics.library.WatchEntity> = emptyList(),
+    val people: List<inga.bpmetrics.library.PersonEntity> = emptyList()
 )

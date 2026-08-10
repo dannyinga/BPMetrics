@@ -260,7 +260,7 @@ private fun WatchEditDialog(
                     people = people,
                     selectedId = personId,
                     onSelect = { personId = it },
-                    label = "Current wearer"
+                    label = "Worn by"
                 )
                 Text(
                     "Applies to recordings that arrive from now on. Recordings already in your " +

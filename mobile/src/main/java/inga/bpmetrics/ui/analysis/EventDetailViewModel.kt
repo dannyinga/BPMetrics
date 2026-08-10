@@ -10,6 +10,7 @@ import inga.bpmetrics.library.EffectiveTagsResolver
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.library.TimeSpan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -34,9 +35,13 @@ data class EventDetailState(
     val event: EventEntity? = null,
     val group: EventEntity? = null,
     /** With readings, because this page draws a merged curve over them. */
-    val records: List<BpmRecordWithPoints> = emptyList(),
+    /** Everything in the subtree, without readings — the header counts them, it does not draw them. */
+    val records: List<inga.bpmetrics.library.BpmRecord> = emptyList(),
     val people: Map<Long, PersonEntity> = emptyMap(),
-    val analysis: ConcurrentAnalysis = ConcurrentAnalysis(),
+    /** How many distinct people are in it, for the header's one-line summary. */
+    val personCount: Int = 0,
+    /** What it actually covers, from its contents rather than its window. */
+    val span: TimeSpan? = null,
     val isLoading: Boolean = true
 ) {
     val missing: Boolean get() = !isLoading && event == null
@@ -60,13 +65,6 @@ class EventDetailViewModel(
      * Kept here rather than in the composable so the chart, the readout legend and the summary rows
      * all read one answer. Three copies of "who is selected" is three chances to disagree.
      */
-    private val _isolatedId = MutableStateFlow<String?>(null)
-    val isolatedId: StateFlow<String?> = _isolatedId.asStateFlow()
-
-    fun isolate(id: String?) {
-        _isolatedId.value = if (id == _isolatedId.value) null else id
-    }
-
     private val eventFlow = repository.getAllEvents()
         .map { events -> events.firstOrNull { it.eventId == eventId } }
 
@@ -86,31 +84,47 @@ class EventDetailViewModel(
         .distinctUntilChanged()
         .mapLatest { ids -> repository.recordsWithPoints(ids) }
 
+    /**
+     * The subject, and nothing about the analysis.
+     *
+     * The readings, the curves and the numbers left with Sprint 5: they belong to the *scope*, and
+     * every subject's scope is served by one [AnalysisViewModel]. What is left here is what makes
+     * an event an event rather than a set or a recording — its name, its window, where it sits in
+     * the tree, and the things you can do to it.
+     *
+     * Points-free, so opening an event no longer loads a single reading to draw its header.
+     */
     val state: StateFlow<EventDetailState> = combine(
         eventFlow,
-        recordsFlow,
+        repository.records,
         // The whole tree. This read the collections flow, which returns nothing since sets
         // arrived, so the breadcrumb never resolved and every event looked top-level.
         repository.allEventsInTree,
-        repository.getAllPeople(),
-        repository.getAllWatches()
-    ) { event, records, groups, people, watches ->
+        repository.getAllPeople()
+    ) { event, rows, tree, people ->
+        val within = if (event == null) emptySet()
+            else inga.bpmetrics.library.EventTree.descendantsOf(tree, event.eventId)
+        val mine = rows.filter { it.metadata.eventId in within }
+
         EventDetailState(
             event = event,
-            // `parentId`/`eventId`, not the legacy `groupId` on either side — that column is null on
-            // anything created since the fold, so the breadcrumb would simply stop appearing.
-            group = event?.parentId?.let { id -> groups.firstOrNull { it.eventId == id } },
-            records = records.sortedBy { it.metadata.startTime },
+            // `parentId`/`eventId`, not the legacy `groupId` on either side — that column is null
+            // on anything created since the fold, so the breadcrumb would stop appearing.
+            group = event?.parentId?.let { id -> tree.firstOrNull { it.eventId == id } },
+            records = mine.sortedBy { it.metadata.startTime },
             people = people.associateBy { it.personId },
-            analysis = EventAnalysis.from(records, watches = watches, people = people),
+            // The subtree, not the direct children: a festival's count has to include the
+            // recordings inside its days, which is what its analysis covers.
+            personCount = mine.mapNotNull { it.metadata.personId }.distinct().size,
+            span = mine.takeIf { it.isNotEmpty() }?.let { rows2 ->
+                TimeSpan(
+                    rows2.minOf { it.metadata.startTime },
+                    rows2.maxOf { it.metadata.endTime }
+                )
+            },
             isLoading = false
         )
-    }
-        // Merging and sampling every reading in an event is real work — an evening across four
-        // watches is tens of thousands of points — and doing it on the main thread stalls the
-        // screen it is meant to draw.
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EventDetailState())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EventDetailState())
 
     /**
      * Tags applied to this event, and the ones it inherits from its group.

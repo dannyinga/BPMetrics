@@ -427,7 +427,7 @@ fun LibraryScreen(
                             )
 
                             DropdownMenuItem(
-                                text = { Text("Set wearer") },
+                                text = { Text("Attribute to…") },
                                 leadingIcon = { Icon(Icons.Default.People, contentDescription = null) },
                                 onClick = {
                                     showSelectionMenu = false

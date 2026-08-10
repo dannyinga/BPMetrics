@@ -1,0 +1,272 @@
+package inga.bpmetrics.ui.detail
+
+import android.widget.Toast
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
+import inga.bpmetrics.library.EventTree
+import inga.bpmetrics.library.LibraryRepository
+import inga.bpmetrics.library.ScopeRef
+import inga.bpmetrics.library.displayName
+import inga.bpmetrics.ui.analysis.AnalysisScreen
+import inga.bpmetrics.ui.analysis.AnalysisViewModel
+import inga.bpmetrics.ui.analysis.EventDetailViewModel
+import inga.bpmetrics.ui.components.DeleteConfirmDialog
+import inga.bpmetrics.ui.tags.EffectiveTagChip
+import inga.bpmetrics.ui.tags.TagSelectionDialog
+import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
+import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
+import inga.bpmetrics.ui.util.ReaderClock
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+/**
+ * An event, and its analysis.
+ *
+ * The first subject to fold. Two ViewModels, split by what they are *about*: the subject one owns
+ * the event — its name, its tags, its place in the tree, and everything you can do to it — and
+ * [AnalysisViewModel] owns the scope, which is this event and everything beneath it.
+ *
+ * That split is why the fold works at all. The analysis half was never event-specific; it was one
+ * component that had been copied to sit under each subject as each subject was added. Sprint 5
+ * points the copy that survived at a [ScopeRef] instead.
+ */
+@Composable
+fun EventDetailScreen(
+    navController: NavController,
+    repository: LibraryRepository,
+    /** The app-wide library ViewModel, which already owns the event-editing plumbing. */
+    libraryViewModel: inga.bpmetrics.ui.library.LibraryViewModel,
+    eventId: Long,
+    onBack: () -> Unit,
+    onExport: (inga.bpmetrics.ui.export.ExportKind) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    val subject: EventDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        // Keyed on the event, or walking from one to another through the breadcrumb would reuse
+        // the first one's ViewModel and show the wrong subject over the right numbers.
+        key = "event-subject-$eventId",
+        factory = EventDetailViewModel.Factory(repository, eventId)
+    )
+    val analysis: AnalysisViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        key = "event-analysis-$eventId",
+        factory = AnalysisViewModel.forScope(repository, ScopeRef.Event(eventId))
+    )
+
+    val state by subject.state.collectAsStateWithLifecycle()
+    val tags by subject.tags.collectAsStateWithLifecycle(initialValue = emptyList())
+    val tree by repository.allEventsInTree.collectAsStateWithLifecycle(initialValue = emptyList())
+    val places by repository.getAllLocations().collectAsStateWithLifecycle(initialValue = emptyList())
+
+    // Registered once for the screen: a launcher outlives the dialog that starts it.
+    val pickCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
+        subject.setCover(context, uri) { ok ->
+            if (!ok) Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    var editing by remember { mutableStateOf(false) }
+    var tagging by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+
+    val event = state.event
+
+    // The event's own clock, so a set at the Gorge reads in Pacific time whoever is looking.
+    val eventClock = remember(places, event, tree) { resolvedZone(event, tree, places) }
+
+    // Its own cover, or whatever it inherits — the same answer the timeline card shows, so the
+    // page and the card that opened it look like the same thing.
+    val cover = remember(event, tree) {
+        // Nearest wins up the tree, exactly as the timeline card resolves it: a set with no
+        // picture of its own shows its day's, or its festival's.
+        event?.let { own ->
+            EventTree.ancestryOf(tree, own.eventId).firstNotNullOfOrNull { it.ownCover }
+        }
+    }
+
+    val resolved = remember(event, tree, places) {
+        event?.let {
+            inga.bpmetrics.library.LocationResolver.forEvent(
+                it.eventId, tree, places.associateBy { p -> p.locationId }
+            )
+        }
+    }
+
+    AnalysisScreen(
+        navController = navController,
+        viewModel = analysis,
+        onOpenDrawer = {},
+        onBack = onBack,
+        // No title: the header below carries the name over the cover, and the app bar repeating it
+        // was the same word twice on one screen.
+        title = null,
+        onExport = onExport,
+        subjectHeader = {
+            if (event != null) {
+                val uiState by analysis.uiState.collectAsStateWithLifecycle()
+                SubjectHeader(
+                    title = event.displayName,
+                    subtitle = buildString {
+                        event.type?.takeIf { it.isNotBlank() }?.let { append("$it · ") }
+                        state.span?.let {
+                            append(getDateString(it.startMs, eventClock))
+                            append(" · ")
+                            append(getTimeString(it.startMs, eventClock))
+                            append("–")
+                            append(getTimeString(it.endMs, eventClock))
+                        } ?: append("Nothing in it yet")
+                        resolved?.location?.displayName?.let { append(" · $it") }
+                    },
+                    cover = cover,
+                    // Innermost last, and without the event itself — it is the title.
+                    trail = EventTree.ancestryOf(tree, event.eventId)
+                        .filter { it.eventId != event.eventId }
+                        .reversed()
+                        .map { it.eventId to it.displayName },
+                    lowBpm = uiState.minTrio.takeIf { !uiState.isEmpty },
+                    avgBpm = uiState.avgTrio.takeIf { !uiState.isEmpty },
+                    highBpm = uiState.maxTrio.takeIf { !uiState.isEmpty },
+                    counts = buildString {
+                        append("${state.records.size} recording")
+                        if (state.records.size != 1) append("s")
+                        if (state.personCount > 0) {
+                            append(" · ${state.personCount} ")
+                            append(if (state.personCount == 1) "person" else "people")
+                        }
+                    },
+                    onOpenAncestor = { id ->
+                        navController.navigate("${inga.bpmetrics.ui.Routes.EVENT_DETAIL}/$id")
+                    },
+                    tags = if (tags.isEmpty()) null else {
+                        {
+                            inga.bpmetrics.ui.components.FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                tags.forEach { effective ->
+                                    EffectiveTagChip(
+                                        effective = effective,
+                                        onRemove = { subject.removeTag(effective.tag.tagId) },
+                                        onExplain = {
+                                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+        },
+        subjectActions = {
+            IconButton(onClick = { editing = true }) {
+                Icon(Icons.Default.Edit, contentDescription = "Edit event")
+            }
+        },
+        subjectOverflow = {
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "More")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    // Tags and the venue moved into the editor, where the rest of what an event is
+                    // already lives. A menu of one-field editors is a menu that grows a row every
+                    // time the thing gains a property.
+                    DropdownMenuItem(
+                        text = { Text("Delete event") },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        onClick = { menuOpen = false; deleting = true }
+                    )
+                }
+            }
+        }
+    )
+
+    if (editing && event != null) {
+        EventEditorLauncher(
+            libraryViewModel = libraryViewModel,
+            event = event,
+            span = state.span,
+            tagCount = tags.count { !it.isInherited },
+            onEditTags = { tagging = true },
+            hasOwnCover = event.ownCover != null,
+            onPickCover = pickCover,
+            onRemoveCover = { subject.clearCover(context) },
+            onDismiss = { editing = false }
+        )
+    }
+
+    if (tagging) {
+        val categories by subject.categories.collectAsStateWithLifecycle(initialValue = emptyList())
+        TagSelectionDialog(
+            onDismiss = { tagging = false },
+            onSave = { selected -> subject.setTags(selected); tagging = false },
+            categories = categories,
+            getTagsByCategoryFlow = { subject.tagsInCategory(it) },
+            onCreateTag = { axis, name, onMade -> subject.createTag(axis, name, onMade) },
+            // Only the ones applied here. An inherited tag cannot be removed on this page, so
+            // offering it pre-ticked would make unticking it look broken.
+            initialSelectedTagIds = tags.filterNot { it.isInherited }.map { it.tag.tagId }
+        )
+    }
+
+    if (deleting && event != null) {
+        DeleteConfirmDialog(
+            title = "Delete ${event.displayName}?",
+            message = if (state.records.isEmpty()) "This event has no recordings in it." else
+                "Its ${state.records.size} recording" +
+                    "${if (state.records.size == 1) "" else "s"} will be kept and move back to " +
+                    "Unfiled. Only the event is deleted.",
+            onDismiss = { deleting = false },
+            onConfirm = {
+                deleting = false
+                scope.launch { subject.deleteEvent(onBack) }
+            }
+        )
+    }
+}
+
+/**
+ * The clock an event's times should read in.
+ *
+ * Through [inga.bpmetrics.library.LocationResolver], so the header agrees with the timeline card
+ * and the export — the venue is inherited from the nearest ancestor that names one, and the zone
+ * comes with it. Falls back to the reader's own, which is what the app did everywhere before
+ * places existed.
+ */
+private fun resolvedZone(
+    event: inga.bpmetrics.library.EventEntity?,
+    tree: List<inga.bpmetrics.library.EventEntity>,
+    places: List<inga.bpmetrics.library.LocationEntity>
+): java.time.ZoneId {
+    val id = event?.let {
+        inga.bpmetrics.library.LocationResolver
+            .forEvent(it.eventId, tree, places.associateBy { p -> p.locationId })
+            ?.location
+            ?.timeZoneId
+    }
+    return id?.let { runCatching { java.time.ZoneId.of(it) }.getOrNull() } ?: ReaderClock
+}

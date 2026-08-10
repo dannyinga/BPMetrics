@@ -23,6 +23,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Save
@@ -90,16 +93,48 @@ fun AnalysisScreen(
     onBack: (() -> Unit)? = null,
     title: String? = null,
     onSave: ((name: String, records: List<AnalysisRecord>) -> Unit)? = null,
-    /** Opens the export utility as an image, scoped to whatever this screen is analysing. */
-    onExportImage: (() -> Unit)? = null
+    /**
+     * Opens the export utility for whatever this screen is analysing, as the chosen kind.
+     *
+     * One button rather than one per kind. "Export" is a single intention and the format is the
+     * first question the flow asks anyway — two icons in the bar made the bar answer it twice.
+     */
+    onExport: ((inga.bpmetrics.ui.export.ExportKind) -> Unit)? = null,
+    /**
+     * The subject, drawn above the analysis.
+     *
+     * The half of a detail page that genuinely differs. A recording, an event and a collection are
+     * not the same thing and their headers should not pretend otherwise — a recording has a person
+     * and a watch, an event has a window and a place, a set has neither. Everything *below* this is
+     * one component pointed at a different scope, which is the whole of Sprint 5.
+     *
+     * Null for a bare question, which has no subject beyond the question itself.
+     */
+    subjectHeader: (@Composable () -> Unit)? = null,
+    /** Actions belonging to the subject rather than to the analysis, for the app bar. */
+    subjectActions: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? = null,
+    /** The subject's overflow, placed rightmost where an overflow belongs. */
+    subjectOverflow: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? = null,
+    /**
+     * An extra block in the Summary, contributed by the subject.
+     *
+     * For a recording this is where it stands among that person's others — "their third highest"
+     * — which is a fact about the recording rather than about the scope, but far too tall to sit
+     * in a header that has to stay out of the chart's way.
+     *
+     * Null for every other subject, which has nothing extra to say.
+     */
+    summaryExtra: (@Composable () -> Unit)? = null
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
+    var choosingExport by remember { mutableStateOf(false) }
     var saveName by remember { mutableStateOf("") }
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val availableAxes by viewModel.availableAxes.collectAsStateWithLifecycle()
     val selectedAxis by viewModel.selectedAxis.collectAsStateWithLifecycle()
     val lanes by viewModel.lanes.collectAsStateWithLifecycle()
     val exclusions by viewModel.exclusions.collectAsStateWithLifecycle()
+    val curves by viewModel.curves.collectAsStateWithLifecycle()
     val scopeEntries by viewModel.scopeEntries.collectAsStateWithLifecycle()
     var showScopeRefinement by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(false)
@@ -179,11 +214,16 @@ fun AnalysisScreen(
                         }
                     },
                     actions = {
-                        if (onExportImage != null && !uiState.isEmpty) {
-                            IconButton(onClick = onExportImage) {
+                        // Order is deliberate: the subject's own verb, then the one thing every
+                        // page can do, then the overflow — which sits rightmost because that is
+                        // where an overflow lives on every other Android screen.
+                        subjectActions?.invoke(this)
+
+                        if (onExport != null && !uiState.isEmpty) {
+                            IconButton(onClick = { choosingExport = true }) {
                                 Icon(
-                                    Icons.Default.Image,
-                                    contentDescription = "Export as image"
+                                    Icons.Default.FileUpload,
+                                    contentDescription = "Export"
                                 )
                             }
                         }
@@ -193,12 +233,15 @@ fun AnalysisScreen(
                                 Icon(Icons.Default.Save, contentDescription = "Save this analysis")
                             }
                         }
+
+                        subjectOverflow?.invoke(this)
                     }
                 )
-                if (!uiState.isEmpty) {
-                    MetricSelector(uiState, selectedMetric) { viewModel.setSelectedMetric(it) }
-                    HorizontalDivider()
-                }
+                // The metric selector used to be pinned here, on every page, above everything. It
+                // is a *sort* control — it decides whether a comparison is ranked by peak,
+                // average or low — so it now sits with the comparisons it sorts. Its three
+                // numbers survive as a line in the subject header, where they are information
+                // rather than a control taking the top of the screen.
             }
         }
     ) { paddingValues ->
@@ -208,6 +251,11 @@ fun AnalysisScreen(
         }
 
         Column(Modifier.padding(paddingValues).fillMaxSize()) {
+            // Above the section bar: the sections are ways of reading the analysis, and the
+            // subject is what is being analysed. Switching from Summary to Compare must not
+            // change which thing you are looking at, so the subject sits outside the switch.
+            subjectHeader?.invoke()
+
             SectionBar(
                 uiState = uiState,
                 sections = sections,
@@ -218,16 +266,21 @@ fun AnalysisScreen(
             when (section) {
                 AnalysisSection.SUMMARY -> SummarySection(
                     uiState = uiState,
+                    subjectHeader = subjectHeader,
                     axes = availableAxes,
                     selectedAxis = selectedAxis,
                     lanes = lanes,
                     onSelectAxis = { viewModel.setSplitAxis(it) },
                     onRefineScope = { showScopeRefinement = true },
-                    isRefined = !exclusions.isEmpty
+                    isRefined = !exclusions.isEmpty,
+                    curves = curves,
+                    extra = summaryExtra
                 )
 
                 AnalysisSection.COMPARE -> CompareSection(
                     uiState = uiState,
+                    selectedMetric = selectedMetric,
+                    onSelectMetric = { viewModel.setSelectedMetric(it) },
                     selectedCategoryId = selectedCategoryId,
                     themeColor = themeColor,
                     isolatedPersonId = isolatedPersonId,
@@ -256,6 +309,8 @@ fun AnalysisScreen(
                 AnalysisSection.RECORDINGS -> RecordingsSection(
                     records = uiState.records,
                     metric = selectedMetric,
+                    onSelectMetric = { viewModel.setSelectedMetric(it) },
+                    uiState = uiState,
                     themeColor = themeColor,
                     isolatedPersonId = isolatedPersonId,
                     onToggleReverse = { viewModel.toggleRecordsReverse() },
@@ -378,19 +433,38 @@ private fun SectionBar(
 @Composable
 private fun SummarySection(
     uiState: AnalysisUiState,
+    /** Null when the subject drew its own header, which already carries all of this. */
+    subjectHeader: (@Composable () -> Unit)? = null,
     axes: List<SplitAxis>,
     selectedAxis: SplitAxis?,
     lanes: List<SplitLane>,
     onSelectAxis: (String?) -> Unit,
     onRefineScope: () -> Unit,
-    isRefined: Boolean
+    isRefined: Boolean,
+    /** The curves for this scope, or empty when there are none to draw. */
+    curves: ConcurrentAnalysis = ConcurrentAnalysis(),
+    /** Whatever the subject wants to add here. See [AnalysisScreen]. */
+    extra: (@Composable () -> Unit)? = null
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item { ScopeHeader(uiState) }
+        // Suppressed when the subject has its own header: a detail page already says what it is
+        // of, over its cover, and repeating the name and the counts underneath was the same
+        // thing twice.
+        if (subjectHeader == null) item { ScopeHeader(uiState) }
+
+        // The shape of the thing, above the numbers describing it. One recording is one lane and a
+        // festival is several, which is the whole claim of Sprint 5 — a recording is not a
+        // different kind of subject, it is the narrowest scope there is.
+        //
+        // Absent for a frozen selection, whose readings may be gone. That is not a gap: its
+        // numbers were copied precisely because the curves could not be.
+        if (!curves.isEmpty) {
+            item { ScopeCurves(curves) }
+        }
 
         // Above the totals, because choosing to compare changes what every figure below means.
         if (axes.isNotEmpty()) {
@@ -427,6 +501,8 @@ private fun SummarySection(
         }
         // Only a group can carry tags. A filter describes a selection rather than an occasion, and
         // a saved analysis is frozen — offering the action there would have nowhere to write.
+        extra?.let { block -> item { block() } }
+
         item { Highlights(uiState) }
     }
 }
@@ -499,6 +575,9 @@ private fun HighlightRow(label: String, subject: String, value: String, colour: 
 @Composable
 private fun CompareSection(
     uiState: AnalysisUiState,
+    /** Which figure the ranking is by. Here rather than pinned to the app bar: it sorts *this*. */
+    selectedMetric: AnalysisViewModel.MetricType,
+    onSelectMetric: (AnalysisViewModel.MetricType) -> Unit,
     selectedCategoryId: Long?,
     themeColor: Color,
     isolatedPersonId: Long?,
@@ -511,6 +590,8 @@ private fun CompareSection(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp)
     ) {
+        item { MetricSelector(uiState, selectedMetric, onSelectMetric) }
+
         item {
             RankingsCard(
                 uiState = uiState,
@@ -555,6 +636,8 @@ private fun PeopleSection(
 private fun RecordingsSection(
     records: List<AnalysisRecord>,
     metric: AnalysisViewModel.MetricType,
+    onSelectMetric: (AnalysisViewModel.MetricType) -> Unit,
+    uiState: AnalysisUiState,
     themeColor: Color,
     isolatedPersonId: Long?,
     onToggleReverse: () -> Unit,
@@ -564,6 +647,8 @@ private fun RecordingsSection(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp)
     ) {
+        item { MetricSelector(uiState, metric, onSelectMetric) }
+
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1084,4 +1169,74 @@ private fun metricLabel(metric: AnalysisViewModel.MetricType) = when (metric) {
     AnalysisViewModel.MetricType.LOW -> "Lowest"
     AnalysisViewModel.MetricType.AVG -> "Average"
     AnalysisViewModel.MetricType.HIGH -> "Highest"
+}
+
+/**
+ * The curves for whatever is in scope.
+ *
+ * The same chart the event page and the recording page each had their own copy of. One recording
+ * draws one lane, a day draws one per person, a festival draws the same — because they are all a
+ * scope, and a scope is a set of recordings on a shared clock.
+ *
+ * Scrubbing and isolating are local to the chart: they are ways of *looking*, not facts about the
+ * analysis, so they do not belong in the ViewModel with the things that are.
+ */
+@Composable
+private fun ScopeCurves(analysis: ConcurrentAnalysis) {
+    var scrubbedMs by remember(analysis) { mutableStateOf<Long?>(null) }
+    var isolatedId by remember(analysis) { mutableStateOf<String?>(null) }
+    val window = rememberConcurrentViewWindow(analysis)
+
+    Column {
+        SectionTitle(
+            "Over time",
+            if (analysis.series.size == 1) "The recording, end to end"
+            else "${analysis.series.size} lanes on one clock"
+        )
+        Spacer(Modifier.height(8.dp))
+        ConcurrentChart(
+            analysis = analysis,
+            window = window,
+            scrubbedMs = scrubbedMs,
+            onScrub = { scrubbedMs = it },
+            isolatedId = isolatedId,
+            onIsolate = { isolatedId = it },
+            modifier = Modifier.fillMaxWidth().height(220.dp)
+        )
+    }
+}
+
+/**
+ * Which kind of export, before the flow starts.
+ *
+ * The export utility asks this as its own first question, but it asks it three steps in — after the
+ * source is settled. From a detail page the source is already known, so the only thing left to
+ * choose is the format, and choosing it here means the flow opens on Contents rather than on a
+ * question that has already been answered.
+ */
+@Composable
+private fun ExportKindDialog(
+    onDismiss: () -> Unit,
+    onPick: (inga.bpmetrics.ui.export.ExportKind) -> Unit
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Export as") },
+        text = {
+            Column {
+                DropdownMenuItem(
+                    text = { Text("Video") },
+                    leadingIcon = { Icon(Icons.Default.Movie, contentDescription = null) },
+                    onClick = { onPick(inga.bpmetrics.ui.export.ExportKind.VIDEO) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Image") },
+                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                    onClick = { onPick(inga.bpmetrics.ui.export.ExportKind.IMAGE) }
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }

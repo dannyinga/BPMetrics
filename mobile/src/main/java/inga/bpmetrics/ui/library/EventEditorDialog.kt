@@ -127,6 +127,13 @@ fun EventEditorDialog(
     knownTypes: List<String> = emptyList(),
     people: List<PersonEntity> = emptyList(),
     collisionError: String? = null,
+    /** How many tags it carries, and the way through to changing them. */
+    tagCount: Int = 0,
+    onEditTags: (() -> Unit)? = null,
+    /** Its *own* picture, not an inherited one. */
+    hasOwnCover: Boolean = false,
+    onPickCover: (() -> Unit)? = null,
+    onRemoveCover: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onConfirm: (EventEdit) -> Unit
 ) {
@@ -300,6 +307,33 @@ fun EventEditorDialog(
                                 )
                             }
                         }
+                    }
+                }
+
+                onPickCover?.let { pick ->
+                    Spacer(Modifier.height(16.dp))
+                    Text("Photo", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(6.dp))
+                    inga.bpmetrics.ui.detail.CoverRow(
+                        hasCover = hasOwnCover,
+                        onPick = pick,
+                        onRemove = { onRemoveCover?.invoke() }
+                    )
+                }
+
+                onEditTags?.let { edit ->
+                    Spacer(Modifier.height(16.dp))
+                    Text("Tags", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(6.dp))
+                    // A door rather than the picker: choosing tags is its own dialog with its own
+                    // axes, and nesting it here would be a dialog inside a dialog. It belongs on
+                    // this list because a tag is part of what an event *is* — which is what this
+                    // editor is for, and why it no longer needs a menu row of its own.
+                    androidx.compose.material3.OutlinedButton(onClick = edit) {
+                        Text(
+                            if (tagCount == 0) "Add tags"
+                            else " tag" + if (tagCount == 1) "" else "s"
+                        )
                     }
                 }
 

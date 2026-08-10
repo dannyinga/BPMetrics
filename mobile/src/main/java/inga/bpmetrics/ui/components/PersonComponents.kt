@@ -70,7 +70,7 @@ fun PersonPicker(
     selectedId: Long?,
     onSelect: (Long?) -> Unit,
     modifier: Modifier = Modifier,
-    label: String = "Wearer",
+    label: String = "Person",
     onAddPerson: (() -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
