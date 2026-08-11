@@ -25,6 +25,9 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
@@ -288,7 +291,10 @@ private fun PickerRow(
     leading: @Composable () -> Unit,
     title: String,
     detail: String?,
-    indent: Int = 0
+    indent: Int = 0,
+    /** Open, shut, or null where there is nothing inside to reveal. */
+    expanded: Boolean? = null,
+    onToggleExpand: () -> Unit = {}
 ) {
     Surface(
         onClick = onClick,
@@ -331,41 +337,18 @@ private fun PickerRow(
                     modifier = Modifier.size(18.dp)
                 )
             }
+            // Separate from picking the row: narrowing to a festival and looking inside it are
+            // different intentions, and one tap cannot be both.
+            expanded?.let { open ->
+                androidx.compose.material3.IconButton(onClick = onToggleExpand) {
+                    Icon(
+                        if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (open) "Collapse" else "Show what is inside",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
         }
-    }
-}
-
-/**
- * A cover at thumbnail size, or a placeholder where there is none.
- *
- * Its *own* cover rather than the inherited one. In a nested list the inherited answer would draw
- * the festival's picture on all six of its sets, which says they are the same thing when the list
- * exists to tell them apart.
- */
-@Composable
-private fun CoverThumb(cover: inga.bpmetrics.library.Cover?) {
-    val shape = MaterialTheme.shapes.small
-    if (cover == null) {
-        Box(
-            Modifier
-                .size(34.dp)
-                .clip(shape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Default.Event,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-    } else {
-        inga.bpmetrics.ui.components.CoverBackground(
-            cover = cover,
-            modifier = Modifier.size(34.dp).clip(shape),
-            scrim = inga.bpmetrics.ui.components.CoverScrim.NONE
-        ) {}
     }
 }
 
@@ -492,6 +475,9 @@ internal fun ValuePickerDialog(
 ) {
     val values = options.forDimension(dimension)
     var query by remember { mutableStateOf("") }
+    // Events only. Collapsed to start, because a library of forty opens as a wall otherwise.
+    var openEvents by remember { mutableStateOf(emptySet<Long>()) }
+    var newestFirst by remember { mutableStateOf(true) }
 
     val shown = remember(values, query) {
         if (query.isBlank()) values
@@ -503,7 +489,30 @@ internal fun ValuePickerDialog(
         title = { PickerTitle(dimension, onBack) },
         text = {
             Column(Modifier.fillMaxWidth()) {
-                if (values.size > 8) {
+                // Newest first, reversible — the same control the export's picker has, for the same
+                // reason: a list of occasions is read in time order or it is not read at all, and
+                // which end you start from depends on what you are looking for.
+                if (dimension == FilterDimension.EVENT) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (newestFirst) "Newest first" else "Oldest first",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        androidx.compose.material3.IconButton(
+                            onClick = { newestFirst = !newestFirst }
+                        ) {
+                            Icon(
+                                Icons.Default.SwapVert,
+                                contentDescription = "Reverse the order",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+
+                if (values.size > 8 || dimension == FilterDimension.EVENT) {
                     OutlinedTextField(
                         value = query,
                         onValueChange = { query = it },
@@ -555,19 +564,45 @@ internal fun ValuePickerDialog(
                                 )
                             }
 
-                        FilterDimension.EVENT -> options.eventRows
-                            .filter { matches(it.first.displayName, query) }
-                            .forEach { (event, depth) ->
-                                val id = event.eventId.toString()
-                                PickerRow(
-                                    picked = isPicked(id),
-                                    onClick = { onPick(id) },
-                                    indent = depth,
-                                    leading = { CoverThumb(event.ownCover) },
-                                    title = event.displayName,
-                                    detail = event.type?.takeIf { t -> t.isNotBlank() }
+                        // Collapsed, and searching opens everything: a query is a way of saying
+                        // "wherever it is", and hiding a match inside a shut festival would be
+                        // answering it with silence.
+                        FilterDimension.EVENT -> {
+                            val searching = query.isNotBlank()
+                            inga.bpmetrics.library.EventTree
+                                .flatten(
+                                    options.eventTree,
+                                    expanded = if (searching) null else openEvents,
+                                    newestFirst = newestFirst
                                 )
-                            }
+                                .filter { matches(it.event.displayName, query) }
+                                .forEach { node ->
+                                    val event = node.event
+                                    val id = event.eventId.toString()
+                                    PickerRow(
+                                        picked = isPicked(id),
+                                        onClick = { onPick(id) },
+                                        indent = node.depth,
+                                        leading = {
+                                            inga.bpmetrics.ui.components.CoverThumbnail(
+                                                event.ownCover,
+                                                placeholder = Icons.Default.Event
+                                            )
+                                        },
+                                        title = event.displayName,
+                                        detail = event.type?.takeIf { t -> t.isNotBlank() },
+                                        expanded = if (!node.hasChildren || searching) null
+                                            else event.eventId in openEvents,
+                                        onToggleExpand = {
+                                            openEvents = if (event.eventId in openEvents) {
+                                                openEvents - event.eventId
+                                            } else {
+                                                openEvents + event.eventId
+                                            }
+                                        }
+                                    )
+                                }
+                        }
 
                         FilterDimension.COLLECTION -> options.collectionEntities
                             .filter { matches(it.displayName, query) }
@@ -576,7 +611,12 @@ internal fun ValuePickerDialog(
                                 PickerRow(
                                     picked = isPicked(id),
                                     onClick = { onPick(id) },
-                                    leading = { CoverThumb(set.ownCover) },
+                                    leading = {
+                                        inga.bpmetrics.ui.components.CoverThumbnail(
+                                            set.ownCover,
+                                            placeholder = Icons.Default.Bookmarks
+                                        )
+                                    },
                                     title = set.displayName,
                                     detail = when {
                                         set.isFrozen -> "Frozen"

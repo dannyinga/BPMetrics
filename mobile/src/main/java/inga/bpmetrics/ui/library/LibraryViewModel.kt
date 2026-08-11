@@ -216,8 +216,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                 .filter { it.tags.isNotEmpty() }
                 .sortedBy { it.name },
             peopleEntities = people,
-            eventRows = inga.bpmetrics.library.EventTree.flatten(events)
-                .map { it.event to it.depth },
+            eventTree = events,
             collectionEntities = sets,
             watches = watches.filter { it.isNamed }.map { it.watchId to it.displayName }
         )
@@ -915,7 +914,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     val eventPickerRows: StateFlow<List<Pair<EventEntity, Int>>> = repository.allEventsInTree
         .map { events ->
-            inga.bpmetrics.library.EventTree.flatten(events).map { it.event to it.depth }
+            // Newest first, matching the timeline and both browsing pickers — filing something is
+            // nearly always filing it into something recent. Expanded rather than collapsed: a
+            // picker offering somewhere to put a thing has to offer everywhere, and a container
+            // shut by default is one you cannot choose.
+            inga.bpmetrics.library.EventTree
+                .flatten(events, newestFirst = true)
+                .map { it.event to it.depth }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

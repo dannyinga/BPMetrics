@@ -2,6 +2,7 @@ package inga.bpmetrics.ui.detail
 
 import android.widget.Toast
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Icon
@@ -93,6 +94,7 @@ fun EventDetailScreen(
     }
 
     var editing by remember { mutableStateOf(false) }
+    var addingInside by remember { mutableStateOf(false) }
     var tagging by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
 
@@ -177,6 +179,13 @@ fun EventDetailScreen(
             }
         },
         subjectActions = {
+            // Making a set inside this day, from the day. It used to mean going back to the
+            // timeline, creating one loose, and moving it in — two trips for one thought. An icon
+            // rather than a menu, because the page has no overflow any more and bringing one back
+            // to hold a single item is the thing that was just removed.
+            IconButton(onClick = { addingInside = true }) {
+                Icon(Icons.Default.Add, contentDescription = "New event inside this one")
+            }
             IconButton(onClick = { editing = true }) {
                 Icon(Icons.Default.Edit, contentDescription = "Edit event")
             }
@@ -226,6 +235,31 @@ fun EventDetailScreen(
             onConfirm = { subject.setCoverCrop(it); framingCover = false },
             // Stays open: removing is usually the first half of replacing.
             onRemove = { subject.clearCover(context) }
+        )
+    }
+
+    // The same editor the timeline creates with, opened with this event already chosen as the
+    // parent — so the only thing left to say is what the new one is.
+    if (addingInside && event != null) {
+        val knownTypes by libraryViewModel.eventTypesInUse.collectAsStateWithLifecycle()
+        val windowError by libraryViewModel.windowError.collectAsStateWithLifecycle()
+        val parentRows by libraryViewModel.eventPickerRows.collectAsStateWithLifecycle()
+
+        inga.bpmetrics.ui.library.EventEditorDialog(
+            initialName = "",
+            initialParentId = event.eventId,
+            knownTypes = knownTypes,
+            parentOptions = parentRows,
+            locations = places,
+            // Its parent's window, as the suggestion. A set is inside the day it happened on, so
+            // the day is the right starting guess for when the set was.
+            suggestedStart = state.span?.startMs,
+            suggestedEnd = state.span?.endMs,
+            collisionError = windowError,
+            onDismiss = { addingInside = false; libraryViewModel.clearWindowError() },
+            onConfirm = { edit ->
+                libraryViewModel.createEvent(edit) { done -> if (done) addingInside = false }
+            }
         )
     }
 

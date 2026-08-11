@@ -16,8 +16,14 @@ package inga.bpmetrics.library
  */
 object EventTree {
 
-    /** A node and how deep it sits, for rendering a tree as a list. */
-    data class Node(val event: EventEntity, val depth: Int)
+    /**
+     * A node and how deep it sits, for rendering a tree as a list.
+     *
+     * [hasChildren] is about the *tree*, not about what is currently on screen: a row needs to know
+     * whether opening it would reveal anything, and a collapsed row has no visible children to
+     * count. A chevron that expands into nothing reads as a broken row.
+     */
+    data class Node(val event: EventEntity, val depth: Int, val hasChildren: Boolean = false)
 
     /**
      * The direct children of [parentId], in the order they happened.
@@ -108,15 +114,40 @@ object EventTree {
      * Depth-first from the top, siblings in time order, so a list rendered from this reads as the
      * tree it is rather than needing the caller to work the shape out again.
      */
-    fun flatten(all: List<EventEntity>): List<Node> {
+    fun flatten(
+        all: List<EventEntity>,
+        /**
+         * Which events are open, or null for all of them.
+         *
+         * Null is the old behaviour and stays the default, because two callers genuinely want the
+         * whole tree at once — a parent picker has to offer every possible parent, and a scope walk
+         * is not a list anybody is scrolling. A *picker* wants the opposite: a library of forty
+         * events opening as forty rows is a wall, and the festivals people are choosing between are
+         * the six at the top.
+         */
+        expanded: Set<Long>? = null,
+        /** Reverses each level. The order within a level is chronological either way. */
+        newestFirst: Boolean = false
+    ): List<Node> {
         val result = mutableListOf<Node>()
         val seen = mutableSetOf<Long>()
 
+        // Everything the tree can reach, whether or not it is currently on screen. Kept apart from
+        // what was *emitted*, because collapsing legitimately leaves most of the tree unemitted —
+        // and the recovery pass below would otherwise dump every collapsed child at depth 0, which
+        // is the opposite of collapsing.
+        val reachable = mutableSetOf<Long>()
+        fun mark(parentId: Long?) {
+            childrenOf(all, parentId).forEach { if (reachable.add(it.eventId)) mark(it.eventId) }
+        }
+        mark(null)
+
         fun walk(parentId: Long?, depth: Int) {
-            childrenOf(all, parentId).forEach { event ->
+            val children = childrenOf(all, parentId).let { if (newestFirst) it.reversed() else it }
+            children.forEach { event ->
                 if (!seen.add(event.eventId)) return@forEach
-                result += Node(event, depth)
-                walk(event.eventId, depth + 1)
+                result += Node(event, depth, childrenOf(all, event.eventId).isNotEmpty())
+                if (expanded == null || event.eventId in expanded) walk(event.eventId, depth + 1)
             }
         }
 
@@ -124,9 +155,10 @@ object EventTree {
 
         // Anything a cycle kept out of the walk still has to appear, or it becomes unreachable in
         // the UI and cannot be repaired by the person looking at it.
-        all.filter { it.eventId !in seen }
+        all.filter { it.eventId !in reachable }
             .sortedBy { it.windowStart ?: it.createdAt }
-            .forEach { result += Node(it, 0) }
+            .let { if (newestFirst) it.reversed() else it }
+            .forEach { if (seen.add(it.eventId)) result += Node(it, 0) }
 
         return result
     }

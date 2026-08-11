@@ -4,9 +4,12 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -136,6 +139,52 @@ val CoverTextShadow: Shadow = Shadow(
  */
 fun TextStyle.overCover(hasCover: Boolean): TextStyle =
     if (hasCover) copy(shadow = CoverTextShadow) else this
+
+/**
+ * A cover at thumbnail size, or a placeholder where there is none.
+ *
+ * For the pickers — a filter narrowing to an event, an export choosing its source. A list of names
+ * makes you read every row; the picture is how you find the right "Day 1" out of four without
+ * reading any of them.
+ *
+ * Deliberately the owner's **own** cover rather than the inherited one. In a nested list the
+ * inherited answer paints the festival's picture on all six of its sets, which says they are the
+ * same thing when the list exists to tell them apart.
+ */
+@Composable
+fun CoverThumbnail(
+    cover: Cover?,
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 34.dp,
+    /** Drawn when there is no picture. A kind of thing, so the gap still says what the row is. */
+    placeholder: androidx.compose.ui.graphics.vector.ImageVector? = null
+) {
+    val shape = androidx.compose.material3.MaterialTheme.shapes.small
+    if (cover == null) {
+        Box(
+            modifier
+                .size(size)
+                .clip(shape)
+                .background(androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = androidx.compose.ui.Alignment.Center
+        ) {
+            placeholder?.let {
+                androidx.compose.material3.Icon(
+                    it,
+                    contentDescription = null,
+                    tint = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(size / 2)
+                )
+            }
+        }
+    } else {
+        CoverBackground(
+            cover = cover,
+            modifier = modifier.size(size).clip(shape),
+            scrim = CoverScrim.NONE
+        ) {}
+    }
+}
 
 /**
  * How hard the scrim works.

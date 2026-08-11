@@ -57,6 +57,8 @@ fun TimelineList(
     selectionMode: Boolean = false,
     onToggleEventSelection: (Long) -> Unit = {},
     onCreateEvent: () -> Unit,
+    /** Makes a new event inside the one given. See [inga.bpmetrics.ui.library.EventOverflow]. */
+    onAddInside: (EventSummary) -> Unit = {},
     onOpenEvent: (Long) -> Unit,
     onEdit: (EventSummary) -> Unit,
     onMoveToGroup: (EventSummary) -> Unit,
@@ -126,6 +128,7 @@ fun TimelineList(
                                 },
                                 onToggleExpand = { onToggleExpand(entry.event.eventId) },
                                 onRename = { onEdit(summary) },
+                                onAddInside = { onAddInside(summary) },
                                 onMoveToGroup = { onMoveToGroup(summary) },
                                 onAddToCollection = { onAddToCollection(summary) },
                                 onDelete = { onDelete(summary) }

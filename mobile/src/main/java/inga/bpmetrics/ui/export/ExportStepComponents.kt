@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,6 +51,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.SwapVert
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.font.FontWeight
@@ -91,6 +97,17 @@ fun SourceStep(
 ) {
     var kind by remember { mutableStateOf(SourceKind.EVENTS) }
 
+    // Collapsed, and empty is the whole point: a library of forty events opening as forty rows is
+    // a wall, and the festivals anyone is choosing between are the six at the top of it.
+    var expanded by remember { mutableStateOf(emptySet<Long>()) }
+    var newestFirst by remember { mutableStateOf(true) }
+
+    // The tree, flattened with depths — the same walk the timeline and the event picker use, so
+    // all three agree about what is inside what and about the order it happened in.
+    val eventRows = remember(events, expanded, newestFirst) {
+        inga.bpmetrics.library.EventTree.flatten(events, expanded, newestFirst)
+    }
+
     Column(Modifier.fillMaxSize()) {
         // Video or image is asked on Contents now, at the top of the step it actually decides.
         // Source is the same set of recordings either way.
@@ -109,17 +126,61 @@ fun SourceStep(
             }
         }
 
+        // Newest first, reversible. A list of occasions is read in time order or it is not read at
+        // all — but which end you start from depends on whether you are looking for last night or
+        // for the festival three years ago.
+        if (kind == SourceKind.EVENTS) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (newestFirst) "Newest first" else "Oldest first",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = { newestFirst = !newestFirst }) {
+                    Icon(Icons.Default.SwapVert, contentDescription = "Reverse the order")
+                }
+            }
+        }
+
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             when (kind) {
-                SourceKind.EVENTS -> items(events, key = { "event-${it.eventId}" }) { event ->
+                // Nested exactly as the timeline is, and carrying their covers. A flat list of
+                // names asks you to read every row; the picture is how anyone finds the right
+                // "Day 1" out of four, and the indent is what says which festival it belongs to.
+                SourceKind.EVENTS -> items(
+                    eventRows,
+                    key = { "event-${it.event.eventId}" }
+                ) { node ->
+                    val event = node.event
                     val count = recordings.count { it.metadata.eventId == event.eventId }
                     SourceRow(
                         title = event.displayName,
-                        subtitle = "$count recording${if (count == 1) "" else "s"}",
+                        subtitle = buildString {
+                            event.type?.takeIf { it.isNotBlank() }?.let { append("$it · ") }
+                            append("$count recording${if (count == 1) "" else "s"}")
+                        },
+                        cover = event.ownCover,
+                        placeholder = Icons.Default.Event,
+                        depth = node.depth,
+                        // Only where opening it reveals something. A chevron that expands into
+                        // nothing reads as a broken row.
+                        expanded = if (!node.hasChildren) null
+                            else event.eventId in expanded,
+                        onToggleExpand = {
+                            expanded = if (event.eventId in expanded) {
+                                expanded - event.eventId
+                            } else {
+                                expanded + event.eventId
+                            }
+                        },
                         isSelected = selected == ExportSource.Event(event.eventId),
                         onClick = { onSelect(ExportSource.Event(event.eventId)) }
                     )
@@ -134,8 +195,15 @@ fun SourceStep(
                         // Deliberately not a count here. What a set resolves to needs the tree
                         // walk, and doing it per row while scrolling — or worse, guessing it from
                         // the link table — is exactly how the picker came to promise one number
-                        // and the export deliver another.
-                        subtitle = "Collection",
+                        // and the export deliver another. What it *is* costs nothing and is worth
+                        // knowing before exporting: a frozen set will never gain a recording.
+                        subtitle = when {
+                            collection.isFrozen -> "Frozen"
+                            collection.isSmart -> "Living"
+                            else -> "Collection"
+                        },
+                        cover = collection.ownCover,
+                        placeholder = Icons.Default.Bookmarks,
                         isSelected = selected == ExportSource.Group(collection.collectionId),
                         onClick = { onSelect(ExportSource.Group(collection.collectionId)) }
                     )
@@ -203,10 +271,21 @@ private fun SourceRow(
     subtitle: String,
     isSelected: Boolean,
     onClick: () -> Unit,
-    accent: Color? = null
+    accent: Color? = null,
+    /** Its own picture. See [inga.bpmetrics.ui.components.CoverThumbnail]. */
+    cover: inga.bpmetrics.library.Cover? = null,
+    placeholder: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    /** How deep in the tree, so the picker nests the way the timeline does. */
+    depth: Int = 0,
+    /** Open, shut, or null where there is nothing inside to reveal. */
+    expanded: Boolean? = null,
+    onToggleExpand: () -> Unit = {}
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = (depth.coerceAtMost(4) * 16).dp)
+            .clickable(onClick = onClick),
         colors = if (isSelected) {
             CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
@@ -222,6 +301,10 @@ private fun SourceRow(
             modifier = Modifier.padding(14.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (cover != null || placeholder != null) {
+                inga.bpmetrics.ui.components.CoverThumbnail(cover, placeholder = placeholder)
+                Spacer(Modifier.width(12.dp))
+            }
             accent?.let {
                 Box(Modifier.size(10.dp).clip(CircleShape).background(it))
                 Spacer(Modifier.width(10.dp))
@@ -233,6 +316,17 @@ private fun SourceRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            // Separate from choosing the row. Opening a festival to see its days and exporting
+            // the festival are different intentions, and one tap cannot be both.
+            expanded?.let { open ->
+                IconButton(onClick = onToggleExpand) {
+                    Icon(
+                        if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (open) "Collapse" else "Show what is inside"
+                    )
+                }
             }
         }
     }

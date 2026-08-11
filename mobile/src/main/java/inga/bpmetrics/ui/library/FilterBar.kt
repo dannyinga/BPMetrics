@@ -275,8 +275,8 @@ data class FilterOptions(
      * easier with the picture that is on it.
      */
     val peopleEntities: List<PersonEntity> = emptyList(),
-    /** Each event with its depth, so the picker nests exactly as the timeline does. */
-    val eventRows: List<Pair<EventEntity, Int>> = emptyList(),
+    /** The tree itself. The picker nests and collapses it; see `FilterEditor`. */
+    val eventTree: List<EventEntity> = emptyList(),
     val collectionEntities: List<CollectionEntity> = emptyList()
 ) {
     fun forDimension(dimension: FilterDimension): List<Pair<String, String>> = when (dimension) {

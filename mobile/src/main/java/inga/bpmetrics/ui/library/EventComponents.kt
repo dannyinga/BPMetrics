@@ -244,6 +244,8 @@ fun EventCard(
     onOpen: () -> Unit,
     onToggleExpand: () -> Unit,
     onRename: () -> Unit,
+    /** Makes a new event inside this one. See [EventOverflow]. */
+    onAddInside: (() -> Unit)? = null,
     onMoveToGroup: () -> Unit,
     onDelete: () -> Unit,
     /** Its own picture or the one it inherits, resolved by the caller. */
@@ -370,6 +372,7 @@ fun EventCard(
                 EventOverflow(
                     renameLabel = "Edit",
                     onRename = onRename,
+                    onAddInside = onAddInside,
                     onMoveToGroup = onMoveToGroup,
                     onAddToCollection = onAddToCollection,
                     onDelete = onDelete,
@@ -405,6 +408,14 @@ private fun EventOverflow(
     /** "Rename" for a collection, "Edit" for an event — the event dialog does rather more. */
     renameLabel: String = "Rename",
     onRename: () -> Unit,
+    /**
+     * Makes a new event inside this one.
+     *
+     * Nesting existed and was awkward to *build*: creating an event put it at the top level, and
+     * putting it where it belonged was a second trip through "Move into…". A set inside Day 1 is
+     * one thought and should be one action, started from the thing it goes inside.
+     */
+    onAddInside: (() -> Unit)? = null,
     /** Files this event inside another. Nesting is the tree; see EventParentPickerDialog. */
     onMoveToGroup: (() -> Unit)?,
     /** Puts it in an arbitrary set, which is a different thing from where it lives. */
@@ -432,6 +443,13 @@ private fun EventOverflow(
                 text = { Text(renameLabel) },
                 onClick = { open = false; onRename() }
             )
+            onAddInside?.let { add ->
+                DropdownMenuItem(
+                    text = { Text("New event inside…") },
+                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    onClick = { open = false; add() }
+                )
+            }
             onMoveToGroup?.let { move ->
                 DropdownMenuItem(
                     text = { Text("Move into…") },

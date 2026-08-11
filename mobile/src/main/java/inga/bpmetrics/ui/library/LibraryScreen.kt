@@ -228,6 +228,9 @@ fun LibraryScreen(
     val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
 
     var showCreateEventDialog by remember { mutableStateOf(false) }
+    // Which event the new one goes inside, or null for the top level. Creating a set inside Day 1
+    // used to mean creating it loose and then moving it, which is two trips for one thought.
+    var creatingInside by remember { mutableStateOf<Long?>(null) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var renamingEvent by remember { mutableStateOf<EventSummary?>(null) }
     // The event whose photo the row editor is choosing, and whether the framing sheet is up. Held
@@ -809,7 +812,11 @@ fun LibraryScreen(
                         selectedEventIds = selectedEventIds,
                         selectionMode = isSelectionMode,
                         onToggleEventSelection = { viewModel.toggleEventSelection(it) },
-                        onCreateEvent = { showCreateEventDialog = true },
+                        onCreateEvent = { creatingInside = null; showCreateEventDialog = true },
+                        onAddInside = {
+                            creatingInside = it.event.eventId
+                            showCreateEventDialog = true
+                        },
                         onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
                         onEdit = { renamingEvent = it },
                         onMoveToGroup = { movingEvent = it },
@@ -957,6 +964,7 @@ fun LibraryScreen(
         }
         EventEditorDialog(
             initialName = "",
+            initialParentId = creatingInside,
             knownTypes = knownTypes,
             people = availablePeopleForBackup,
             // From the recordings being filed into it, where there are any — the same rule as
@@ -969,6 +977,7 @@ fun LibraryScreen(
             onDismiss = {
                 showCreateEventDialog = false
                 namingEventForSelection = false
+                creatingInside = null
                 viewModel.clearWindowError()
             },
             onConfirm = { edit ->
@@ -976,6 +985,7 @@ fun LibraryScreen(
                     if (done) {
                         showCreateEventDialog = false
                         namingEventForSelection = false
+                        creatingInside = null
                     }
                 }
             }

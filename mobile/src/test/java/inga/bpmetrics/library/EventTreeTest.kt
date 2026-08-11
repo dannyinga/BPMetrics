@@ -184,4 +184,76 @@ class EventTreeTest {
 
         assertEquals(null, EventTree.spanOf(empty, 1, emptyList(), emptyMap()))
     }
+
+    // --- Flattening a tree into rows, collapsed and reversed ---
+
+    @Test
+    fun `everything shows when nothing says otherwise`() {
+        assertEquals(
+            listOf("Griztronics", "Day 1", "Subtronics", "Excision", "Day 2"),
+            EventTree.flatten(festival()).map { it.event.name }
+        )
+    }
+
+    @Test
+    fun `collapsed shows the tops and nothing under them`() {
+        assertEquals(
+            listOf("Griztronics"),
+            EventTree.flatten(festival(), expanded = emptySet()).map { it.event.name }
+        )
+    }
+
+    @Test
+    fun `opening one level opens only that level`() {
+        assertEquals(
+            listOf("Griztronics", "Day 1", "Day 2"),
+            EventTree.flatten(festival(), expanded = setOf(1L)).map { it.event.name }
+        )
+    }
+
+    /**
+     * The trap collapsing sets, and the reason this is tested rather than eyeballed.
+     *
+     * The walk kept one set of ids for "emitted", and a recovery pass appended everything not in
+     * it — there so a cycle cannot make an event unreachable in the UI. With collapsing, *most* of
+     * the tree is legitimately unemitted, so that pass would have dumped every collapsed child at
+     * the top level: the exact opposite of collapsing, and it would have looked like the feature
+     * simply did not work.
+     */
+    @Test
+    fun `collapsed children are not swept up by the cycle recovery`() {
+        val rows = EventTree.flatten(festival(), expanded = emptySet())
+
+        assertEquals(1, rows.size)
+        assertTrue(rows.none { it.event.name == "Subtronics" })
+    }
+
+    @Test
+    fun `a row says whether opening it would reveal anything`() {
+        val rows = EventTree.flatten(festival()).associateBy { it.event.name }
+
+        assertTrue(rows.getValue("Griztronics").hasChildren)
+        assertTrue(rows.getValue("Day 1").hasChildren)
+        // A chevron here would expand into nothing, which reads as a broken row.
+        assertFalse(rows.getValue("Excision").hasChildren)
+    }
+
+    @Test
+    fun `newest first reverses each level and keeps parents above children`() {
+        assertEquals(
+            listOf("Griztronics", "Day 2", "Day 1", "Excision", "Subtronics"),
+            EventTree.flatten(festival(), newestFirst = true).map { it.event.name }
+        )
+    }
+
+    /** An event a cycle keeps out of the walk still has to appear, collapsed or not. */
+    @Test
+    fun `an unreachable event still appears`() {
+        val tangled = festival() + event(9, "Orphan", parent = 99)
+
+        assertTrue(
+            EventTree.flatten(tangled, expanded = emptySet())
+                .any { it.event.name == "Orphan" }
+        )
+    }
 }

@@ -1175,6 +1175,44 @@ picker has a **back arrow** to that grid: one wrong tap used to mean closing the
 again. The value picker stays open until Done and shows what is already on, rather than closing on
 the first tap so that narrowing to three people meant opening the same list three times.
 
+**Nesting was possible and awkward to build.** Creating an event put it at the top level, so a set
+inside Day 1 meant creating it loose and then a second trip through "Move into…" — two actions for
+one thought, and the tree §2 exists for was the thing being made hardest to make. **New event
+inside…** is in the timeline card's overflow and on the event's own page, opening the same editor
+with the parent already chosen and the parent's window as the suggested one. A set is inside the day
+it happened on, so the day is the right first guess for when the set was.
+
+On the page it is an icon rather than a menu item, deliberately: that page's overflow was removed a
+few changes ago for holding exactly one thing, and bringing it back to hold one thing again would be
+the same mistake with a different item in it.
+
+**Events are collapsed, and every list of them reads in time order.** A nested picker that opens
+fully expanded is a wall — a library of forty events arrives as forty rows, when the festivals
+anyone is choosing between are the six at the top. `EventTree.flatten` takes an `expanded` set and a
+`newestFirst` flag, so the collapsing and the ordering are one implementation rather than one per
+picker, and a `Node` now says whether opening it would reveal anything (a chevron that expands into
+nothing reads as a broken row).
+
+Collapsing had a trap worth naming: the walk tracked one set of ids for "emitted", and a recovery
+pass appended everything *not* in it — there so a cycle cannot make an event unreachable in the UI.
+With collapsing, most of the tree is legitimately unemitted, so that pass would have dumped every
+collapsed child at the top level. Reachability is tracked separately from emission now, and a test
+pins it.
+
+Which lists got a reverse toggle is a distinction rather than an oversight. The **browsing** lists —
+the export's source picker, the filter's event picker, the library timeline — are read in time order
+and which end you start from depends on whether you want last night or the festival three years ago,
+so they carry one. The **structural** pickers — choose a parent, file into an event — are scanned for
+a name rather than read, and cannot collapse either: a picker offering somewhere to put a thing has
+to offer everywhere, and a container shut by default is one you cannot choose. They are ordered
+newest-first to match, and that is all they need.
+
+**The export's source picker too.** Same complaint, same fix: events nested with their covers and
+their type, collections with theirs and whether they are living or frozen. It listed a flat column
+of names, so choosing between four events called "Day 1" meant reading all four and still guessing
+which festival each belonged to. The thumbnail is one `CoverThumbnail` shared with the filter —
+these were about to be two copies of the same twenty lines.
+
 **Each dimension is drawn as the thing it is.** A person is a face and a colour, an event is a cover
 and a place in a tree, a collection is a cover and a name — and the filter was the one screen in the
 app where all three were a line of grey text. People get their avatar, events nest exactly as the
