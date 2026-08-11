@@ -75,7 +75,19 @@ object LibraryTimeline {
          * a chronology. Only the top level flips: inside a festival, Day 1 before Day 2 is not a
          * preference, it is what the container is.
          */
-        newestFirst: Boolean = true
+        newestFirst: Boolean = true,
+        /**
+         * Whether recordings belonging to no event appear at all.
+         *
+         * Off is "show me what I have filed". A library accumulates loose recordings faster than it
+         * accumulates events — every session that was never tidied up is one — and once there are
+         * two hundred of them the events they sit between are unfindable, which is the opposite of
+         * what a timeline is for.
+         *
+         * Only the *unfiled* ones go. A recording inside an event is part of that event and still
+         * appears when it is opened; hiding those would make expanding an event pointless.
+         */
+        includeUnfiled: Boolean = true
     ): List<TimelineRow> {
         // An event survives if it holds something *or* anything beneath it does. Pruning on direct
         // contents alone would cut a festival whose recordings all live in its sets — and because
@@ -133,8 +145,12 @@ object LibraryTimeline {
                 childEvents[parentId].orEmpty()
                     .filter { seen.add(it.eventId) }
                     .forEach { add(TimelineEntry.Event(it, keyOf(it.eventId))) }
-                childRecords[parentId].orEmpty()
-                    .forEach { add(TimelineEntry.Recording(it)) }
+                // Nothing filed anywhere hangs off the top level, so that is where hiding the
+                // unfiled applies — and only there.
+                if (parentId != null || includeUnfiled) {
+                    childRecords[parentId].orEmpty()
+                        .forEach { add(TimelineEntry.Recording(it)) }
+                }
             }
 
             // Newest first at the top, oldest first once inside something. Both are what someone

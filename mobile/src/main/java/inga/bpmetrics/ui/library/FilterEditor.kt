@@ -151,7 +151,34 @@ fun FilterEditor(
         )
     }
 
-    when (val dimension = adding) {
+    openPicker(
+        dimension = adding,
+        filter = filter,
+        options = options,
+        onChange = onChange,
+        onBack = goBack,
+        onDismiss = { adding = null }
+    )
+}
+
+/**
+ * Whichever picker a dimension needs, or nothing when none is open.
+ *
+ * One dispatch, because there are two ways in: the library's bar, which goes through the grid
+ * first, and a collection's rule, where every dimension already has a row and the grid would be a
+ * step asking what the screen has just been told. Two copies of this `when` would be two chances
+ * for a dimension to behave differently depending on where it was opened from.
+ */
+@Composable
+private fun openPicker(
+    dimension: FilterDimension?,
+    filter: FilterState,
+    options: FilterOptions,
+    onChange: (FilterState) -> Unit,
+    onBack: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    when (dimension) {
         null -> Unit
 
         FilterDimension.TAG -> TagPickerDialog(
@@ -174,33 +201,33 @@ fun FilterEditor(
                     )
                 )
             },
-            onBack = goBack,
-            onDismiss = { adding = null }
+            onBack = onBack,
+            onDismiss = onDismiss
         )
 
         FilterDimension.DATE -> DateRangeDialog(
             initial = filter.dateRange,
-            onBack = goBack,
-            onDismiss = { adding = null },
-            onConfirm = { onChange(filter.copy(dateRange = it)); adding = null }
+            onBack = onBack,
+            onDismiss = onDismiss,
+            onConfirm = { onChange(filter.copy(dateRange = it)); onDismiss() }
         )
 
         FilterDimension.RATE -> RateRangeDialog(
             initialMin = filter.minBpm,
             initialMax = filter.maxBpm,
-            onBack = goBack,
-            onDismiss = { adding = null },
+            onBack = onBack,
+            onDismiss = onDismiss,
             onConfirm = { low, high ->
                 onChange(filter.copy(minBpm = low, maxBpm = high))
-                adding = null
+                onDismiss()
             }
         )
 
         else -> ValuePickerDialog(
             dimension = dimension,
             options = options,
-            onBack = goBack,
-            onDismiss = { adding = null },
+            onBack = onBack,
+            onDismiss = onDismiss,
             // Stays open. Picking three people should not mean opening the same list three times.
             onPick = { id -> onChange(FilterChips.with(filter, dimension, id)) },
             isPicked = { id -> FilterChips.holds(filter, dimension, id) }
@@ -220,23 +247,43 @@ fun FilterEditor(
  * was — which matters more here than on the library bar, where a filter is a view and changing your
  * mind costs nothing.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CollectionRuleDialog(
     initial: FilterState,
     options: FilterOptions,
-    /** The terms of an arbitrary filter, resolved to names. See `LibraryViewModel.chipsFor`. */
+    /** The terms of an arbitrary filter, resolved to names. See `LibraryViewModel.chipsOf`. */
     chipsOf: (FilterState) -> List<FilterChip>,
     onDismiss: () -> Unit,
     onConfirm: (FilterState) -> Unit
 ) {
     var rule by remember { mutableStateOf(initial) }
+    var opening by remember { mutableStateOf<FilterDimension?>(null) }
     val chips = chipsOf(rule)
+
+    // Whichever dimension was tapped, opened straight from its own row. The library's bar goes
+    // through the grid first because it is one small "Add" chip with nine possible meanings; here
+    // every dimension already has a row of its own, so the grid would be a step that asks a
+    // question the screen has just been answered.
+    openPicker(
+        dimension = opening,
+        filter = rule,
+        options = options,
+        onChange = { rule = it },
+        onBack = { opening = null },
+        onDismiss = { opening = null }
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("What this collects") },
         text = {
-            Column(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 Text(
                     "Anything matching all of these is in the collection, and stays in it as the " +
                         "library grows. Recordings you added by hand are kept as well.",
@@ -244,19 +291,77 @@ fun CollectionRuleDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(12.dp))
-                FilterEditor(
-                    filter = rule,
-                    chips = chips,
-                    options = options,
-                    onChange = { rule = it },
-                    onClearAll = { rule = FilterState() }
-                )
+
+                // Every dimension, on one screen. It was the library's own bar: one "Add" chip
+                // opening a grid, then a picker, then closing — and then the whole walk again for
+                // the second term. A rule is a *form*, filled in once and revisited, not a series
+                // of questions asked one at a time.
+                FilterDimension.entries.forEach { dimension ->
+                    val mine = chips.filter { it.dimension == dimension }
+                    val available = options.countFor(dimension)
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            iconFor(dimension),
+                            contentDescription = null,
+                            tint = if (mine.isEmpty()) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            dimension.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            enabled = available > 0,
+                            onClick = { opening = dimension }
+                        ) {
+                            Text(if (mine.isEmpty()) "Any" else "Change")
+                        }
+                    }
+
+                    if (mine.isNotEmpty()) {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            mine.forEach { chip ->
+                                InputChip(
+                                    selected = true,
+                                    onClick = { rule = FilterChips.without(rule, chip) },
+                                    label = { Text(chip.label) },
+                                    leadingIcon = chip.colorArgb?.let {
+                                        { PersonSwatch(it, size = 14) }
+                                    },
+                                    trailingIcon = {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Remove ${chip.label}",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 if (chips.isEmpty()) {
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(12.dp))
                     Text(
                         // Saving an empty rule would mean "everything", which is a collection of
                         // the whole library and almost certainly not what was meant.
-                        "A rule with no terms matches everything. Add at least one.",
+                        "A rule with no terms matches everything. Narrow at least one.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -269,7 +374,14 @@ fun CollectionRuleDialog(
                 onClick = { onConfirm(rule) }
             ) { Text("Save rule") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        dismissButton = {
+            Row {
+                if (chips.isNotEmpty()) {
+                    TextButton(onClick = { rule = FilterState() }) { Text("Clear") }
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        }
     )
 }
 
@@ -573,7 +685,8 @@ internal fun ValuePickerDialog(
                                 .flatten(
                                     options.eventTree,
                                     expanded = if (searching) null else openEvents,
-                                    newestFirst = newestFirst
+                                    newestFirst = newestFirst,
+                                    startBy = options.eventStarts
                                 )
                                 .filter { matches(it.event.displayName, query) }
                                 .forEach { node ->

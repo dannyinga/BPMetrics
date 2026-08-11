@@ -56,9 +56,9 @@ enum class ExportStep(val title: String, val question: String) {
  * before it could navigate, which is a modal in the way of a question the flow was about to ask
  * anyway.
  */
-enum class ExportKind(val label: String, val description: String) {
-    VIDEO("Video", "Curves drawn over footage, rendered in the background"),
-    IMAGE("Image", "The whole timeline in one frame, saved straight away")
+enum class ExportKind(val label: String) {
+    VIDEO("Video"),
+    IMAGE("Image")
 }
 
 /**
@@ -127,7 +127,14 @@ data class ImagePlanEntry(
                 .filter { it.eventId in byEvent.keys }
                 .map { event ->
                     ImagePlanEntry(
-                        label = event.displayName,
+                        // The same rule as every other title — see [ExportTitle]. Six images out
+                        // of one festival all called "Day 1" … "Day 6" say nothing about which
+                        // festival once they are out of the app. No venue: it would be the same
+                        // words on all six, and the scope they came from already carries it.
+                        label = inga.bpmetrics.library.ExportTitle.of(
+                            eventId = event.eventId,
+                            events = events
+                        ),
                         records = byEvent[event.eventId].orEmpty(),
                         eventId = event.eventId
                     )
@@ -181,6 +188,15 @@ data class ClipSelection(
      * shape does: a clip where three curves all climb is the one to export, and a flat one is not.
      */
     val sparks: List<ClipSpark> = emptyList(),
+    /**
+     * What the sparkline's floor and ceiling stand for, in bpm.
+     *
+     * Carried rather than left implicit because the curve is normalised against it. A plot drawn
+     * floor-to-ceiling fills its box whatever the heart did, so without this the same mountain is
+     * drawn for a clip spanning four beats and one spanning ninety — and "is this curve steep" is
+     * exactly the question the sparkline exists to answer. Null until the curves have been walked.
+     */
+    val bpmScale: IntRange? = null,
     /**
      * Where the graph sits on this clip, as fractions of the canvas.
      *
@@ -374,9 +390,21 @@ data class GraphPlacement(
 data class ClipSpark(
     val label: String,
     val colorArgb: Int,
-    /** Evenly sampled across the clip, 0..1. Null where that person was not recording. */
+    /** Evenly sampled across the clip, 0..1 of [ClipSelection.bpmScale]. Null inside a dropout. */
     val points: List<Float?>,
     val peakBpm: Int
+)
+
+/**
+ * Everyone's curve across one clip, and the axis they are drawn against.
+ *
+ * The two travel together because neither is meaningful alone: the points are fractions, and the
+ * fractions are fractions *of* the scale. Returning only the curves is how the scale came to be
+ * computed and discarded, leaving a plot that always filled its box.
+ */
+data class ClipCurves(
+    val sparks: List<ClipSpark> = emptyList(),
+    val scale: IntRange? = null
 )
 
 /**
@@ -452,9 +480,18 @@ class ExportUtilityViewModel(
             listOf(library, source, events, eventLinks, recordLinks)
         },
         // The sets themselves, so a smart collection resolves its rule rather than exporting
-        // nothing. Membership comes from Scope here as it does everywhere else.
-        repository.getAllCollections()
-    ) { parts, collections ->
+        // nothing. Membership comes from Scope here as it does everywhere else — and so do the
+        // registries a rule needs to look itself up, without which a rule naming an event type or
+        // a venue exports nothing at all. See [filterContextOf].
+        combine(
+            repository.getAllCollections(),
+            repository.getAllLocations(),
+            repository.effectiveTags,
+            repository.allTags
+        ) { sets, places, tagsByRecord, allTags ->
+            listOf(sets, places, tagsByRecord, allTags)
+        }
+    ) { parts, registries ->
         @Suppress("UNCHECKED_CAST")
         val library = parts[0] as List<BpmRecord>
         val source = parts[1] as ExportSource
@@ -464,28 +501,52 @@ class ExportUtilityViewModel(
         val eventLinks = parts[3] as List<inga.bpmetrics.library.CollectionEventCrossRef>
         @Suppress("UNCHECKED_CAST")
         val recordLinks = parts[4] as List<inga.bpmetrics.library.CollectionRecordCrossRef>
+        @Suppress("UNCHECKED_CAST")
+        val collections = registries[0] as List<inga.bpmetrics.library.CollectionEntity>
+        @Suppress("UNCHECKED_CAST")
+        val places = registries[1] as List<inga.bpmetrics.library.LocationEntity>
+        @Suppress("UNCHECKED_CAST")
+        val tagsByRecord =
+            registries[2] as Map<Long, List<inga.bpmetrics.library.EffectiveTag>>
+        @Suppress("UNCHECKED_CAST")
+        val allTags = registries[3] as List<inga.bpmetrics.library.TagEntity>
+
+        // One snapshot for every branch below, with the whole context. Each branch used to build
+        // its own or none at all.
+        val snapshot = inga.bpmetrics.library.Library(
+            records = library,
+            events = events,
+            collections = collections,
+            collectionEvents = eventLinks,
+            collectionRecords = recordLinks,
+            filterContext = inga.bpmetrics.library.filterContextOf(
+                events = events,
+                places = places,
+                effectiveTags = tagsByRecord,
+                tags = allTags
+            )
+        )
+
+        fun through(ref: inga.bpmetrics.library.ScopeRef): List<BpmRecord> {
+            val ids = inga.bpmetrics.library.Scope.recordsIn(ref, snapshot)
+                .mapTo(mutableSetOf()) { it.metadata.recordId }
+            return library.filter { it.metadata.recordId in ids }
+        }
 
         when (source) {
             is ExportSource.None -> emptyList()
             is ExportSource.Recordings -> library.filter { it.metadata.recordId in source.recordIds }
-            is ExportSource.Event -> library.filter { it.metadata.eventId == source.eventId }
-            is ExportSource.Group -> {
-                // A collection, resolved through the same walk its card counts with — so a set
-                // reporting 47 recordings exports those 47. References are followed now rather
-                // than frozen when they were made, so a recording filed into one of its events
-                // last night is in this export without anyone re-adding anything.
-                val ids = inga.bpmetrics.library.Scope.recordsIn(
-                    inga.bpmetrics.library.ScopeRef.Collection(source.groupId),
-                    inga.bpmetrics.library.Library(
-                        records = library,
-                        events = events,
-                        collections = collections,
-                        collectionEvents = eventLinks,
-                        collectionRecords = recordLinks
-                    )
-                ).mapTo(mutableSetOf()) { it.metadata.recordId }
-                library.filter { it.metadata.recordId in ids }
-            }
+            // The whole subtree, through the resolver. This matched the recordings filed *directly*
+            // on the event — and a festival almost never holds any itself, its days do — so
+            // choosing a top-level event resolved to nothing, the picker said seven, and Next was
+            // dead with no explanation. The sixth time this codebase has counted one level.
+            is ExportSource.Event -> through(inga.bpmetrics.library.ScopeRef.Event(source.eventId))
+            // A collection, resolved through the same walk its card counts with — so a set
+            // reporting 47 recordings exports those 47. References are followed now rather than
+            // frozen when they were made, so a recording filed into one of its events last night
+            // is in this export without anyone re-adding anything.
+            is ExportSource.Group ->
+                through(inga.bpmetrics.library.ScopeRef.Collection(source.groupId))
             // Resolved by id against the library, so a recording deleted since the analysis was
             // saved simply is not offered — an export cannot render a curve that is gone.
             is ExportSource.SavedAnalysis -> savedAnalysisRecordIds.value
@@ -520,6 +581,8 @@ class ExportUtilityViewModel(
             is ExportSource.None -> ""
             is ExportSource.Recordings ->
                 "${source.recordIds.size} recording${if (source.recordIds.size == 1) "" else "s"}"
+            // The short name here. This labels the step — "what am I exporting" — where the full
+            // path would wrap; [scopeTitle] is the one that ends up drawn on the picture.
             is ExportSource.Event ->
                 events.firstOrNull { it.eventId == source.eventId }?.displayName.orEmpty()
             is ExportSource.Group ->
@@ -541,14 +604,29 @@ class ExportUtilityViewModel(
     val scopeTitle: StateFlow<String> = combine(
         _source,
         records,
-        repository.getAllEvents(),
+        // The whole tree, not [getAllEvents]: a title is the path down to the thing, and a walk that
+        // cannot see the containers stops at the first one it does not know about.
+        repository.allEventsInTree,
         repository.getAllCollections(),
-        combine(repository.getAllPeople(), labelOverride) { people, override -> people to override }
-    ) { source, records, events, collections, (people, override) ->
+        combine(
+            repository.getAllPeople(),
+            labelOverride,
+            repository.getAllLocations()
+        ) { people, override, places -> Triple(people, override, places) }
+    ) { source, records, events, collections, (people, override, places) ->
+        val placesById = places.associateBy { it.locationId }
+
         override?.takeIf { it.isNotBlank() } ?: when (source) {
             is ExportSource.None -> ""
-            is ExportSource.Event ->
-                events.firstOrNull { it.eventId == source.eventId }?.displayName.orEmpty()
+            // Through [ExportTitle] like everything else. This branch answered with the event's
+            // bare `displayName`, which is how a Tape B export came out captioned "Tape B" with no
+            // sign of the Levitape it sits inside — and the ancestry matters most in exactly this
+            // case, because an event's own name is usually its least distinctive part.
+            is ExportSource.Event -> inga.bpmetrics.library.ExportTitle.of(
+                eventId = source.eventId,
+                events = events,
+                places = placesById
+            )
             is ExportSource.Group ->
                 collections.firstOrNull { it.collectionId == source.groupId }?.displayName.orEmpty()
             is ExportSource.SavedAnalysis -> savedAnalysisName.value
@@ -557,8 +635,16 @@ class ExportUtilityViewModel(
                 if (single != null) {
                     // The name shown everywhere else for this recording, generated one included,
                     // so the picture is captioned the way the library labels it.
-                    single.displayName(
+                    val name = single.displayName(
                         people.firstOrNull { it.personId == single.metadata.personId }?.displayName
+                    )
+                    // Where it was recorded, and its own name only if it was filed nowhere. A
+                    // recording filed into a set is as much "that night" as the set is.
+                    inga.bpmetrics.library.ExportTitle.of(
+                        recordingName = name,
+                        eventId = single.metadata.eventId,
+                        events = events,
+                        places = placesById
                     )
                 } else {
                     // Several loose recordings genuinely have no shared name. A count is the
@@ -1045,6 +1131,48 @@ class ExportUtilityViewModel(
         else list.sortedByDescending { it.clip.startedAtMs }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /**
+     * What each clip's video will be called, keyed by its uri.
+     *
+     * Shown on the card in step 2, because the export is one video per clip and the name is the
+     * only thing telling four of them filmed twenty minutes apart apart. Built through
+     * [inga.bpmetrics.library.ExportTitle], so the caption on the card and the caption on the file
+     * are the same string from the same rule.
+     *
+     * Named after the occasion, not after the recordings on it — see [ExportTitle]. The recording's
+     * own name appears only where a clip covers exactly one and it was filed nowhere, which is the
+     * only case with nothing better to call it.
+     */
+    val clipTitles: StateFlow<Map<String, String>> = combine(
+        _clips,
+        scopeSummaries,
+        repository.allEventsInTree,
+        repository.getAllLocations(),
+        repository.getAllPeople()
+    ) { list, inScope, events, places, people ->
+        val placesById = places.associateBy { it.locationId }
+        val byId = inScope.associateBy { it.metadata.recordId }
+
+        list.associate { selection ->
+            val covered = selection.recordIds.mapNotNull { byId[it] }
+            val single = covered.singleOrNull()
+            selection.clip.uri.toString() to inga.bpmetrics.library.ExportTitle.of(
+                recordingName = single?.displayName(
+                    people.firstOrNull { it.personId == single.metadata.personId }?.displayName
+                ),
+                // The event they *all* sit in, not the first one's. A clip that ran across the end
+                // of one set and the start of the next belongs to the day that holds both, and
+                // `firstOrNull` would have captioned it with whichever record sorted first.
+                eventId = inga.bpmetrics.library.EventTree.commonAncestorOf(
+                    events,
+                    covered.map { it.metadata.eventId }
+                ),
+                events = events,
+                places = placesById
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     private val _loadingClips = MutableStateFlow(false)
     val loadingClips: StateFlow<Boolean> = _loadingClips.asStateFlow()
 
@@ -1081,16 +1209,15 @@ class ExportUtilityViewModel(
             val watches = repository.getAllWatches().first()
             val withSparks = withContext(Dispatchers.Default) {
                 _clips.value.map { selection ->
-                    selection.copy(
-                        sparks = sparkFor(selection, sourceRecords, watches, people)
-                    )
+                    val curves = sparkFor(selection, sourceRecords, watches, people)
+                    selection.copy(sparks = curves.sparks, bpmScale = curves.scale)
                 }
             }
             // Re-read rather than overwrite blindly: the user may have unticked something while
             // this was running, and their taps outrank a background computation.
             _clips.value = _clips.value.map { current ->
                 withSparks.firstOrNull { it.clip.uri == current.clip.uri }
-                    ?.let { current.copy(sparks = it.sparks) }
+                    ?.let { current.copy(sparks = it.sparks, bpmScale = it.bpmScale) }
                     ?: current
             }
         }
@@ -1108,9 +1235,9 @@ class ExportUtilityViewModel(
         allRecords: List<BpmRecordWithPoints>,
         watches: List<inga.bpmetrics.library.WatchEntity>,
         people: List<inga.bpmetrics.library.PersonEntity>
-    ): List<ClipSpark> {
+    ): ClipCurves {
         val theirs = allRecords.filter { it.metadata.recordId in selection.recordIds }
-        if (theirs.isEmpty()) return emptyList()
+        if (theirs.isEmpty()) return ClipCurves()
 
         val analysis = EventAnalysis.from(
             records = theirs,
@@ -1118,30 +1245,38 @@ class ExportUtilityViewModel(
             people = people,
             window = selection.clip.startedAtMs..selection.clip.endedAtMs
         )
-        if (analysis.isEmpty) return emptyList()
+        if (analysis.isEmpty) return ClipCurves()
 
         // One range for everyone, so the lines keep their relative heights.
-        val low = analysis.series.minOf { it.minBpm }
-        val high = analysis.series.maxOf { it.maxBpm }
-        val span = (high - low).coerceAtLeast(1.0)
+        val scale = scaleFor(
+            low = analysis.series.minOf { it.minBpm },
+            high = analysis.series.maxOf { it.maxBpm }
+        )
+        val base = scale.first.toDouble()
+        val span = (scale.last - scale.first).toDouble()
 
         val start = selection.clip.startedAtMs
         val step = (selection.clip.durationMs.toDouble() / (SPARK_SAMPLES - 1)).coerceAtLeast(1.0)
 
-        return analysis.series.map { series ->
-            ClipSpark(
-                label = series.label,
-                colorArgb = series.colorArgb,
-                points = (0 until SPARK_SAMPLES).map { i ->
-                    // Null inside a dropout rather than a floor value, so a break in the line
-                    // reads as "not measured" instead of "heart rate fell off a cliff".
-                    series.bpmAt(start + (i * step).toLong())
-                        ?.let { (((it - low) / span).toFloat()).coerceIn(0f, 1f) }
-                },
-                peakBpm = series.maxBpm.toInt()
-            )
-        }
+        return ClipCurves(
+            scale = scale,
+            sparks = analysis.series.map { series ->
+                ClipSpark(
+                    label = series.label,
+                    colorArgb = series.colorArgb,
+                    points = (0 until SPARK_SAMPLES).map { i ->
+                        // Null inside a dropout rather than a floor value, so a break in the line
+                        // reads as "not measured" instead of "heart rate fell off a cliff".
+                        series.bpmAt(start + (i * step).toLong())
+                            ?.let { (((it - base) / span).toFloat()).coerceIn(0f, 1f) }
+                    },
+                    peakBpm = series.maxBpm.toInt()
+                )
+            }
+        )
     }
+
+    private fun scaleFor(low: Double, high: Double): IntRange = SparkScale.of(low, high)
 
     fun setLoadingClips() {
         _loadingClips.value = true
@@ -1280,7 +1415,9 @@ class ExportUtilityViewModel(
         records,
         _source,
         _imageGrouping,
-        repository.getAllEvents(),
+        // The whole tree: an image's label is the path down to its event, and a walk that cannot
+        // see the containers stops at the first one it does not know about.
+        repository.allEventsInTree,
         scopeTitle
     ) { records, source, grouping, events, title ->
         ImagePlanEntry.plan(

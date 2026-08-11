@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
@@ -545,29 +547,52 @@ fun NameDialog(
  * Files the selected recordings under an event, existing or new.
  *
  * Mirrors [BulkWearerDialog]: the same gesture — select, then say what they have in common.
+ *
+ * The two actions that are not "pick one of these" sit at the top, because they are what somebody
+ * with a fresh selection most often wants and neither is findable below a list of forty: making the
+ * event this belongs in, and taking it out of whatever it is in now.
+ *
+ * The tree collapses and carries its covers, like the export and filter pickers. This was the one
+ * nested list still drawn flat and fully open, which turns a library of forty events into a wall.
+ * The argument for leaving it open — that a picker offering somewhere to put a thing has to offer
+ * everywhere — does not hold: collapsing hides nothing that expanding cannot reach.
  */
 @Composable
 fun AddToEventDialog(
     recordCount: Int,
+    /** The whole tree. Containers included: a recording can belong to a festival directly. */
+    events: List<inga.bpmetrics.library.EventEntity>,
+    /** When each happened, for ordering. See [inga.bpmetrics.library.EventTree.startsOf]. */
+    starts: Map<Long, Long> = emptyMap(),
     /**
-     * The whole tree in reading order, each with its depth.
+     * How many recordings each already holds, subtree included.
      *
-     * Containers included. This offered only leaf events, so a recording belonging to the festival
-     * rather than to any one set — the walk between stages, the queue — had nowhere to go but
-     * unfiled. Anything that can hold recordings is offered, at the depth it sits.
+     * Worth knowing before filing something into one, and worth being the *subtree* count: a
+     * festival showing "0 recordings" beside its days showing twelve each reads as a container
+     * that lost them. See [inga.bpmetrics.library.EventTree.recordCountsByEvent].
      */
-    rows: List<Pair<inga.bpmetrics.library.EventEntity, Int>>,
+    counts: Map<Long, Int> = emptyMap(),
     onDismiss: () -> Unit,
     onPick: (Long?) -> Unit,
     onCreateEvent: () -> Unit
 ) {
+    var expanded by remember { mutableStateOf(emptySet<Long>()) }
+    val rows = remember(events, expanded, starts) {
+        inga.bpmetrics.library.EventTree.flatten(
+            events,
+            expanded = expanded,
+            newestFirst = true,
+            startBy = starts
+        )
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add $recordCount recording${if (recordCount == 1) "" else "s"} to…") },
         text = {
             Column(
                 Modifier
-                    .heightIn(max = 420.dp)
+                    .heightIn(max = 440.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 DropdownMenuItem(
@@ -575,15 +600,40 @@ fun AddToEventDialog(
                     leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
                     onClick = onCreateEvent
                 )
+                DropdownMenuItem(
+                    text = { Text("No event") },
+                    leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                    onClick = { onPick(null) }
+                )
+
                 if (rows.isNotEmpty()) HorizontalDivider()
-                rows.forEach { (event, depth) ->
-                    DropdownMenuItem(
-                        modifier = Modifier.padding(start = (depth.coerceAtLeast(0) * 14).dp),
-                        text = {
-                            Column {
-                                Text(event.displayName)
+
+                rows.forEach { node ->
+                    val event = node.event
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = (node.depth.coerceAtMost(4) * 16).dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onPick(event.eventId) }
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            inga.bpmetrics.ui.components.CoverThumbnail(
+                                event.ownCover,
+                                placeholder = Icons.Default.Event
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(event.displayName, style = MaterialTheme.typography.bodyMedium)
+                                val held = counts[event.eventId] ?: 0
                                 val detail = listOfNotNull(
                                     event.type?.takeIf { it.isNotBlank() },
+                                    "$held recording" + if (held == 1) "" else "s",
                                     event.windowStart?.let { start ->
                                         event.windowEnd?.let { formatSpan(TimeSpan(start, it)) }
                                     }
@@ -596,15 +646,29 @@ fun AddToEventDialog(
                                     )
                                 }
                             }
-                        },
-                        onClick = { onPick(event.eventId) }
-                    )
+                        }
+                        // Only where opening it reveals something, and separate from choosing it:
+                        // filing into a festival and looking inside it are different intentions.
+                        if (node.hasChildren) {
+                            IconButton(
+                                onClick = {
+                                    expanded = if (event.eventId in expanded) {
+                                        expanded - event.eventId
+                                    } else {
+                                        expanded + event.eventId
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    if (event.eventId in expanded) Icons.Default.ExpandLess
+                                    else Icons.Default.ExpandMore,
+                                    contentDescription = if (event.eventId in expanded) "Collapse"
+                                    else "Show what is inside"
+                                )
+                            }
+                        }
+                    }
                 }
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text("Remove from event") },
-                    onClick = { onPick(null) }
-                )
             }
         },
         confirmButton = {},

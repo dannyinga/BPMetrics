@@ -1175,6 +1175,114 @@ picker has a **back arrow** to that grid: one wrong tap used to mean closing the
 again. The value picker stays open until Done and shows what is already on, rather than closing on
 the first tap so that narrowing to three people meant opening the same list three times.
 
+**A living collection's rule showed no terms, and often would not save.** Found from "I asked for
+all of Colin's recordings and it did not load them in".
+
+Not the resolver: `Scope`, `FilterCodec` and the JSON round trip are all correct, which six tests
+now pin end to end — a rule naming a person, one written before a dimension existed, a rule
+combined with hand-picked members, a struck-out recording. The break was in the display. Chips were
+built from six registries, so a caller outside the library screen — a collection editing its rule —
+reached into the ViewModel's cached copies through `.value`. Those are shared `WhileSubscribed`, and
+with nothing collecting them `.value` is the *initial* value: empty. So the rule held Colin's id and
+the dialog drew nothing, which looks exactly like a rule that did not save — and because saving is
+gated on having at least one term, sometimes it genuinely did not.
+
+Intermittent, too, which is the worst part: arriving from the Library within five seconds left the
+flows warm and it worked. `FilterChips.of` takes the `FilterOptions` every caller already collects,
+so there is nothing left to be stale.
+
+**The timeline can hide what was never filed.** A library accumulates loose recordings faster than
+it accumulates events — every session nobody tidied up is one — and past a couple of hundred the
+events they sit between are unfindable, which is the opposite of what a timeline is for. A view
+rather than a filter, so it sits with the sort and the expansion rather than in `FilterState`: a
+rule saved to a collection has no business remembering that somebody once tidied their view.
+
+Only the *unfiled* ones go. A recording inside an event is part of that event and still appears when
+it is opened; hiding those too would make expanding an event pointless. And the empty state says
+which emptiness it is — "Nothing here yet" over a library of two hundred hidden recordings is the
+app telling you your data is gone.
+
+**"New event" left the top of the library.** It sat above the timeline permanently, pushing the most
+recent night down the screen to offer something done once in a while, and it is in the overflow now.
+It survives in the *empty* state, where there is nothing to push down and the offer is the answer.
+
+**And then a sixth, which stopped the export dead.** Choosing a top-level event resolved to the
+recordings filed *directly* on it — none, for a festival — so `canAdvance` was false and **Next did
+nothing**, with the picker beside it reporting seven. Two numbers from two walks, one fixed and one
+not, disagreeing on the same screen. It goes through `Scope.recordsIn(ScopeRef.Event(…))` now, the
+same resolver the event's own page uses.
+
+The same branch was building a `Library` with no filter context — an eighth short one — so a smart
+collection exported nothing whenever its rule named an event type, a venue or a tag. One snapshot
+serves every branch now.
+
+A dead `recordsFlow` in `EventDetailViewModel` went with it: unread since the Sprint 5 fold, and
+matching one level deep. An unread, wrong implementation of "this event's recordings" sitting in the
+file is the answer somebody copies next, which is how this has now happened six times.
+
+**A container reported no recordings, for the fifth time.** The export picker counted the recordings
+filed *directly* on each event — and recordings hang off the deepest thing that claims them, so a
+festival almost never holds any itself. Every container read as empty beside days holding twelve
+each, which reads as a container that has lost them.
+
+This is the count named in `EventTree`'s own opening comment as the reason that file exists, got
+wrong again in a fifth place. It is `EventTree.recordCountsByEvent` now — one pass crediting each
+recording to every event above it, cycle-guarded through `ancestryOf` — used by the export picker
+and by the add-to-event modal, which had no counts at all and is exactly where you want to know
+what an event already holds before filing something into it. Three tests, because a number that is
+plausible and wrong is the failure nobody looks at twice.
+
+**An exported picture was captioned with a short name.** "Subtronics" is enough inside the app,
+where the row above it says which festival — and useless once the picture has left, which is the
+entire point of exporting one. Titles carry the path now, outermost first, with the venue resolved
+through the tree: *Griz | Day 2 | Griztronics @ The Gorge*. A recording exported on its own gets its
+event's path in front of it, and a collection split into one image per event labels each with its
+own path rather than six pictures called "Day 1" through "Day 6".
+
+The two orders are deliberate and now both tested. A **comparison lane** reads innermost first,
+because the thing is what you are looking for and the ancestry is only there to tell two events
+sharing a short name apart. A **title** reads as a path, because it has to say where it came from to
+someone who cannot tap it — the other way round is a breadcrumb printed backwards. The step header
+keeps the short name: it labels "what am I exporting", and the full path would wrap.
+
+**A rule by event type worked on the library screen and nowhere else.** Event type, venue and tag are
+matched through the `FilterContext` rather than off the recording, because all three belong to the
+*event* and a recording knows only which event it is filed under. **Three places built a `Library`
+and each built a different context**: the library screen assembled the whole thing, the collections
+list passed none at all, the repository's snapshot passed only the tags. An absent lookup is a null
+rather than a failure, so "every concert" matched every concert on the library screen and *nothing*
+in the collection, its export, or its analysis — silently, with no empty state to suggest a fault.
+
+**Four**, in the end — the analysis scope built a fifth-short one too, which is why a collection's
+tile showed the right count over a detail page showing nothing at all. The tile and the page were
+resolving the same rule against different contexts.
+
+One `filterContextOf` now, used by every one of them, and `Library.filterContext` says in its own
+documentation that the default is a trap kept only for tests that never filter. This is the same
+shape as the bug two sections up and the one before that: the recurring failure of this codebase is
+not wrong logic, it is one piece of logic assembled from scratch in several places until the copies
+disagree — and it fails by returning *nothing*, which reads as an empty library rather than a fault.
+
+**A living collection gathered recordings and no events.** A collection's events came from its
+*links* alone — right for a hand-made set, wrong for a living one. So a rule for every concert found
+all the recordings, named no events, and the collection showed an empty trail with a header reading
+"0 events" over a page holding forty. An event a rule reached is an event the collection holds, and
+it is reached exactly when something inside it matched.
+
+**Event lists were ordered by when things were typed in.** `childrenOf` fell back to `createdAt`
+where an event had no window, and most events have none — so a picker claiming to be chronological
+read as creation order. The library's timeline had the real answer all along: a window where there
+is one, else the earliest recording anywhere beneath. That is `EventTree.startsOf` now, and both
+pickers use it. Collections sort alphabetically, at the repository rather than per screen: a set has
+no time of its own — gathering things that did not happen together is the entire point — so
+insertion order is the one ordering that means nothing.
+
+**And a rule is a form now, not a series of questions.** Every dimension has its own row with its
+terms under it, and each opens its own picker directly. The library's bar goes through the "Narrow
+by" grid because it is one small Add chip with nine possible meanings; on a rule the grid asks a
+question the screen has just been told the answer to, and adding a second term meant walking the
+whole loop again.
+
 **Nesting was possible and awkward to build.** Creating an event put it at the top level, so a set
 inside Day 1 meant creating it loose and then a second trip through "Move into…" — two actions for
 one thought, and the tree §2 exists for was the thing being made hardest to make. **New event
@@ -1314,3 +1422,16 @@ Things deliberately left alone, so they do not get "fixed" by accident:
 | **"Refine scope" sat in the middle of the Summary** | Moved into the event's edit modal, under **Analysis**, beside Tags and Photo. Deciding what an analysis covers is an edit to the question being asked; it was a text button next to the "Where the time went" heading, which is a place for a figure. `AnalysisScreen` still owns the sheet — the editor is rendered through a new `subjectEditor` slot that is handed the way in — so there is still exactly one implementation. A subject with no editor keeps the Summary's button rather than losing the door. |
 | **The event editor's tag button read " tags"** | `"$tagCount tag"` with the template eaten by a shell substitution — the fifth of that kind. Found while adding the row next to it. |
 | **Four copies of the export handoff** | One `openExportOf(source, kind)`. The four detail pages differed only in the `ExportSource` they named, and four copies of a handoff is four chances for one to land on a different step. Two further dead wires went with it: `openExport`, and the library's `onExportSelection` — the selection menu exports CSV and `.bpmjson` itself now, so the video/image path out of it had no caller. |
+| **The video and the image of the same night were captioned differently** | Two callers built the caption from scratch and disagreed about the order, so an image read *Griz \| Day 2 \| Levity* and a video read the other way round. One `ExportTitle.of` now, and the order is settled: **innermost first** — `Levity \| Griztronics \| Day 2 \| Griz @ The Gorge`. A caption is read left to right and the reader stops as soon as they know what they are looking at, so the specific thing leads and the ancestry trails behind it as context; outermost-first puts three containers in front of the answer and buries the subject where a narrow canvas truncates it. The venue is appended once to the whole line rather than per rung, because a set inherits its festival's place and attaching it at each level repeats the same words down the caption. Pinned by `ExportTitleTest`, including the dangling-event case a queued export can hit. |
+| **Contents said what a clip was called, and it was the filename** | The card led with a timestamp and then `VID_20260714_211403.mp4`, which is the one thing that does not distinguish four clips filmed the same evening. Each card now shows the title the video will actually be exported with — the same `ExportTitle` string, from the same rule — with the time, the duration and the filename demoted to the line beneath. Choosing what to export is choosing between finished things, so the card should name the finished thing. |
+| **"Choose which clips to export" sat above a list of tickable clips** | An instruction restating what the list plainly is, and it cost the row that **Select all** now shares with the Oldest/Newest toggle. One line: the count, then the two controls. |
+| **The export picker showed covers as stamps** | Events and collections were drawn as a 34dp `CoverThumbnail` beside a grey row — a *reference* to a cover rather than the cover. One screen away the same events are photographs. `CoverBackground` with the `TILE` scrim and `overCover` text now, the same three components the library and the collections list use, so choosing what to export is choosing between things you recognise by sight. The placeholder icon survives for events with no picture, where it is the only thing saying what kind of row it is. |
+| **…and the picker resolved them differently** | It read `event.ownCover`, so a day inside a photographed festival was a grey row here and the festival's picture in the library. The library's ancestry walk moved to `CoverResolver.byEvent` and both call it — the third time this initiative has found the same derivation written twice with different answers. |
+| **One editor, two modals** | The library's event edit and the event page's already called the same `EventEditorLauncher`, which looked like the unification was done. It was not: tags, delete and refine-scope were *optional slots*, and the two callers filled different ones — so the library's editor could not tag and could not delete, and the same event offered different things depending on which door you came through. Tags and Delete are rendered by the launcher now, off `LibraryViewModel`, and are no longer the caller's business. Two slots remain and both earn it: the **cover**, because the event's page edits it from the header where the picture actually is, and **What's included**, because only a screen with an analysis behind it can refine one. `EventDetailViewModel` lost `createTag`, `setTags`, `categories`, `tagsInCategory` and `deleteEvent` — five methods with no callers left, which is exactly the unused-copy-someone-reaches-for-next this document keeps recording. |
+| **`scopeTitle` was built correctly and never drawn** | The full title existed, was documented as "the one that ends up drawn on the picture", and reached exactly one consumer — the image *plan*. Everything the user actually saw or exported used `sourceLabel`, the short bare name for the step header: the title field on step 3, the preview caption, and the label burned into every video. So a Tape B export was captioned "Tape B" while the plan separately built "Tape B \| Levitape", and the two disagreed with each other. Three call sites moved to `scopeTitle`; `sourceLabel` stays on the step header, which is what it is for. |
+| **An event's own export dropped its ancestry** | `scopeTitle`'s `ExportSource.Event` branch answered with the event's bare `displayName` instead of going through `ExportTitle` at all — the one case where the family matters most, since an event's own name ("Day 2", "Tape B") is usually its least distinctive part. |
+| **The recording's name was a prefix, not a fallback** | `ExportTitle` put the recording first and the family behind it, so four recordings of the Tape B set produced a caption led by whichever one the export happened to be drawn from. A graph of a set is a picture of *the set*, whoever's watch drew it. The event family alone now, innermost first — **Tape B \| Levitape** — with the recording's own name kept for the one case that has nothing better: an unfiled recording. |
+| **Every video in a batch got the batch's caption** | The card in Contents promises what a clip's video will be called and then the render used one label for all six. Each job takes its own `clipTitles` entry now, so the promise and the file match. A *typed* title still applies to the whole batch, which is what typing one means. |
+| **A clip spanning two sets was captioned by whichever record sorted first** | `covered.firstOrNull()?.metadata?.eventId` — arbitrary, and wrong about half the time. `EventTree.commonAncestorOf` answers the innermost event containing all of them, so a clip that ran across the end of one set and the start of the next is captioned with the day that holds both. One unfiled recording in the group answers null rather than a name that would claim to cover data from outside it. |
+| **The clip sparkline had no axis** | It was drawn bare on the reasoning that a list row is glanced at and numbers would slow it down. Wrong in a specific way: the curve is normalised floor-to-ceiling, so it fills its box whatever happened — the same failure as the comparison bars — and "was this clip any good" is exactly what a shape cannot answer without knowing whether the box is fifteen beats tall or ninety. The range was already computed in `sparkFor` and *thrown away*. It is carried on the selection now as `bpmScale` and drawn: three grid lines with their bpm values, measured into the canvas so a number is always on its own line. `SparkScale` owns the rule — a **minimum span of 15 bpm** so genuinely flat footage draws flat instead of being magnified into a skyline, bounds rounded outward to fives so the labels are numbers people round to, and an even number of steps so the middle rung is a whole bpm rather than a `.5` printed as an integer on a line that is not where it sits. Pinned by `SparkScaleTest`, which caught the zero-clamp case on the way in: a resting range of 2–3 bpm widened to −5..10 and then clamped to 0..10, losing the minimum span the widening existed to provide. |
+| **People in the export flow were a coloured dot** | Both places: the leading icon on a clip's per-person chips, and the recordings tab of the Source step, where a 10dp dot said two rows differed without saying who either one was — beside the Events and Collections tabs, which carry covers. Both draw `PersonAvatar` now, which is the same photograph-or-coloured-initial token a person is identified by everywhere else in the app, at the same 34dp the covers use so the three tabs line up. |

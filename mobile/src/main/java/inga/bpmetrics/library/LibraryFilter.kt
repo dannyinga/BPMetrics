@@ -118,6 +118,43 @@ data class FilterContext(
 )
 
 /**
+ * Everything a filter needs to look up, built once from the registries.
+ *
+ * **Three places built this and each built a different one**, which is how a living collection came
+ * to match nothing. The library screen assembled the whole thing; the collections list passed no
+ * context at all; the repository's snapshot passed the tags and nothing else. A `FilterContext` with
+ * an empty `eventTypeByEvent` does not fail loudly — it looks up every recording's type, gets null,
+ * and quietly matches none of them. So a rule saying "every concert" found the concerts on the
+ * library screen and nothing anywhere else: not in the collection, not in its export, not in its
+ * analysis. Location and tag rules failed the same way for the same reason.
+ *
+ * One builder, then. The one thing it cannot fill in is [FilterContext.recordIdsByCollection],
+ * which needs the resolved [Library] and so is a `copy` at the point of use — see
+ * [Scope.recordIdsByCollection].
+ */
+fun filterContextOf(
+    events: List<EventEntity>,
+    places: List<LocationEntity>,
+    effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap(),
+    tags: List<TagEntity> = emptyList()
+): FilterContext {
+    val byId = places.associateBy { it.locationId }
+    val resolved = events.associate { event ->
+        event.eventId to LocationResolver.forEvent(event.eventId, events, byId)?.location
+    }
+
+    return FilterContext(
+        effectiveTags = effectiveTags,
+        eventNames = events.associate { it.eventId to it.displayName },
+        placeNames = resolved.mapNotNull { (id, place) -> place?.let { id to it.displayName } }
+            .toMap(),
+        locationIdByEvent = resolved.mapValues { it.value?.locationId },
+        eventTypeByEvent = events.associate { it.eventId to it.type },
+        categoryByTag = tags.associate { it.tagId to it.parentCategoryId }
+    )
+}
+
+/**
  * The one predicate.
  *
  * Pure and static, because the library filters for display while analysis filters independently for

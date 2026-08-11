@@ -376,4 +376,70 @@ class LibraryTimelineTest {
     fun `expanding to a top-level event opens only itself`() {
         assertEquals(setOf(1L), LibraryTimeline.expansionFor(festival(), 1))
     }
+
+    // --- Hiding what was never filed ---
+
+    /**
+     * "Show me what I have filed."
+     *
+     * A library accumulates loose recordings faster than it accumulates events — every session
+     * nobody tidied up is one — and once there are two hundred of them the events they sit between
+     * are unfindable, which is the opposite of what a timeline is for.
+     */
+    @Test
+    fun `hiding the unfiled drops recordings belonging to no event`() {
+        val records = listOf(
+            recording(100, at(21), filedAs = 3),
+            recording(200, at(30))
+        )
+
+        val rows = LibraryTimeline.build(
+            festival(),
+            records,
+            expandedIds = emptySet(),
+            includeUnfiled = false
+        )
+
+        assertTrue(rows.none { it.entry is TimelineEntry.Recording })
+        assertTrue(rows.any { (it.entry as? TimelineEntry.Event)?.event?.name == "Griztronics" })
+    }
+
+    /**
+     * And only the unfiled ones.
+     *
+     * A recording inside an event is part of that event and still appears when it is opened.
+     * Hiding those as well would make expanding an event pointless, which is not what "hide the
+     * unfiled" says or means.
+     */
+    @Test
+    fun `a filed recording still shows inside its event`() {
+        val records = listOf(
+            recording(100, at(21), filedAs = 3),
+            recording(200, at(30))
+        )
+
+        val rows = LibraryTimeline.build(
+            festival(),
+            records,
+            expandedIds = setOf(1L, 2L, 3L),
+            includeUnfiled = false
+        )
+
+        assertEquals(
+            listOf(100L),
+            rows.mapNotNull { (it.entry as? TimelineEntry.Recording)?.record?.recordId }
+        )
+    }
+
+    @Test
+    fun `showing them again brings them back`() {
+        val records = listOf(recording(200, at(30)))
+
+        val rows = LibraryTimeline.build(festival(), records, includeUnfiled = true)
+
+        assertEquals(
+            listOf(200L),
+            rows.mapNotNull { (it.entry as? TimelineEntry.Recording)?.record?.recordId }
+        )
+    }
 }

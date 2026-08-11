@@ -163,4 +163,25 @@ object CoverResolver {
             groupChainCovers = ancestry.drop(1).map { eventCovers[it.eventId] }
         )
     }
+
+    /**
+     * Every event's picture, its own or the nearest one above it.
+     *
+     * The map any list of events wants. A day inside a festival shows the festival's photograph
+     * rather than nothing, which is what inheritance means everywhere else in the app — a cover put
+     * on "Coachella" that decorated the Coachella card and left all six days blank would be a cover
+     * that only worked at the level it was set.
+     *
+     * Shared because it had already been written twice with different answers: the library walked
+     * the ancestry, and the export picker read `ownCover` directly — so the same six days were
+     * photographs in one list and grey rows in the other.
+     */
+    fun byEvent(events: List<EventEntity>): Map<Long, Cover> {
+        val own = events.associate { it.eventId to it.ownCover }
+        return events.mapNotNull { event ->
+            EventTree.ancestryOf(events, event.eventId)
+                .firstNotNullOfOrNull { own[it.eventId] }
+                ?.let { event.eventId to it }
+        }.toMap()
+    }
 }

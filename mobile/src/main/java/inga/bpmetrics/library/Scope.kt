@@ -46,6 +46,17 @@ data class Library(
     val collections: List<CollectionEntity> = emptyList(),
     val collectionEvents: List<CollectionEventCrossRef> = emptyList(),
     val collectionRecords: List<CollectionRecordCrossRef> = emptyList(),
+    /**
+     * What a rule needs to look itself up. Build it with [filterContextOf].
+     *
+     * **The default is a trap and is kept only for tests that never filter.** Event type, venue and
+     * tag category are matched through this rather than off the recording, because all three belong
+     * to the *event*. An empty context does not fail — it looks each one up, gets null, and matches
+     * nothing. Four call sites built their own and three of them were short; the visible result was
+     * a living collection whose tile showed the right count over a detail page showing nothing.
+     *
+     * If you are constructing a [Library] that will resolve a collection, pass a real one.
+     */
     val filterContext: FilterContext = FilterContext()
 )
 
@@ -166,12 +177,34 @@ object Scope {
     fun eventsIn(
         collectionId: Long,
         events: List<EventEntity>,
-        links: List<CollectionEventCrossRef>
+        links: List<CollectionEventCrossRef>,
+        /**
+         * What the collection resolves to, so a *rule* contributes events as well as recordings.
+         *
+         * This read the links alone, which is right for a hand-made set and wrong for a living
+         * one: a rule saying "every concert" found all the recordings and named no events at all,
+         * so the collection listed nothing, its trail was empty, and its header said "0 events"
+         * over a page holding forty recordings. An event a rule reached is an event the collection
+         * holds, and it is reached exactly when something inside it matched.
+         *
+         * Empty for a caller that only wants what was named by hand.
+         */
+        resolved: List<BpmRecordEntity> = emptyList()
     ): List<EventEntity> {
-        val named = links.filter { it.collectionId == collectionId }.mapTo(mutableSetOf()) { it.eventId }
-        return events.filter { it.eventId in named }
-            .sortedByDescending { it.windowStart ?: it.createdAt }
+        val named = links.filter { it.collectionId == collectionId }
+            .mapTo(mutableSetOf()) { it.eventId }
+        val reached = resolved.mapNotNullTo(mutableSetOf()) { it.eventId }
+        val starts = startsOfFor(events, resolved)
+
+        return events.filter { it.eventId in named || it.eventId in reached }
+            .sortedByDescending { starts[it.eventId] ?: it.windowStart ?: it.createdAt }
     }
+
+    /** [EventTree.startsOf], named apart so this file reads without the qualifier. */
+    private fun startsOfFor(
+        events: List<EventEntity>,
+        records: List<BpmRecordEntity>
+    ): Map<Long, Long> = EventTree.startsOf(events, records)
 
     /**
      * What every collection holds, for the filter to match against.

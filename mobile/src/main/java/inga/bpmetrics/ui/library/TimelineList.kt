@@ -2,6 +2,9 @@ package inga.bpmetrics.ui.library
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -57,6 +60,8 @@ fun TimelineList(
     selectionMode: Boolean = false,
     onToggleEventSelection: (Long) -> Unit = {},
     onCreateEvent: () -> Unit,
+    /** Whether unfiled recordings are hidden, so an empty list can say which emptiness it is. */
+    hidingUnfiled: Boolean = false,
     /** Makes a new event inside the one given. See [inga.bpmetrics.ui.library.EventOverflow]. */
     onAddInside: (EventSummary) -> Unit = {},
     onOpenEvent: (Long) -> Unit,
@@ -71,20 +76,34 @@ fun TimelineList(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item {
-            OutlinedButton(onClick = onCreateEvent, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Add, null, Modifier.padding(end = 8.dp))
-                Text("New event")
-            }
-        }
+        // No "New event" button here any more. It sat above the timeline permanently, pushing the
+        // most recent night down the screen to offer an action taken once in a while — and it is
+        // in the library's overflow now, beside the other things you *do* rather than read.
 
         if (rows.isEmpty()) {
             item {
-                inga.bpmetrics.ui.components.BpmEmptySection(
-                    "Nothing here yet",
-                    "Recordings appear here in the order they happened. Give an event a time " +
-                        "window and anything recorded inside it files itself."
-                )
+                Column {
+                    inga.bpmetrics.ui.components.BpmEmptySection(
+                        if (hidingUnfiled) "Nothing filed yet" else "Nothing here yet",
+                        // Says which emptiness this is. "Nothing here yet" over a library holding
+                        // two hundred recordings, because they are all unfiled and hidden, is the
+                        // app telling you your data is gone.
+                        if (hidingUnfiled) {
+                            "Unfiled recordings are hidden. File some into an event, or show " +
+                                "them again from the menu above."
+                        } else {
+                            "Recordings appear here in the order they happened. Give an event a " +
+                                "time window and anything recorded inside it files itself."
+                        }
+                    )
+                    // Here rather than pinned above the list: with nothing to push down it costs
+                    // nothing, and an empty timeline is the one moment the offer is the answer.
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(onClick = onCreateEvent, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Add, null, Modifier.padding(end = 8.dp))
+                        Text("New event")
+                    }
+                }
             }
         }
 

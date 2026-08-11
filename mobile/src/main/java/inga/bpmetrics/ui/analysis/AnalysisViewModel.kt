@@ -702,8 +702,9 @@ private fun LibraryRepository.liveRecordsInScope(ref: ScopeRef): Flow<List<Analy
             collectionRecords = recordLinks
         )
     },
-    combine(getAllCategories(), getAllWatches(), getAllPeople(), getAllLocations()) {
-        categories, watches, people, places -> listOf(categories, watches, people, places)
+    combine(getAllCategories(), getAllWatches(), getAllPeople(), getAllLocations(), allTags) {
+        categories, watches, people, places, tagRegistry ->
+        listOf(categories, watches, people, places, tagRegistry)
     },
     effectiveTags
 ) { snapshot, registries, tags ->
@@ -715,12 +716,25 @@ private fun LibraryRepository.liveRecordsInScope(ref: ScopeRef): Flow<List<Analy
     val people = registries[2] as List<inga.bpmetrics.library.PersonEntity>
     @Suppress("UNCHECKED_CAST")
     val places = registries[3] as List<inga.bpmetrics.library.LocationEntity>
+    @Suppress("UNCHECKED_CAST")
+    val tagRegistry = registries[4] as List<inga.bpmetrics.library.TagEntity>
 
     AnalysisRecord.from(
-        // A smart collection's rule reads tags too, so they go into the context rather than only
-        // into the reduction — filtering by an event's tag has to reach everything under it here
-        // as it does everywhere else.
-        Scope.recordsIn(ref, snapshot.copy(filterContext = FilterContext(effectiveTags = tags))),
+        // The whole context, through the one builder. This passed the tags alone, so a rule naming
+        // an event type, a venue or a tag category resolved to nothing *here* while the collection's
+        // own tile — built somewhere else, from a fuller context — showed the right count. An empty
+        // detail page under an accurate tile is what that looks like from the outside.
+        Scope.recordsIn(
+            ref,
+            snapshot.copy(
+                filterContext = inga.bpmetrics.library.filterContextOf(
+                    events = snapshot.events,
+                    places = places,
+                    effectiveTags = tags,
+                    tags = tagRegistry
+                )
+            )
+        ),
         categories,
         watches,
         people,
@@ -742,7 +756,7 @@ private fun LibraryRepository.describeScope(ref: ScopeRef): Flow<AnalysisScope> 
     is ScopeRef.Selection -> records.map { rows ->
         val chosen = rows.count { it.metadata.recordId in ref.recordIds }
         AnalysisScope.Group(
-            name = " recording" + if (chosen == 1) "" else "s",
+            name = "$chosen recording" + if (chosen == 1) "" else "s",
             eventCount = 0,
             recordCount = chosen
         )
@@ -785,7 +799,12 @@ private fun LibraryRepository.describeScope(ref: ScopeRef): Flow<AnalysisScope> 
                 )
                 AnalysisScope.Group(
                     name = set.displayName,
-                    eventCount = Scope.eventsIn(ref.collectionId, tree, eventLinks).size,
+                    eventCount = Scope.eventsIn(
+                        ref.collectionId,
+                        tree,
+                        eventLinks,
+                        Scope.recordsIn(ref, snapshot).map { it.metadata }
+                    ).size,
                     // The same walk the card counts with, so a header cannot say "4 events" over
                     // an analysis of six.
                     recordCount = Scope.recordsIn(ref, snapshot).size,

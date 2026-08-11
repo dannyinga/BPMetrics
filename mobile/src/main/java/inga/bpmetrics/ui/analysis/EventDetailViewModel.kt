@@ -68,21 +68,11 @@ class EventDetailViewModel(
     private val eventFlow = repository.getAllEvents()
         .map { events -> events.firstOrNull { it.eventId == eventId } }
 
-    /**
-     * This event's recordings, with their readings.
-     *
-     * The event page draws a merged curve, so it is one of the four places that genuinely needs
-     * them. Which recordings is answered from the library stream — a question about rows — and
-     * only then are the readings for those rows loaded. Loading the library's readings to find one
-     * evening's is what §9 of the product doc is about.
-     */
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private val recordsFlow = repository.records
-        .map { records ->
-            records.filter { it.metadata.eventId == eventId }.map { it.metadata.recordId }
-        }
-        .distinctUntilChanged()
-        .mapLatest { ids -> repository.recordsWithPoints(ids) }
+    // The readings flow that used to sit here is gone. It was dead from the Sprint 5 fold — the
+    // curves belong to the *scope* now and every subject's scope is served by one
+    // [AnalysisViewModel] — and it matched `eventId == eventId`, one level deep. Leaving a private,
+    // unread, wrong implementation of "this event's recordings" in the file is leaving the answer
+    // somebody copies next, which is how that mistake has now been made six times.
 
     /**
      * The subject, and nothing about the analysis.
@@ -154,27 +144,18 @@ class EventDetailViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Makes a tag where it is applied, creating its axis if new. */
-    fun createTag(categoryName: String, tagName: String, onMade: (Long) -> Unit) {
-        viewModelScope.launch { repository.findOrCreateTag(categoryName, tagName)?.let(onMade) }
-    }
-
-    fun setTags(tagIds: List<Long>) {
-        viewModelScope.launch {
-            val current = repository.getTagsForEvent(eventId).first().map { it.tagId }
-            current.filterNot { it in tagIds }.forEach { repository.removeTagFromEvent(eventId, it) }
-            tagIds.filterNot { it in current }.forEach { repository.addTagToEvent(eventId, it) }
-        }
-    }
-
+    /**
+     * Takes one tag off, from the chip on the header.
+     *
+     * The only tag operation left here. Choosing tags, and creating them, moved to the editor —
+     * which is opened from the library as well as from this page and so cannot be built on a
+     * ViewModel only this page has. `createTag`, `setTags`, `categories` and `tagsInCategory` went
+     * with them rather than being left as a second, unreachable implementation of the same thing:
+     * an unused copy is the answer somebody reaches for next.
+     */
     fun removeTag(tagId: Long) {
         viewModelScope.launch { repository.removeTagFromEvent(eventId, tagId) }
     }
-
-    val categories = repository.getAllCategories()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    fun tagsInCategory(categoryId: Long) = repository.getTagsByCategory(categoryId)
 
     fun rename(name: String) {
         viewModelScope.launch { repository.renameEvent(eventId, name) }
@@ -227,12 +208,8 @@ class EventDetailViewModel(
         }
     }
 
-    fun deleteEvent(onDone: () -> Unit) {
-        viewModelScope.launch {
-            repository.deleteEvent(eventId)
-            onDone()
-        }
-    }
+    // `deleteEvent` was here too, and is gone for the same reason: the editor deletes, through
+    // `LibraryViewModel.deleteEvent`, wherever it was opened from.
 
     class Factory(
         private val repository: LibraryRepository,

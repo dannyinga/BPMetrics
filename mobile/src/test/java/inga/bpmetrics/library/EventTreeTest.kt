@@ -246,6 +246,100 @@ class EventTreeTest {
         )
     }
 
+    // --- Counting what an event holds ---
+
+    private fun rec(id: Long, filedAs: Long?) = BpmRecordEntity(
+        recordId = id,
+        title = "Record $id",
+        date = id * 1000,
+        startTime = id * 1000,
+        endTime = id * 1000 + 100,
+        durationMs = 100,
+        eventId = filedAs
+    )
+
+    /**
+     * The count this codebase has got wrong four times, always the same way.
+     *
+     * Recordings hang off the deepest thing that claims them, so a festival almost never holds any
+     * *itself* — its days do, or its sets do. Counting the recordings filed directly on an event
+     * therefore reports every container as empty, while its own page resolves the subtree correctly
+     * and shows forty. A number that is plausible and wrong is the failure mode nobody looks at
+     * twice, which is why this is a test rather than a comment.
+     */
+    @Test
+    fun `an event counts everything beneath it, not what is filed on it`() {
+        val records = listOf(
+            rec(1, 4),   // Subtronics, inside Day 1
+            rec(2, 4),
+            rec(3, 5),   // Excision, inside Day 1
+            rec(4, 3),   // filed on Day 2 itself
+            rec(5, null) // unfiled
+        )
+
+        val counts = EventTree.recordCountsByEvent(festival(), records)
+
+        assertEquals(4, counts[1])  // Griztronics: everything under it
+        assertEquals(3, counts[2])  // Day 1: two sets
+        assertEquals(1, counts[3])  // Day 2: its own
+        assertEquals(2, counts[4])  // Subtronics
+    }
+
+    @Test
+    fun `an event holding nothing is absent rather than wrong`() {
+        val counts = EventTree.recordCountsByEvent(festival(), emptyList())
+
+        assertEquals(0, counts[1] ?: 0)
+    }
+
+    /** Unfiled recordings belong to no event and must not inflate one. */
+    @Test
+    fun `unfiled recordings count towards nothing`() {
+        val counts = EventTree.recordCountsByEvent(festival(), listOf(rec(1, null)))
+
+        assertTrue(counts.values.all { it == 0 } || counts.isEmpty())
+    }
+
+    // --- Qualified names: a lane's label and a picture's title want opposite orders ---
+
+    /**
+     * A comparison lane names the thing first.
+     *
+     * The thing is what you are looking for; the ancestry is only there to tell two events sharing
+     * a short name apart. Two "Subtronics" from different weekends are two nights, and reading as
+     * one is a wrong answer rather than an untidy one.
+     */
+    @Test
+    fun `a lane label reads innermost first`() {
+        assertEquals(
+            "Subtronics | Day 1 | Griztronics",
+            EventTree.qualifiedNameOf(festival(), 4, separator = " | ")
+        )
+    }
+
+    /**
+     * A title reads as a path.
+     *
+     * An exported picture leaves the app, so its caption has to say where it came from to someone
+     * who cannot tap it. "Griztronics | Day 1 | Subtronics" is where you were; the other order is a
+     * breadcrumb printed backwards.
+     */
+    @Test
+    fun `a title reads outermost first`() {
+        assertEquals(
+            "Griztronics | Day 1 | Subtronics",
+            EventTree.qualifiedNameOf(festival(), 4, separator = " | ", outermostFirst = true)
+        )
+    }
+
+    @Test
+    fun `an event at the top is its own whole path`() {
+        assertEquals(
+            "Griztronics",
+            EventTree.qualifiedNameOf(festival(), 1, separator = " | ", outermostFirst = true)
+        )
+    }
+
     /** An event a cycle keeps out of the walk still has to appear, collapsed or not. */
     @Test
     fun `an unreachable event still appears`() {

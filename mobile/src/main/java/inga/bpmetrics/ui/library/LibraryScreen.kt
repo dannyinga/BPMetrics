@@ -132,6 +132,7 @@ fun LibraryScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
     val currentSort by viewModel.sortOption.collectAsStateWithLifecycle()
+    val showUnfiled by viewModel.showUnfiled.collectAsStateWithLifecycle()
     val selectedRecordIds by viewModel.selectedRecordIds.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
@@ -534,7 +535,8 @@ fun LibraryScreen(
                                             tint = MaterialTheme.colorScheme.error
                                         )
                                     },
-                                    enabled = hasSelection,
+                                    enabled = selectedRecordIds.isNotEmpty() ||
+                                        selectedEventIds.isNotEmpty(),
                                     onClick = {
                                         showSelectionMenu = false
                                         showBulkDeleteDialog = true
@@ -685,6 +687,24 @@ fun LibraryScreen(
                                         showCreateEventDialog = true
                                     }
                                 )
+                                // A view rather than a filter, so it sits with the things that
+                                // change what the list draws.
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (showUnfiled) "Hide unfiled recordings"
+                                            else "Show unfiled recordings"
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (showUnfiled) Icons.Default.FilterAlt
+                                            else Icons.Default.FilterAltOff,
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = { showLibraryMenu = false; viewModel.toggleUnfiled() }
+                                )
                                 DropdownMenuItem(
                                     text = { Text("Import recordings…") },
                                     leadingIcon = {
@@ -813,6 +833,7 @@ fun LibraryScreen(
                         selectionMode = isSelectionMode,
                         onToggleEventSelection = { viewModel.toggleEventSelection(it) },
                         onCreateEvent = { creatingInside = null; showCreateEventDialog = true },
+                        hidingUnfiled = !showUnfiled,
                         onAddInside = {
                             creatingInside = it.event.eventId
                             showCreateEventDialog = true
@@ -846,12 +867,40 @@ fun LibraryScreen(
     if (showBulkDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showBulkDeleteDialog = false },
-            title = { Text("Delete Selected Recordings") },
-            text = { Text("Are you sure you want to permanently delete the ${selectedRecordIds.size} selected recordings? This action cannot be undone.") },
+            title = {
+                Text(
+                    if (selectedRecordIds.isEmpty()) "Delete selected events"
+                    else if (selectedEventIds.isEmpty()) "Delete selected recordings"
+                    else "Delete selection"
+                )
+            },
+            // Says what each kind means, because they mean different things and the difference is
+            // the whole reason this is worth a confirmation: a deleted recording is gone, a deleted
+            // event is only a grouping and its recordings come back as Unfiled.
+            text = {
+                Text(
+                    buildString {
+                        if (selectedRecordIds.isNotEmpty()) {
+                            append("${selectedRecordIds.size} recording")
+                            if (selectedRecordIds.size != 1) append("s")
+                            append(" will be permanently deleted. This cannot be undone.")
+                        }
+                        if (selectedEventIds.isNotEmpty()) {
+                            if (isNotEmpty()) append(System.lineSeparator().repeat(2))
+                            append("${selectedEventIds.size} event")
+                            if (selectedEventIds.size != 1) append("s")
+                            append(
+                                " will be deleted. The recordings inside them are kept and move " +
+                                    "back to Unfiled."
+                            )
+                        }
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteSelectedRecords()
+                        viewModel.deleteSelection()
                         showBulkDeleteDialog = false
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
@@ -934,10 +983,23 @@ fun LibraryScreen(
 
     // --- Event and group dialogs ---
 
+    // How many recordings are under each event, counting its whole subtree. Screen-level because
+    // two dialogs need the same answer — the picker, which promises a number, and the delete
+    // confirmation, which says what is at stake — and a festival holds its recordings in its days
+    // rather than itself, so a direct count calls every container empty.
+    val eventRecordCounts = remember(filterOptions.eventTree, uiState.records) {
+        inga.bpmetrics.library.EventTree.recordCountsByEvent(
+            filterOptions.eventTree,
+            uiState.records.map { it.metadata }
+        )
+    }
+
     if (showAddToEventDialog) {
         AddToEventDialog(
             recordCount = effectiveRecordIds.size,
-            rows = eventPickerRows,
+            events = filterOptions.eventTree,
+            starts = filterOptions.eventStarts,
+            counts = eventRecordCounts,
             onDismiss = { showAddToEventDialog = false },
             onPick = { eventId ->
                 viewModel.assignSelectedToEvent(eventId)
@@ -995,7 +1057,7 @@ fun LibraryScreen(
     if (showCreateGroupDialog) {
         NewCollectionDialog(
             filterOptions = filterOptions,
-            chipsOf = { viewModel.chipsFor(it) },
+            chipsOf = { viewModel.chipsOf(it, filterOptions) },
             // Whatever is selected goes in as well, rule or no rule — the two combine.
             recordCount = effectiveRecordIds.size,
             onDismiss = { showCreateGroupDialog = false },
@@ -1025,10 +1087,12 @@ fun LibraryScreen(
             libraryViewModel = viewModel,
             event = summary.event,
             span = summary.span,
-            // Tags stay on the event's own page: a count and a button say nothing without the
-            // effective set, inherited tags included, to check them against. The photo does not
-            // have that problem any more — choosing one opens the framing sheet, which is the
-            // picture at the size the library will draw it.
+            // The subtree, not what is filed directly on it: a festival almost never holds a
+            // recording itself, so counting directly would tell you a day of footage is safe to
+            // delete because the event "has none in it".
+            recordCount = eventRecordCounts[summary.event.eventId] ?: 0,
+            // Tags and Delete used to be left out here, and that is what made this a second modal
+            // rather than the same one. The editor renders both itself now.
             coverEditor = {
                 val live = eventSummariesById[summary.event.eventId]?.event ?: summary.event
                 inga.bpmetrics.ui.components.CoverEditor(

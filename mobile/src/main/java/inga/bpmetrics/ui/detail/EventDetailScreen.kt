@@ -31,14 +31,11 @@ import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
 import inga.bpmetrics.ui.analysis.EventDetailViewModel
 import inga.bpmetrics.ui.analysis.shortDuration
-import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.tags.EffectiveTagChip
-import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import inga.bpmetrics.ui.util.ReaderClock
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 /**
  * An event, and its analysis.
@@ -62,7 +59,6 @@ fun EventDetailScreen(
     onExport: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     val subject: EventDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         // Keyed on the event, or walking from one to another through the breadcrumb would reuse
@@ -95,8 +91,6 @@ fun EventDetailScreen(
 
     var editing by remember { mutableStateOf(false) }
     var addingInside by remember { mutableStateOf(false) }
-    var tagging by remember { mutableStateOf(false) }
-    var deleting by remember { mutableStateOf(false) }
 
     val event = state.event
 
@@ -200,17 +194,18 @@ fun EventDetailScreen(
                     libraryViewModel = libraryViewModel,
                     event = event,
                     span = state.span,
-                    tagCount = tags.count { !it.isInherited },
-                    onEditTags = { tagging = true },
+                    // The subtree, which is what this page's `records` already is.
+                    recordCount = state.records.size,
                     excludedCount = exclusions.excludedEventIds.size +
                         exclusions.excludedRecordIds.size,
                     // Closes the editor first. Two stacked dialogs would leave the sheet's own
                     // scrim over an editor nobody can reach, and returning to a half-typed name
                     // after picking through a tree is not where anyone wants to land.
                     onRefineScope = { editing = false; openRefineScope() },
-                    // At the bottom of the editor rather than in a three-dot menu holding one
-                    // item — and that item the destructive one.
-                    onDelete = { editing = false; deleting = true },
+                    // Deleting an event from its own page has to leave the page. The library's
+                    // copy of this editor stays where it is, which is why the launcher takes the
+                    // destination rather than deciding one.
+                    onDeleted = onBack,
                     onDismiss = { editing = false }
                 )
             }
@@ -263,34 +258,9 @@ fun EventDetailScreen(
         )
     }
 
-    if (tagging) {
-        val categories by subject.categories.collectAsStateWithLifecycle(initialValue = emptyList())
-        TagSelectionDialog(
-            onDismiss = { tagging = false },
-            onSave = { selected -> subject.setTags(selected); tagging = false },
-            categories = categories,
-            getTagsByCategoryFlow = { subject.tagsInCategory(it) },
-            onCreateTag = { axis, name, onMade -> subject.createTag(axis, name, onMade) },
-            // Only the ones applied here. An inherited tag cannot be removed on this page, so
-            // offering it pre-ticked would make unticking it look broken.
-            initialSelectedTagIds = tags.filterNot { it.isInherited }.map { it.tag.tagId }
-        )
-    }
-
-    if (deleting && event != null) {
-        DeleteConfirmDialog(
-            title = "Delete ${event.displayName}?",
-            message = if (state.records.isEmpty()) "This event has no recordings in it." else
-                "Its ${state.records.size} recording" +
-                    "${if (state.records.size == 1) "" else "s"} will be kept and move back to " +
-                    "Unfiled. Only the event is deleted.",
-            onDismiss = { deleting = false },
-            onConfirm = {
-                deleting = false
-                scope.launch { subject.deleteEvent(onBack) }
-            }
-        )
-    }
+    // The tag picker and the delete confirmation used to be rendered here, from `subject`, while
+    // the library's copy of the same editor offered neither. Both live in the editor now, built off
+    // the library ViewModel — one modal, whichever door you came through. See [EventEditorLauncher].
 }
 
 /**

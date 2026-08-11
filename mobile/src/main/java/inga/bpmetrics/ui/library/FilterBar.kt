@@ -277,6 +277,8 @@ data class FilterOptions(
     val peopleEntities: List<PersonEntity> = emptyList(),
     /** The tree itself. The picker nests and collapses it; see `FilterEditor`. */
     val eventTree: List<EventEntity> = emptyList(),
+    /** When each event happened, for ordering. See [inga.bpmetrics.library.EventTree.startsOf]. */
+    val eventStarts: Map<Long, Long> = emptyMap(),
     val collectionEntities: List<CollectionEntity> = emptyList()
 ) {
     fun forDimension(dimension: FilterDimension): List<Pair<String, String>> = when (dimension) {

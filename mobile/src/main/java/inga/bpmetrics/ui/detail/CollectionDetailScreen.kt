@@ -169,7 +169,7 @@ fun CollectionDetailScreen(
             collection = summary.collection,
             recordCount = summary.recordCount,
             filterOptions = filterOptions,
-            chipsOf = { libraryViewModel.chipsFor(it) },
+            chipsOf = { libraryViewModel.chipsOf(it, filterOptions) },
             onRename = { libraryViewModel.renameCollection(collectionId, it) },
             onSetRule = { libraryViewModel.setCollectionRule(collectionId, it) },
             onMakeStatic = {

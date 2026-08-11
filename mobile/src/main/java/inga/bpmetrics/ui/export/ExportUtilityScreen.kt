@@ -85,6 +85,9 @@ fun ExportUtilityScreen(
     val furthest by viewModel.furthestStep.collectAsStateWithLifecycle()
     val canAdvance by viewModel.canAdvance.collectAsStateWithLifecycle()
     val sourceLabel by viewModel.sourceLabel.collectAsStateWithLifecycle()
+    // What gets *drawn*, as opposed to what labels the step. The two differ on purpose: a step
+    // header wants "Tape B" and a caption wants "Tape B | Levitape". See [ExportUtilityViewModel].
+    val scopeTitle by viewModel.scopeTitle.collectAsStateWithLifecycle()
     val records by viewModel.records.collectAsStateWithLifecycle()
     val source by viewModel.source.collectAsStateWithLifecycle()
     val clips by viewModel.clips.collectAsStateWithLifecycle()
@@ -114,6 +117,7 @@ fun ExportUtilityScreen(
     val manualOverlay by viewModel.manualOverlay.collectAsStateWithLifecycle()
     val previewAt by viewModel.previewAt.collectAsStateWithLifecycle()
     val kind by viewModel.kind.collectAsStateWithLifecycle()
+    val clipTitles by viewModel.clipTitles.collectAsStateWithLifecycle()
     val imageGrouping by viewModel.imageGrouping.collectAsStateWithLifecycle()
     val imagePlan by viewModel.imagePlan.collectAsStateWithLifecycle()
     val imageCrop by viewModel.imageCrop.collectAsStateWithLifecycle()
@@ -396,7 +400,8 @@ fun ExportUtilityScreen(
                                 onToggleClip = { viewModel.toggleClip(it) },
                                 onToggleRecord = { uri, id ->
                                     viewModel.toggleRecordOnClip(uri, id)
-                                }
+                                },
+                                titles = clipTitles
                             )
                         }
                     }
@@ -423,9 +428,14 @@ fun ExportUtilityScreen(
                     previewOverlay = pendingJobs.firstOrNull()?.clip?.uri ?: manualOverlay,
                     previewColours = recordColours,
                     previewPhotos = recordPhotos,
-                    graphTitle = imageTitle ?: sourceLabel,
+                    // [scopeTitle], not [sourceLabel]. These three fed the bare name of the source
+                    // to the thing that gets drawn — so a Tape B export was captioned "Tape B"
+                    // with no sign of the Levitape it belongs to, while the image *plan* was
+                    // separately building the full title and the two disagreed. `sourceLabel` is
+                    // the short form, and it stays where it belongs: on the step header.
+                    graphTitle = imageTitle ?: scopeTitle,
                     onGraphTitleChange = { viewModel.setImageTitle(it) },
-                    previewTitle = (imageTitle ?: sourceLabel).takeIf { it.isNotBlank() },
+                    previewTitle = (imageTitle ?: scopeTitle).takeIf { it.isNotBlank() },
                     previewAt = previewAt,
                     onScrub = { viewModel.scrubPreview(it) },
                     framing = currentFraming,
@@ -512,7 +522,10 @@ fun ExportUtilityScreen(
                                 colours = recordColours,
                                 photos = recordPhotos,
                                 manualOverlay = manualOverlay,
-                                label = imageTitle?.takeIf { it.isNotBlank() } ?: sourceLabel
+                                // The caption burned into every video in the batch.
+                                label = imageTitle?.takeIf { it.isNotBlank() } ?: scopeTitle,
+                                clipTitles = clipTitles,
+                                titleOverride = imageTitle?.takeIf { it.isNotBlank() }
                             )
                         }
                     )
@@ -541,7 +554,15 @@ private fun queueBatch(
     colours: Map<Long, Int>,
     photos: Map<Long, android.graphics.Bitmap>,
     manualOverlay: Uri?,
-    label: String
+    label: String,
+    /**
+     * What each clip's own video is captioned, keyed by uri — the same map step 2 shows on the
+     * cards. Without this every video in a batch was captioned with the batch's name, so a card
+     * promising "Tape B | Levitape" could render a file saying something broader.
+     */
+    clipTitles: Map<String, String> = emptyMap(),
+    /** A typed title, which is deliberately for the whole batch and outranks the per-clip one. */
+    titleOverride: String? = null
 ) {
     if (allRecords.isEmpty()) return
     val name = label.ifBlank { "Export" }
@@ -567,6 +588,10 @@ private fun queueBatch(
         val forThisClip = allRecords.filter { it.metadata.recordId in job.recordIds }
         if (forThisClip.isEmpty()) return@forEach
 
+        val caption = titleOverride
+            ?: clipTitles[job.clip.uri.toString()]?.takeIf { it.isNotBlank() }
+            ?: name
+
         BpmExportService.startExport(
             context,
             forThisClip.first().metadata.recordId,
@@ -577,7 +602,7 @@ private fun queueBatch(
                 overlay = job.clip.uri,
                 colours = colours,
                 photos = photos,
-                title = name,
+                title = caption,
                 clip = job.clip,
                 placement = job.graph
             ),
@@ -939,13 +964,21 @@ private fun StepPlaceholder(step: ExportStep, description: String) {
  *
  * A segmented control rather than two chips, for the same reason the Compare tab uses one: it is a
  * single setting with two positions, and two chips side by side look like two independent things to
- * tap. The description under it is the honest part — "rendered in the background" and "saved
- * straight away" are the difference anyone actually cares about.
+ * tap.
+ *
+ * Bare, with no explanation under it. "Curves drawn over footage, rendered in the background" told
+ * anyone who had reached step 2 of an export utility what a video is, and it sat between this
+ * control and the row that reports what is ticked — so the cost of the sentence was paid by the
+ * thing it was pushing down the screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExportKindToggle(kind: ExportKind, onSelect: (ExportKind) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp)
+    ) {
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             ExportKind.entries.forEachIndexed { index, entry ->
                 SegmentedButton(
@@ -957,11 +990,5 @@ private fun ExportKindToggle(kind: ExportKind, onSelect: (ExportKind) -> Unit) {
                 )
             }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            kind.description,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }

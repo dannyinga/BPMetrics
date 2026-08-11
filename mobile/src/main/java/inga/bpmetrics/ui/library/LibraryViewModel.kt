@@ -43,6 +43,9 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     val isReversed = _isReversed.asStateFlow()
 
+    /** Every recording, for ordering events by when they actually happened. */
+    private val allRecordsForOrdering: StateFlow<List<BpmRecord>> = repository.records
+
     /** Every tag, kept for [inga.bpmetrics.library.FilterContext.categoryByTag]. */
     private val tagRegistry: StateFlow<List<inga.bpmetrics.library.TagEntity>> = repository.allTags
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -81,26 +84,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.allCollectionEventLinks(),
         repository.allCollectionRecordLinks()
     ) { inputs, sets, eventLinks, recordLinks ->
-        val byId = inputs.places.associateBy { it.locationId }
-        // Every tag the library knows, so a tag nothing carries still knows its category.
-        val categoryByTag = tagRegistry.value.associate { it.tagId to it.parentCategoryId }
-        val resolved = inputs.events.associate { event ->
-            event.eventId to inga.bpmetrics.library.LocationResolver
-                .forEvent(event.eventId, inputs.events, byId)
-                ?.location
-        }
-
-        val context = inga.bpmetrics.library.FilterContext(
+        // One builder, shared with the repository's snapshot and the collections list — see
+        // [inga.bpmetrics.library.filterContextOf]. Three hand-assembled copies is how a rule came
+        // to work here and nowhere else.
+        val context = inga.bpmetrics.library.filterContextOf(
+            events = inputs.events,
+            places = inputs.places,
             effectiveTags = inputs.tags,
-            eventNames = inputs.events.associate { it.eventId to it.displayName },
-            placeNames = resolved.mapNotNull { (id, place) ->
-                place?.let { id to it.displayName }
-            }.toMap(),
-            locationIdByEvent = resolved.mapValues { it.value?.locationId },
-            eventTypeByEvent = inputs.events.associate { it.eventId to it.type },
-            // From the registry, so a tag nothing carries still knows its category. See
-            // [FilterContext.categoryByTag].
-            categoryByTag = categoryByTag
+            tags = tagRegistry.value
         )
 
         val library = inga.bpmetrics.library.Library(
@@ -150,35 +141,22 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     val availableWatches: StateFlow<List<WatchEntity>> = repository.getAllWatches()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     /**
-     * The active filter as chips, resolved to names.
+     * The terms of any filter, given what the pickers offer.
      *
-     * Through [FilterChips], which is pure and is the only thing that describes a filter — two
-     * places rendering "what is applied" is two places free to disagree about it.
+     * A plain function over data the caller already has, rather than something reaching into this
+     * ViewModel's cached flows — see [FilterChips.of]. A collection editing its rule calls this
+     * with the [FilterOptions] it collected, so what it shows cannot depend on whether some other
+     * screen happens to be subscribed.
      */
-    val filterChips: StateFlow<List<FilterChip>> = combine(
-        _filterState,
-        combine(availablePeople, repository.getAllCategories(), repository.allEventsInTree) {
-            p, c, e -> Triple(p, c, e)
-        },
-        combine(repository.getAllLocations(), repository.getAllWatches(), repository.allTags) {
-            l, w, t -> Triple(l, w, t)
+    fun chipsOf(filter: FilterState, options: FilterOptions): List<FilterChip> = FilterChips.of(
+        filter = filter,
+        options = options,
+        formatDate = {
+            inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(
+                it, inga.bpmetrics.ui.util.ReaderClock
+            )
         }
-    ) { filter, (people, categories, events), (places, watches, tags) ->
-        FilterChips.of(
-            filter = filter,
-            people = people,
-            tags = tags,
-            categories = categories,
-            events = events,
-            locations = places,
-            watches = watches,
-            formatDate = {
-                inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(
-                    it, inga.bpmetrics.ui.util.ReaderClock
-                )
-            }
-        )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    )
 
     /** What each dimension can be narrowed to. */
     val filterOptions: StateFlow<FilterOptions> = combine(
@@ -217,10 +195,27 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                 .sortedBy { it.name },
             peopleEntities = people,
             eventTree = events,
+            eventStarts = inga.bpmetrics.library.EventTree
+                .startsOf(events, allRecordsForOrdering.value.map { it.metadata }),
             collectionEntities = sets,
             watches = watches.filter { it.isNamed }.map { it.watchId to it.displayName }
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FilterOptions())
+
+    /**
+     * The active filter as chips, resolved to names.
+     *
+     * Through [FilterChips], which is pure and is the only thing that describes a filter — two
+     * places rendering "what is applied" is two places free to disagree about it.
+     *
+     * Declared after [filterOptions] because it reads it: a property initialised before the one it
+     * depends on gets null at construction, which Kotlin permits and nothing catches until it runs.
+     */
+    val filterChips: StateFlow<List<FilterChip>> = combine(
+        _filterState,
+        filterOptions
+    ) { filter, options -> chipsOf(filter, options) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun setQuery(text: String) { _filterState.value = _filterState.value.copy(query = text) }
 
@@ -355,14 +350,9 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * in either direction — see [coversByCollection].
      */
     val coversByEvent: StateFlow<Map<Long, inga.bpmetrics.library.Cover>> =
-        repository.allEventsInTree.map { events ->
-            val own = events.associate { it.eventId to it.ownCover }
-            events.mapNotNull { event ->
-                inga.bpmetrics.library.EventTree.ancestryOf(events, event.eventId)
-                    .firstNotNullOfOrNull { own[it.eventId] }
-                    ?.let { event.eventId to it }
-            }.toMap()
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+        repository.allEventsInTree
+            .map { inga.bpmetrics.library.CoverResolver.byEvent(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
      * Each event's resolved venue name, for cards to show where without walking per row.
@@ -546,7 +536,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.records,
         repository.allCollectionEventLinks(),
         repository.allCollectionRecordLinks(),
-        peopleById
+        peopleById,
+        // The registries the rule needs to be resolvable. Without them this built a Library with a
+        // default, empty context, and a rule naming an event type, a venue or a tag matched
+        // nothing — silently, because an absent lookup is a null rather than a failure.
+        repository.getAllLocations(),
+        repository.effectiveTags,
+        repository.allTags
     ) { args ->
         @Suppress("UNCHECKED_CAST")
         val sets = args[0] as List<inga.bpmetrics.library.CollectionEntity>
@@ -560,12 +556,25 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         val recordLinks = args[4] as List<inga.bpmetrics.library.CollectionRecordCrossRef>
         @Suppress("UNCHECKED_CAST")
         val people = args[5] as Map<Long, PersonEntity>
+        @Suppress("UNCHECKED_CAST")
+        val places = args[6] as List<inga.bpmetrics.library.LocationEntity>
+        @Suppress("UNCHECKED_CAST")
+        val tagsByRecord = args[7] as Map<Long, List<EffectiveTag>>
+        @Suppress("UNCHECKED_CAST")
+        val allTags = args[8] as List<inga.bpmetrics.library.TagEntity>
+
         val library = inga.bpmetrics.library.Library(
             records = records,
             events = events,
             collections = sets,
             collectionEvents = eventLinks,
-            collectionRecords = recordLinks
+            collectionRecords = recordLinks,
+            filterContext = inga.bpmetrics.library.filterContextOf(
+                events = events,
+                places = places,
+                effectiveTags = tagsByRecord,
+                tags = allTags
+            )
         )
         sets.map { set ->
             val within = inga.bpmetrics.library.Scope.recordsIn(
@@ -577,7 +586,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                 people = within.mapNotNull { r -> r.metadata.personId?.let { people[it] } }
                     .distinct(),
                 events = inga.bpmetrics.library.Scope.eventsIn(
-                    set.collectionId, events, eventLinks
+                    set.collectionId, events, eventLinks, within.map { it.metadata }
                 ),
                 records = within
             )
@@ -628,35 +637,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         }
     }
 
-    /**
-     * What a filter asks, as chips, for any filter rather than the one being applied.
-     *
-     * Read at composition rather than collected, because the caller owns the [FilterState] — a rule
-     * being edited on a collection is not what the library is showing, and must not become it.
-     */
-    fun chipsFor(filter: FilterState): List<FilterChip> = FilterChips.of(
-        filter = filter,
-        people = availablePeople.value,
-        tags = allTagsForChips.value,
-        categories = allCategoriesForChips.value,
-        events = allEventsForChips.value,
-        locations = allLocationsForChips.value,
-        watches = availableWatches.value,
-        formatDate = {
-            inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(
-                it, inga.bpmetrics.ui.util.ReaderClock
-            )
-        }
-    )
-
-    private val allTagsForChips = repository.allTags
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    private val allCategoriesForChips = repository.getAllCategories()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    private val allEventsForChips = repository.allEventsInTree
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    private val allLocationsForChips = repository.getAllLocations()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
      * Makes a collection, answering everything a collection is asked at creation.
@@ -843,6 +823,18 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /** Containers the user has opened in the timeline. */
+    /**
+     * Whether recordings belonging to no event are on the timeline.
+     *
+     * A view rather than a filter: it changes what the list draws and not what the library holds,
+     * so it sits with the sort and the expansion rather than in [FilterState] — a rule saved to a
+     * collection has no business remembering that somebody once tidied their view.
+     */
+    private val _showUnfiled = MutableStateFlow(true)
+    val showUnfiled: StateFlow<Boolean> = _showUnfiled.asStateFlow()
+
+    fun toggleUnfiled() { _showUnfiled.value = !_showUnfiled.value }
+
     private val _expandedInTimeline = MutableStateFlow<Set<Long>>(emptySet())
     val expandedInTimeline: StateFlow<Set<Long>> = _expandedInTimeline.asStateFlow()
 
@@ -868,15 +860,16 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         // divergence is why the two views were merged.
         filteredRecords,
         _expandedInTimeline,
-        _filterState,
+        combine(_filterState, _showUnfiled) { filter, unfiled -> filter to unfiled },
         _isReversed
-    ) { events, records, expanded, filter, reversed ->
+    ) { events, records, expanded, (filter, unfiled), reversed ->
         inga.bpmetrics.library.LibraryTimeline.build(
             events = events,
             records = records.map { it.metadata },
             expandedIds = expanded,
             pruneEmpty = !filter.isEmpty,
-            newestFirst = !reversed
+            newestFirst = !reversed,
+            includeUnfiled = unfiled
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -1307,13 +1300,26 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         }
     }
 
-    fun deleteSelectedRecords() {
-        val idsToDelete = _selectedRecordIds.value
+    /**
+     * Deletes what is selected, of either kind.
+     *
+     * It deleted recordings only, so selecting events and pressing Delete did nothing at all —
+     * silently, because the selection was cleared either way and the list simply came back
+     * unchanged.
+     *
+     * **Recordings inside a selected event are kept.** Deleting an event has meant "the recordings
+     * go back to Unfiled" everywhere else in the app since events existed, and a bulk action that
+     * quietly meant something stronger than the single one is the worst kind of difference — it is
+     * invisible until the data is gone. So this takes the *directly chosen* recordings, not the
+     * effective set, which is the one place that distinction matters.
+     */
+    fun deleteSelection() {
+        val records = _selectedRecordIds.value
+        val events = _selectedEventIds.value
         viewModelScope.launch {
-            idsToDelete.forEach { id ->
-                repository.deleteRecordWithId(id)
-            }
-            clearSelection()
+            records.forEach { repository.deleteRecordWithId(it) }
+            events.forEach { repository.deleteEvent(it) }
+            clearWholeSelection()
         }
     }
 
@@ -1329,6 +1335,35 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun createTag(categoryName: String, tagName: String, onMade: (Long) -> Unit) {
         viewModelScope.launch {
             repository.findOrCreateTag(categoryName, tagName)?.let(onMade)
+        }
+    }
+
+    /**
+     * The tag axes, for the picker inside the event editor.
+     *
+     * Here as well as on the event's own page because the editor is one component opened from two
+     * places, and it cannot offer tags from only one of them — see
+     * [inga.bpmetrics.ui.detail.EventEditorLauncher].
+     */
+    val categories = repository.getAllCategories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun tagsInCategory(categoryId: Long) = repository.getTagsByCategory(categoryId)
+
+    /** The tags applied to this event *here*, inherited ones excluded — those are not editable. */
+    fun ownTagsOfEvent(eventId: Long) = repository.getTagsForEvent(eventId)
+
+    /**
+     * Replaces an event's own tags with [tagIds].
+     *
+     * A diff rather than clear-and-reinsert: rewriting every row would churn the link table on a
+     * dialog people open to add one tag, and the same call on the event's page does it this way.
+     */
+    fun setEventTags(eventId: Long, tagIds: List<Long>) {
+        viewModelScope.launch {
+            val current = repository.getTagsForEvent(eventId).first().map { it.tagId }
+            current.filterNot { it in tagIds }.forEach { repository.removeTagFromEvent(eventId, it) }
+            tagIds.filterNot { it in current }.forEach { repository.addTagToEvent(eventId, it) }
         }
     }
 

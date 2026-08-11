@@ -284,14 +284,26 @@ class LibraryRepository(
         )
 
     /** Everything [Scope] needs to answer a question, read once. */
-    suspend fun librarySnapshot(): Library = Library(
-        records = records.first(),
-        events = eventDao.getAllEventsUnfiltered(),
-        collections = collectionDao.getAll(),
-        collectionEvents = collectionDao.allEventLinks(),
-        collectionRecords = collectionDao.allRecordLinks(),
-        filterContext = FilterContext(effectiveTags = effectiveTags.first())
-    )
+    suspend fun librarySnapshot(): Library {
+        val events = eventDao.getAllEventsUnfiltered()
+        return Library(
+            records = records.first(),
+            events = events,
+            collections = collectionDao.getAll(),
+            collectionEvents = collectionDao.allEventLinks(),
+            collectionRecords = collectionDao.allRecordLinks(),
+            // The whole context, not just the tags. It carried only those, so a collection whose
+            // rule named an event type, a venue or a tag category resolved to nothing here — and
+            // this is what the export scope, the analysis scope and every `recordsInCollection`
+            // read. See [filterContextOf].
+            filterContext = filterContextOf(
+                events = events,
+                places = locationDao.getAll(),
+                effectiveTags = effectiveTags.first(),
+                tags = tagDao.getAllTags()
+            )
+        )
+    }
 
     /**
      * Retrieves a BPM data point by its ID.
@@ -1213,7 +1225,15 @@ class LibraryRepository(
     // walking the same [EventTree] the timeline and the export scope walk. A set is a different
     // question asked of one walk, not a second walk.
 
+    /**
+     * Every collection, alphabetically.
+     *
+     * A set has no time of its own — it gathers things that did not happen together, which is the
+     * whole point of it — so insertion order is the one ordering that means nothing at all. Sorted
+     * here rather than at each screen, so the tab, the export picker and the filter agree.
+     */
     fun getAllCollections(): Flow<List<CollectionEntity>> = collectionDao.getAllFlow()
+        .map { sets -> sets.sortedBy { it.displayName.lowercase() } }
 
     suspend fun getCollection(collectionId: Long): CollectionEntity? =
         collectionDao.get(collectionId)

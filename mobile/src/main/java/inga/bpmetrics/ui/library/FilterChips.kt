@@ -54,33 +54,47 @@ object FilterChips {
      * Ordered by dimension rather than by when each was added, so the same filter always reads the
      * same way — a bar that reshuffles as you add terms is one nobody can scan.
      */
+    /**
+     * The terms of any filter, resolved through what the pickers already offer.
+     *
+     * [FilterOptions] rather than six registries, and that is a correctness fix rather than tidying.
+     * The registry version had to be handed six lists, so a caller outside the library screen — a
+     * collection editing its rule — reached for the ViewModel's copies through `.value`. Those are
+     * shared `WhileSubscribed`, so with nothing collecting them `.value` is the *initial* value:
+     * empty. A living collection's rule therefore displayed no terms at all unless you had arrived
+     * from the Library within five seconds, which made it look as though the rule had not saved —
+     * and, because saving is gated on having at least one term, sometimes stopped it saving.
+     *
+     * One shape, collected properly by every caller, and the flakiness is gone by construction.
+     */
     fun of(
         filter: FilterState,
-        people: List<PersonEntity> = emptyList(),
-        tags: List<TagEntity> = emptyList(),
-        categories: List<CategoryEntity> = emptyList(),
-        events: List<EventEntity> = emptyList(),
-        locations: List<LocationEntity> = emptyList(),
-        watches: List<WatchEntity> = emptyList(),
+        options: FilterOptions,
         formatDate: (Long) -> String = { it.toString() }
     ): List<FilterChip> {
         val chips = mutableListOf<FilterChip>()
-        val categoryNames = categories.associate { it.categoryId to it.name }
+        val people = options.peopleEntities
+        val events = options.eventTree
+        val categoryNames = options.tagCategories.associate { it.categoryId to it.name }
+        val tags = options.tagCategories.flatMap { category ->
+            category.tags.map { (id, name) -> Triple(id, name, category.categoryId) }
+        }
 
         people.filter { it.personId in filter.selectedPersonIds }.forEach {
             chips += FilterChip(FilterDimension.PERSON, "person-${it.personId}", it.name, it.colorArgb)
         }
 
-        tags.filter { it.tagId in filter.selectedTagIds }.forEach { tag ->
-            // Qualified by its axis, because "Hulk" alone does not say what is being compared and
-            // two categories can hold the same word.
-            val axis = categoryNames[tag.parentCategoryId]
-            chips += FilterChip(
-                FilterDimension.TAG,
-                "tag-${tag.tagId}",
-                axis?.let { "$it › ${tag.name}" } ?: tag.name
-            )
-        }
+        tags.filter { (id, _, _) -> id in filter.selectedTagIds }
+            .forEach { (id, name, categoryId) ->
+                // Qualified by its axis, because "Hulk" alone does not say what is being compared
+                // and two categories can hold the same word.
+                val axis = categoryNames[categoryId]
+                chips += FilterChip(
+                    FilterDimension.TAG,
+                    "tag-$id",
+                    axis?.let { "$it › $name" } ?: name
+                )
+            }
 
         events.filter { it.eventId in filter.selectedEventIds }.forEach {
             chips += FilterChip(FilterDimension.EVENT, "event-${it.eventId}", it.displayName)
@@ -90,9 +104,10 @@ object FilterChips {
             chips += FilterChip(FilterDimension.COLLECTION, "group-${it.eventId}", it.displayName)
         }
 
-        locations.filter { it.locationId in filter.selectedLocationIds }.forEach {
-            chips += FilterChip(FilterDimension.LOCATION, "place-${it.locationId}", it.displayName)
-        }
+        options.locations.filter { (id, _) -> id.toLongOrNull() in filter.selectedLocationIds }
+            .forEach { (id, name) ->
+                chips += FilterChip(FilterDimension.LOCATION, "place-$id", name)
+            }
 
         // From the filter itself rather than from a registry: an event type is a string somebody
         // typed, so the set of them is whatever is in use, and the chip is the value.
@@ -100,9 +115,10 @@ object FilterChips {
             chips += FilterChip(FilterDimension.EVENT_TYPE, "type-$it", it)
         }
 
-        watches.filter { it.watchId in filter.selectedWatchIds }.forEach {
-            chips += FilterChip(FilterDimension.WATCH, "watch-${it.watchId}", it.displayName)
-        }
+        options.watches.filter { (id, _) -> id in filter.selectedWatchIds }
+            .forEach { (id, name) ->
+                chips += FilterChip(FilterDimension.WATCH, "watch-$id", name)
+            }
 
         filter.dateRange?.let { (start, end) ->
             chips += FilterChip(

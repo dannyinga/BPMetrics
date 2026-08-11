@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Card
@@ -30,6 +29,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SecondaryScrollableTabRow
 import androidx.compose.material3.Tab
@@ -58,15 +58,20 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.SwapVert
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import inga.bpmetrics.library.clock
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.displayName
-import inga.bpmetrics.ui.components.PersonSwatch
+import inga.bpmetrics.ui.components.PersonAvatar
+import inga.bpmetrics.ui.components.overCover
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDurationString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
@@ -104,9 +109,26 @@ fun SourceStep(
 
     // The tree, flattened with depths — the same walk the timeline and the event picker use, so
     // all three agree about what is inside what and about the order it happened in.
-    val eventRows = remember(events, expanded, newestFirst) {
-        inga.bpmetrics.library.EventTree.flatten(events, expanded, newestFirst)
+    // When each event happened, from its window or the earliest recording beneath it. Without this
+    // the fallback is `createdAt` — the order things were typed in — and most events have no
+    // window, so the list read as creation order however chronological it claimed to be.
+    val startBy = remember(events, recordings) {
+        inga.bpmetrics.library.EventTree.startsOf(events, recordings.map { it.metadata })
     }
+    val eventRows = remember(events, expanded, newestFirst, startBy) {
+        inga.bpmetrics.library.EventTree.flatten(events, expanded, newestFirst, startBy)
+    }
+
+    // The whole subtree, not the recordings filed directly on each event. A festival almost never
+    // holds any itself — its days do — so counting directly reported every container as empty.
+    val countBy = remember(events, recordings) {
+        inga.bpmetrics.library.EventTree.recordCountsByEvent(events, recordings.map { it.metadata })
+    }
+
+    // Inherited, not each event's own. This list read `ownCover` and so showed a day inside a
+    // photographed festival as a grey row, while the library one screen away showed the festival's
+    // picture on all six days. Same walk as the library's now — see [CoverResolver.byEvent].
+    val coverBy = remember(events) { inga.bpmetrics.library.CoverResolver.byEvent(events) }
 
     Column(Modifier.fillMaxSize()) {
         // Video or image is asked on Contents now, at the top of the step it actually decides.
@@ -160,14 +182,14 @@ fun SourceStep(
                     key = { "event-${it.event.eventId}" }
                 ) { node ->
                     val event = node.event
-                    val count = recordings.count { it.metadata.eventId == event.eventId }
+                    val count = countBy[event.eventId] ?: 0
                     SourceRow(
                         title = event.displayName,
                         subtitle = buildString {
                             event.type?.takeIf { it.isNotBlank() }?.let { append("$it · ") }
                             append("$count recording${if (count == 1) "" else "s"}")
                         },
-                        cover = event.ownCover,
+                        cover = coverBy[event.eventId],
                         placeholder = Icons.Default.Event,
                         depth = node.depth,
                         // Only where opening it reveals something. A chevron that expands into
@@ -187,7 +209,9 @@ fun SourceStep(
                 }
 
                 SourceKind.GROUPS -> items(
-                    collections,
+                    // Alphabetical. A set has no time of its own — it gathers things that did not
+                    // happen together — so the only order that means anything is its name.
+                    collections.sortedBy { it.displayName.lowercase() },
                     key = { "collection-${it.collectionId}" }
                 ) { collection ->
                     SourceRow(
@@ -221,7 +245,7 @@ fun SourceStep(
                         title = record.displayName(wearer?.displayName),
                         subtitle = "${getDateString(record.metadata.date, record.clock)} · " +
                             getDurationString(record.metadata.durationMs),
-                        accent = wearer?.colorArgb?.let { Color(it) },
+                        person = wearer,
                         isSelected = chosen,
                         onClick = {
                             // Multi-select, because "these three that happened together" is a
@@ -271,7 +295,8 @@ private fun SourceRow(
     subtitle: String,
     isSelected: Boolean,
     onClick: () -> Unit,
-    accent: Color? = null,
+    /** Whose recording this is, drawn as their face. Null for rows that are not one person's. */
+    person: PersonEntity? = null,
     /** Its own picture. See [inga.bpmetrics.ui.components.CoverThumbnail]. */
     cover: inga.bpmetrics.library.Cover? = null,
     placeholder: androidx.compose.ui.graphics.vector.ImageVector? = null,
@@ -297,35 +322,61 @@ private fun SourceRow(
             BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
         } else null
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+        // The picture behind the row, exactly as the library and the collections list draw it —
+        // same component, same scrim, same text treatment over it. It was a 34dp thumbnail here,
+        // which is a *reference* to a cover rather than the cover: the picker showed a stack of
+        // grey rows with a stamp on each while the same events, one screen away, were the
+        // photographs. Choosing what to export is choosing between things you recognise by sight.
+        inga.bpmetrics.ui.components.CoverBackground(
+            cover = cover,
+            modifier = Modifier.fillMaxWidth(),
+            scrim = inga.bpmetrics.ui.components.CoverScrim.TILE
         ) {
-            if (cover != null || placeholder != null) {
-                inga.bpmetrics.ui.components.CoverThumbnail(cover, placeholder = placeholder)
-                Spacer(Modifier.width(12.dp))
-            }
-            accent?.let {
-                Box(Modifier.size(10.dp).clip(CircleShape).background(it))
-                Spacer(Modifier.width(10.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            // Separate from choosing the row. Opening a festival to see its days and exporting
-            // the festival are different intentions, and one tap cannot be both.
-            expanded?.let { open ->
-                IconButton(onClick = onToggleExpand) {
-                    Icon(
-                        if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (open) "Collapse" else "Show what is inside"
+            Row(
+                modifier = Modifier.padding(14.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // A recording's identity is the person, so it gets the leading slot instead. It
+                // previously got a 10dp dot of their colour, which said that two rows differed
+                // without saying who either one was.
+                if (person != null) {
+                    PersonAvatar(person, size = 34.dp)
+                    Spacer(Modifier.width(12.dp))
+                } else if (cover == null && placeholder != null) {
+                    // Only where there is no picture: the placeholder says what kind of thing the
+                    // row is, which a cover says better and does not need repeating beside.
+                    inga.bpmetrics.ui.components.CoverThumbnail(null, placeholder = placeholder)
+                    Spacer(Modifier.width(12.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleSmall.overCover(cover != null),
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall.overCover(cover != null),
+                        color = if (cover != null) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+
+                // Separate from choosing the row. Opening a festival to see its days and exporting
+                // the festival are different intentions, and one tap cannot be both.
+                expanded?.let { open ->
+                    IconButton(onClick = onToggleExpand) {
+                        Icon(
+                            if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (open) "Collapse" else "Show what is inside",
+                            tint = if (cover != null) MaterialTheme.colorScheme.onSurface
+                            else LocalContentColor.current
+                        )
+                    }
                 }
             }
         }
@@ -350,7 +401,9 @@ fun ContentsStep(
     onToggleOrder: () -> Unit,
     onSelectAll: (Boolean) -> Unit,
     onToggleClip: (android.net.Uri) -> Unit,
-    onToggleRecord: (android.net.Uri, Long) -> Unit
+    onToggleRecord: (android.net.Uri, Long) -> Unit,
+    /** What each clip's video will be called, keyed by uri. See `ExportUtilityViewModel`. */
+    titles: Map<String, String> = emptyMap()
 ) {
     if (loading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -395,27 +448,39 @@ fun ContentsStep(
         // and as an item this scrolled away after the first two — taking with it the running count
         // of what is ticked and the only way to clear the lot. Both are needed most at the bottom
         // of a long list, which is precisely where they used to be unavailable.
+        // Tight under the video/image toggle. This row and that control are one band of settings
+        // about the same list, and 16dp of its own on top of the toggle's own bottom padding read
+        // as two separate sections with nothing between them.
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 2.dp)
         ) {
+            // One line: the count, then the two controls. "Choose which clips to export" was an
+            // instruction above a list of tickable clips, which is the list saying what it is —
+            // and it cost the row that Select all now shares with the order toggle.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    if (ticked == 0) {
-                        "Choose which clips to export"
-                    } else {
-                        "$ticked of ${clips.size} clip${if (clips.size == 1) "" else "s"} · " +
-                            "one export each"
-                    },
+                    "$ticked of ${clips.size} clip${if (clips.size == 1) "" else "s"}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = onToggleOrder) {
+                if (selectable > 1) {
+                    TextButton(
+                        onClick = { onSelectAll(ticked < selectable) },
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Text(if (ticked < selectable) "Select all" else "Deselect all")
+                    }
+                }
+                TextButton(
+                    onClick = onToggleOrder,
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) {
                     Icon(
                         Icons.Default.SwapVert,
                         contentDescription = null,
@@ -423,14 +488,6 @@ fun ContentsStep(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(if (oldestFirst) "Oldest first" else "Newest first")
-                }
-            }
-            if (selectable > 1) {
-                TextButton(
-                    onClick = { onSelectAll(ticked < selectable) },
-                    contentPadding = PaddingValues(horizontal = 4.dp)
-                ) {
-                    Text(if (ticked < selectable) "Select all" else "Deselect all")
                 }
             }
         }
@@ -444,6 +501,7 @@ fun ContentsStep(
             items(clips, key = { it.clip.uri.toString() }) { selection ->
                 ClipCard(
                     selection = selection,
+                    title = titles[selection.clip.uri.toString()].orEmpty(),
                     // Only people who were actually recording during this clip. Offering the rest
                     // would let someone tick a curve that has no data for the footage.
                     clock = records.clock,
@@ -473,7 +531,9 @@ private fun ClipCard(
     recordsById: Map<Long, BpmRecordWithPoints>,
     peopleById: Map<Long, PersonEntity>,
     onToggleClip: () -> Unit,
-    onToggleRecord: (Long) -> Unit
+    onToggleRecord: (Long) -> Unit,
+    /** What the video will be called. Empty where nothing was recorded during it. */
+    title: String = ""
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -495,13 +555,20 @@ private fun ClipCard(
                 Spacer(Modifier.width(10.dp))
 
                 Column(Modifier.weight(1f)) {
+                    // What the file will be called, first. Four clips filmed twenty minutes apart
+                    // are told apart by their name, not by their timestamp — and the name is the
+                    // one thing the card was not showing.
                     Text(
-                        getTimeString(selection.clip.startedAtMs, clock),
+                        title.takeIf { it.isNotBlank() }
+                            ?: getTimeString(selection.clip.startedAtMs, clock),
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                     Text(
-                        "${getDurationString(selection.clip.durationMs)} · " +
+                        getTimeString(selection.clip.startedAtMs, clock) + " · " +
+                            getDurationString(selection.clip.durationMs) + " · " +
                             selection.clip.displayName,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -520,13 +587,18 @@ private fun ClipCard(
 
             // What the heart rates did during this clip, which is the thing that decides whether
             // it is worth overlaying at all. Everyone climbing together is the clip to export.
-            if (selection.sparks.isNotEmpty()) {
+            //
+            // Drawn only with its scale, never without: the curve is a fraction of that range, so
+            // showing one and not the other is showing a shape and withholding what it means.
+            selection.bpmScale?.takeIf { selection.sparks.isNotEmpty() }?.let { scale ->
                 Spacer(Modifier.height(8.dp))
                 ClipSparkline(
                     sparks = selection.sparks,
+                    scale = scale,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp)
+                        // Tall enough for three labels to sit on their own lines without touching.
+                        .height(56.dp)
                         .padding(start = 12.dp)
                 )
             }
@@ -554,7 +626,11 @@ private fun ClipCard(
                         selected = id in selection.recordIds,
                         enabled = selection.selected,
                         onClick = { onToggleRecord(id) },
-                        leadingIcon = person?.let { { PersonSwatch(it.colorArgb, size = 12) } },
+                        // Their face, not their colour. The chip already carries the name, so a
+                        // dot added nothing a reader could not already see — an avatar is the same
+                        // token they are identified by everywhere else, and recognising it is
+                        // faster than reading it.
+                        leadingIcon = person?.let { { PersonAvatar(it, size = 20.dp) } },
                         label = {
                             Text(
                                 person?.displayName
@@ -613,15 +689,69 @@ private fun ClipThumbnail(uri: android.net.Uri) {
 }
 
 /**
- * Everyone's curve across the clip, in their own colours.
+ * Everyone's curve across the clip, in their own colours, against a stated axis.
  *
- * Deliberately unlabelled and without axes — this answers "did anything happen", not "what
- * exactly". The full chart is one step away, and putting numbers here would make a row that has to
- * be read rather than glanced at.
+ * It was drawn bare for a while, on the reasoning that a row is glanced at rather than read and
+ * that numbers would slow it down. That reasoning was wrong in a specific way: the curve is
+ * normalised floor-to-ceiling, so it fills its box whatever happened, and "did anything happen"
+ * is precisely the question a shape *cannot* answer without knowing whether the box is fifteen
+ * beats tall or ninety. Three grid lines and their values cost one glance and make every other
+ * glance mean something.
+ *
+ * Labels are drawn into the canvas rather than laid out beside it so a number is always on its own
+ * line — a label column with its own layout drifts off the line it names as soon as the row height
+ * changes.
  */
 @Composable
-private fun ClipSparkline(sparks: List<ClipSpark>, modifier: Modifier = Modifier) {
+private fun ClipSparkline(
+    sparks: List<ClipSpark>,
+    /** What the floor and ceiling stand for. See [inga.bpmetrics.ui.export.ClipSelection.bpmScale]. */
+    scale: IntRange,
+    modifier: Modifier = Modifier
+) {
+    val measurer = rememberTextMeasurer()
+    val gridColour = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
+    val labelStyle = MaterialTheme.typography.labelSmall.copy(
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 9.sp
+    )
+
     Canvas(modifier) {
+        // Ceiling, middle, floor. Three is enough to read a slope against and few enough to stay
+        // out of the way of the curves.
+        val rungs = listOf(
+            1f to scale.last,
+            0.5f to (scale.first + scale.last) / 2,
+            0f to scale.first
+        ).map { (fraction, bpm) ->
+            fraction to measurer.measure(bpm.toString(), labelStyle)
+        }
+
+        // The numbers get their own column on the right, so a curve never runs underneath one.
+        val gutter = rungs.maxOf { it.second.size.width }.toFloat() + 6.dp.toPx()
+        val plotWidth = (size.width - gutter).coerceAtLeast(1f)
+
+        // Half a label's height of room top and bottom: it keeps the topmost and bottommost numbers
+        // fully on the canvas, and doubles as the margin that stops a curve sitting at its own
+        // extreme from being clipped in half by its stroke width.
+        val inset = rungs.first().second.size.height / 2f
+        val plotTop = inset
+        val plotHeight = (size.height - inset * 2f).coerceAtLeast(1f)
+
+        rungs.forEach { (fraction, text) ->
+            val y = plotTop + (1f - fraction) * plotHeight
+            drawLine(
+                gridColour,
+                Offset(0f, y),
+                Offset(plotWidth, y),
+                strokeWidth = 1f
+            )
+            drawText(
+                textLayoutResult = text,
+                topLeft = Offset(size.width - text.size.width, y - text.size.height / 2f)
+            )
+        }
+
         sparks.forEach { spark ->
             val colour = Color(spark.colorArgb)
             val path = Path()
@@ -634,9 +764,8 @@ private fun ClipSparkline(sparks: List<ClipSpark>, modifier: Modifier = Modifier
                     started = false
                     return@forEachIndexed
                 }
-                val x = size.width * (i.toFloat() / (spark.points.size - 1).coerceAtLeast(1))
-                // Inset top and bottom so a curve touching its own extreme is still visible.
-                val y = size.height - (value * size.height * 0.9f) - (size.height * 0.05f)
+                val x = plotWidth * (i.toFloat() / (spark.points.size - 1).coerceAtLeast(1))
+                val y = plotTop + (1f - value) * plotHeight
                 if (started) path.lineTo(x, y) else path.moveTo(x, y).also { started = true }
             }
 

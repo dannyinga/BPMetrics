@@ -33,14 +33,24 @@ class FilterChipsTest {
     private val gorge = LocationEntity(locationId = 5, name = "The Gorge", createdAt = 1)
     private val watch = WatchEntity(watchId = "abc", deviceName = "Pixel Watch")
 
+    // The same shape the pickers offer, because the chips are now built from it rather than from
+    // six registries — see [FilterChips.of]. A caller outside the library screen had to reach for
+    // the ViewModel's cached copies to get those, and they are empty unless something is watching.
+    private val options = FilterOptions(
+        locations = listOf(gorge.locationId.toString() to gorge.displayName),
+        watches = listOf(watch.watchId to watch.displayName),
+        tagCategories = listOf(
+            TagCategoryOption(character.categoryId, character.name, listOf(hulk.tagId to hulk.name)),
+            TagCategoryOption(weather.categoryId, weather.name, listOf(rain.tagId to rain.name))
+        ),
+        peopleEntities = listOf(kyle, ben),
+        eventTree = listOf(coachella),
+        collectionEntities = emptyList()
+    )
+
     private fun chips(filter: FilterState) = FilterChips.of(
         filter = filter,
-        people = listOf(kyle, ben),
-        tags = listOf(hulk, rain),
-        categories = listOf(character, weather),
-        events = listOf(coachella),
-        locations = listOf(gorge),
-        watches = listOf(watch),
+        options = options,
         formatDate = { "d$it" }
     )
 

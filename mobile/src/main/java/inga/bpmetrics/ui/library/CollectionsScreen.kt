@@ -147,7 +147,7 @@ fun CollectionsScreen(
         val filterOptions by viewModel.filterOptions.collectAsStateWithLifecycle()
         NewCollectionDialog(
             filterOptions = filterOptions,
-            chipsOf = { viewModel.chipsFor(it) },
+            chipsOf = { viewModel.chipsOf(it, filterOptions) },
             onDismiss = { creating = false },
             onCreate = { name, rule, pinned ->
                 viewModel.createCollection(name, rule = rule, pinned = pinned)
