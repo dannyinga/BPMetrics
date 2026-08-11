@@ -51,7 +51,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
-import java.text.SimpleDateFormat
+import inga.bpmetrics.ui.util.ReaderClock
+import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
+import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
+import java.time.Instant
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
@@ -194,28 +197,28 @@ private fun StatPair(label: String, value: Int, tone: Color, hasCover: Boolean) 
 /**
  * Renders a span the way someone would say it out loud.
  *
- * "14 Mar, 19:40 – 21:05" when it is one day, and both dates when it straddles midnight. The year
- * is dropped for the current year, which is nearly every row.
+ * "March 14, 2026, 7:40 PM – 9:05 PM" when it is one day, and both dates when it straddles midnight.
+ *
+ * Through [StringFormatHelpers], so a card in the library reads the way the same event reads on its
+ * own page. It used to hold its own `SimpleDateFormat` patterns — "d MMM" and a 24-hour clock — so
+ * the library ignored the Appearance setting entirely and two screens described one event two
+ * different ways.
+ *
+ * The year is no longer dropped for the current year. That was a nicety this could afford while it
+ * owned its own pattern; it cannot survive somebody else's, and one format everywhere is worth more
+ * than four characters saved on a row.
  */
-fun formatSpan(span: TimeSpan?): String {
+fun formatSpan(span: TimeSpan?, zone: java.time.ZoneId = ReaderClock): String {
     if (span == null) return "No recordings yet"
 
-    val thisYear = Calendar.getInstance().get(Calendar.YEAR)
-    val startCal = Calendar.getInstance().apply { timeInMillis = span.startMs }
-    val endCal = Calendar.getInstance().apply { timeInMillis = span.endMs }
+    val startDay = Instant.ofEpochMilli(span.startMs).atZone(zone).toLocalDate()
+    val endDay = Instant.ofEpochMilli(span.endMs).atZone(zone).toLocalDate()
 
-    val datePattern = if (startCal.get(Calendar.YEAR) == thisYear) "d MMM" else "d MMM yyyy"
-    val date = SimpleDateFormat(datePattern, Locale.getDefault())
-    val time = SimpleDateFormat("HH:mm", Locale.getDefault())
-
-    val sameDay = startCal.get(Calendar.YEAR) == endCal.get(Calendar.YEAR) &&
-        startCal.get(Calendar.DAY_OF_YEAR) == endCal.get(Calendar.DAY_OF_YEAR)
-
-    return if (sameDay) {
-        "${date.format(Date(span.startMs))}, ${time.format(Date(span.startMs))} – " +
-            time.format(Date(span.endMs))
+    return if (startDay == endDay) {
+        getDateString(span.startMs, zone) + ", " +
+            getTimeString(span.startMs, zone) + " – " + getTimeString(span.endMs, zone)
     } else {
-        "${date.format(Date(span.startMs))} – ${date.format(Date(span.endMs))}"
+        getDateString(span.startMs, zone) + " – " + getDateString(span.endMs, zone)
     }
 }
 

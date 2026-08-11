@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,7 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AddAPhoto
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -80,6 +84,17 @@ fun SubjectHeader(
     tags: List<EffectiveTag> = emptyList(),
     onRemoveTag: (Long) -> Unit = {},
     onExplainTag: (String) -> Unit = {},
+    /**
+     * Opens the cover editor, from the corner of the cover.
+     *
+     * On the picture rather than in the edit modal, because the picture is the thing being edited
+     * and the header is where all of it is on screen — the crop, what the writing does to it, how
+     * bright it is. A button in a dialog three taps away asks someone to remember all of that.
+     *
+     * Bottom right: the writing is bottom left, so the corner opposite it is the one piece of a
+     * header that is reliably empty.
+     */
+    onEditCover: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     // Over a photo, flat text disappears into whatever is behind it. The same shadow the library
@@ -155,8 +170,26 @@ fun SubjectHeader(
         }
     }
 
+    val editButton: @Composable BoxScope.() -> Unit = {
+        onEditCover?.let { edit ->
+            FilledTonalIconButton(
+                onClick = edit,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).size(36.dp)
+            ) {
+                Icon(
+                    if (cover == null) Icons.Default.AddAPhoto else Icons.Default.Edit,
+                    contentDescription = if (cover == null) "Add a photo" else "Edit the photo",
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+
     if (cover == null) {
-        Box(modifier.fillMaxWidth()) { content() }
+        Box(modifier.fillMaxWidth()) {
+            content()
+            editButton()
+        }
     } else {
         CoverBackground(
             cover = cover,
@@ -165,7 +198,13 @@ fun SubjectHeader(
             // has the thing worth seeing in it.
             scrim = CoverScrim.HEADER
         ) {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.BottomStart) { content() }
+            Box(Modifier.fillMaxWidth()) {
+                Box(
+                    Modifier.fillMaxWidth().align(Alignment.BottomStart),
+                    contentAlignment = Alignment.BottomStart
+                ) { content() }
+                editButton()
+            }
         }
     }
 }

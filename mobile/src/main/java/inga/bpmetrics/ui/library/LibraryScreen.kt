@@ -726,11 +726,11 @@ fun LibraryScreen(
             if (showFilterBar || !filterState.isEmpty || savedViews.isNotEmpty()) {
                 FilterBar(
                     query = filterState.query,
+                    filter = filterState,
                     chips = filterChips,
                     options = filterOptions,
                     onQueryChange = { viewModel.setQuery(it) },
-                    onRemoveChip = { viewModel.removeChip(it) },
-                    onAdd = { dimension, id -> viewModel.addFilterTerm(dimension, id) },
+                    onChange = { viewModel.setFilter(it) },
                     onClearAll = { viewModel.clearFilter() },
                     onAnalyse = { onAnalyseFilter(filterState) },
                     savedViews = savedViews,
@@ -983,17 +983,14 @@ fun LibraryScreen(
     }
 
     if (showCreateGroupDialog) {
-        NameDialog(
-            title = "New collection",
-            label = "Collection name",
-            confirmLabel = "Create",
-            supporting = "A collection gathers things that belong together but did not happen " +
-                "together — every festival, or everything with Kyle. Whatever you add stays " +
-                "exactly where it is on the timeline.",
+        NewCollectionDialog(
+            filterOptions = filterOptions,
+            chipsOf = { viewModel.chipsFor(it) },
+            // Whatever is selected goes in as well, rule or no rule — the two combine.
+            recordCount = effectiveRecordIds.size,
             onDismiss = { showCreateGroupDialog = false },
-            onConfirm = { name ->
-                viewModel.createCollection(name)
-                showCreateGroupDialog = false
+            onCreate = { name, rule, pinned ->
+                viewModel.createCollection(name, effectiveRecordIds, rule, pinned)
             }
         )
     }

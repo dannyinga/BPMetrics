@@ -30,7 +30,6 @@ import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.components.rememberCoverPicker
 import inga.bpmetrics.ui.library.CollectionSummary
 import inga.bpmetrics.ui.library.LibraryViewModel
-import inga.bpmetrics.ui.library.NameDialog
 
 /**
  * A collection, and its analysis.
@@ -67,7 +66,6 @@ fun CollectionDetailScreen(
 
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
-    var menuOpen by remember { mutableStateOf(false) }
 
     var framingCover by remember { mutableStateOf(false) }
     val pickCover = rememberCoverPicker { uri ->
@@ -128,7 +126,8 @@ fun CollectionDetailScreen(
                             )
                         }
                     },
-                    onOpenAncestor = { navController.navigate("${Routes.EVENT_DETAIL}/$it") }
+                    onOpenAncestor = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
+                    onEditCover = { framingCover = true }
                 )
             }
         },
@@ -137,46 +136,8 @@ fun CollectionDetailScreen(
                 Icon(Icons.Default.Edit, contentDescription = "Rename collection")
             }
         },
-        subjectOverflow = {
-            Box {
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "More")
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    // One item, not three. Choosing, framing and removing all happen inside the
-                    // sheet, where the picture is on screen while you do them.
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                if (summary?.collection?.ownCover != null) "Edit photo"
-                                else "Add photo"
-                            )
-                        },
-                        onClick = { menuOpen = false; framingCover = true }
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                if (summary?.collection?.isPinned == true) "Unpin from library"
-                                else "Pin to library"
-                            )
-                        },
-                        onClick = {
-                            menuOpen = false
-                            libraryViewModel.setCollectionPinned(
-                                collectionId,
-                                summary?.collection?.isPinned != true
-                            )
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Delete collection") },
-                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                        onClick = { menuOpen = false; deleting = true }
-                    )
-                }
-            }
-        }
+        // No overflow. Everything that was in it — the photo, pinning, deleting — is in the
+        // editor, which is where the rest of what a collection *is* already lives.
     )
 
     if (framingCover && summary != null) {
@@ -203,15 +164,29 @@ fun CollectionDetailScreen(
     }
 
     if (renaming && summary != null) {
-        NameDialog(
-            title = "Rename collection",
-            label = "Collection name",
-            initial = summary.collection.name,
-            onDismiss = { renaming = false },
-            onConfirm = { name ->
-                libraryViewModel.renameCollection(collectionId, name)
-                renaming = false
-            }
+        val filterOptions by libraryViewModel.filterOptions.collectAsStateWithLifecycle()
+        inga.bpmetrics.ui.library.CollectionEditorDialog(
+            collection = summary.collection,
+            recordCount = summary.recordCount,
+            filterOptions = filterOptions,
+            chipsOf = { libraryViewModel.chipsFor(it) },
+            onRename = { libraryViewModel.renameCollection(collectionId, it) },
+            onSetRule = { libraryViewModel.setCollectionRule(collectionId, it) },
+            onMakeStatic = {
+                libraryViewModel.materialiseCollection(collectionId) { message ->
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                }
+            },
+            onThaw = if (!summary.collection.isFrozen) null else {
+                {
+                    libraryViewModel.thawCollection(collectionId) { message ->
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            },
+            onTogglePin = { libraryViewModel.setCollectionPinned(collectionId, it) },
+            onDelete = { renaming = false; deleting = true },
+            onDismiss = { renaming = false }
         )
     }
 

@@ -46,7 +46,24 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         
         super.onCreate(savedInstanceState)
-        
+
+        val app = application as BPMetricsApp
+
+        // Before anything else touches the library. Every line below opens it one way or another —
+        // the watch listener, the render queue, the nav host — and a file that will not open used
+        // to take the process down right here, on the main thread, with nothing on screen to say
+        // why and no way to reach the backups sitting on the same phone.
+        if (!app.openLibrary()) {
+            val failure = app.databaseFailure ?: IllegalStateException("The library did not open")
+            enableEdgeToEdge()
+            setContent {
+                BPMetricsTheme(dynamicColor = false) {
+                    inga.bpmetrics.ui.recovery.RecoveryScreen(this, failure)
+                }
+            }
+            return
+        }
+
         // Register the data client listener to the activity's lifecycle
         lifecycle.addObserver(dataClientListener)
 

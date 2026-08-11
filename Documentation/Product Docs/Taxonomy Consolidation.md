@@ -1082,6 +1082,25 @@ unfinished.
 
 ### 10.1 Wrong
 
+**A database that will not open must not kill the app.** It did. `LibraryDatabase.getInstance` is a
+default constructor argument to `LibraryRepository`, so the first touch of `libraryRepository` opens
+the file — and that first touch was in `Application.onCreate`, on the main thread. Anything wrong
+with the database therefore ended the process before a pixel was drawn, identically on every
+subsequent launch, with the automatic pre-migration backups sitting one directory away and
+completely unreachable.
+
+The trigger was mundane and will happen again: an **older build installed over a newer library**.
+A build from `1ca70d5` onwards upgrades the file to version 30; a build from before it expects 29,
+and databases only ever go forwards. Room says *"a migration from 30 to 29 was required but not
+found"*, which is accurate and tells the person holding the phone nothing — least of all that their
+recordings are completely fine.
+
+So the open is guarded and its failure is kept rather than thrown, and `RecoveryScreen` says what
+happened. It reads the version straight off the file, so it can tell the two cases apart: a library
+newer than the app is **not damaged and must not be restored over** — restoring would work and would
+throw away everything recorded since the backup — while a library that genuinely will not open gets
+the backup list and a way back. Both beat a crash loop; telling them apart is the point.
+
 Nothing outstanding. The two defects §8.6 found are fixed, and the two this stretch introduced —
 tapping a collection navigating nowhere, and the export button doing nothing at all — are in §10.5.
 
@@ -1104,9 +1123,91 @@ perl tools/dead-ui-flags.pl $(find mobile/src/main/java -name '*.kt')
 
 | | Why it matters |
 |---|---|
-| **No rule editor for a smart collection** (§8.9). Built from the filter bar, edited by re-applying and re-saving. | Enough to use, not enough to call finished. |
 | **Exclusions have no UI** (§8.9). Column, resolver and tests exist. | "Not that one" is one context-menu item away. |
-| **Freezing is only reachable from Save.** | It is a property of a selection now, so it belongs on the collection too — and so does thawing. |
+| **Freezing still cannot be *started* from a collection.** Unfreezing can. | It is a property of a selection now, so setting it belongs there too, not only on Save. |
+
+### 10.2.1 Living and static collections, finished
+
+The model has carried both since §8: a rule re-asked every time the set is read, hand-picked
+members that stay as you left them, and any mix. Only half was reachable. A rule could be created
+exactly one way — narrow the library, press "Save view" — and changed exactly one way, by doing that
+again. From the collection itself there was no way to see what it asked, and no way to give a
+hand-made set a rule at all.
+
+The editor now names both states and offers both directions:
+
+- **Living.** A rule, edited in place through the same component the library's filter bar uses —
+  they are the same object, and were being edited by two different pieces of UI.
+- **Static.** A list. What is in it is what somebody put in it.
+
+**Living → static keeps what the rule found.** This is the part that was missing rather than merely
+unbuilt. "Stop using a rule" dropped the rule, and with it everything the rule had found that nobody
+had also named by hand — right when the rule was a mistake, wrong when the rule was the *point* and
+you now want the answer held still, which is the ordinary case. `materialiseCollection` writes the
+current answer down as membership first. Still references, not copies: a recording renamed or
+refiled tomorrow stays in the set and stays correct.
+
+**Frozen is deliberately not on that axis.** It is a copy of the *numbers*, for recordings that may
+not survive. Thawing keeps whichever still exist and hands the set back as a static one; the
+snapshot rows are left in place, so thawing by mistake is not destructive.
+
+**Creating one asks what a collection is.** It was a name field, which is enough for a static set
+and nothing else — a living collection could not be *created* at all, only made afterwards by
+editing one, so the useful half of the feature was reachable only by someone who already knew it
+existed. The new dialog asks the two things that cannot sensibly be deferred: what it collects
+(Static or Living, with the rule editor when Living) and whether it is pinned. A cover has no choice
+but to wait, because a cover is stored against an id that does not exist until the dialog returns,
+and the dialog says so rather than leaving someone hunting for a control that cannot be there.
+
+### 10.2.2 Event type joins the filter
+
+Compare has been able to split by event type since §3.0. The filter could not narrow by it — so
+"every concert" was a comparison you could draw and not a library you could look at, and a living
+collection of every concert was impossible to express. `FilterState.selectedEventTypes`, matched
+through `FilterContext.eventTypeByEvent` because a type belongs to the *event* and a recording knows
+only which event it is filed under. By the string rather than an id: an event type has no registry,
+only a vocabulary that forms from use.
+
+**The filter's dialogs are drawn now.** Choosing a dimension is a centred grid of tiles carrying the
+glyph, the name and how many values it can offer, so a dead end is visible before it is tapped — it
+was nine rows of plain text with a heading saying "Narrow by" above nine labelled buttons. Every
+picker has a **back arrow** to that grid: one wrong tap used to mean closing the dialog and starting
+again. The value picker stays open until Done and shows what is already on, rather than closing on
+the first tap so that narrowing to three people meant opening the same list three times.
+
+**Each dimension is drawn as the thing it is.** A person is a face and a colour, an event is a cover
+and a place in a tree, a collection is a cover and a name — and the filter was the one screen in the
+app where all three were a line of grey text. People get their avatar, events nest exactly as the
+timeline does with their own covers, collections show theirs and whether they are living or frozen.
+Venues, watches and event types stay as chips: a short string with nothing to draw.
+
+**Tags are ticked, nested under their categories.** The flat "Character › Hulk" list is the right
+shape for a chip and the wrong shape for choosing — the level people think at is the category, and a
+flat list turns "any character" into eight taps with no way to see you got them all. The category
+carries a tri-state box: ticking it takes everything under it, and it shows half-ticked when only
+some are in.
+
+**A tag term could match everything.** Found by ticking a tag and watching the library not narrow.
+The tag term groups the chosen tags by category — two characters mean "either", a character and a
+venue mean "both" — and it built that category lookup by *walking the records*. So a tag nothing
+carried had no category, `mapNotNull` dropped it from the term, and a filter left with no terms
+matches the whole library. Asking for an unused tag returned everything instead of nothing.
+
+Two changes, and the distinction between them matters. The **fix** is that a tag's category comes
+from the registry now (`FilterContext.categoryByTag`) — it is a fact about the tag, not about which
+records happen to carry it. The **safety net** is that an id with no known category groups on its
+own rather than vanishing, so a caller with no registry behind it — a frozen snapshot filtered on
+its own terms — still enforces the term and still answers "nothing". Six tests, one of which was
+written to fail first.
+
+**Date and rate finally do something.** Both have been in `FilterDimension` since the filter was
+built, both were listed and tappable, and both opened a value picker over a list that is empty by
+definition — a range is not chosen from a list. That is also why `FilterEditor` now takes the whole
+`FilterState` rather than emitting `(dimension, id)` pairs: a band is two numbers and cannot be
+expressed as a term with an id, so the contract that covered seven dimensions could never have
+covered these two. Date uses Material's own range picker with the end pushed to the end of its day;
+rate is a slider over the **average**, said on the dialog because "over 180" means something very
+different applied to peaks.
 
 ### 10.3 Unlovely
 
@@ -1145,6 +1246,9 @@ Things deliberately left alone, so they do not get "fixed" by accident:
 | **The refinement sheet put recordings after the subtree** | A day's loose recordings were emitted after all of its nested sets, so they read as belonging to the last set rather than to the day. Own recordings now come directly beneath their event, before its children. |
 | **The X on a recording row** | Removed. Filing is edited from the recording or from a bulk edit; a destructive control on every row of a list you are reading is one mis-tap from a recording quietly leaving its event. |
 | **The export button did nothing** | `ExportKindDialog` was written and never rendered — the button set a flag nothing observed. Rendered, on all four subjects. See §10.1 for the check that now catches this shape. |
+| **The cover was edited from a dialog three taps from the cover** | The button is on the picture now — bottom right of the header, the one corner reliably empty because the writing is bottom left. The header is where the whole of what you are editing is on screen: the crop, what the writing does to it, how bright it is. It stays in the *library's* row editor, which has no header to put a button on. |
+| **The edit modal was three headings and a paragraph** | Photo, Tags and What's included each had a heading, a button and — for one — an explanation, spent on three things that are all "this opens somewhere else". One row of buttons with icons and counts. |
+| **A three-dot menu holding one item, and that item Delete** | Gone from the event page and the collection page. Delete sits at the bottom of the editor, below a rule, furthest from Save. |
 | **Two selections that could not see each other** | Recordings were selected in the app bar; events in a strip above the list. Two counts, two close buttons, two back handlers, and no way to say "these two sets and that one recording" — an entirely ordinary thing to want. One selection now, in the app bar, saying *"2 events · 3 recordings"* when it is both. Every action goes through `selectedRecordIdsEffective`, where a chosen event contributes its whole subtree: analysing, filing and exporting are actions on *recordings*, and which kind of row was tapped to name them is not something they should care about. The event-only actions — move into, add to a collection — are in the same overflow as everything else. |
 | **Filing a selection was three levels down** | Bulk edit → "File into an event…" → the picker. Filing is the most ordinary thing anyone does with a fresh selection, so **Add to an event…** is the first item in the selection's own overflow — it needs a selection, so that is where it belongs. Creating an empty event is a *library* action and sits in the library overflow. Both land in the same picker. |
 | **Four action icons on the library bar** | Sort and filter are controls over the list you are looking at and stay. Select, New event and Import are things you *do*, and they are now one overflow. |
@@ -1161,6 +1265,11 @@ Things deliberately left alone, so they do not get "fixed" by accident:
 | **Highlights were a dead end** | Every row is a statement about one moment — "Kyle hit 186" — and there was no way to go and look at it. "Highest peak" and "Peak came from" now open the recording behind them. "Most time recorded" deliberately does not: a total across eleven recordings is not any one of them, and opening the longest would answer a question nobody asked. |
 | **The Summary opened on a chart of coloured bars** | Reordered to how the questions are asked: what stood out, who was there, then how the time was spent. "Where the time went" is the most detailed thing on the page and the least likely to be what someone came for, so it is last. |
 | **The duration was a section heading** | Moved into the subject header beside the low, average and high. It is a total for the same subject as those three, not a label for a chart — and the heading it sat in was the only reason that section had to be at the top. |
+| **Compare sat behind Timeline** | Second now. It answers the question people arrive with — which of these was the most — where the Timeline answers "what did it look like", which is a thing you go and look at rather than a thing you ask. |
+| **The chart could be pinched and nothing said so** | Zoom and pan worked and were invisible: nothing on a chart announces a gesture, and there was no gesture at all for "put it back", so a chart somebody had pinched into stayed that way until they left the page. There are handles on those operations now, the visible span is stated — *"6m 20s · 9:14 PM – 9:20 PM"* — and a scrollbar doubles as the one thing a zoomed chart otherwise cannot say: where in the whole you are. |
+| **Isolating a curve meant hitting the curve** | On a plot with six lanes that is a two-pixel target among five others, and it asks you to know whose line is whose *before* you can ask which one is whose. A strip of faces above the chart, each ringed in that lane's colour, does it standing still. |
+| **Splitting had the fields but not the picture** | Two text fields behind a menu item, with no view of what was being cut; the chart could show the exact stretch and had no way to act on it. The **view window is the selection** now: pinch and pan until the chart is showing the set — that is the visual fine-tuning, done against the curve — then *Split this stretch* opens holding those two instants, to the second, for when you know it began at 21:00 exactly. Typed in the recording's own clock, so a set at the Gorge is entered in the times it happened at. Both doors call one `splitBetween`. |
+| **The library ignored the Appearance setting** | Four places held their own patterns: the event card's span (`"d MMM"` and a 24-hour clock), the name the app invents for an untitled recording (`"d MMM, HH:mm"`), the analysis scope's date range, and the graph's scrub readout — which had a 24-hour formatter it never used, so a library set to 24 hours still read "10:30:00 AM" there. All through `StringFormatHelpers` now, so a card in the library reads the way the same event reads on its own page. Two exceptions kept on purpose: the event editor's window edges keep their **seconds**, because a window is a membership rule and "21:00" and "21:00:47" claim different recordings; and the export flow's typed time field keeps a fixed pattern, because it has to parse back what it prints. The year is no longer dropped for the current year — a nicety a format can afford while it owns its own pattern, and cannot survive somebody else's. |
 | **`03/14/2026` and `9:14:07 PM`** | The default date format is `MMMM d, yyyy` — "August 5, 2026" — and it is the first option in Settings. A date on a detail page is read once and remembered, not scanned down a column, so making the reader parse a number before they know the month was work for nothing. Times drop their seconds: nothing this formats is meaningful to the second. The one exception is the clock burned into an exported video, which is *running* and would look frozen without them. |
 | **The refinement sheet was not drawn as a tree** | `entriesFor` has returned a nested walk with a depth on every row since it was rewritten, and the dialog rendered them all flush left — so a festival's days, its sets, and the recordings inside those sets arrived as one flat column of forty checkboxes. It indents by depth now. The indent is the point of the sheet: it is where you see that unticking one row takes six others with it. |
 | **Unticking an event left its children ticked** | The rule was always in the numbers — excluding an event excludes its subtree — but the sheet drew a scope that did not exist: Day 1 out, its six sets apparently still in. Rows under an excluded row now show unticked, dimmed, saying *"Left out with what it's in"*, and cannot be ticked back on their own. The way back is the parent's box, which is the only tick that would actually change anything. |

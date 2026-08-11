@@ -1459,6 +1459,31 @@ abstract class LibraryDatabase : RoomDatabase() {
          * before anything is opened. If it cannot be read the answer is "yes": an unreadable file
          * is the case where a backup is worth the most.
          */
+        /**
+         * The version stored in the database file, or null when it cannot be read.
+         *
+         * Read off the file rather than through Room, because the case this exists for is Room
+         * refusing to open it. A file newer than the code — the app downgraded, an older build
+         * installed over a newer one — throws "a migration from 30 to 29 was required but not
+         * found", which is accurate and says nothing anyone can act on.
+         */
+        fun fileVersion(context: Context): Int? {
+            val dbFile = context.getDatabasePath(DB_NAME)?.takeIf { it.exists() } ?: return null
+            return try {
+                android.database.sqlite.SQLiteDatabase.openDatabase(
+                    dbFile.path,
+                    null,
+                    android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+                ).use { it.version }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Could not read the database version", e)
+                null
+            }
+        }
+
+        /** The version this build of the app knows how to open. See [LIBRARY_DB_VERSION]. */
+        const val EXPECTED_VERSION = LIBRARY_DB_VERSION
+
         private fun migrationPending(dbFile: java.io.File): Boolean = try {
             android.database.sqlite.SQLiteDatabase.openDatabase(
                 dbFile.path,

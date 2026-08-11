@@ -1,5 +1,9 @@
 package inga.bpmetrics.ui.library
 
+import inga.bpmetrics.library.CollectionEntity
+import inga.bpmetrics.library.EventEntity
+import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.library.FilterState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -54,11 +58,12 @@ import inga.bpmetrics.ui.components.PersonSwatch
 @Composable
 fun FilterBar(
     query: String,
+    /** The whole filter, because ranges cannot be expressed as chips. See [FilterEditor]. */
+    filter: FilterState,
     chips: List<FilterChip>,
     options: FilterOptions,
     onQueryChange: (String) -> Unit,
-    onRemoveChip: (FilterChip) -> Unit,
-    onAdd: (FilterDimension, String) -> Unit,
+    onChange: (FilterState) -> Unit,
     onClearAll: () -> Unit,
     /**
      * Analyses whatever the bar currently says.
@@ -84,8 +89,6 @@ fun FilterBar(
 ) {
     var naming by remember { mutableStateOf(false) }
     var managing by remember { mutableStateOf<inga.bpmetrics.library.CollectionEntity?>(null) }
-    var adding by remember { mutableStateOf<FilterDimension?>(null) }
-    var choosingDimension by remember { mutableStateOf(false) }
 
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         OutlinedTextField(
@@ -104,38 +107,17 @@ fun FilterBar(
             modifier = Modifier.fillMaxWidth()
         )
 
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        // Through the shared editor, which the collection rule dialog also uses — a filter and a
+        // rule are the same object and were being edited by two different pieces of UI.
+        FilterEditor(
+            filter = filter,
+            chips = chips,
+            options = options,
+            onChange = onChange,
+            onClearAll = if (chips.isNotEmpty() || query.isNotBlank()) onClearAll else null,
+            modifier = Modifier.padding(top = 8.dp)
         ) {
-            chips.forEach { chip ->
-                InputChip(
-                    selected = true,
-                    onClick = { onRemoveChip(chip) },
-                    label = { Text(chip.label) },
-                    leadingIcon = chip.colorArgb?.let { { PersonSwatch(it, size = 14) } },
-                    trailingIcon = {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Remove ${chip.label}",
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                )
-            }
-
-            AssistChip(
-                onClick = { choosingDimension = true },
-                label = { Text(if (chips.isEmpty()) "Add filter" else "Add") },
-                leadingIcon = {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                }
-            )
-
-            // Only once there is something to clear. A permanent "clear" beside an empty filter is
-            // an action that does nothing, sitting where a useful one could be.
             if (chips.isNotEmpty() || query.isNotBlank()) {
-                AssistChip(onClick = onClearAll, label = { Text("Clear") })
                 // Offered only when there is a question worth keeping, and not when it is already
                 // one of the saved ones — saving a view twice under two names is a mess nobody
                 // asked for.
@@ -251,56 +233,6 @@ fun FilterBar(
         )
     }
 
-    if (choosingDimension) {
-        AlertDialog(
-            onDismissRequest = { choosingDimension = false },
-            title = { Text("Narrow by") },
-            text = {
-                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
-                    FilterDimension.entries.forEach { dimension ->
-                        val available = options.countFor(dimension)
-                        DropdownMenuItem(
-                            enabled = available > 0,
-                            text = {
-                                Column {
-                                    Text(dimension.label)
-                                    // Says why a row is unavailable rather than leaving it greyed
-                                    // with no explanation — "no venues yet" is actionable.
-                                    if (available == 0) {
-                                        Text(
-                                            "Nothing to choose from yet",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            },
-                            onClick = {
-                                choosingDimension = false
-                                adding = dimension
-                            }
-                        )
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { choosingDimension = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    adding?.let { dimension ->
-        ValuePickerDialog(
-            dimension = dimension,
-            options = options,
-            onDismiss = { adding = null },
-            onPick = { id ->
-                onAdd(dimension, id)
-                adding = null
-            }
-        )
-    }
 }
 
 /**
@@ -309,13 +241,43 @@ fun FilterBar(
  * One shape rather than seven parameters, so adding a dimension is one entry here and one branch in
  * [FilterChips] rather than a change threaded through every call site.
  */
+/** One tag category and everything in it. */
+data class TagCategoryOption(
+    val categoryId: Long,
+    val name: String,
+    /** Tag id to name, without the category prefix — the heading above already says it. */
+    val tags: List<Pair<Long, String>>
+)
+
 data class FilterOptions(
     val people: List<Pair<String, String>> = emptyList(),
     val tags: List<Pair<String, String>> = emptyList(),
     val events: List<Pair<String, String>> = emptyList(),
     val collections: List<Pair<String, String>> = emptyList(),
     val locations: List<Pair<String, String>> = emptyList(),
-    val watches: List<Pair<String, String>> = emptyList()
+    val watches: List<Pair<String, String>> = emptyList(),
+    /** The event types in use. Value and label are the same string — a type *is* its name. */
+    val eventTypes: List<Pair<String, String>> = emptyList(),
+    /**
+     * Tags with their categories intact, for the tag picker.
+     *
+     * [tags] is the same information flattened to "Character › Hulk" strings, which is right for a
+     * chip and wrong for choosing: a category is the level people actually think at — "any
+     * character" — and a flat list makes that eight taps down a list of forty.
+     */
+    val tagCategories: List<TagCategoryOption> = emptyList(),
+    /**
+     * The things themselves, for the pickers that should show them as they look everywhere else.
+     *
+     * A person is a face and a colour, an event is a cover and a place in a tree, a collection is a
+     * cover and a name. Offering all three as a line of grey text made the filter the one screen in
+     * the app where they are anonymous — and picking the right "Day 1" out of four is a great deal
+     * easier with the picture that is on it.
+     */
+    val peopleEntities: List<PersonEntity> = emptyList(),
+    /** Each event with its depth, so the picker nests exactly as the timeline does. */
+    val eventRows: List<Pair<EventEntity, Int>> = emptyList(),
+    val collectionEntities: List<CollectionEntity> = emptyList()
 ) {
     fun forDimension(dimension: FilterDimension): List<Pair<String, String>> = when (dimension) {
         FilterDimension.PERSON -> people
@@ -323,6 +285,7 @@ data class FilterOptions(
         FilterDimension.EVENT -> events
         FilterDimension.COLLECTION -> collections
         FilterDimension.LOCATION -> locations
+        FilterDimension.EVENT_TYPE -> eventTypes
         FilterDimension.WATCH -> watches
         // Neither is chosen from a list — they are ranges, and get their own editors.
         FilterDimension.DATE, FilterDimension.RATE -> emptyList()
@@ -334,33 +297,3 @@ data class FilterOptions(
     }
 }
 
-@Composable
-private fun ValuePickerDialog(
-    dimension: FilterDimension,
-    options: FilterOptions,
-    onDismiss: () -> Unit,
-    onPick: (String) -> Unit
-) {
-    val values = options.forDimension(dimension)
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(dimension.label) },
-        text = {
-            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                if (values.isEmpty()) {
-                    Text(
-                        "Nothing to choose from yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                values.forEach { (id, label) ->
-                    DropdownMenuItem(text = { Text(label) }, onClick = { onPick(id) })
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}

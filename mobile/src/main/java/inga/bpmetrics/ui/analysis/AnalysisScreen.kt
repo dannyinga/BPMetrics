@@ -33,7 +33,10 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.automirrored.filled.TrendingDown
 import androidx.compose.material.icons.automirrored.filled.TrendingFlat
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material.icons.filled.StackedBarChart
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
@@ -146,7 +149,14 @@ fun AnalysisScreen(
      * Null for a subject with no editor — a bare filter, a saved snapshot — which keeps the
      * Summary's own button, because otherwise the sheet would have no door at all.
      */
-    subjectEditor: (@Composable (openRefineScope: () -> Unit) -> Unit)? = null
+    subjectEditor: (@Composable (openRefineScope: () -> Unit) -> Unit)? = null,
+    /**
+     * Cuts a new recording out of the stretch the chart is showing.
+     *
+     * Only a recording can be split, so this is null everywhere else. Times arrive as wall-clock
+     * instants — the chart works in those — and the subject rebases them.
+     */
+    onSplitFromTimeline: ((startMs: Long, endMs: Long) -> Unit)? = null
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
     var saveName by remember { mutableStateOf("") }
@@ -312,7 +322,9 @@ fun AnalysisScreen(
                     uiState = uiState,
                     curves = curves,
                     drawsChart = drawsChart,
-                    onDrawChart = { viewModel.requestChart() }
+                    onDrawChart = { viewModel.requestChart() },
+                    peopleById = peopleById,
+                    onSplit = onSplitFromTimeline
                 )
 
                 AnalysisSection.COMPARE -> CompareSection(
@@ -388,14 +400,18 @@ fun AnalysisScreen(
  * **The curves gained one.** They were the top of the Summary, which pushed the numbers below the
  * fold and made every page pay for a chart before saying anything.
  *
+ * **Compare sits second.** It answers the question people arrive with — which of these was the
+ * most — where the Timeline answers "what did it look like", which is a thing you go and look at
+ * rather than a thing you ask.
+ *
  * **Recordings stopped being one too.** It was a list of recordings ranked by low, average or peak,
  * which is a comparison — the same question Compare answers, asked through a second control and
  * drawn a second way. It is now an axis, [SplitAxis.Recording], and Compare took its look.
  */
 private enum class AnalysisSection(val label: String) {
     SUMMARY("Summary"),
-    TIMELINE("Timeline"),
-    COMPARE("Compare");
+    COMPARE("Compare"),
+    TIMELINE("Timeline");
 
     /**
      * @param axes What the scope can be compared along, which is the only honest test for whether
@@ -404,9 +420,9 @@ private enum class AnalysisSection(val label: String) {
      */
     fun isAvailable(state: AnalysisUiState, axes: List<SplitAxis>): Boolean = when (this) {
         SUMMARY -> true
+        COMPARE -> axes.isNotEmpty()
         // Offered whenever there is anything to draw, including the offer to draw it.
         TIMELINE -> state.records.isNotEmpty()
-        COMPARE -> axes.isNotEmpty()
     }
 
 }
@@ -540,7 +556,10 @@ private fun TimelineSection(
     uiState: AnalysisUiState,
     curves: ConcurrentAnalysis,
     drawsChart: Boolean,
-    onDrawChart: () -> Unit
+    onDrawChart: () -> Unit,
+    peopleById: Map<Long, inga.bpmetrics.library.PersonEntity>,
+    /** Cuts a new recording out of whatever the chart is showing. Null unless this is one. */
+    onSplit: ((startMs: Long, endMs: Long) -> Unit)? = null
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -548,7 +567,9 @@ private fun TimelineSection(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         when {
-            !curves.isEmpty -> item { ScopeCurves(curves) }
+            !curves.isEmpty -> item {
+                ScopeCurves(curves, peopleById, onSplit)
+            }
             // Too much to draw unasked. Offered rather than omitted: a missing chart with no
             // explanation reads as a page that failed, and the reason — how much there is — is the
             // same reason someone might still want it.
@@ -990,7 +1011,11 @@ private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifie
  * analysis, so they do not belong in the ViewModel with the things that are.
  */
 @Composable
-private fun ScopeCurves(analysis: ConcurrentAnalysis) {
+private fun ScopeCurves(
+    analysis: ConcurrentAnalysis,
+    peopleById: Map<Long, inga.bpmetrics.library.PersonEntity> = emptyMap(),
+    onSplit: ((startMs: Long, endMs: Long) -> Unit)? = null
+) {
     var scrubbedMs by remember(analysis) { mutableStateOf<Long?>(null) }
     var isolatedId by remember(analysis) { mutableStateOf<String?>(null) }
     val window = rememberConcurrentViewWindow(analysis)
@@ -1002,6 +1027,20 @@ private fun ScopeCurves(analysis: ConcurrentAnalysis) {
             else "${analysis.series.size} lanes on one clock"
         )
         Spacer(Modifier.height(8.dp))
+
+        // Who is on the chart, as faces. Tap-to-isolate was already in the chart itself — on the
+        // curve, which on a busy plot means hitting a two-pixel line among six others. A face is a
+        // 40dp target that says whose curve it is before you tap it, which the curve cannot.
+        if (analysis.series.size > 1) {
+            SeriesStrip(
+                series = analysis.series,
+                peopleById = peopleById,
+                isolatedId = isolatedId,
+                onIsolate = { isolatedId = if (isolatedId == it) null else it }
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
         ConcurrentChart(
             analysis = analysis,
             window = window,
@@ -1011,6 +1050,12 @@ private fun ScopeCurves(analysis: ConcurrentAnalysis) {
             onIsolate = { isolatedId = it },
             modifier = Modifier.fillMaxWidth().height(220.dp)
         )
+
+        // What the chart is showing, and the ways of changing it. Pinch and drag worked before and
+        // still do; these are the same thing for anyone who does not know that, plus the one
+        // control a gesture cannot give you — a way back to the whole thing.
+        Spacer(Modifier.height(6.dp))
+        ViewWindowControls(window, analysis.clock, onSplit)
 
         // The moments everyone spiked at once. Only meaningful with more than one lane, which is
         // why it lived on the same-time screen — but that screen was this chart with a heading,
@@ -1030,6 +1075,268 @@ private fun ScopeCurves(analysis: ConcurrentAnalysis) {
                     isSelected = scrubbedMs == moment.wallClockMs,
                     onClick = { scrubbedMs = moment.wallClockMs }
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Cutting a new recording out of the stretch the chart is showing.
+ *
+ * The visual half and the typed half of the same act, which is the thing that was missing. Splitting
+ * lived behind a menu item on a dialog with two text fields and no picture: you could say the range
+ * you meant precisely, and you could not *see* it. The chart could show you exactly the stretch you
+ * wanted and had no way to act on it.
+ *
+ * So the window is the selection. Pinch and pan until the chart is showing the set — that is the
+ * fine-tuning, done against the curve — and the fields open holding those two instants, to the
+ * second, for when you know the set began at 21:00 exactly.
+ *
+ * Typed in the clock the recording was made in, not the reader's, so a set at the Gorge is entered
+ * in the times it happened at.
+ */
+@Composable
+private fun SplitFromWindowDialog(
+    startMs: Long,
+    endMs: Long,
+    clock: java.time.ZoneId,
+    onDismiss: () -> Unit,
+    onConfirm: (Long, Long) -> Unit
+) {
+    fun format(ms: Long) = getTimeString(ms, clock, withSeconds = true)
+    fun parse(text: String, sameDayAs: Long): Long? =
+        inga.bpmetrics.ui.graph.TimeUtils.parseClockTimeToRelativeMs(text.trim(), sameDayAs, clock)
+            ?.let { sameDayAs + it }
+
+    var fromText by remember(startMs) { mutableStateOf(format(startMs)) }
+    var toText by remember(endMs) { mutableStateOf(format(endMs)) }
+
+    // Anchored to the day the window starts on, so a set running past midnight still parses.
+    val from = parse(fromText, startMs)
+    val to = parse(toText, startMs)
+    val valid = from != null && to != null && to > from
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Split this stretch") },
+        text = {
+            Column {
+                Text(
+                    "Makes a new recording from the part of this one the chart is showing. The " +
+                        "original is left alone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Pinch and drag the chart to change it, or type the times.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(Modifier.height(14.dp))
+                OutlinedTextField(
+                    value = fromText,
+                    onValueChange = { fromText = it },
+                    label = { Text("From") },
+                    singleLine = true,
+                    isError = from == null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = toText,
+                    onValueChange = { toText = it },
+                    label = { Text("To") },
+                    singleLine = true,
+                    isError = to == null || (from != null && to <= from),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    if (valid) shortDuration(to!! - from!!) + " long"
+                    else "Give an end after the start.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (valid) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = valid, onClick = { onConfirm(from!!, to!!) }) { Text("Split") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+/**
+ * Who is on the chart, as faces, and which one is being singled out.
+ *
+ * Isolating a curve existed already — by tapping the curve. On a plot with six lanes that is a
+ * two-pixel target among five others, and it asks you to know whose line is whose *before* you can
+ * ask which one is whose. A face with a ring in their own colour answers that standing still.
+ *
+ * A ring rather than a dot, because the colour is the thing that ties the face to the line and a
+ * dot beside a photograph puts them in competition. Someone with no photograph still appears — the
+ * avatar falls back to their initial on their colour — so a group is never partly missing.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun SeriesStrip(
+    series: List<ConcurrentSeries>,
+    peopleById: Map<Long, inga.bpmetrics.library.PersonEntity>,
+    isolatedId: String?,
+    onIsolate: (String) -> Unit
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        series.forEach { lane ->
+            val singled = isolatedId == lane.id
+            // Dimmed only when something *else* is singled out. With nothing isolated every lane
+            // is on the chart, so every face should look like it.
+            val alpha = if (isolatedId == null || singled) 1f else 0.4f
+            val tone = Color(lane.colorArgb)
+            val person = peopleById.values.firstOrNull { it.displayName == lane.label }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .clickable { onIsolate(lane.id) }
+                    .padding(horizontal = 2.dp)
+            ) {
+                Box(
+                    Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(tone.copy(alpha = alpha))
+                        .padding(if (singled) 3.dp else 2.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (person != null) {
+                        inga.bpmetrics.ui.components.PersonAvatar(
+                            person = person,
+                            size = if (singled) 36.dp else 38.dp
+                        )
+                    } else {
+                        Box(
+                            Modifier
+                                .size(if (singled) 36.dp else 38.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                lane.label.take(1).uppercase().ifBlank { "?" },
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    lane.label.takeIf { it.isNotBlank() } ?: "—",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.width(56.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+/**
+ * What the chart is showing, and how to change it.
+ *
+ * Pinch and drag already worked. They are also invisible: nothing on a chart says it can be zoomed,
+ * and there is no gesture at all for "put it back", so a chart someone had pinched into stayed that
+ * way until they left the page. These are the same operations with a handle on them.
+ *
+ * The span is stated rather than implied. "6m 20s of 2h 14m" is the one fact that makes the rest of
+ * the controls legible, and it is what turns the window into a *selection* — which is what Split
+ * then acts on.
+ */
+@Composable
+private fun ViewWindowControls(
+    window: ConcurrentViewWindow,
+    clock: java.time.ZoneId,
+    onSplit: ((startMs: Long, endMs: Long) -> Unit)?
+) {
+    var splitting by remember { mutableStateOf(false) }
+
+    if (splitting && onSplit != null) {
+        SplitFromWindowDialog(
+            startMs = window.startMs,
+            endMs = window.endMs,
+            clock = clock,
+            onDismiss = { splitting = false },
+            onConfirm = { from, to -> onSplit(from, to); splitting = false }
+        )
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                buildString {
+                    append(shortDuration(window.spanMs))
+                    if (window.isZoomed) {
+                        append("  ·  ")
+                        append(getTimeString(window.startMs, clock))
+                        append(" – ")
+                        append(getTimeString(window.endMs, clock))
+                    }
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+
+            IconButton(onClick = { window.zoomBy(0.5f, 0.5f, 1f) }) {
+                Icon(Icons.Default.Remove, contentDescription = "Show more time")
+            }
+            IconButton(onClick = { window.zoomBy(2f, 0.5f, 1f) }) {
+                Icon(Icons.Default.Add, contentDescription = "Show less time")
+            }
+            // Only once something is hidden. A reset beside an unzoomed chart does nothing.
+            if (window.isZoomed) {
+                IconButton(onClick = { window.reset() }) {
+                    Icon(Icons.Default.ZoomOutMap, contentDescription = "Show the whole thing")
+                }
+            }
+        }
+
+        // The scrollbar *is* the pan control, and it also draws where you are in the whole — which
+        // a chart zoomed into ten minutes of a festival otherwise cannot say at all.
+        if (window.visibleFraction < 0.999f) {
+            androidx.compose.material3.Slider(
+                value = window.scrollFraction,
+                onValueChange = { window.scrollTo(it) },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        onSplit?.let {
+            OutlinedButton(
+                onClick = { splitting = true },
+                modifier = Modifier.padding(top = 4.dp)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.CallSplit,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Split this stretch")
             }
         }
     }

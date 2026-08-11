@@ -169,8 +169,11 @@ sealed interface AnalysisScope {
         /** Beyond this, names stop being readable and a count says more. */
         private const val MAX_NAMED = 3
 
+        // Through [StringFormatHelpers], like every other date on screen.
         private fun shortDate(ms: Long): String =
-            SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(ms))
+            inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(
+                ms, inga.bpmetrics.ui.util.ReaderClock
+            )
     }
 }
 
@@ -187,16 +190,13 @@ fun dateRangeText(records: List<AnalysisRecord>): String {
     val first = records.minOf { it.date }
     val last = records.maxOf { it.date }
 
-    val thisYear = Calendar.getInstance().get(Calendar.YEAR)
-    val firstCal = Calendar.getInstance().apply { timeInMillis = first }
-    val lastCal = Calendar.getInstance().apply { timeInMillis = last }
+    val zone = inga.bpmetrics.ui.util.ReaderClock
+    val firstDay = java.time.Instant.ofEpochMilli(first).atZone(zone).toLocalDate()
+    val lastDay = java.time.Instant.ofEpochMilli(last).atZone(zone).toLocalDate()
 
-    val pattern = if (firstCal.get(Calendar.YEAR) == thisYear) "d MMM" else "d MMM yyyy"
-    val format = SimpleDateFormat(pattern, Locale.getDefault())
+    // One formatter for the whole app — see [StringFormatHelpers]. This held its own pattern and
+    // dropped the year for the current one, which no shared setting can honour.
+    val text = { ms: Long -> inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(ms, zone) }
 
-    val sameDay = firstCal.get(Calendar.YEAR) == lastCal.get(Calendar.YEAR) &&
-        firstCal.get(Calendar.DAY_OF_YEAR) == lastCal.get(Calendar.DAY_OF_YEAR)
-
-    return if (sameDay) format.format(Date(first))
-    else "${format.format(Date(first))} – ${format.format(Date(last))}"
+    return if (firstDay == lastDay) text(first) else "${text(first)} – ${text(last)}"
 }

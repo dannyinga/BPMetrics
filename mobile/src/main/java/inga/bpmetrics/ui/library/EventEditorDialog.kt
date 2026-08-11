@@ -10,14 +10,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Rule
+import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -151,6 +158,13 @@ fun EventEditorDialog(
      */
     excludedCount: Int = 0,
     onRefineScope: (() -> Unit)? = null,
+    /**
+     * Deletes the event, from the bottom of this dialog.
+     *
+     * Null at creation, where there is nothing to delete. Elsewhere it is here rather than in the
+     * page's overflow, which held this and nothing else.
+     */
+    onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onConfirm: (EventEdit) -> Unit
 ) {
@@ -327,47 +341,53 @@ fun EventEditorDialog(
                     }
                 }
 
-                coverEditor?.let { editor ->
+                // The three doors, on one line.
+                //
+                // Each had a heading, a button and — for one of them — a paragraph explaining
+                // itself, which is three headings and half a screen of editor spent on three
+                // things that are all the same thing: *this opens somewhere else*. They are
+                // buttons; a button with an icon and a count says what it is.
+                if (coverEditor != null || onEditTags != null || onRefineScope != null) {
                     Spacer(Modifier.height(16.dp))
-                    Text("Photo", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(6.dp))
-                    editor()
-                }
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        coverEditor?.invoke()
 
-                onEditTags?.let { edit ->
-                    Spacer(Modifier.height(16.dp))
-                    Text("Tags", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(6.dp))
-                    // A door rather than the picker: choosing tags is its own dialog with its own
-                    // axes, and nesting it here would be a dialog inside a dialog. It belongs on
-                    // this list because a tag is part of what an event *is* — which is what this
-                    // editor is for, and why it no longer needs a menu row of its own.
-                    androidx.compose.material3.OutlinedButton(onClick = edit) {
-                        Text(
-                            if (tagCount == 0) "Add tags"
-                            else "$tagCount tag" + if (tagCount == 1) "" else "s"
-                        )
-                    }
-                }
+                        onEditTags?.let { edit ->
+                            // A door rather than the picker: choosing tags is its own dialog with
+                            // its own axes, and nesting it here would be a dialog in a dialog.
+                            OutlinedButton(onClick = edit) {
+                                Icon(
+                                    Icons.Default.Sell,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    if (tagCount == 0) "Tags"
+                                    else "$tagCount tag" + if (tagCount == 1) "" else "s"
+                                )
+                            }
+                        }
 
-                onRefineScope?.let { refine ->
-                    Spacer(Modifier.height(16.dp))
-                    Text("Analysis", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(6.dp))
-                    // A door, like Tags above it: the sheet is a tree of checkboxes and does not
-                    // fit inside another dialog's scroll.
-                    androidx.compose.material3.OutlinedButton(onClick = refine) {
-                        Text(
-                            if (excludedCount == 0) "What's included"
-                            else "$excludedCount left out"
-                        )
+                        onRefineScope?.let { refine ->
+                            OutlinedButton(onClick = refine) {
+                                Icon(
+                                    Icons.Default.Rule,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    if (excludedCount == 0) "Included"
+                                    else "$excludedCount left out"
+                                )
+                            }
+                        }
                     }
-                    Text(
-                        "Which of the events and recordings inside this one count toward its " +
-                            "numbers. Applies to this analysis only — nothing is moved or deleted.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
 
                 val problem = when {
@@ -381,6 +401,31 @@ fun EventEditorDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
+                }
+
+                // Last, and below a rule. Deleting was the only thing in the page's overflow, so
+                // the overflow was a three-dot menu holding one item — and the one item was the
+                // destructive one, which is a menu whose entire purpose is a mistake waiting to
+                // happen. It belongs at the bottom of the editor with the other things you can do
+                // to an event, furthest from Save.
+                onDelete?.let { delete ->
+                    Spacer(Modifier.height(20.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(
+                        onClick = delete,
+                        colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Delete event")
+                    }
                 }
             }
         },
@@ -526,7 +571,7 @@ private fun EdgeButton(
 ) {
     OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Text(label, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
-        Text(value?.let { edgeFormat(zone).format(Date(it)) } ?: "Choose…")
+        Text(value?.let { edgeText(it, zone) } ?: "Choose…")
     }
 }
 
@@ -538,8 +583,14 @@ private fun EdgeButton(
  * Built per call rather than held as a constant: a `SimpleDateFormat` carries its zone, and one
  * shared instance would render every event in whichever zone was set on it last.
  */
-private fun edgeFormat(zone: java.util.TimeZone) =
-    SimpleDateFormat("d MMM yyyy, HH:mm:ss", Locale.getDefault()).apply { timeZone = zone }
+private fun edgeText(atMs: Long, zone: java.util.TimeZone): String {
+    val id = zone.toZoneId()
+    // The date follows Appearance like every other date. The time does not: it keeps its seconds,
+    // because a window is a membership rule and "21:00" and "21:00:47" claim different recordings —
+    // the editor has to show which one it is holding.
+    return inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(atMs, id) + ", " +
+        inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString(atMs, id, withSeconds = true)
+}
 
 /**
  * A date then a time, as two steps.

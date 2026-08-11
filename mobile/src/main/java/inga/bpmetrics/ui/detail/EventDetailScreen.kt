@@ -4,15 +4,11 @@ import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -99,7 +95,6 @@ fun EventDetailScreen(
     var editing by remember { mutableStateOf(false) }
     var tagging by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
-    var menuOpen by remember { mutableStateOf(false) }
 
     val event = state.event
 
@@ -176,30 +171,14 @@ fun EventDetailScreen(
                     },
                     tags = tags,
                     onRemoveTag = { subject.removeTag(it) },
-                    onExplainTag = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                    onExplainTag = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() },
+                    onEditCover = { framingCover = true }
                 )
             }
         },
         subjectActions = {
             IconButton(onClick = { editing = true }) {
                 Icon(Icons.Default.Edit, contentDescription = "Edit event")
-            }
-        },
-        subjectOverflow = {
-            Box {
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "More")
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    // Tags, the venue and the photo moved into the editor, where the rest of what
-                    // an event is already lives. A menu of one-field editors is a menu that grows
-                    // a row every time the thing gains a property.
-                    DropdownMenuItem(
-                        text = { Text("Delete event") },
-                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                        onClick = { menuOpen = false; deleting = true }
-                    )
-                }
             }
         },
         // The editor, rendered by the analysis so it can offer "What's included" — see the slot's
@@ -214,38 +193,41 @@ fun EventDetailScreen(
                     span = state.span,
                     tagCount = tags.count { !it.isInherited },
                     onEditTags = { tagging = true },
-                    coverEditor = {
-                        inga.bpmetrics.ui.components.CoverEditor(
-                            cover = event.ownCover,
-                            onPick = pickCover,
-                            framing = framingCover,
-                            onFramingChange = { framingCover = it },
-                            onCrop = { subject.setCoverCrop(it) },
-                            onRemove = { subject.clearCover(context) },
-                            title = "Frame ${event.displayName}",
-                            // The name, drawn where it will really sit, so the frame is judged
-                            // against the words that will be over it rather than in the abstract.
-                            previewContent = {
-                                Text(
-                                    event.displayName,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                        )
-                    },
                     excludedCount = exclusions.excludedEventIds.size +
                         exclusions.excludedRecordIds.size,
                     // Closes the editor first. Two stacked dialogs would leave the sheet's own
                     // scrim over an editor nobody can reach, and returning to a half-typed name
                     // after picking through a tree is not where anyone wants to land.
                     onRefineScope = { editing = false; openRefineScope() },
+                    // At the bottom of the editor rather than in a three-dot menu holding one
+                    // item — and that item the destructive one.
+                    onDelete = { editing = false; deleting = true },
                     onDismiss = { editing = false }
                 )
             }
         }
     )
+
+    // Opened from the corner of the cover rather than from the editor. See [SubjectHeader].
+    if (framingCover && event != null) {
+        inga.bpmetrics.ui.components.CoverCropDialog(
+            cover = event.ownCover,
+            onPick = pickCover,
+            title = "Frame ${event.displayName}",
+            previewContent = {
+                Text(
+                    event.displayName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            },
+            onDismiss = { framingCover = false },
+            onConfirm = { subject.setCoverCrop(it); framingCover = false },
+            // Stays open: removing is usually the first half of replacing.
+            onRemove = { subject.clearCover(context) }
+        )
+    }
 
     if (tagging) {
         val categories by subject.categories.collectAsStateWithLifecycle(initialValue = emptyList())

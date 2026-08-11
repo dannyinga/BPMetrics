@@ -144,17 +144,13 @@ fun CollectionsScreen(
     }
 
     if (creating) {
-        NameDialog(
-            title = "New collection",
-            label = "Collection name",
-            confirmLabel = "Create",
-            supporting = "A collection gathers things that belong together but did not happen " +
-                "together — every festival, or everything with Kyle. Whatever you add stays " +
-                "exactly where it is on the timeline.",
+        val filterOptions by viewModel.filterOptions.collectAsStateWithLifecycle()
+        NewCollectionDialog(
+            filterOptions = filterOptions,
+            chipsOf = { viewModel.chipsFor(it) },
             onDismiss = { creating = false },
-            onConfirm = { name ->
-                viewModel.createCollection(name)
-                creating = false
+            onCreate = { name, rule, pinned ->
+                viewModel.createCollection(name, rule = rule, pinned = pinned)
             }
         )
     }

@@ -1,6 +1,8 @@
 package inga.bpmetrics.library
 
-import java.text.SimpleDateFormat
+import inga.bpmetrics.ui.util.ReaderClock
+import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
+import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 import java.util.Date
 import java.util.Locale
 
@@ -40,7 +42,10 @@ object RecordNameFormatter {
             ?: watchName?.takeIf { it.isNotBlank() }
             ?: record.deviceId.takeIf { it.isNotBlank() }
 
-        val at = timeFormat.format(Date(record.startTime))
+        // Through [StringFormatHelpers], so a recording the app named itself reads the way every
+        // other date in the app reads. It had its own "d MMM, HH:mm", which ignored Appearance.
+        val at = getDateString(record.startTime, ReaderClock) +
+            ", " + getTimeString(record.startTime, ReaderClock)
 
         // Reaching here means the title was blank or a placeholder, so falling back to it would
         // undo the whole point. When nothing is known about who or what, the time still is.
@@ -61,7 +66,6 @@ object RecordNameFormatter {
 
     private val PLACEHOLDER = Regex("""^Untitled(?: \d+)?$""", RegexOption.IGNORE_CASE)
 
-    private val timeFormat = SimpleDateFormat("d MMM, HH:mm", Locale.getDefault())
 }
 
 /**

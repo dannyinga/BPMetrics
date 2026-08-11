@@ -43,6 +43,10 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     val isReversed = _isReversed.asStateFlow()
 
+    /** Every tag, kept for [inga.bpmetrics.library.FilterContext.categoryByTag]. */
+    private val tagRegistry: StateFlow<List<inga.bpmetrics.library.TagEntity>> = repository.allTags
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private val _filterState = MutableStateFlow(FilterState())
     /**
      * The current filtering state applied to the record library.
@@ -78,6 +82,8 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.allCollectionRecordLinks()
     ) { inputs, sets, eventLinks, recordLinks ->
         val byId = inputs.places.associateBy { it.locationId }
+        // Every tag the library knows, so a tag nothing carries still knows its category.
+        val categoryByTag = tagRegistry.value.associate { it.tagId to it.parentCategoryId }
         val resolved = inputs.events.associate { event ->
             event.eventId to inga.bpmetrics.library.LocationResolver
                 .forEvent(event.eventId, inputs.events, byId)
@@ -90,7 +96,11 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             placeNames = resolved.mapNotNull { (id, place) ->
                 place?.let { id to it.displayName }
             }.toMap(),
-            locationIdByEvent = resolved.mapValues { it.value?.locationId }
+            locationIdByEvent = resolved.mapValues { it.value?.locationId },
+            eventTypeByEvent = inputs.events.associate { it.eventId to it.type },
+            // From the registry, so a tag nothing carries still knows its category. See
+            // [FilterContext.categoryByTag].
+            categoryByTag = categoryByTag
         )
 
         val library = inga.bpmetrics.library.Library(
@@ -188,40 +198,35 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             events = events.map { it.eventId.toString() to it.displayName }.sortedBy { it.second },
             collections = sets.map { it.collectionId.toString() to it.displayName },
             locations = places.map { it.locationId.toString() to it.displayName },
+            // From the events themselves. A type is a string somebody typed, so the vocabulary is
+            // whatever is in use — there is no registry to read.
+            eventTypes = events.mapNotNull { it.type?.takeIf { t -> t.isNotBlank() } }
+                .distinct().sorted().map { it to it },
+            // The same tags, nested. Ticking "Character" should be one action rather than eight.
+            tagCategories = categories
+                .map { category ->
+                    TagCategoryOption(
+                        categoryId = category.categoryId,
+                        name = category.name,
+                        tags = tags.filter { it.parentCategoryId == category.categoryId }
+                            .map { it.tagId to it.name }
+                            .sortedBy { it.second }
+                    )
+                }
+                .filter { it.tags.isNotEmpty() }
+                .sortedBy { it.name },
+            peopleEntities = people,
+            eventRows = inga.bpmetrics.library.EventTree.flatten(events)
+                .map { it.event to it.depth },
+            collectionEntities = sets,
             watches = watches.filter { it.isNamed }.map { it.watchId to it.displayName }
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FilterOptions())
 
     fun setQuery(text: String) { _filterState.value = _filterState.value.copy(query = text) }
 
-    fun removeChip(chip: FilterChip) {
-        _filterState.value = FilterChips.without(_filterState.value, chip)
-    }
-
-    /** Adds one term. Ids arrive as strings because a watch is a UUID and everything else is not. */
-    fun addFilterTerm(dimension: FilterDimension, id: String) {
-        val current = _filterState.value
-        val numeric = id.toLongOrNull()
-        _filterState.value = when (dimension) {
-            FilterDimension.PERSON -> numeric?.let {
-                current.copy(selectedPersonIds = current.selectedPersonIds + it)
-            }
-            FilterDimension.TAG -> numeric?.let {
-                current.copy(selectedTagIds = current.selectedTagIds + it)
-            }
-            FilterDimension.EVENT -> numeric?.let {
-                current.copy(selectedEventIds = current.selectedEventIds + it)
-            }
-            FilterDimension.COLLECTION -> numeric?.let {
-                current.copy(selectedGroupIds = current.selectedGroupIds + it)
-            }
-            FilterDimension.LOCATION -> numeric?.let {
-                current.copy(selectedLocationIds = current.selectedLocationIds + it)
-            }
-            FilterDimension.WATCH -> current.copy(selectedWatchIds = current.selectedWatchIds + id)
-            FilterDimension.DATE, FilterDimension.RATE -> current
-        } ?: current
-    }
+    /** Replaces the whole filter. See [FilterEditor], which edits a [FilterState] rather than chips. */
+    fun setFilter(filter: FilterState) { _filterState.value = filter }
 
     fun clearFilter() { _filterState.value = FilterState() }
 
@@ -595,11 +600,86 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         viewModelScope.launch { repository.setCollectionRule(collectionId, null) }
     }
 
-    fun createCollection(name: String, withRecords: Set<Long> = emptySet()) {
+    /**
+     * Gives a collection a rule, or replaces the one it has.
+     *
+     * The half that was missing. A rule could only be created by narrowing the library and pressing
+     * Save, and could only be *changed* by narrowing the library again and re-saving — so a
+     * collection's own page could not answer "what does this ask?", let alone change it.
+     */
+    fun setCollectionRule(collectionId: Long, filter: FilterState) {
+        viewModelScope.launch {
+            repository.setCollectionRule(collectionId, FilterCodec.toJson(filter))
+        }
+    }
+
+    /** Living → static, keeping what the rule found. See [LibraryRepository.materialiseCollection]. */
+    fun materialiseCollection(collectionId: Long, onResult: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            val kept = repository.materialiseCollection(collectionId)
+            onResult("Kept $kept recording${if (kept == 1) "" else "s"}. It no longer updates.")
+        }
+    }
+
+    /** Frozen → live. See [LibraryRepository.thawCollection]. */
+    fun thawCollection(collectionId: Long, onResult: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            val alive = repository.thawCollection(collectionId)
+            onResult("Unfrozen with $alive recording${if (alive == 1) "" else "s"}.")
+        }
+    }
+
+    /**
+     * What a filter asks, as chips, for any filter rather than the one being applied.
+     *
+     * Read at composition rather than collected, because the caller owns the [FilterState] — a rule
+     * being edited on a collection is not what the library is showing, and must not become it.
+     */
+    fun chipsFor(filter: FilterState): List<FilterChip> = FilterChips.of(
+        filter = filter,
+        people = availablePeople.value,
+        tags = allTagsForChips.value,
+        categories = allCategoriesForChips.value,
+        events = allEventsForChips.value,
+        locations = allLocationsForChips.value,
+        watches = availableWatches.value,
+        formatDate = {
+            inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(
+                it, inga.bpmetrics.ui.util.ReaderClock
+            )
+        }
+    )
+
+    private val allTagsForChips = repository.allTags
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val allCategoriesForChips = repository.getAllCategories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val allEventsForChips = repository.allEventsInTree
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val allLocationsForChips = repository.getAllLocations()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Makes a collection, answering everything a collection is asked at creation.
+     *
+     * It used to take a name and nothing else, which meant a *living* collection could not be
+     * created at all — only made afterwards, from a screen that had no idea it was making one. The
+     * two things a set needs deciding up front are what it collects and whether it sits on the
+     * bar; everything else can wait, and a cover genuinely has to, because a cover is stored
+     * against an id that does not exist until this returns.
+     */
+    fun createCollection(
+        name: String,
+        withRecords: Set<Long> = emptySet(),
+        rule: FilterState? = null,
+        pinned: Boolean = false
+    ) {
         viewModelScope.launch {
             val id = repository.createCollection(name)
             if (withRecords.isNotEmpty()) repository.addRecordsToCollection(id, withRecords)
-            clearSelection()
+            rule?.let { repository.setCollectionRule(id, FilterCodec.toJson(it)) }
+            if (pinned) repository.setCollectionPinned(id, true)
+            clearWholeSelection()
         }
     }
 

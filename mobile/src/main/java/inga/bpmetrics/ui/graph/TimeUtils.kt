@@ -92,12 +92,21 @@ object TimeUtils {
     }
 
     /**
-     * Formats epoch milliseconds into a clock time string (e.g., "10:30:00 AM").
+     * A clock time on the graph, in the reader's chosen clock.
+     *
+     * Both formatters existed and only the 12-hour one was ever used, so a library set to 24 hours
+     * still read "10:30:00 AM" here. Seconds stay: this labels a scrub position on a chart, where
+     * the second is the whole point — [parseClockTimeToRelativeMs] reads back what this writes.
      */
     fun formatClockTime(epochMs: Long, zoneId: ZoneId = ZoneId.systemDefault()): String {
+        val formatter = if (inga.bpmetrics.ui.util.StringFormatHelpers.use24Hour) {
+            clockFormatter24
+        } else {
+            clockFormatter
+        }
         return Instant.ofEpochMilli(epochMs)
             .atZone(zoneId)
-            .format(clockFormatter)
+            .format(formatter)
     }
 
     /**

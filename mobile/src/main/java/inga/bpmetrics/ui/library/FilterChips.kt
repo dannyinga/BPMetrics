@@ -15,6 +15,7 @@ enum class FilterDimension(val label: String) {
     EVENT("Event"),
     COLLECTION("Collection"),
     LOCATION("Location"),
+    EVENT_TYPE("Event type"),
     WATCH("Watch"),
     DATE("When"),
     RATE("Rate")
@@ -93,6 +94,12 @@ object FilterChips {
             chips += FilterChip(FilterDimension.LOCATION, "place-${it.locationId}", it.displayName)
         }
 
+        // From the filter itself rather than from a registry: an event type is a string somebody
+        // typed, so the set of them is whatever is in use, and the chip is the value.
+        filter.selectedEventTypes.sorted().forEach {
+            chips += FilterChip(FilterDimension.EVENT_TYPE, "type-$it", it)
+        }
+
         watches.filter { it.watchId in filter.selectedWatchIds }.forEach {
             chips += FilterChip(FilterDimension.WATCH, "watch-${it.watchId}", it.displayName)
         }
@@ -145,12 +152,70 @@ object FilterChips {
             FilterDimension.LOCATION -> filter.copy(
                 selectedLocationIds = filter.selectedLocationIds - chip.numericId()
             )
+            FilterDimension.EVENT_TYPE -> filter.copy(
+                selectedEventTypes = filter.selectedEventTypes - chip.id.removePrefix("type-")
+            )
             FilterDimension.WATCH -> filter.copy(
                 selectedWatchIds = filter.selectedWatchIds - chip.id.removePrefix("watch-")
             )
             FilterDimension.DATE -> filter.copy(dateRange = null)
             FilterDimension.RATE -> filter.copy(minBpm = 0.0, maxBpm = null)
         }
+
+    /**
+     * This filter with one more term.
+     *
+     * The counterpart to [without], and pure for the same reason: a rule being edited on a
+     * collection is a [FilterState] nobody is filtering by yet, so adding to it cannot mean
+     * "change what the library is showing".
+     *
+     * Ids arrive as strings because a watch is a UUID and everything else is not.
+     */
+    fun with(filter: FilterState, dimension: FilterDimension, id: String): FilterState {
+        val numeric = id.toLongOrNull()
+        return when (dimension) {
+            FilterDimension.PERSON -> numeric?.let {
+                filter.copy(selectedPersonIds = filter.selectedPersonIds + it)
+            }
+            FilterDimension.TAG -> numeric?.let {
+                filter.copy(selectedTagIds = filter.selectedTagIds + it)
+            }
+            FilterDimension.EVENT -> numeric?.let {
+                filter.copy(selectedEventIds = filter.selectedEventIds + it)
+            }
+            FilterDimension.COLLECTION -> numeric?.let {
+                filter.copy(selectedGroupIds = filter.selectedGroupIds + it)
+            }
+            FilterDimension.LOCATION -> numeric?.let {
+                filter.copy(selectedLocationIds = filter.selectedLocationIds + it)
+            }
+            FilterDimension.EVENT_TYPE ->
+                filter.copy(selectedEventTypes = filter.selectedEventTypes + id)
+            FilterDimension.WATCH -> filter.copy(selectedWatchIds = filter.selectedWatchIds + id)
+            FilterDimension.DATE, FilterDimension.RATE -> filter
+        } ?: filter
+    }
+
+    /**
+     * Whether this filter already names that value.
+     *
+     * So a picker can show what is on rather than only what has been tapped since it opened —
+     * reopening it used to present a list with no memory of the last visit.
+     */
+    fun holds(filter: FilterState, dimension: FilterDimension, id: String): Boolean {
+        val numeric = id.toLongOrNull()
+        return when (dimension) {
+            FilterDimension.PERSON -> numeric in filter.selectedPersonIds
+            FilterDimension.TAG -> numeric in filter.selectedTagIds
+            FilterDimension.EVENT -> numeric in filter.selectedEventIds
+            FilterDimension.COLLECTION -> numeric in filter.selectedGroupIds
+            FilterDimension.LOCATION -> numeric in filter.selectedLocationIds
+            FilterDimension.EVENT_TYPE -> id in filter.selectedEventTypes
+            FilterDimension.WATCH -> id in filter.selectedWatchIds
+            FilterDimension.DATE -> filter.dateRange != null
+            FilterDimension.RATE -> filter.minBpm > 0.0 || filter.maxBpm != null
+        }
+    }
 
     private fun FilterChip.numericId(): Long = id.substringAfterLast('-').toLongOrNull() ?: -1L
 }

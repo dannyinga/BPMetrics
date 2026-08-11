@@ -181,6 +181,8 @@ fun EventEditorLauncher(
     /** See [inga.bpmetrics.ui.library.EventEditorDialog]. Null where there is no analysis behind it. */
     excludedCount: Int = 0,
     onRefineScope: (() -> Unit)? = null,
+    /** See [inga.bpmetrics.ui.library.EventEditorDialog]. */
+    onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val knownTypes by libraryViewModel.eventTypesInUse.collectAsStateWithLifecycle()
@@ -217,6 +219,7 @@ fun EventEditorLauncher(
         coverEditor = coverEditor,
         excludedCount = excludedCount,
         onRefineScope = onRefineScope,
+        onDelete = onDelete,
         onDismiss = {
             libraryViewModel.clearWindowError()
             onDismiss()

@@ -63,7 +63,18 @@ data class FilterState(
      */
     val selectedGroupIds: Set<Long> = emptySet(),
     /** Venues to include, matched on the location a recording resolves to. */
-    val selectedLocationIds: Set<Long> = emptySet()
+    val selectedLocationIds: Set<Long> = emptySet(),
+    /**
+     * Kinds of event to include — concerts, sports games, raids.
+     *
+     * By the type string rather than an id, because that is what an event type is: there is no
+     * registry behind it, only a vocabulary that forms from use. Distinct from [selectedEventIds],
+     * which names particular occasions, and from a tag, which is a property somebody attached.
+     *
+     * The axis Compare has had since event types became splittable, missing from the filter — so
+     * "every concert" was a comparison you could draw and not a library you could narrow to.
+     */
+    val selectedEventTypes: Set<String> = emptySet()
 ) {
     /** Whether anything is narrowing the library at all. */
     val isEmpty: Boolean get() = this == FilterState()
@@ -88,7 +99,22 @@ data class FilterContext(
     val recordIdsByCollection: Map<Long, Set<Long>> = emptyMap(),
     val eventNames: Map<Long, String> = emptyMap(),
     val placeNames: Map<Long, String> = emptyMap(),
-    val locationIdByEvent: Map<Long?, Long?> = emptyMap()
+    val locationIdByEvent: Map<Long?, Long?> = emptyMap(),
+    /** What kind each event is, for the event-type term. Absent means untyped. */
+    val eventTypeByEvent: Map<Long?, String?> = emptyMap(),
+    /**
+     * Which category each tag belongs to, from the registry.
+     *
+     * A fact about the *tag*, which is why it comes from the registry rather than from whichever
+     * tags the records in hand happen to carry. Deriving it from the records meant a tag nothing
+     * carried had no category, and a tag with no category was dropped from the term — leaving a
+     * filter with no terms, which matches everything. Ticking an unused tag showed the whole
+     * library instead of nothing.
+     *
+     * Empty is still workable: [LibraryFilter] falls back to what the records say, which is right
+     * for the callers that filter a snapshot with no registry behind it.
+     */
+    val categoryByTag: Map<Long, Long> = emptyMap()
 )
 
 /**
@@ -124,6 +150,8 @@ object LibraryFilter {
                     put(it.tag.tagId, it.tag.parentCategoryId)
                 }
             }
+            // The registry last, because it is the authority. See [FilterContext.categoryByTag].
+            putAll(context.categoryByTag)
         }
 
         // The union of what every named collection holds, resolved before the loop rather than per
@@ -144,8 +172,11 @@ object LibraryFilter {
             val tagMatch = if (filter.selectedTagIds.isEmpty()) true else {
                 val recordTagIds = tagIdsFor(record)
                 filter.selectedTagIds
-                    .mapNotNull { tagId -> tagToCategory[tagId]?.let { it to tagId } }
-                    .groupBy({ it.first }, { it.second })
+                    // A tag whose category is unknown groups under -1 rather than being dropped.
+                    // Dropping it removed the term, and a term-less filter matches everything —
+                    // so asking for a tag nothing carries returned the whole library. Kept, it
+                    // matches nothing, which is the honest answer and says the tag is unused.
+                    .groupBy { tagId -> tagToCategory[tagId] ?: -1L }
                     .all { (_, wanted) -> wanted.any { it in recordTagIds } }
             }
 
@@ -183,8 +214,13 @@ object LibraryFilter {
             val locationMatch = filter.selectedLocationIds.isEmpty() ||
                 context.locationIdByEvent[meta.eventId] in filter.selectedLocationIds
 
+            // Resolved through the map rather than off the recording: a type belongs to the event,
+            // and a recording knows only which event it is filed under.
+            val eventTypeMatch = filter.selectedEventTypes.isEmpty() ||
+                context.eventTypeByEvent[meta.eventId] in filter.selectedEventTypes
+
             dateMatch && tagMatch && bpmMatch && personMatch && watchMatch &&
-                eventMatch && collectionMatch && queryMatch && locationMatch
+                eventMatch && collectionMatch && queryMatch && locationMatch && eventTypeMatch
         }
     }
 }

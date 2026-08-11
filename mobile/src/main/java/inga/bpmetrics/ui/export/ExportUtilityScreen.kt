@@ -364,33 +364,41 @@ fun ExportUtilityScreen(
                 // asking it first.
                 ExportStep.CONTENTS -> Column(Modifier.fillMaxSize()) {
                     ExportKindToggle(kind) { viewModel.setKind(it) }
-                    if (kind == ExportKind.IMAGE) {
-                    ImageContentsStep(
-                        plan = imagePlan,
-                        grouping = imageGrouping,
-                        onGroupingChange = { viewModel.setImageGrouping(it) },
-                        // Only a group can become more than one image, so only a group is asked.
-                        showGroupingChoice = source is ExportSource.Group,
-                        crop = imageCrop,
-                        onCropChange = { viewModel.setImageCrop(it) },
-                        naturalSpan = imageNaturalSpan,
-                        timeZoneId = preset.timeZoneId,
-                        title = imageTitle,
-                        onTitleChange = { viewModel.setImageTitle(it) }
-                    )
-                } else {
-                    ContentsStep(
-                        clips = clips,
-                        records = records,
-                        peopleById = peopleById,
-                        loading = loadingClips,
-                        hasNoClips = hasNoClips,
-                        oldestFirst = oldestFirst,
-                        onToggleOrder = { viewModel.toggleClipOrder() },
-                        onSelectAll = { viewModel.setAllClipsSelected(it) },
-                        onToggleClip = { viewModel.toggleClip(it) },
-                        onToggleRecord = { uri, id -> viewModel.toggleRecordOnClip(uri, id) }
-                    )
+
+                    // Weighted so the list below takes the space the toggle leaves, rather than
+                    // relying on the Column's remaining-space default.
+                    Box(Modifier.weight(1f)) {
+                        if (kind == ExportKind.IMAGE) {
+                            ImageContentsStep(
+                                plan = imagePlan,
+                                grouping = imageGrouping,
+                                onGroupingChange = { viewModel.setImageGrouping(it) },
+                                // Only a group can become more than one image, so only a group is
+                                // asked.
+                                showGroupingChoice = source is ExportSource.Group,
+                                crop = imageCrop,
+                                onCropChange = { viewModel.setImageCrop(it) },
+                                naturalSpan = imageNaturalSpan,
+                                timeZoneId = preset.timeZoneId,
+                                title = imageTitle,
+                                onTitleChange = { viewModel.setImageTitle(it) }
+                            )
+                        } else {
+                            ContentsStep(
+                                clips = clips,
+                                records = records,
+                                peopleById = peopleById,
+                                loading = loadingClips,
+                                hasNoClips = hasNoClips,
+                                oldestFirst = oldestFirst,
+                                onToggleOrder = { viewModel.toggleClipOrder() },
+                                onSelectAll = { viewModel.setAllClipsSelected(it) },
+                                onToggleClip = { viewModel.toggleClip(it) },
+                                onToggleRecord = { uri, id ->
+                                    viewModel.toggleRecordOnClip(uri, id)
+                                }
+                            )
+                        }
                     }
                 }
 

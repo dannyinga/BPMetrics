@@ -1279,6 +1279,53 @@ class LibraryRepository(
         Scope.recordsIn(ScopeRef.Collection(collectionId), librarySnapshot()).map { it.metadata }
 
     /**
+     * Turns a living collection into a static one, keeping what its rule had found.
+     *
+     * The difference from simply clearing the rule, which is the operation that already existed:
+     * clearing stops it re-asking, so everything the rule found and nobody named by hand quietly
+     * leaves. That is right when the rule was a mistake and wrong when the rule was the *point* and
+     * you now want the answer held still — which is the ordinary case, and the one nothing offered.
+     *
+     * So the current answer is written down as membership first. Nothing is copied: these are
+     * references, so a recording that is later renamed or refiled stays in the set and stays
+     * correct. Freezing, which does copy, is a different thing again — see [saveAnalysis].
+     *
+     * @return how many recordings it kept.
+     */
+    suspend fun materialiseCollection(collectionId: Long): Int {
+        val found = recordsInCollection(collectionId).map { it.recordId }
+        addRecordsToCollection(collectionId, found)
+        collectionDao.updateRule(collectionId, null)
+        Log.i(tag, "Collection $collectionId materialised: ${found.size} recordings kept")
+        return found.size
+    }
+
+    /**
+     * Brings a frozen selection back to life, keeping the recordings it was frozen over.
+     *
+     * Its snapshot rows name recordings by id, so those become ordinary membership and the set
+     * carries on as a hand-made one. Anything deleted in the meantime is simply gone — the numbers
+     * a snapshot holds cannot be recomputed from a recording that no longer exists, which is the
+     * whole reason freezing exists.
+     *
+     * The snapshot rows are left in place rather than deleted: re-freezing overwrites them, and
+     * keeping them means thawing by mistake is not destructive.
+     *
+     * @return how many recordings survived into the live set.
+     */
+    suspend fun thawCollection(collectionId: Long): Int {
+        val ids = loadSavedAnalysis(collectionId)?.records?.map { it.recordId }.orEmpty()
+        // Through the snapshot rather than a query per id: the library is already in memory for
+        // [Scope], and "which of these still exist" is a set intersection.
+        val existing = librarySnapshot().records.mapTo(mutableSetOf()) { it.metadata.recordId }
+        val alive = ids.filter { it in existing }
+        addRecordsToCollection(collectionId, alive)
+        collectionDao.setFrozenAt(collectionId, null)
+        Log.i(tag, "Collection $collectionId thawed: ${alive.size} of ${ids.size} still exist")
+        return alive.size
+    }
+
+    /**
      * The whole tree, collections included.
      *
      * What anything walking ancestry or descendants needs. [getAllEvents] hides collections so the

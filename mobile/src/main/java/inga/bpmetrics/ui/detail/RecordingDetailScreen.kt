@@ -134,6 +134,11 @@ fun RecordingDetailScreen(
         // No title: the header below carries the name over the cover. It used to be in both.
         title = null,
         onExport = onExport,
+        // Splitting, driven by the chart. The dialog it used to open had two text fields and no
+        // picture; the chart could show the exact stretch and had no way to act on it.
+        onSplitFromTimeline = r?.let { rec ->
+            { fromMs: Long, toMs: Long -> splitBetween(context, subject, rec, fromMs, toMs) }
+        },
         subjectHeader = {
             if (r != null) {
                 val uiState by analysis.uiState.collectAsStateWithLifecycle()
@@ -166,7 +171,8 @@ fun RecordingDetailScreen(
                     onOpenAncestor = onOpenEvent,
                     tags = effectiveTags,
                     onRemoveTag = { subject.removeTag(it) },
-                    onExplainTag = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                    onExplainTag = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() },
+                    onEditCover = { framingCover = true }
                 )
             }
         },
@@ -218,6 +224,20 @@ fun RecordingDetailScreen(
         }
     )
 
+    // Opened from the corner of the cover rather than from the editor. See [SubjectHeader].
+    if (framingCover && r != null) {
+        inga.bpmetrics.ui.components.CoverCropDialog(
+            cover = r.metadata.ownCover,
+            onPick = pickCover,
+            title = "Frame this recording",
+            previewContent = {},
+            onDismiss = { framingCover = false },
+            onConfirm = { subject.setOwnCoverCrop(it); framingCover = false },
+            // Stays open: removing is usually the first half of replacing.
+            onRemove = { subject.clearOwnCover(context) }
+        )
+    }
+
     if (editing && r != null) {
         // The title, description and who wore it — the three fields the old screen edited inline in
         // its app bar. A dialog now, because the app bar belongs to the analysis as much as to the
@@ -229,17 +249,6 @@ fun RecordingDetailScreen(
             inheritedPlaceName = place?.takeIf { it.isInherited }?.location?.displayName,
             tagCount = r.tags.size,
             onEditTags = { tagging = true },
-            coverEditor = {
-                inga.bpmetrics.ui.components.CoverEditor(
-                    cover = r.metadata.ownCover,
-                    onPick = pickCover,
-                    framing = framingCover,
-                    onFramingChange = { framingCover = it },
-                    onCrop = { subject.setOwnCoverCrop(it) },
-                    onRemove = { subject.clearOwnCover(context) },
-                    title = "Frame this recording"
-                )
-            },
             onDismiss = { editing = false },
             onConfirm = { title, description, deviceId, personId, locationId ->
                 subject.updateTitle(title)
@@ -274,31 +283,15 @@ fun RecordingDetailScreen(
         SplitRecordDialog(
             record = r,
             onDismiss = { splitting = false },
+            // Offsets from the dialog, instants from the chart — one implementation either way.
             onSplit = { startMs, endMs ->
-                // Timestamps rebased to the new recording's own start, so the split reads as a
-                // recording rather than as a fragment that begins forty minutes in.
-                val points = r.dataPoints
-                    .filter { it.timestamp in startMs..endMs }
-                    .map { it.copy(timestamp = it.timestamp - startMs) }
-
-                if (points.isEmpty()) {
-                    Toast.makeText(context, "Nothing recorded in that range", Toast.LENGTH_SHORT)
-                        .show()
-                } else {
-                    subject.splitRecord(
-                        inga.bpmetrics.core.BpmWatchRecord(
-                            date = java.sql.Date(r.metadata.startTime + startMs),
-                            dataPoints = points.map {
-                                inga.bpmetrics.core.BpmDataPoint(it.timestamp, it.bpm)
-                            },
-                            startTime = r.metadata.startTime + startMs,
-                            endTime = r.metadata.startTime + endMs
-                        ),
-                        "${r.metadata.title} (Split)"
-                    )
-                    Toast.makeText(context, "New record created from split", Toast.LENGTH_SHORT)
-                        .show()
-                }
+                splitBetween(
+                    context,
+                    subject,
+                    r,
+                    r.metadata.startTime + startMs,
+                    r.metadata.startTime + endMs
+                )
                 splitting = false
             }
         )
@@ -316,4 +309,45 @@ fun RecordingDetailScreen(
             }
         )
     }
+}
+
+/**
+ * Cuts the readings between two wall-clock instants into a new recording.
+ *
+ * Shared by the two ways in — the chart's own Split, and the older typed dialog in the overflow —
+ * so the two cannot disagree about what a split produces. Timestamps are rebased to the new
+ * recording's own start, so it reads as a recording rather than as a fragment that begins forty
+ * minutes in.
+ */
+private fun splitBetween(
+    context: android.content.Context,
+    subject: BpmRecordViewModel,
+    record: inga.bpmetrics.library.BpmRecordWithPoints,
+    fromMs: Long,
+    toMs: Long
+) {
+    val base = record.metadata.startTime
+    // The chart works in wall-clock instants and the readings are stored relative to the start.
+    val fromOffset = fromMs - base
+    val toOffset = toMs - base
+
+    val points = record.dataPoints
+        .filter { it.timestamp in fromOffset..toOffset }
+        .map { it.copy(timestamp = it.timestamp - fromOffset) }
+
+    if (points.isEmpty()) {
+        Toast.makeText(context, "Nothing recorded in that range", Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    subject.splitRecord(
+        inga.bpmetrics.core.BpmWatchRecord(
+            date = java.sql.Date(base + fromOffset),
+            dataPoints = points.map { inga.bpmetrics.core.BpmDataPoint(it.timestamp, it.bpm) },
+            startTime = base + fromOffset,
+            endTime = base + toOffset
+        ),
+        "${record.metadata.title} (Split)"
+    )
+    Toast.makeText(context, "New record created from split", Toast.LENGTH_SHORT).show()
 }
