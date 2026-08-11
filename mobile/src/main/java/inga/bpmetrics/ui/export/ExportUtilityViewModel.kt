@@ -46,9 +46,15 @@ enum class ExportStep(val title: String, val question: String) {
 /**
  * Whether this export is a video or an image.
  *
- * Asked in step 1, because it changes what step 2 is *for*. A video export picks which clips to
- * draw on; an image has no clips and asks a different question — which of the recordings in scope
- * share a timeline. The four-step shape cannot express that without being told up front.
+ * Asked on **Contents**, at the top of the step it decides. It used to be asked on Source, on the
+ * reasoning that step 2 needs to know before it can frame its question — true, but it made step 1
+ * ask two unrelated things, and the source is the same set of recordings either way. What changes
+ * between a video and an image is precisely the contents: a video picks which clips to draw on, an
+ * image asks which recordings share a timeline.
+ *
+ * It also cost an extra dialog. Every entry point outside the utility had to ask "video or image?"
+ * before it could navigate, which is a modal in the way of a question the flow was about to ask
+ * anyway.
  */
 enum class ExportKind(val label: String, val description: String) {
     VIDEO("Video", "Curves drawn over footage, rendered in the background"),
@@ -1305,13 +1311,10 @@ class ExportUtilityViewModel(
          * would otherwise be labelled "4 recordings" and lose the name that was the point of
          * saving it.
          */
-        label: String? = null,
-        /** Video or image. A caller that knows which button was pressed knows this too. */
-        kind: ExportKind = ExportKind.VIDEO
+        label: String? = null
     ) {
         setSource(source)
         labelOverride.value = label
-        _kind.value = kind
         _step.value = step
         if (step.ordinal > _furthestStep.value.ordinal) _furthestStep.value = step
     }

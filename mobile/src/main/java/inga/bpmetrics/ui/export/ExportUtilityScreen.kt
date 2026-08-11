@@ -30,6 +30,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -351,12 +354,17 @@ fun ExportUtilityScreen(
                     recordings = allRecords,
                     peopleById = peopleById,
                     selected = source,
-                    onSelect = { viewModel.setSource(it) },
-                    exportKind = kind,
-                    onExportKindChange = { viewModel.setKind(it) }
+                    onSelect = { viewModel.setSource(it) }
                 )
 
-                ExportStep.CONTENTS -> if (kind == ExportKind.IMAGE) {
+                // Video or image sits at the top of this step, because this step is what it
+                // decides — a video picks clips to draw on, an image asks which recordings share a
+                // timeline. It used to be asked on Source, where the answer changes nothing, and
+                // that forced every entry point outside the utility to put a modal in the way
+                // asking it first.
+                ExportStep.CONTENTS -> Column(Modifier.fillMaxSize()) {
+                    ExportKindToggle(kind) { viewModel.setKind(it) }
+                    if (kind == ExportKind.IMAGE) {
                     ImageContentsStep(
                         plan = imagePlan,
                         grouping = imageGrouping,
@@ -383,6 +391,7 @@ fun ExportUtilityScreen(
                         onToggleClip = { viewModel.toggleClip(it) },
                         onToggleRecord = { uri, id -> viewModel.toggleRecordOnClip(uri, id) }
                     )
+                    }
                 }
 
                 ExportStep.LOOK -> LookStep(
@@ -916,3 +925,35 @@ private fun StepPlaceholder(step: ExportStep, description: String) {
     }
 }
 
+
+/**
+ * Video or image, at the top of the step it decides.
+ *
+ * A segmented control rather than two chips, for the same reason the Compare tab uses one: it is a
+ * single setting with two positions, and two chips side by side look like two independent things to
+ * tap. The description under it is the honest part — "rendered in the background" and "saved
+ * straight away" are the difference anyone actually cares about.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ExportKindToggle(kind: ExportKind, onSelect: (ExportKind) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            ExportKind.entries.forEachIndexed { index, entry ->
+                SegmentedButton(
+                    selected = kind == entry,
+                    onClick = { onSelect(entry) },
+                    shape = SegmentedButtonDefaults.itemShape(index, ExportKind.entries.size),
+                    icon = {},
+                    label = { Text(entry.label) }
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            kind.description,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}

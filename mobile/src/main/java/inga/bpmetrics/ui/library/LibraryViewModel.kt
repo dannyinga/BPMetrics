@@ -690,6 +690,45 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun clearEventSelection() { _selectedEventIds.value = emptySet() }
 
     /**
+     * Everything the selection covers, as recordings.
+     *
+     * The two id sets are two tables, not two selections. Picking Day 1 and a loose recording from
+     * the following morning is one gesture expressing one set, and every action worth taking on it
+     * — analyse, add to a collection, export — is an action on *recordings*. So an event
+     * contributes its whole subtree here and the actions stop caring which kind of row was tapped.
+     *
+     * The library used to run two selections side by side, each with its own bar and its own back
+     * handler, and neither could see the other: there was no way to say "these two sets and that
+     * one recording", which is a completely ordinary thing to want.
+     */
+    val selectedRecordIdsEffective: StateFlow<Set<Long>> = combine(
+        _selectedRecordIds,
+        _selectedEventIds,
+        repository.allEventsInTree,
+        repository.records
+    ) { records, eventIds, tree, all ->
+        if (eventIds.isEmpty()) records else {
+            val within = buildSet {
+                eventIds.forEach { addAll(inga.bpmetrics.library.EventTree.descendantsOf(tree, it)) }
+            }
+            records + all.filter { it.metadata.eventId in within }.map { it.metadata.recordId }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    /** Nothing picked, of either kind. */
+    val selectionIsEmpty: StateFlow<Boolean> = combine(
+        _selectedRecordIds, _selectedEventIds
+    ) { records, events ->
+        records.isEmpty() && events.isEmpty()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** One exit, because there is one selection. */
+    fun clearWholeSelection() {
+        _selectedRecordIds.value = emptySet()
+        _selectedEventIds.value = emptySet()
+    }
+
+    /**
      * Nests every selected event under one parent.
      *
      * Sequential rather than parallel, and each one guarded: moving A under B and B under A in the
@@ -819,11 +858,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Files the current selection under an event, or unfiles it when [eventId] is null. */
     fun assignSelectedToEvent(eventId: Long?) {
-        val ids = _selectedRecordIds.value
+        // The effective set, so filing a selected *event* files everything inside it. Refiling a
+        // day into a festival by picking the day is the same gesture as refiling four loose
+        // recordings, and the action should not care which was tapped.
+        val ids = selectedRecordIdsEffective.value
         if (ids.isEmpty()) return
         viewModelScope.launch {
             repository.assignRecordsToEvent(ids, eventId)
-            clearSelection()
+            clearWholeSelection()
         }
     }
 
@@ -1011,6 +1053,46 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             }
             repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
             onResult("Cover removed from ${event.displayName}")
+        }
+    }
+
+    /**
+     * A picture for one event, from wherever it is being edited.
+     *
+     * The timeline row's editor offers this now. It deliberately did not — the reasoning was that a
+     * photo button with nothing to check it against was worse than no button — but that objection
+     * dissolved once picking one opens the framing sheet, which *is* the picture at the size the
+     * library will draw it. Being able to set a cover only from inside the event was the loss.
+     */
+    fun setEventCover(
+        context: android.content.Context,
+        eventId: Long,
+        source: android.net.Uri,
+        onResult: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            val hint = repository.getEvent(eventId)?.displayName ?: "event"
+            onResult(
+                repository.setCover(
+                    context = context,
+                    owner = LibraryRepository.CoverOwner.Event(eventId),
+                    source = source,
+                    nameHint = hint
+                )
+            )
+        }
+    }
+
+    /** Re-frames the picture an event already has, leaving the file alone. */
+    fun setEventCoverCrop(eventId: Long, cover: inga.bpmetrics.library.Cover) {
+        viewModelScope.launch {
+            repository.setCoverCrop(LibraryRepository.CoverOwner.Event(eventId), cover)
+        }
+    }
+
+    fun clearEventCover(context: android.content.Context, eventId: Long) {
+        viewModelScope.launch {
+            repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
         }
     }
 

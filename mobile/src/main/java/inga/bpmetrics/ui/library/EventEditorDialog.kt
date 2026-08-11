@@ -130,10 +130,27 @@ fun EventEditorDialog(
     /** How many tags it carries, and the way through to changing them. */
     tagCount: Int = 0,
     onEditTags: (() -> Unit)? = null,
-    /** Its *own* picture, not an inherited one. */
-    hasOwnCover: Boolean = false,
-    onPickCover: (() -> Unit)? = null,
-    onRemoveCover: (() -> Unit)? = null,
+    /**
+     * Choosing, framing and softening its picture — see [inga.bpmetrics.ui.components.CoverEditor].
+     *
+     * A slot rather than three parameters. The editor needs the cover itself to frame it, not just
+     * whether there is one, and passing the picture down into a dialog so it could pass it back up
+     * again was how the framing step came to be skipped everywhere but a person.
+     */
+    coverEditor: (@Composable () -> Unit)? = null,
+    /**
+     * The way through to "What's included", and whether anything currently is not.
+     *
+     * Here because deciding what an event's numbers are computed over is an edit to the event's
+     * analysis, and this dialog is where the edits are. It was a text button in the middle of the
+     * Summary, next to the "Where the time went" heading, which is a place for a figure rather
+     * than for a control.
+     *
+     * Null everywhere the caller has no analysis behind it — the timeline's inline editor, and the
+     * create-event flow, where there is nothing yet to leave out.
+     */
+    excludedCount: Int = 0,
+    onRefineScope: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onConfirm: (EventEdit) -> Unit
 ) {
@@ -310,15 +327,11 @@ fun EventEditorDialog(
                     }
                 }
 
-                onPickCover?.let { pick ->
+                coverEditor?.let { editor ->
                     Spacer(Modifier.height(16.dp))
                     Text("Photo", style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.height(6.dp))
-                    inga.bpmetrics.ui.detail.CoverRow(
-                        hasCover = hasOwnCover,
-                        onPick = pick,
-                        onRemove = { onRemoveCover?.invoke() }
-                    )
+                    editor()
                 }
 
                 onEditTags?.let { edit ->
@@ -332,9 +345,29 @@ fun EventEditorDialog(
                     androidx.compose.material3.OutlinedButton(onClick = edit) {
                         Text(
                             if (tagCount == 0) "Add tags"
-                            else " tag" + if (tagCount == 1) "" else "s"
+                            else "$tagCount tag" + if (tagCount == 1) "" else "s"
                         )
                     }
+                }
+
+                onRefineScope?.let { refine ->
+                    Spacer(Modifier.height(16.dp))
+                    Text("Analysis", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(6.dp))
+                    // A door, like Tags above it: the sheet is a tree of checkboxes and does not
+                    // fit inside another dialog's scroll.
+                    androidx.compose.material3.OutlinedButton(onClick = refine) {
+                        Text(
+                            if (excludedCount == 0) "What's included"
+                            else "$excludedCount left out"
+                        )
+                    }
+                    Text(
+                        "Which of the events and recordings inside this one count toward its " +
+                            "numbers. Applies to this analysis only — nothing is moved or deleted.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
                 val problem = when {

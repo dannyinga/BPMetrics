@@ -286,5 +286,6 @@ internal fun CoverDto?.toCover(): inga.bpmetrics.library.Cover =
         cropTop = this?.cropTop ?: 0f,
         cropRight = this?.cropRight ?: 1f,
         cropBottom = this?.cropBottom ?: 1f,
-        blur = this?.blur ?: 0f
+        blur = this?.blur ?: 0f,
+        dim = this?.dim ?: 0f
     )

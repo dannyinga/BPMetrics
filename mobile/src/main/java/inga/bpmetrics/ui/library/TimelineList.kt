@@ -47,6 +47,14 @@ fun TimelineList(
     onToggleExpand: (Long) -> Unit,
     /** Events picked out for a bulk action, and the gesture that picks them. */
     selectedEventIds: Set<Long> = emptySet(),
+    /**
+     * Whether a selection is running at all, of either kind.
+     *
+     * Not the same as "some events are selected". Events and recordings are one selection now, so
+     * a tap on an event has to add to it whenever picking is under way — including when what has
+     * been picked so far is three recordings, or nothing yet because the mode was just armed.
+     */
+    selectionMode: Boolean = false,
     onToggleEventSelection: (Long) -> Unit = {},
     onCreateEvent: () -> Unit,
     onOpenEvent: (Long) -> Unit,
@@ -113,8 +121,8 @@ fun TimelineList(
                                 // navigating away — the same rule the recording tiles follow, and
                                 // the alternative is losing the selection by mistapping.
                                 onOpen = {
-                                    if (selectedEventIds.isEmpty()) onOpenEvent(entry.event.eventId)
-                                    else onToggleEventSelection(entry.event.eventId)
+                                    if (selectionMode) onToggleEventSelection(entry.event.eventId)
+                                    else onOpenEvent(entry.event.eventId)
                                 },
                                 onToggleExpand = { onToggleExpand(entry.event.eventId) },
                                 onRename = { onEdit(summary) },

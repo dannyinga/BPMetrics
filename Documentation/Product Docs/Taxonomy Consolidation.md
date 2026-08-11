@@ -300,13 +300,44 @@ first-class:
 | **Child event** | Day 1 vs Day 2, set vs set, week vs week | One tree walk |
 | **Tag within a category** | Spiderman vs Hulk, co-op vs solo, indoor vs outdoor | Categories as axes |
 | **Event type** | Concerts vs gaming sessions vs runs | A type on the event |
+| **Events of one type** | Which concert? Which raid? | The type, and the same tree walk |
+| **Recording** | Which single recording was the hardest? | Nothing |
 
-The last two do not exist yet and are the most valuable. They are also the reason §2.5 reverses
+The middle two did not exist and are the most valuable. They are also the reason §2.5 reverses
 course on categories.
 
-Each of the four is a **partition** — every recording in scope falls in exactly one lane. That is
-why §2.5 allows only one tag per category, and it is what lets a comparison show percentages that
-add up.
+Each is a **partition** — every recording in scope falls in exactly one lane. That is why §2.5
+allows only one tag per category, and it is what lets a comparison show percentages that add up.
+
+### 3.0 An event type is a category, and its types are the values
+
+"Event type" and "events of one type" are the two halves of one idea, and the app shipped only the
+first half. **Event type** answers *concerts or sports games?* — one lane each. The question anyone
+asks immediately afterwards is *which concert?*, and there was no way to ask it: **child event** puts
+every event in the scope side by side, so a year's concerts sat scattered among its sports games
+with nothing separating them.
+
+So an event type behaves exactly like a tag category. `Character` is an axis whose lanes are
+Spiderman and Hulk; `Concert` is an axis whose lanes are Subtronics, Excision and the rest. One is
+offered per type that holds more than one event, on the same rule as everything else: an axis with
+one value is not a comparison.
+
+The residue is labelled differently, and that difference is the point. A recording with no character
+tag is **Unlabelled**. A sports game inside a Concert comparison is not unlabelled — it has an event
+type, it simply is not this one — so its lane says **Other event types**. It is still there, because
+the lanes have to sum to the whole, but calling it unlabelled would be a lie about the data.
+
+### 3.0.1 The scope's own event is never a lane
+
+A festival's loose recordings carry the festival's id. Compare them by child event and the festival
+becomes a lane holding everything, drawn at full width, ranked first — a bar that says nothing and
+wins every comparison it appears in. The same event also appeared in its own *exclusion* list, which
+offered to empty the page you were looking at.
+
+Both come from the same gap: the analysis knew its records but not what it was an analysis **of**.
+The scope's root event id is now threaded through, and it is excluded from the lanes, from the axes'
+qualifying counts, and from the refinement sheet. An axis that only qualified because of the root is
+not offered at all.
 
 **Scope and split are separate choices.** Scope says which recordings ("Coachella"), split says how
 to divide them ("by character"). The current analysis screen conflates them — a scope is picked and
@@ -1051,8 +1082,23 @@ unfinished.
 
 ### 10.1 Wrong
 
-Nothing outstanding. The two defects §8.6 found are fixed, and the one this stretch introduced —
-tapping a collection navigating nowhere — was caught before it shipped.
+Nothing outstanding. The two defects §8.6 found are fixed, and the two this stretch introduced —
+tapping a collection navigating nowhere, and the export button doing nothing at all — are in §10.5.
+
+**The export button is worth its own note**, because of how it failed. The fold wrote the button,
+wrote the dialog, wrote the four navigation handoffs, and never wrote the six lines that render the
+dialog. Everything compiled. Nothing warned. The flag was set and nothing read it, so a button on
+four pages did nothing for two commits.
+
+That shape — *state written, never observed* — is invisible to the compiler and to any test that
+does not drive the UI. It is now checked for directly by `tools/dead-ui-flags.pl`, which walks every
+`var … by remember { mutableStateOf(…) }` in the source and reports any whose only appearances are
+writes. It found this one and one other, a leftover expansion set in the library that the ViewModel
+had taken over.
+
+```
+perl tools/dead-ui-flags.pl $(find mobile/src/main/java -name '*.kt')
+```
 
 ### 10.2 Incomplete
 
@@ -1067,7 +1113,6 @@ tapping a collection navigating nowhere — was caught before it shipped.
 | | Why it matters |
 |---|---|
 | **Empty states across the new pages are untested.** A recording with no readings, an event with nothing in it, a collection whose rule matches nothing. | The three states most likely to be someone's first experience of a page. |
-| **Compare and Recordings each render their own metric selector.** Correct — it sorts both — but they have not been seen side by side. | Two selectors that disagree about which is selected would be worse than the pinned one it replaced. |
 | **The subject header's height varies a lot by subject.** An event with a trail, a place and six tags is much taller than a bare recording. | The chart's position on screen moves between pages, which makes flicking between them feel unsteady. |
 | **`RecordingSubject.kt` is 591 lines.** Lifted wholesale so the fold's diff stayed honest about what changed. | Now that it has landed, the split dialog and the insights section each want their own file. |
 | **Sprint 6 — colour discipline** is polish of exactly this kind and is already written. | Worth doing as part of this rather than after it. |
@@ -1089,7 +1134,36 @@ Things deliberately left alone, so they do not get "fixed" by accident:
 |---|---|
 | **A collection had no subject header** | `CollectionDetailScreen`, with the cover as its header like the other two. Its trail points *downward* into the events it names — a set does not nest, so it has nothing above it, and the way out of the page is inward. |
 | **No breadcrumb from a collection** | The same trail. §2.4 satisfied for the third subject. |
-| **"Remove from event" was gone** | Back, as an optional per-row action on the shared Recordings section. Offered only where the scope is something a recording can be *taken out of* — an event. A collection's membership is edited from the collection; a filter's is not membership at all. |
+| **"Remove from event" was gone** | Restored as a per-row X, then removed again — see the last row of this table. Refiling belongs in the recording's editor and in bulk edit, not on every row of a list. |
 | **"Save CSV" was gone** | Back, in the recording's overflow. |
 | **The library's duplicate event editor** | Deleted. It now opens `EventEditorLauncher`, the same one the event's page uses. Tags and the photo are deliberately *not* offered from the timeline row: both need the thing they describe on screen to be worth editing, and opening the event is one tap from the same row. |
 | **The collection route was registered at `"/{groupId}"`** | Fixed. A Kotlin string template eaten by a shell substitution — the fourth of that kind this stretch, and the reason string templates now go through the editor rather than through `perl`. |
+| **The Recordings tab was a comparison in disguise** | Folded into Compare as `SplitAxis.Recording`. A list of recordings ranked by low, average or peak *is* a comparison — it had its own metric selector, its own row layout, and answered the same question a second way. Compare took its look: flat rows with a dot, a name and a figure at a fixed right margin, instead of a stack of bordered cards that broke the column the eye reads down. A lane holding one recording opens it, whatever axis produced it. |
+| **Compare could open on an empty screen** | An axis is selected by default, and tapping the selected chip no longer clears it. Comparing used to be a question you asked on purpose from a page of totals; now it is a tab, and arriving there *is* the question — so opening on chips above blank space asked for a tap before the screen would say anything. The tab is offered only when the scope has an axis, so there is always an answer to show. |
+| **Three rows of identical chips** | Measure, metric and axis all rendered as `FilterChip`s, so nothing in the shape said which row was the question. Measure is now a segmented control; the metric is three coloured dials in the app's own low/average/peak colours, with the chosen one named beside them; only the axes stay as chips. The comparison bar takes the metric's colour too — it was always red, so a column of blue lows sat above red bars. |
+| **The event being analysed appeared inside its own analysis** | §3.0.1. It was a lane in its own event comparison and a row in its own exclusion list. |
+| **The refinement sheet put recordings after the subtree** | A day's loose recordings were emitted after all of its nested sets, so they read as belonging to the last set rather than to the day. Own recordings now come directly beneath their event, before its children. |
+| **The X on a recording row** | Removed. Filing is edited from the recording or from a bulk edit; a destructive control on every row of a list you are reading is one mis-tap from a recording quietly leaving its event. |
+| **The export button did nothing** | `ExportKindDialog` was written and never rendered — the button set a flag nothing observed. Rendered, on all four subjects. See §10.1 for the check that now catches this shape. |
+| **Two selections that could not see each other** | Recordings were selected in the app bar; events in a strip above the list. Two counts, two close buttons, two back handlers, and no way to say "these two sets and that one recording" — an entirely ordinary thing to want. One selection now, in the app bar, saying *"2 events · 3 recordings"* when it is both. Every action goes through `selectedRecordIdsEffective`, where a chosen event contributes its whole subtree: analysing, filing and exporting are actions on *recordings*, and which kind of row was tapped to name them is not something they should care about. The event-only actions — move into, add to a collection — are in the same overflow as everything else. |
+| **Filing a selection was three levels down** | Bulk edit → "File into an event…" → the picker. Filing is the most ordinary thing anyone does with a fresh selection, so **Add to an event…** is the first item in the selection's own overflow — it needs a selection, so that is where it belongs. Creating an empty event is a *library* action and sits in the library overflow. Both land in the same picker. |
+| **Four action icons on the library bar** | Sort and filter are controls over the list you are looking at and stay. Select, New event and Import are things you *do*, and they are now one overflow. |
+| **A selected event with a cover showed no sign of it** | The card tinted its container and the cover is drawn *over* the container, so on an event with a picture — which is most of them — selection was invisible. A 2dp outline now, the same one a recording tile uses. The tint stays for the ones with no cover; the border is what actually says so. |
+| **Only titles were legible over a cover** | Fixed on the *picture*, after a wrong turn. A stroked outline on the text was tried first — it works, and it makes every letter look like a sticker; it also treats the symptom on the wrong object, because what is unreadable is unreadable on account of the photograph. Reverted. A cover now carries a **Darken** slider beside Soften: per-cover, because only some covers are too bright and dimming all of them is how every photograph becomes the same grey rectangle. `coverDim` on all three owners, migration 29→30. |
+| **The comparison bar lied about close numbers** | Bars were scaled between the lowest and the highest lane, which uses the width well and is a lie in the case that matters: with two lanes, one is pinned empty and the other full by construction, so 151 against 152 drew as nothing against everything. Now zero to the highest figure in the comparison, so a bar is a proportion and two close numbers look close. |
+| **Tags could push a header off the screen** | A recording inheriting its set's, its day's and its festival's tags easily carries a dozen, which wraps to four rows of chips over the cover they are covering up. Four, then "+N more", expanding in place. The header takes the tags as data now rather than a finished row of chips — it has to be able to count them — which also removed the second copy of that `FlowRow`. |
+| **Video-or-image was asked twice, in the wrong places** | It was chosen on **Source**, where the answer changes nothing — the source is the same set of recordings either way — which meant step 1 asked two unrelated questions *and* every entry point outside the utility needed a modal asking it before it could navigate. It is now a segmented toggle at the top of **Contents**, which is the step it actually decides: a video picks clips to draw on, an image asks which recordings share a timeline. The pre-flow dialog is gone and `openExportOf` no longer carries a kind. |
+| **The cover editor had no door** | `CoverCropDialog` — crop, pan, pinch, soften — was reachable from a person's profile photo and *nowhere else*. Every other cover imported straight to whatever the centre-fill happened to catch, permanently. `setCoverCrop` existed on three ViewModels with no caller on any of them. Wired for events, collections and recordings. |
+| **…and then three doors** | The first fix put "Change photo", "Adjust" and "Remove" in the editor in front of the sheet, which is clunky to read and wrong in principle: two of those three act on a picture without ever showing it, and all three are things the sheet can do with the picture on screen. One button now. Editing a cover is: open it, choose or do not choose a photograph, frame it, save. `CoverCropDialog` takes a nullable cover and owns choosing and removing, so the same sheet is the empty state and the editor. |
+| **The library could not set a photo** | The timeline row's editor deliberately omitted it — the reasoning was that a photo button with nothing to check it against was worse than no button. That dissolves once picking one opens the framing sheet, which *is* the picture at the size the library will draw it. Restored, with its own `setEventCover` on the library ViewModel. |
+| **An individual recording's Highlights looped for ever** | A recording is the narrowest scope there is, so its own highest peak came from itself — and the new link pointed at the page it was already on, pushing a fresh copy onto the back stack every tap. `AnalysisViewModel` now knows which recording it *is*, and both Highlights and the Compare lanes ask for a way to open a record rather than being handed one: null means "that is here", and no link is drawn. |
+| **The recording editor's tag button read " tags"** | The sixth eaten string template. Same as the event editor's, found the same way. |
+| **Highlights were a dead end** | Every row is a statement about one moment — "Kyle hit 186" — and there was no way to go and look at it. "Highest peak" and "Peak came from" now open the recording behind them. "Most time recorded" deliberately does not: a total across eleven recordings is not any one of them, and opening the longest would answer a question nobody asked. |
+| **The Summary opened on a chart of coloured bars** | Reordered to how the questions are asked: what stood out, who was there, then how the time was spent. "Where the time went" is the most detailed thing on the page and the least likely to be what someone came for, so it is last. |
+| **The duration was a section heading** | Moved into the subject header beside the low, average and high. It is a total for the same subject as those three, not a label for a chart — and the heading it sat in was the only reason that section had to be at the top. |
+| **`03/14/2026` and `9:14:07 PM`** | The default date format is `MMMM d, yyyy` — "August 5, 2026" — and it is the first option in Settings. A date on a detail page is read once and remembered, not scanned down a column, so making the reader parse a number before they know the month was work for nothing. Times drop their seconds: nothing this formats is meaningful to the second. The one exception is the clock burned into an exported video, which is *running* and would look frozen without them. |
+| **The refinement sheet was not drawn as a tree** | `entriesFor` has returned a nested walk with a depth on every row since it was rewritten, and the dialog rendered them all flush left — so a festival's days, its sets, and the recordings inside those sets arrived as one flat column of forty checkboxes. It indents by depth now. The indent is the point of the sheet: it is where you see that unticking one row takes six others with it. |
+| **Unticking an event left its children ticked** | The rule was always in the numbers — excluding an event excludes its subtree — but the sheet drew a scope that did not exist: Day 1 out, its six sets apparently still in. Rows under an excluded row now show unticked, dimmed, saying *"Left out with what it's in"*, and cannot be ticked back on their own. The way back is the parent's box, which is the only tick that would actually change anything. |
+| **"Refine scope" sat in the middle of the Summary** | Moved into the event's edit modal, under **Analysis**, beside Tags and Photo. Deciding what an analysis covers is an edit to the question being asked; it was a text button next to the "Where the time went" heading, which is a place for a figure. `AnalysisScreen` still owns the sheet — the editor is rendered through a new `subjectEditor` slot that is handed the way in — so there is still exactly one implementation. A subject with no editor keeps the Summary's button rather than losing the door. |
+| **The event editor's tag button read " tags"** | `"$tagCount tag"` with the template eaten by a shell substitution — the fifth of that kind. Found while adding the row next to it. |
+| **Four copies of the export handoff** | One `openExportOf(source, kind)`. The four detail pages differed only in the `ExportSource` they named, and four copies of a handoff is four chances for one to land on a different step. Two further dead wires went with it: `openExport`, and the library's `onExportSelection` — the selection menu exports CSV and `.bpmjson` itself now, so the video/image path out of it had no caller. |

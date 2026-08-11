@@ -67,7 +67,7 @@ class AnalysisSplitTest {
         )
 
         assertEquals(
-            listOf<SplitAxis>(SplitAxis.TagCategory(1, "Character")),
+            listOf(SplitAxis.TagCategory(1, "Character"), SplitAxis.Recording),
             AnalysisSplit.axesFor(records)
         )
     }
@@ -81,7 +81,8 @@ class AnalysisSplitTest {
             record(2, tags = listOf(tag("Spiderman")))
         )
 
-        assertTrue(AnalysisSplit.axesFor(records).isEmpty())
+        // Only the recordings themselves, which two of anything can always be compared along.
+        assertEquals(listOf(SplitAxis.Recording), AnalysisSplit.axesFor(records))
     }
 
     @Test
@@ -92,7 +93,7 @@ class AnalysisSplitTest {
             record(2)
         )
 
-        assertTrue(AnalysisSplit.axesFor(records).isEmpty())
+        assertEquals(listOf(SplitAxis.Recording), AnalysisSplit.axesFor(records))
     }
 
     @Test
@@ -103,7 +104,12 @@ class AnalysisSplitTest {
         )
 
         assertEquals(
-            listOf(SplitAxis.Person, SplitAxis.ChildEvent, SplitAxis.EventType),
+            listOf(
+                SplitAxis.Person,
+                SplitAxis.ChildEvent,
+                SplitAxis.EventType,
+                SplitAxis.Recording
+            ),
             AnalysisSplit.axesFor(records)
         )
     }
@@ -112,7 +118,7 @@ class AnalysisSplitTest {
     fun `an axis nobody used is not offered`() {
         val records = listOf(record(1), record(2))
 
-        assertTrue(AnalysisSplit.axesFor(records).isEmpty())
+        assertEquals(listOf(SplitAxis.Recording), AnalysisSplit.axesFor(records))
     }
 
     @Test
@@ -128,9 +134,73 @@ class AnalysisSplitTest {
         )
 
         assertEquals(
-            setOf("Character", "Mode"),
+            setOf("Character", "Mode", "Recording"),
             AnalysisSplit.axesFor(records).map { it.label }.toSet()
         )
+    }
+
+    // --- Event types behave like tag categories ---
+
+    @Test
+    fun `a type holding several events becomes an axis of its own`() {
+        // "Concert or sports game" is the category question and EventType answers it. "Which
+        // concert" is the one asked next, and ChildEvent could not answer it — it puts every event
+        // in the scope side by side, so the concerts sit scattered among the sports games.
+        val records = listOf(
+            record(1, eventName = "Subtronics", eventType = "Concert"),
+            record(2, eventName = "Excision", eventType = "Concert"),
+            record(3, eventName = "Sounders", eventType = "Sports game")
+        )
+
+        assertTrue(AnalysisSplit.axesFor(records).contains(SplitAxis.EventsOfType("Concert")))
+        // One sports game is not a comparison of sports games.
+        assertFalse(AnalysisSplit.axesFor(records).contains(SplitAxis.EventsOfType("Sports game")))
+    }
+
+    @Test
+    fun `an event type axis compares only that type, and says so`() {
+        val records = listOf(
+            record(1, eventName = "Subtronics", eventType = "Concert", max = 180.0),
+            record(2, eventName = "Excision", eventType = "Concert", max = 170.0),
+            record(3, eventName = "Sounders", eventType = "Sports game", max = 120.0)
+        )
+
+        val lanes = AnalysisSplit.split(records, SplitAxis.EventsOfType("Concert"))
+
+        assertEquals(listOf("Subtronics", "Excision"), lanes.filterNot { it.isUnlabelled }.map { it.value })
+        // The sports game is still counted — the lanes sum to the whole — but it is *other*, not
+        // unlabelled. It has an event type; it simply is not this one.
+        assertEquals("Other event types", lanes.last().value)
+        assertTrue(lanes.last().isUnlabelled)
+    }
+
+    // --- The scope's own event is never a lane ---
+
+    @Test
+    fun `the event being analysed is not compared against itself`() {
+        // A festival's own loose recordings carry its id. Left in, they become a lane holding
+        // everything, drawn at full width, saying nothing.
+        val records = listOf(
+            record(1, eventName = "Coachella", eventId = 10),
+            record(2, eventName = "Day 1", eventId = 11),
+            record(3, eventName = "Day 2", eventId = 12)
+        )
+
+        val lanes = AnalysisSplit.split(records, SplitAxis.ChildEvent, excludeEventId = 10)
+
+        assertEquals(listOf("Day 1", "Day 2"), lanes.filterNot { it.isUnlabelled }.map { it.value })
+        // Its recording is still in the totals, in the residual lane.
+        assertEquals(3, lanes.sumOf { it.count })
+    }
+
+    @Test
+    fun `an axis that only qualified because of the root is not offered`() {
+        val records = listOf(
+            record(1, eventName = "Coachella", eventId = 10),
+            record(2, eventName = "Day 1", eventId = 11)
+        )
+
+        assertFalse(AnalysisSplit.axesFor(records, excludeEventId = 10).contains(SplitAxis.ChildEvent))
     }
 
     // --- The partition property ---
@@ -209,15 +279,25 @@ class AnalysisSplitTest {
     // --- Ordering and summaries ---
 
     @Test
-    fun `lanes read hardest first`() {
+    fun `lanes read highest first by whatever is being measured`() {
+        // Ordered by the figure on show, not always by peak. Ranking by peak while the screen
+        // displays averages is a list that looks mis-sorted with no way to tell that it is not.
         val records = listOf(
-            record(1, max = 140.0, tags = listOf(tag("Spiderman"))),
-            record(2, max = 190.0, tags = listOf(tag("Hulk")))
+            record(1, max = 190.0, avg = 90.0, tags = listOf(tag("Spiderman"))),
+            record(2, max = 140.0, avg = 130.0, tags = listOf(tag("Hulk")))
         )
+        val axis = SplitAxis.TagCategory(1, "Character")
 
+        // The default is the average, which is what the screen opens on.
         assertEquals(
             listOf("Hulk", "Spiderman"),
-            AnalysisSplit.split(records, SplitAxis.TagCategory(1, "Character")).map { it.value }
+            AnalysisSplit.split(records, axis).map { it.value }
+        )
+
+        // Asked for the peak instead, the order flips — the two disagree here on purpose.
+        assertEquals(
+            listOf("Spiderman", "Hulk"),
+            AnalysisSplit.split(records, axis) { it.maxBpm }.map { it.value }
         )
     }
 

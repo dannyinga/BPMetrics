@@ -587,9 +587,12 @@ object ImageExporter {
         timelineOriginMs: Long
     ): String? = when (config.clockMode) {
         ClockMode.NONE -> null
+        // With seconds: this one is a running clock rather than a stamp, and it advances a frame
+        // at a time.
         ClockMode.CLOCK -> StringFormatHelpers.getTimeString(
             timelineOriginMs + viewport.playhead.toLong(),
-            java.time.ZoneId.of(config.timeZoneId)
+            java.time.ZoneId.of(config.timeZoneId),
+            withSeconds = true
         )
         // From the start of the session, which is well defined however many people are on the
         // frame — unlike "into the recording", which with five wearers is five different numbers.

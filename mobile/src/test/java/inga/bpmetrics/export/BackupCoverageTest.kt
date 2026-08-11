@@ -56,7 +56,8 @@ class BackupCoverageTest {
             "coverCropTop" to "Carried inside cover.",
             "coverCropRight" to "Carried inside cover.",
             "coverCropBottom" to "Carried inside cover.",
-            "coverBlur" to "Carried inside cover."
+            "coverBlur" to "Carried inside cover.",
+            "coverDim" to "Carried inside cover."
         ),
         EventEntity::class.java to mapOf(
             "eventId" to "Reassigned on insert; the backup keys events by name.",
@@ -68,7 +69,8 @@ class BackupCoverageTest {
             "coverCropTop" to "Carried inside cover.",
             "coverCropRight" to "Carried inside cover.",
             "coverCropBottom" to "Carried inside cover.",
-            "coverBlur" to "Carried inside cover."
+            "coverBlur" to "Carried inside cover.",
+            "coverDim" to "Carried inside cover."
         ),
         CollectionEntity::class.java to mapOf(
             "collectionId" to "Reassigned on insert; members are re-linked through the id maps.",
@@ -77,7 +79,8 @@ class BackupCoverageTest {
             "coverCropTop" to "Carried inside cover.",
             "coverCropRight" to "Carried inside cover.",
             "coverCropBottom" to "Carried inside cover.",
-            "coverBlur" to "Carried inside cover."
+            "coverBlur" to "Carried inside cover.",
+            "coverDim" to "Carried inside cover."
         ),
         PersonEntity::class.java to mapOf(
             "personId" to "Reassigned on insert; the backup keys people by name.",

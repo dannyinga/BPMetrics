@@ -434,9 +434,8 @@ internal fun RecordEditDialog(
     tagCount: Int = 0,
     onEditTags: (() -> Unit)? = null,
     /** Its *own* picture, not an inherited one — removing what you did not set makes no sense. */
-    hasOwnCover: Boolean = false,
-    onPickCover: (() -> Unit)? = null,
-    onRemoveCover: (() -> Unit)? = null,
+    /** See [inga.bpmetrics.ui.components.CoverEditor]. */
+    coverEditor: (@Composable () -> Unit)? = null,
     onDismiss: () -> Unit,
     onConfirm: (
         title: String,
@@ -499,15 +498,11 @@ internal fun RecordEditDialog(
                     onSelect = { locationId = it }
                 )
 
-                onPickCover?.let { pick ->
+                coverEditor?.let { editor ->
                     Spacer(Modifier.height(16.dp))
                     Text("Photo", style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.height(6.dp))
-                    CoverRow(
-                        hasCover = hasOwnCover,
-                        onPick = pick,
-                        onRemove = { onRemoveCover?.invoke() }
-                    )
+                    editor()
                 }
 
                 onEditTags?.let { edit ->
@@ -519,7 +514,10 @@ internal fun RecordEditDialog(
                     // dialog. It belongs on this list because a tag is part of what a recording
                     // is, which is what this editor is for.
                     androidx.compose.material3.OutlinedButton(onClick = edit) {
-                        Text(if (tagCount == 0) "Add tags" else " tag" + if (tagCount == 1) "" else "s")
+                        Text(
+                            if (tagCount == 0) "Add tags"
+                            else "$tagCount tag" + if (tagCount == 1) "" else "s"
+                        )
                     }
                 }
             }

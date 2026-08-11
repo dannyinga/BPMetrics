@@ -9,11 +9,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,6 +33,7 @@ import inga.bpmetrics.library.displayName
 import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
 import inga.bpmetrics.ui.analysis.EventDetailViewModel
+import inga.bpmetrics.ui.analysis.shortDuration
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.tags.EffectiveTagChip
 import inga.bpmetrics.ui.tags.TagSelectionDialog
@@ -58,7 +62,7 @@ fun EventDetailScreen(
     libraryViewModel: inga.bpmetrics.ui.library.LibraryViewModel,
     eventId: Long,
     onBack: () -> Unit,
-    onExport: (inga.bpmetrics.ui.export.ExportKind) -> Unit
+    onExport: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -79,10 +83,16 @@ fun EventDetailScreen(
     val tree by repository.allEventsInTree.collectAsStateWithLifecycle(initialValue = emptyList())
     val places by repository.getAllLocations().collectAsStateWithLifecycle(initialValue = emptyList())
 
+    // Straight into framing once it lands, while the choice is fresh. A cover that came out
+    // centred on somebody's shoulder and has to be hunted down to fix is worse than one more step
+    // now — and until this existed there was no way to fix it at all.
+    var framingCover by remember { mutableStateOf(false) }
+
     // Registered once for the screen: a launcher outlives the dialog that starts it.
     val pickCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
         subject.setCover(context, uri) { ok ->
-            if (!ok) Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+            if (ok) framingCover = true
+            else Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -155,29 +165,18 @@ fun EventDetailScreen(
                             append(" · ${state.personCount} ")
                             append(if (state.personCount == 1) "person" else "people")
                         }
+                        // The one figure that used to head the zone breakdown. It is a total like
+                        // the counts either side of it, not a heading for a chart.
+                        if (!uiState.isEmpty) {
+                            append(" · ${shortDuration(uiState.totalActiveDurationMs)}")
+                        }
                     },
                     onOpenAncestor = { id ->
                         navController.navigate("${inga.bpmetrics.ui.Routes.EVENT_DETAIL}/$id")
                     },
-                    tags = if (tags.isEmpty()) null else {
-                        {
-                            inga.bpmetrics.ui.components.FlowRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                tags.forEach { effective ->
-                                    EffectiveTagChip(
-                                        effective = effective,
-                                        onRemove = { subject.removeTag(effective.tag.tagId) },
-                                        onExplain = {
-                                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    tags = tags,
+                    onRemoveTag = { subject.removeTag(it) },
+                    onExplainTag = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
                 )
             }
         },
@@ -186,9 +185,6 @@ fun EventDetailScreen(
                 Icon(Icons.Default.Edit, contentDescription = "Edit event")
             }
         },
-        // Filing something wrongly is easy, and undoing it should not mean opening the recording
-        // to change which event it is in.
-        onRemoveFromScope = { subject.removeRecord(it) },
         subjectOverflow = {
             Box {
                 IconButton(onClick = { menuOpen = true }) {
@@ -205,22 +201,51 @@ fun EventDetailScreen(
                     )
                 }
             }
+        },
+        // The editor, rendered by the analysis so it can offer "What's included" — see the slot's
+        // documentation. An event is the one subject where refining means much: it is the only one
+        // with a subtree to leave parts of out.
+        subjectEditor = { openRefineScope ->
+            if (editing && event != null) {
+                val exclusions by analysis.exclusions.collectAsStateWithLifecycle()
+                EventEditorLauncher(
+                    libraryViewModel = libraryViewModel,
+                    event = event,
+                    span = state.span,
+                    tagCount = tags.count { !it.isInherited },
+                    onEditTags = { tagging = true },
+                    coverEditor = {
+                        inga.bpmetrics.ui.components.CoverEditor(
+                            cover = event.ownCover,
+                            onPick = pickCover,
+                            framing = framingCover,
+                            onFramingChange = { framingCover = it },
+                            onCrop = { subject.setCoverCrop(it) },
+                            onRemove = { subject.clearCover(context) },
+                            title = "Frame ${event.displayName}",
+                            // The name, drawn where it will really sit, so the frame is judged
+                            // against the words that will be over it rather than in the abstract.
+                            previewContent = {
+                                Text(
+                                    event.displayName,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        )
+                    },
+                    excludedCount = exclusions.excludedEventIds.size +
+                        exclusions.excludedRecordIds.size,
+                    // Closes the editor first. Two stacked dialogs would leave the sheet's own
+                    // scrim over an editor nobody can reach, and returning to a half-typed name
+                    // after picking through a tree is not where anyone wants to land.
+                    onRefineScope = { editing = false; openRefineScope() },
+                    onDismiss = { editing = false }
+                )
+            }
         }
     )
-
-    if (editing && event != null) {
-        EventEditorLauncher(
-            libraryViewModel = libraryViewModel,
-            event = event,
-            span = state.span,
-            tagCount = tags.count { !it.isInherited },
-            onEditTags = { tagging = true },
-            hasOwnCover = event.ownCover != null,
-            onPickCover = pickCover,
-            onRemoveCover = { subject.clearCover(context) },
-            onDismiss = { editing = false }
-        )
-    }
 
     if (tagging) {
         val categories by subject.categories.collectAsStateWithLifecycle(initialValue = emptyList())

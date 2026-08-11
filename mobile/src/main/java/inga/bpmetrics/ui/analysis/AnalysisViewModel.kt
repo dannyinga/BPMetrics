@@ -56,7 +56,23 @@ class AnalysisViewModel(
     private val readings: suspend (List<Long>) -> List<inga.bpmetrics.library.BpmRecordWithPoints> =
         { emptyList() },
     /** Who and what the lanes are labelled and coloured by. */
-    private val chartContext: Flow<ChartContext> = flowOf(ChartContext())
+    private val chartContext: Flow<ChartContext> = flowOf(ChartContext()),
+    /**
+     * The event this scope *is*, when it is one.
+     *
+     * Excluded from both lists it would otherwise appear in. Offering to leave out the thing you
+     * opened is offering to empty the page, and comparing an event against itself gives one lane
+     * holding everything — a bar at full width saying nothing.
+     */
+    private val rootEventId: Long? = null,
+    /**
+     * The recording this scope *is*, when it is one.
+     *
+     * Nothing offers to open it. A recording's own page is the narrowest scope there is, so its
+     * highest peak came from itself — and the link went to the page it was already on, pushing a
+     * fresh copy onto the back stack every tap.
+     */
+    private val rootRecordId: Long? = null
 ) : ViewModel() {
 
     // --- What this analysis leaves out (TX-3.6 to 3.8) ---
@@ -85,9 +101,10 @@ class AnalysisViewModel(
                     eventLabel = it.eventLabel
                 )
             },
-            // No root: a collection scope holds unrelated branches, a filter holds whatever it
-            // matched, and a saved analysis has no live tree. None of those has a level to take.
-            rootId = null,
+            // The event being analysed, where there is one — its own row is not something to
+            // tick off. Null for a collection holding unrelated branches, a filter, or a frozen
+            // snapshot, none of which has a single level to take.
+            rootId = rootEventId,
             exclusions = excluded
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -139,32 +156,73 @@ class AnalysisViewModel(
 
     private val _splitAxisKey = MutableStateFlow<String?>(null)
 
+    /** See [rootRecordId]. Read by the screen so nothing draws a link back to where it already is. */
+    val selfRecordId: Long? get() = rootRecordId
+
     /** Only axes the scope can actually be compared along. See [AnalysisSplit.axesFor]. */
     val availableAxes: StateFlow<List<SplitAxis>> = analysisRecords
-        .map { AnalysisSplit.axesFor(it) }
+        .map { AnalysisSplit.axesFor(it, excludeEventId = rootEventId) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val selectedAxis: StateFlow<SplitAxis?> = combine(availableAxes, _splitAxisKey) { axes, key ->
         // Resolved against what is currently offered, so an axis that stops qualifying — the last
         // Hulk recording excluded, say — falls away rather than showing one lane.
-        axes.firstOrNull { it.key == key }
+        //
+        // Falls back to the first offered rather than to nothing. Compare opening on a row of
+        // chips and an empty space below asks the reader to make a choice before the tab will say
+        // anything, and the first axis is a better guess than no axis: the tab is only reachable
+        // when there is something to compare, so there is always an answer to show.
+        axes.firstOrNull { it.key == key } ?: axes.firstOrNull()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val lanes: StateFlow<List<SplitLane>> = combine(analysisRecords, selectedAxis) { records, axis ->
-        axis?.let { AnalysisSplit.split(records, it) }.orEmpty()
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    // Average, highest first. A peak is one instant and says how hard the hardest moment was; an
+    // average is the night. Opening on the peak ranked whoever spiked once above whoever sustained
+    // it, which is rarely the question being asked.
+    private val _selectedMetric = MutableStateFlow(MetricType.AVG)
 
+    private val _isRecordsReversed = MutableStateFlow(false)
+
+    val lanes: StateFlow<List<SplitLane>> =
+        combine(
+            analysisRecords,
+            selectedAxis,
+            _selectedMetric,
+            _isRecordsReversed
+        ) { records, axis, metric, reversed ->
+            val split = axis?.let {
+                // Ordered by the figure on show. Ranking by peak while displaying averages is a
+                // list that looks mis-sorted, with no way for the reader to tell it is not.
+                AnalysisSplit.split(records, it, excludeEventId = rootEventId) { lane ->
+                    when (metric) {
+                        MetricType.LOW -> lane.minBpm
+                        MetricType.AVG -> lane.avgBpm
+                        MetricType.HIGH -> lane.maxBpm
+                    }
+                }
+            }.orEmpty()
+            // Highest first answers "which was the most", which is nearly always the question. The
+            // exception is the low: "whose was the calmest" needs the other end, and picking LOW
+            // alone still puts the *highest* low at the top.
+            if (reversed) split.reversed() else split
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Picks an axis. Tapping the selected one again does nothing.
+     *
+     * It used to clear the selection, on the reasoning that comparing is a question you ask on
+     * purpose and should be as easy to stop asking. But Compare is now a tab of its own — arriving
+     * there *is* asking — so clearing only ever produced an empty screen someone had to tap their
+     * way back out of.
+     */
     fun setSplitAxis(key: String?) {
-        _splitAxisKey.value = if (_splitAxisKey.value == key) null else key
+        if (key != null) _splitAxisKey.value = key
     }
 
-    private val _selectedMetric = MutableStateFlow(MetricType.HIGH)
     /**
      * The currently selected metric (LOW, AVG, HIGH) for sorting and display.
      */
     val selectedMetric = _selectedMetric.asStateFlow()
 
-    private val _isRecordsReversed = MutableStateFlow(false)
     /**
      * Whether the records list should be reversed from its default metric-based sort.
      */
@@ -214,6 +272,23 @@ class AnalysisViewModel(
     private val _chartRequested = MutableStateFlow(false)
 
     fun requestChart() { _chartRequested.value = true }
+
+    /**
+     * What a comparison compares.
+     *
+     * Rate and time-in-band are two different questions about the same lanes, and showing both at
+     * once — a number *and* a bar of coloured segments per row — meant every row said two things
+     * and neither clearly. They are an axis of their own, so they get a control of their own.
+     */
+    private val _compareMeasure = MutableStateFlow(CompareMeasure.RATE)
+    val compareMeasure: StateFlow<CompareMeasure> = _compareMeasure.asStateFlow()
+
+    fun setCompareMeasure(measure: CompareMeasure) { _compareMeasure.value = measure }
+
+    /** Profiles by id, so a row can show someone's face rather than a coloured dot. */
+    val peopleById: StateFlow<Map<Long, inga.bpmetrics.library.PersonEntity>> = chartContext
+        .map { context -> context.people.associateBy { it.personId } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
      * How much measured time is in scope, from the stored figures.
@@ -553,6 +628,8 @@ class AnalysisViewModel(
                 scope = repository.describeScope(ref),
                 // A frozen selection has no live tree to walk: its rows are a snapshot, and
                 // anything left out of it was left out when it was taken.
+                rootEventId = (ref as? ScopeRef.Event)?.eventId,
+                rootRecordId = (ref as? ScopeRef.Recording)?.recordId,
                 tree = repository.scopeIsFrozen(ref).flatMapLatest { isFrozen ->
                     if (isFrozen) flowOf(emptyList()) else repository.allEventsInTree
                 },
@@ -873,3 +950,18 @@ data class ChartContext(
     val watches: List<inga.bpmetrics.library.WatchEntity> = emptyList(),
     val people: List<inga.bpmetrics.library.PersonEntity> = emptyList()
 )
+
+/**
+ * What a comparison is comparing.
+ *
+ * Two questions people ask of the same lanes, and they want different pictures. "Who peaked
+ * highest" is one number per lane and a bar; "who spent longest above 160" is a breakdown. Drawing
+ * both on every row made each row say two things and neither clearly.
+ */
+enum class CompareMeasure(val label: String) {
+    /** Low, average or peak — whichever the metric control says. */
+    RATE("Rate"),
+
+    /** Time in each heart rate band. */
+    ZONES("Zones")
+}

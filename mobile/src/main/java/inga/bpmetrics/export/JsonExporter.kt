@@ -125,7 +125,9 @@ data class CoverDto(
     val cropTop: Float = 0f,
     val cropRight: Float = 1f,
     val cropBottom: Float = 1f,
-    val blur: Float = 0f
+    val blur: Float = 0f,
+    /** How far it is darkened. See [inga.bpmetrics.library.Cover.dim]. */
+    val dim: Float = 0f
 )
 
 data class EventDto(
@@ -427,7 +429,8 @@ object JsonExporter {
                             cropTop = record.metadata.coverCropTop ?: 0f,
                             cropRight = record.metadata.coverCropRight ?: 1f,
                             cropBottom = record.metadata.coverCropBottom ?: 1f,
-                            blur = record.metadata.coverBlur ?: 0f
+                            blur = record.metadata.coverBlur ?: 0f,
+                            dim = record.metadata.coverDim ?: 0f
                         ).toDto(readImage)
                     },
                 dataPoints = record.dataPoints.map { BpmDataPointDto(it.timestamp, it.bpm) }
@@ -590,5 +593,6 @@ internal fun Cover.toDto(readImage: (String) -> ByteArray?): CoverDto =
         cropTop = cropTop,
         cropRight = cropRight,
         cropBottom = cropBottom,
-        blur = blur
+        blur = blur,
+        dim = dim
     )

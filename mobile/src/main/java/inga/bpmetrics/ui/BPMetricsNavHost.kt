@@ -47,7 +47,6 @@ import inga.bpmetrics.ui.navigation.AppDestination
 import inga.bpmetrics.ui.navigation.AppDrawerContent
 import inga.bpmetrics.ui.settings.SettingsScreen
 import inga.bpmetrics.ui.settings.SettingsViewModel
-import inga.bpmetrics.ui.export.ExportKind
 import inga.bpmetrics.ui.export.ExportSource
 import inga.bpmetrics.ui.export.ExportStep
 import inga.bpmetrics.ui.export.ExportUtilityScreen
@@ -116,24 +115,18 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
      * defaults for a step the user never saw, and then previewed the result as though they had
      * chosen it.
      *
-     * The label is passed through because a saved analysis exported from its own screen arrives as
-     * a bare set of recordings, and would otherwise lose the name that was the point of saving it.
+     * One function rather than the four copies of these five lines that the detail pages each
+     * carried. They only ever differed in the [ExportSource] they named — which is the one thing
+     * the caller actually knows — and four copies of a handoff is four chances for one of them to
+     * land on a different step.
+     *
+     * It no longer carries a kind either. Video or image is asked at the top of Contents, which is
+     * where it lands — so the modal that used to ask it before navigating was standing in front of
+     * a question the next screen was about to put better.
      */
-    val openExportAs: (List<inga.bpmetrics.library.BpmRecord>, String?, ExportKind) -> Unit =
-        { recs, label, kind ->
-            if (recs.isNotEmpty()) {
-                exportViewModel.startAt(
-                    source = ExportSource.Recordings(recs.map { it.metadata.recordId }.toSet()),
-                    step = ExportStep.CONTENTS,
-                    label = label,
-                    kind = kind
-                )
-                navController.navigateToSection(AppDestination.EXPORT)
-            }
-        }
-
-    val openExport: (List<inga.bpmetrics.library.BpmRecord>, String?) -> Unit = { recs, label ->
-        openExportAs(recs, label, ExportKind.VIDEO)
+    val openExportOf: (ExportSource) -> Unit = { source ->
+        exportViewModel.startAt(source = source, step = ExportStep.CONTENTS)
+        navController.navigateToSection(AppDestination.EXPORT)
     }
 
     ModalNavigationDrawer(
@@ -205,10 +198,6 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     viewModel = libraryViewModel,
                     onOpenDrawer = openDrawer,
                     awaitingConcurrentSelection = awaitingConcurrentSelection,
-                    onExportSelection = { recs, exportKind ->
-                        libraryViewModel.clearSelection()
-                        openExportAs(recs, null, exportKind)
-                    },
                     onAnalyseSelection = { ids ->
                         awaitingConcurrentSelection = false
                         // The same page an event or a collection opens. A hand-picked set is a
@@ -286,14 +275,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                             navController.navigateToSection(AppDestination.COLLECTIONS)
                         }
                     },
-                    onExport = { kind ->
-                        exportViewModel.startAt(
-                            source = ExportSource.Recordings(analysisSelection),
-                            step = ExportStep.CONTENTS,
-                            kind = kind
-                        )
-                        navController.navigateToSection(AppDestination.EXPORT)
-                    }
+                    onExport = { openExportOf(ExportSource.Recordings(analysisSelection)) }
                 )
             }
 
@@ -341,14 +323,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     libraryViewModel = libraryViewModel,
                     eventId = eventId,
                     onBack = { navController.popBackStack() },
-                    onExport = { kind ->
-                        exportViewModel.startAt(
-                            source = ExportSource.Event(eventId),
-                            step = ExportStep.CONTENTS,
-                            kind = kind
-                        )
-                        navController.navigateToSection(AppDestination.EXPORT)
-                    }
+                    onExport = { openExportOf(ExportSource.Event(eventId)) }
                 )
             }
 
@@ -392,17 +367,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                             navController.navigateToSection(AppDestination.COLLECTIONS)
                         }
                     },
-                    onExport = { kind ->
-                        // Scoped as the *collection* rather than as its recordings, so the
-                        // utility can still offer one image per event. Flattening it to a bare
-                        // set of records would throw away the structure that choice depends on.
-                        exportViewModel.startAt(
-                            source = ExportSource.Group(groupId),
-                            step = ExportStep.CONTENTS,
-                            kind = kind
-                        )
-                        navController.navigateToSection(AppDestination.EXPORT)
-                    }
+                    // Scoped as the *collection* rather than as its recordings, so the utility can
+                    // still offer one image per event. Flattening it to a bare set of records
+                    // would throw away the structure that choice depends on.
+                    onExport = { openExportOf(ExportSource.Group(groupId)) }
                 )
             }
 
@@ -449,14 +417,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                     recordId = recordId,
                     onBack = { navController.popBackStack() },
                     onDeleted = { navController.popBackStack() },
-                    onExport = { kind ->
-                        exportViewModel.startAt(
-                            source = ExportSource.Recordings(setOf(recordId)),
-                            step = ExportStep.CONTENTS,
-                            kind = kind
-                        )
-                        navController.navigateToSection(AppDestination.EXPORT)
-                    },
+                    onExport = { openExportOf(ExportSource.Recordings(setOf(recordId))) },
                     onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") }
                 )
             }

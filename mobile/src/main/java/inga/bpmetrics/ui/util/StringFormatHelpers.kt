@@ -79,7 +79,7 @@ object StringFormatHelpers {
      * The cost is a global, and the honest reason it is acceptable is that this genuinely is one:
      * there is no sense in which two parts of the app should disagree about what today looks like.
      */
-    @Volatile var datePattern: String = "MM/dd/yyyy"
+    @Volatile var datePattern: String = "MMMM d, yyyy"
     @Volatile var use24Hour: Boolean = false
 
     /**
@@ -97,7 +97,7 @@ object StringFormatHelpers {
         // Rebuilt per call rather than cached: a DateTimeFormatter is cheap to make, and caching
         // one would need invalidating every time the preference changed.
         val dateFormatter = runCatching { DateTimeFormatter.ofPattern(datePattern) }
-            .getOrElse { DateTimeFormatter.ofPattern("MM/dd/yyyy") }
+            .getOrElse { DateTimeFormatter.ofPattern("MMMM d, yyyy") }
         val dateText = Instant.ofEpochMilli(date).atZone(zoneId).format(dateFormatter)
         return dateText
     }
@@ -112,8 +112,20 @@ object StringFormatHelpers {
     /**
      * A time, in a stated clock. See [getDateString] for why the zone is not optional.
      */
-    fun getTimeString(time: Long, zoneId: ZoneId) : String {
-        val pattern = if (use24Hour) "HH:mm:ss" else "hh:mm:ss a"
+    fun getTimeString(time: Long, zoneId: ZoneId, withSeconds: Boolean = false) : String {
+        // No seconds by default. Nearly every time this formats is a wall-clock moment — when a set
+        // started, when a recording was made — and none of them is meaningful to the second; the
+        // trailing ":07" was two characters of noise on every date line in the app.
+        //
+        // [withSeconds] is for a clock that is *running*: the overlay burned into an exported
+        // video advances a frame at a time, and one that sat on "9:14 PM" for a minute of footage
+        // would look frozen.
+        val pattern = when {
+            use24Hour && withSeconds -> "HH:mm:ss"
+            use24Hour -> "HH:mm"
+            withSeconds -> "h:mm:ss a"
+            else -> "h:mm a"
+        }
         val timeFormatter = DateTimeFormatter.ofPattern(pattern, Locale.getDefault())
         val timeString = "${
             Instant.ofEpochMilli(time)

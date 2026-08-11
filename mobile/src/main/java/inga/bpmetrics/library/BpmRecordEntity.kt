@@ -90,6 +90,8 @@ data class BpmRecordEntity (
     @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
     /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
     @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
+    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
+    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null,
 
     /**
      * The clock this recording is read in — an IANA id like "America/Los_Angeles".
@@ -150,7 +152,8 @@ data class BpmRecordEntity (
 
     /** This recording's own cover, if it was given one. */
     val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
+        coverDim
     )
 
 

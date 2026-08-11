@@ -2,6 +2,8 @@ package inga.bpmetrics.ui.detail
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,10 +15,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -24,9 +31,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.Cover
+import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.ui.components.CoverBackground
 import inga.bpmetrics.ui.components.CoverScrim
 import inga.bpmetrics.ui.components.overCover
+import inga.bpmetrics.ui.tags.EffectiveTagChip
 import inga.bpmetrics.ui.theme.BpmAvg
 import inga.bpmetrics.ui.theme.BpmHigh
 import inga.bpmetrics.ui.theme.BpmLow
@@ -61,7 +70,16 @@ fun SubjectHeader(
     /** A line of counts — "12 recordings · 4 people · 3h 20m". */
     counts: String? = null,
     onOpenAncestor: (Long) -> Unit = {},
-    tags: (@Composable () -> Unit)? = null,
+    /**
+     * What it is tagged with, effective set included.
+     *
+     * Data rather than a slot. The header has to be able to *count* them to collapse the list, and
+     * it could not while each subject handed down a finished row of chips — which was also two
+     * copies of the same `FlowRow`.
+     */
+    tags: List<EffectiveTag> = emptyList(),
+    onRemoveTag: (Long) -> Unit = {},
+    onExplainTag: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Over a photo, flat text disappears into whatever is behind it. The same shadow the library
@@ -130,9 +148,9 @@ fun SubjectHeader(
                 }
             }
 
-            tags?.let {
+            if (tags.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
-                it()
+                HeaderTags(tags, onRemoveTag, onExplainTag)
             }
         }
     }
@@ -170,30 +188,49 @@ private fun Figure(label: String, value: Int?, colour: Color, overCover: Boolean
     }
 }
 
+/** How many tags a header shows before it stops. */
+private const val TAGS_SHOWN = 4
+
 /**
- * Choosing the picture, from inside an editor.
+ * The tags, up to a few, and a way to see the rest.
  *
- * The cover *is* the header now, so it is part of what a subject looks like and belongs with the
- * rest of the editing rather than behind a menu. It was reachable from neither on a detail page —
- * only from the library's card menu — which meant the picture you were looking at could not be
- * changed from the page it was on.
+ * A header is a fixed amount of space at the top of a page, and tags are the one thing on it with
+ * no upper bound — a recording that inherits its set's, its day's and its festival's can easily
+ * carry a dozen, and a dozen chips wrap to four rows and push the whole analysis off the screen.
+ * Worse over a cover, where the header is a photograph the chips are then covering up.
+ *
+ * So: four, then a chip saying how many more. Expanded in place rather than in a dialog, because
+ * they are only chips and the point is to *see* them — and it collapses again from the same chip.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CoverRow(
-    hasCover: Boolean,
-    onPick: () -> Unit,
-    onRemove: () -> Unit
+private fun HeaderTags(
+    tags: List<EffectiveTag>,
+    onRemove: (Long) -> Unit,
+    onExplain: (String) -> Unit
 ) {
-    Row(
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val shown = if (expanded) tags else tags.take(TAGS_SHOWN)
+    val hidden = tags.size - shown.size
+
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        androidx.compose.material3.OutlinedButton(onClick = onPick) {
-            Text(if (hasCover) "Change photo" else "Add photo")
+        shown.forEach { effective ->
+            EffectiveTagChip(
+                effective = effective,
+                onRemove = { onRemove(effective.tag.tagId) },
+                onExplain = onExplain
+            )
         }
-        if (hasCover) {
-            androidx.compose.material3.TextButton(onClick = onRemove) { Text("Remove") }
+        if (hidden > 0 || expanded) {
+            AssistChip(
+                onClick = { expanded = !expanded },
+                label = { Text(if (expanded) "Show fewer" else "+$hidden more") }
+            )
         }
     }
 }
+

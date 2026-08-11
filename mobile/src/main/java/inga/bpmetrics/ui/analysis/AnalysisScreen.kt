@@ -21,17 +21,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileUpload
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.automirrored.filled.TrendingDown
+import androidx.compose.material.icons.automirrored.filled.TrendingFlat
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.StackedBarChart
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -43,6 +46,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SecondaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -82,9 +88,9 @@ import inga.bpmetrics.ui.theme.BpmLow
  * recordings, what happened and who did what", and only the header differs. Building the group its
  * own page would have been two implementations of one question, free to answer differently.
  *
- * Top to bottom: what is in scope, the three headline numbers, rankings by whichever comparison the
- * records support, per-person totals, and the recordings themselves. Tapping a person anywhere dims
- * the others everywhere, the same interaction as the event page.
+ * Three tabs: what the scope amounts to, its curves, and it split along whichever axes it supports.
+ * Tapping a person in the Summary dims the others everywhere, the same interaction as the event
+ * page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,7 +108,7 @@ fun AnalysisScreen(
      * One button rather than one per kind. "Export" is a single intention and the format is the
      * first question the flow asks anyway — two icons in the bar made the bar answer it twice.
      */
-    onExport: ((inga.bpmetrics.ui.export.ExportKind) -> Unit)? = null,
+    onExport: (() -> Unit)? = null,
     /**
      * The subject, drawn above the analysis.
      *
@@ -129,16 +135,20 @@ fun AnalysisScreen(
      */
     summaryExtra: (@Composable () -> Unit)? = null,
     /**
-     * Takes a recording out of the subject, where the subject is something it can be *in*.
+     * The subject's edit modal, handed the way in to "What's included".
      *
-     * An event, in practice. A collection's membership is edited from the collection, and a
-     * filter's is not membership at all — so this is null everywhere else and the row simply has
-     * no button.
+     * Rendered here rather than by the subject so that one composable still owns the refinement
+     * sheet, and so the subject can offer it from inside its editor. Deciding what an analysis
+     * covers is an edit to the question being asked, and it belongs with the other edits — it was
+     * a text button wedged into the middle of the Summary, beside a section heading it had nothing
+     * to do with.
+     *
+     * Null for a subject with no editor — a bare filter, a saved snapshot — which keeps the
+     * Summary's own button, because otherwise the sheet would have no door at all.
      */
-    onRemoveFromScope: ((Long) -> Unit)? = null
+    subjectEditor: (@Composable (openRefineScope: () -> Unit) -> Unit)? = null
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
-    var choosingExport by remember { mutableStateOf(false) }
     var saveName by remember { mutableStateOf("") }
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val availableAxes by viewModel.availableAxes.collectAsStateWithLifecycle()
@@ -147,6 +157,9 @@ fun AnalysisScreen(
     val exclusions by viewModel.exclusions.collectAsStateWithLifecycle()
     val curves by viewModel.curves.collectAsStateWithLifecycle()
     val drawsChart by viewModel.chartDrawsItself.collectAsStateWithLifecycle()
+    val compareMeasure by viewModel.compareMeasure.collectAsStateWithLifecycle()
+    val isReversed by viewModel.isRecordsReversed.collectAsStateWithLifecycle()
+    val peopleById by viewModel.peopleById.collectAsStateWithLifecycle()
     val scopeEntries by viewModel.scopeEntries.collectAsStateWithLifecycle()
     var showScopeRefinement by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(false)
@@ -164,18 +177,24 @@ fun AnalysisScreen(
     val selectedCategoryId by viewModel.selectedCategoryTabId.collectAsStateWithLifecycle()
     val isolatedPersonId by viewModel.isolatedPersonId.collectAsStateWithLifecycle()
 
-    val themeColor = when (selectedMetric) {
-        AnalysisViewModel.MetricType.LOW -> BpmLow
-        AnalysisViewModel.MetricType.AVG -> BpmAvg
-        AnalysisViewModel.MetricType.HIGH -> BpmHigh
+    /**
+     * Opens a recording, or null when there is nowhere to go.
+     *
+     * Null for the recording this page *is*. A recording is the narrowest scope there is, so its
+     * own highest peak came from itself — and the Highlights link pointed at the page it was
+     * already on, pushing a fresh copy onto the back stack every tap, for ever.
+     */
+    val openRecord: (Long) -> (() -> Unit)? = { id ->
+        if (id == viewModel.selfRecordId) null
+        else { { navController.navigate("${Routes.DETAIL}/$id") } }
     }
 
     var section by remember { mutableStateOf(AnalysisSection.SUMMARY) }
 
     // Sections with nothing in them are not offered. A Compare tab on a scope with one wearer and
     // no tags would open onto an empty card, which reads as a bug rather than as an absence.
-    val sections = remember(uiState.availableCategories, uiState.people, uiState.records) {
-        AnalysisSection.entries.filter { it.isAvailable(uiState) }
+    val sections = remember(uiState.records, availableAxes) {
+        AnalysisSection.entries.filter { it.isAvailable(uiState, availableAxes) }
     }
     // Whatever was selected can stop existing — filing the last recording out of a group empties
     // People, and the screen would otherwise keep rendering a section that is no longer listed.
@@ -232,7 +251,7 @@ fun AnalysisScreen(
                         subjectActions?.invoke(this)
 
                         if (onExport != null && !uiState.isEmpty) {
-                            IconButton(onClick = { choosingExport = true }) {
+                            IconButton(onClick = onExport) {
                                 Icon(
                                     Icons.Default.FileUpload,
                                     contentDescription = "Export"
@@ -269,7 +288,6 @@ fun AnalysisScreen(
             subjectHeader?.invoke()
 
             SectionBar(
-                uiState = uiState,
                 sections = sections,
                 selected = section,
                 onSelect = { section = it }
@@ -279,57 +297,36 @@ fun AnalysisScreen(
                 AnalysisSection.SUMMARY -> SummarySection(
                     uiState = uiState,
                     subjectHeader = subjectHeader,
-                    axes = availableAxes,
-                    selectedAxis = selectedAxis,
-                    lanes = lanes,
-                    onSelectAxis = { viewModel.setSplitAxis(it) },
-                    onRefineScope = { showScopeRefinement = true },
+                    peopleById = peopleById,
+                    isolatedPersonId = isolatedPersonId,
+                    onIsolate = { viewModel.isolatePerson(it) },
+                    onRefineScope = if (subjectEditor != null) null else {
+                        { showScopeRefinement = true }
+                    },
                     isRefined = !exclusions.isEmpty,
-                    curves = curves,
                     extra = summaryExtra,
+                    onOpenRecord = openRecord
+                )
+
+                AnalysisSection.TIMELINE -> TimelineSection(
+                    uiState = uiState,
+                    curves = curves,
                     drawsChart = drawsChart,
                     onDrawChart = { viewModel.requestChart() }
                 )
 
                 AnalysisSection.COMPARE -> CompareSection(
-                    uiState = uiState,
-                    selectedMetric = selectedMetric,
-                    onSelectMetric = { viewModel.setSelectedMetric(it) },
-                    selectedCategoryId = selectedCategoryId,
-                    themeColor = themeColor,
-                    isolatedPersonId = isolatedPersonId,
-                    peopleByName = remember(uiState.people) {
-                        uiState.people.associateBy { it.name }
-                    },
-                    onSelectCategory = { viewModel.setSelectedCategoryTab(it) },
-                    onToggleReverse = { viewModel.toggleRankingsReverse() },
-                    onOpenRanking = { ranking ->
-                        // An event bar opens the event; anything else opens the recording that
-                        // produced its number.
-                        ranking.eventId?.let {
-                            navController.navigate("${Routes.EVENT_DETAIL}/$it")
-                        } ?: ranking.topRecordId?.let {
-                            navController.navigate("${Routes.DETAIL}/$it")
-                        }
-                    }
-                )
-
-                AnalysisSection.PEOPLE -> PeopleSection(
-                    people = uiState.people,
-                    isolatedPersonId = isolatedPersonId,
-                    onIsolate = { viewModel.isolatePerson(it) }
-                )
-
-                AnalysisSection.RECORDINGS -> RecordingsSection(
-                    records = uiState.records,
+                    axes = availableAxes,
+                    selectedAxis = selectedAxis,
+                    onSelectAxis = { viewModel.setSplitAxis(it) },
+                    lanes = lanes,
+                    measure = compareMeasure,
+                    onSelectMeasure = { viewModel.setCompareMeasure(it) },
                     metric = selectedMetric,
                     onSelectMetric = { viewModel.setSelectedMetric(it) },
-                    uiState = uiState,
-                    themeColor = themeColor,
-                    isolatedPersonId = isolatedPersonId,
+                    isReversed = isReversed,
                     onToggleReverse = { viewModel.toggleRecordsReverse() },
-                    onOpen = { navController.navigate("${Routes.DETAIL}/$it") },
-                    onRemoveFromScope = onRemoveFromScope
+                    onOpenRecord = openRecord
                 )
             }
         }
@@ -370,6 +367,8 @@ fun AnalysisScreen(
             dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") } }
         )
     }
+
+    subjectEditor?.invoke { showScopeRefinement = true }
 }
 
 /**
@@ -379,36 +378,48 @@ fun AnalysisScreen(
  * per-person totals under a list nobody wanted to scroll past to reach them. Sections are cheap to
  * move between and each one is short enough to take in.
  */
+/**
+ * The three ways of reading one scope.
+ *
+ * **People stopped being one of them.** Per-person totals are a summary of who was there, not a
+ * separate question, and a tab holding one list beside a Summary that held everything else was
+ * splitting one answer across two places.
+ *
+ * **The curves gained one.** They were the top of the Summary, which pushed the numbers below the
+ * fold and made every page pay for a chart before saying anything.
+ *
+ * **Recordings stopped being one too.** It was a list of recordings ranked by low, average or peak,
+ * which is a comparison — the same question Compare answers, asked through a second control and
+ * drawn a second way. It is now an axis, [SplitAxis.Recording], and Compare took its look.
+ */
 private enum class AnalysisSection(val label: String) {
     SUMMARY("Summary"),
-    COMPARE("Compare"),
-    PEOPLE("People"),
-    RECORDINGS("Recordings");
+    TIMELINE("Timeline"),
+    COMPARE("Compare");
 
-    fun isAvailable(state: AnalysisUiState): Boolean = when (this) {
+    /**
+     * @param axes What the scope can be compared along, which is the only honest test for whether
+     *   Compare has anything to show — it used to be asked of the tag categories alone, so a
+     *   festival with no tags hid a tab that would have compared its nights.
+     */
+    fun isAvailable(state: AnalysisUiState, axes: List<SplitAxis>): Boolean = when (this) {
         SUMMARY -> true
-        COMPARE -> state.availableCategories.isNotEmpty()
-        PEOPLE -> state.people.isNotEmpty()
-        RECORDINGS -> state.records.isNotEmpty()
+        // Offered whenever there is anything to draw, including the offer to draw it.
+        TIMELINE -> state.records.isNotEmpty()
+        COMPARE -> axes.isNotEmpty()
     }
 
-    fun count(state: AnalysisUiState): Int? = when (this) {
-        SUMMARY -> null
-        COMPARE -> state.availableCategories.size
-        PEOPLE -> state.people.size
-        RECORDINGS -> state.records.size
-    }
 }
 
 /**
  * Which section is showing.
  *
- * Carries counts so the bar says how much is behind each one — "Recordings 42" is the difference
- * between knowing what you are about to open and finding out.
+ * No counts any more. They were there for "Recordings 42", which was worth knowing before opening
+ * the tab; the three that remain are ways of reading one scope rather than lists of things, and a
+ * number beside "Compare" would only be counting the chips on the tab below it.
  */
 @Composable
 private fun SectionBar(
-    uiState: AnalysisUiState,
     sections: List<AnalysisSection>,
     selected: AnalysisSection,
     onSelect: (AnalysisSection) -> Unit
@@ -431,13 +442,6 @@ private fun SectionBar(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(entry.label, maxLines = 1)
-                        entry.count(uiState)?.let { count ->
-                            Text(
-                                "$count",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
                     }
                 }
             )
@@ -445,269 +449,269 @@ private fun SectionBar(
     }
 }
 
+/**
+ * What this scope amounts to: the numbers, and who was there.
+ *
+ * People used to be a tab. Per-person totals are a summary of who was in a scope, not a separate
+ * question about it, so having them next door meant one answer split across two places — and the
+ * Summary that remained opened on a chart with the figures below the fold.
+ */
 @Composable
 private fun SummarySection(
     uiState: AnalysisUiState,
-    /** Null when the subject drew its own header, which already carries all of this. */
+    /** Null when there is no subject — a bare question draws the scope card instead. */
     subjectHeader: (@Composable () -> Unit)? = null,
-    axes: List<SplitAxis>,
-    selectedAxis: SplitAxis?,
-    lanes: List<SplitLane>,
-    onSelectAxis: (String?) -> Unit,
-    onRefineScope: () -> Unit,
+    peopleById: Map<Long, inga.bpmetrics.library.PersonEntity>,
+    isolatedPersonId: Long?,
+    onIsolate: (Long) -> Unit,
+    /** Null where the subject offers the sheet from its own editor instead. */
+    onRefineScope: (() -> Unit)?,
     isRefined: Boolean,
-    /** The curves for this scope, or empty when there are none to draw. */
-    curves: ConcurrentAnalysis = ConcurrentAnalysis(),
     /** Whatever the subject wants to add here. See [AnalysisScreen]. */
     extra: (@Composable () -> Unit)? = null,
-    /** False when the scope is large enough that the chart waits to be asked for. */
-    drawsChart: Boolean = true,
-    onDrawChart: () -> Unit = {}
+    /** Given a record, the way to open it — or null where that is the page we are on. */
+    onOpenRecord: (Long) -> (() -> Unit)?
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Suppressed when the subject has its own header: a detail page already says what it is
-        // of, over its cover, and repeating the name and the counts underneath was the same
-        // thing twice.
+        // Suppressed when the subject drew its own header: a detail page already says what it is
+        // of, over its cover, and repeating the name and the counts underneath was the same thing
+        // twice.
         if (subjectHeader == null) item { ScopeHeader(uiState) }
 
-        // The shape of the thing, above the numbers describing it. One recording is one lane and a
-        // festival is several, which is the whole claim of Sprint 5 — a recording is not a
-        // different kind of subject, it is the narrowest scope there is.
-        //
-        // Absent for a frozen selection, whose readings may be gone. That is not a gap: its
-        // numbers were copied precisely because the curves could not be.
-        when {
-            !curves.isEmpty -> item { ScopeCurves(curves) }
-            // Too much to draw unasked. Offered rather than omitted: a missing chart with no
-            // explanation reads as a page that failed, and the reason — how much there is —
-            // is the same reason someone might still want it.
-            !drawsChart && !uiState.isEmpty -> item {
-                OfferChart(uiState.totalActiveDurationMs, uiState.recordCount, onDrawChart)
-            }
-        }
+        // Ordered as the questions are asked: what stood out, who was there, and only then how the
+        // time was spent. The bands used to open the page under a heading carrying the duration —
+        // a figure that belongs in the header with the other figures — and the standout moments
+        // sat below a chart of coloured bars nobody had asked for yet.
+        item { Highlights(uiState, onOpenRecord) }
 
-        // Above the totals, because choosing to compare changes what every figure below means.
-        if (axes.isNotEmpty()) {
+        extra?.let { block -> item { block() } }
+
+        if (uiState.people.isNotEmpty()) {
             item {
-                SplitAxisPicker(
-                    axes = axes,
-                    selected = selectedAxis,
-                    onSelect = onSelectAxis
+                SectionTitle(
+                    "Who was there",
+                    "${uiState.people.size} " +
+                        if (uiState.people.size == 1) "person" else "people"
+                )
+            }
+            items(uiState.people, key = { "person-${it.name}" }) { person ->
+                PersonTotalsRow(
+                    person = person,
+                    profile = person.personId?.let { peopleById[it] },
+                    dimmed = isolatedPersonId != null && isolatedPersonId != person.personId,
+                    isolated = isolatedPersonId != null && isolatedPersonId == person.personId,
+                    // Only offered where there is an id. A saved analysis stores names, so there
+                    // is nothing stable to isolate on.
+                    onClick = person.personId?.let { { onIsolate(it) } }
                 )
             }
         }
-        if (lanes.isNotEmpty()) {
-            item { SplitLanes(lanes) }
-        }
 
-        // Offered whether or not anything is excluded yet, so "what is actually in this" is
-        // answerable without first having to change something.
-        item {
-            androidx.compose.material3.TextButton(onClick = onRefineScope) {
-                Text(if (isRefined) "Some recordings excluded — review" else "What's included")
-            }
-        }
+        // Last. It is the most detailed thing on the page and the least likely to be what someone
+        // came for — and its heading no longer carries the duration, which moved up into the
+        // subject header where the low, average and high already were.
+        item { SectionTitle("Where the time went", null) }
+        item { ZoneBreakdown(uiState.zoneTimes, showDurations = true) }
 
-        // Where the whole scope's time went. The same split every person row and every ranking bar
-        // shows, summed — one definition of "time in the peak band" for the entire screen.
-        if (uiState.zoneTimes.any { it.durationMs > 0L }) {
+        // Only for a scope whose subject has no editor to hold it. See [AnalysisScreen].
+        onRefineScope?.let { refine ->
             item {
-                Column {
-                    SectionTitle("Time in range", "Across everything in scope")
-                    Spacer(Modifier.height(8.dp))
-                    ZoneBreakdown(uiState.zoneTimes, showDurations = true)
+                TextButton(onClick = refine) {
+                    Text(if (isRefined) "Scope — refined" else "Refine scope")
                 }
             }
         }
-        // Only a group can carry tags. A filter describes a selection rather than an occasion, and
-        // a saved analysis is frozen — offering the action there would have nowhere to write.
-        extra?.let { block -> item { block() } }
-
-        item { Highlights(uiState) }
     }
 }
-
 
 /**
- * The two or three facts worth knowing before looking at anything else.
+ * The curves, on their own.
  *
- * Summary would otherwise be a header and nothing, which is not worth a tab of its own.
+ * They were the top of the Summary, which meant every page opened on a chart and put its figures
+ * below the fold — and, for a scope big enough, opened on a wait. A tab is the honest place for
+ * something that is one of several ways of reading a scope rather than the first thing about it.
  */
 @Composable
-private fun Highlights(uiState: AnalysisUiState) {
-    val hardest = uiState.people.maxByOrNull { it.maxBpm }
-    val longest = uiState.people.maxByOrNull { it.activeDurationMs }
-    val peak = uiState.records.maxByOrNull { it.maxBpm ?: 0.0 }
-
-    if (hardest == null && peak == null) return
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionTitle("Highlights", null)
-
-        hardest?.let {
-            HighlightRow(
-                "Highest peak",
-                it.name,
-                "${it.maxBpm.toInt()} bpm",
-                it.colorArgb?.let { argb -> Color(argb) }
-            )
-        }
-        // Only worth saying when it is not the same person again — repeating one name twice
-        // reads as a bug in the screen rather than as a fact about the weekend.
-        longest?.takeIf { it.name != hardest?.name }?.let {
-            HighlightRow(
-                "Most time recorded",
-                it.name,
-                shortDuration(it.activeDurationMs),
-                it.colorArgb?.let { argb -> Color(argb) }
-            )
-        }
-        peak?.takeIf { it.eventName.isNotBlank() }?.let {
-            HighlightRow("Peak came from", it.eventName, "${it.maxBpm?.toInt() ?: 0} bpm", null)
-        }
-    }
-}
-
-@Composable
-private fun HighlightRow(label: String, subject: String, value: String, colour: Color?) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(14.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            colour?.let {
-                Box(Modifier.size(12.dp).clip(CircleShape).background(it))
-                Spacer(Modifier.width(10.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(subject, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            }
-            Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun CompareSection(
+private fun TimelineSection(
     uiState: AnalysisUiState,
-    /** Which figure the ranking is by. Here rather than pinned to the app bar: it sorts *this*. */
-    selectedMetric: AnalysisViewModel.MetricType,
-    onSelectMetric: (AnalysisViewModel.MetricType) -> Unit,
-    selectedCategoryId: Long?,
-    themeColor: Color,
-    isolatedPersonId: Long?,
-    peopleByName: Map<String, PersonTotals>,
-    onSelectCategory: (Long) -> Unit,
-    onToggleReverse: () -> Unit,
-    onOpenRanking: (TagRankingWithRecord) -> Unit
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp)
-    ) {
-        item { MetricSelector(uiState, selectedMetric, onSelectMetric) }
-
-        item {
-            RankingsCard(
-                uiState = uiState,
-                selectedCategoryId = selectedCategoryId,
-                themeColor = themeColor,
-                isolatedPersonId = isolatedPersonId,
-                peopleByName = peopleByName,
-                onSelectCategory = onSelectCategory,
-                onToggleReverse = onToggleReverse,
-                onOpenRanking = onOpenRanking
-            )
-        }
-    }
-}
-
-@Composable
-private fun PeopleSection(
-    people: List<PersonTotals>,
-    isolatedPersonId: Long?,
-    onIsolate: (Long) -> Unit
+    curves: ConcurrentAnalysis,
+    drawsChart: Boolean,
+    onDrawChart: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { SectionTitle("Per person", "Totals across everything in scope") }
-        items(people, key = { "person-${it.name}" }) { person ->
-            PersonTotalsRow(
-                person = person,
-                dimmed = isolatedPersonId != null && isolatedPersonId != person.personId,
-                isolated = isolatedPersonId != null && isolatedPersonId == person.personId,
-                // Only offered where there is an id. A saved analysis stores names, so there is
-                // nothing stable to isolate on.
-                onClick = person.personId?.let { { onIsolate(it) } }
-            )
+        when {
+            !curves.isEmpty -> item { ScopeCurves(curves) }
+            // Too much to draw unasked. Offered rather than omitted: a missing chart with no
+            // explanation reads as a page that failed, and the reason — how much there is — is the
+            // same reason someone might still want it.
+            !drawsChart -> item {
+                OfferChart(uiState.totalActiveDurationMs, uiState.recordCount, onDrawChart)
+            }
+            else -> item {
+                Text(
+                    "Nothing measured in this scope.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
 
+/**
+ * One scope, split and ranked.
+ *
+ * Two controls, because there are two questions: **what to split by** — people, events, event
+ * types, venues, or the values on a tag axis — and **what to compare** once split.
+ *
+ * Splitting used to live under the chart in the Summary, and comparing was a separate tab ranking
+ * tags with the value and a band breakdown on every row at once. That meant one row said two things
+ * and neither clearly, and the axis you were splitting by was three screens from the ranking it
+ * produced.
+ */
 @Composable
-private fun RecordingsSection(
-    records: List<AnalysisRecord>,
+private fun CompareSection(
+    axes: List<SplitAxis>,
+    selectedAxis: SplitAxis?,
+    onSelectAxis: (String?) -> Unit,
+    lanes: List<SplitLane>,
+    measure: CompareMeasure,
+    onSelectMeasure: (CompareMeasure) -> Unit,
     metric: AnalysisViewModel.MetricType,
     onSelectMetric: (AnalysisViewModel.MetricType) -> Unit,
-    uiState: AnalysisUiState,
-    themeColor: Color,
-    isolatedPersonId: Long?,
+    isReversed: Boolean,
     onToggleReverse: () -> Unit,
-    onOpen: (Long) -> Unit,
-    /** Takes a recording out of the thing being analysed, where that means anything. */
-    onRemoveFromScope: ((Long) -> Unit)? = null
+    onOpenRecord: (Long) -> (() -> Unit)?
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp)
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { MetricSelector(uiState, metric, onSelectMetric) }
+        // What is being measured comes first, because it decides what the axes below will even
+        // show — picking "Person" means nothing until you have said whether you are asking about
+        // rate or about time in a band.
+        item {
+            CompareControls(
+                measure = measure,
+                onSelectMeasure = onSelectMeasure,
+                metric = metric,
+                onSelectMetric = onSelectMetric,
+                isReversed = isReversed,
+                onToggleReverse = onToggleReverse
+            )
+        }
 
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                SectionTitle("${records.size} recordings", "By ${metricLabel(metric).lowercase()}")
-                IconButton(onClick = onToggleReverse) {
-                    Icon(Icons.Default.SwapVert, contentDescription = "Reverse order")
-                }
+            SplitAxisPicker(
+                axes = axes,
+                selected = selectedAxis,
+                onSelect = onSelectAxis
+            )
+        }
+
+        if (selectedAxis != null && lanes.isNotEmpty()) {
+            item {
+                SplitLanes(
+                    lanes = lanes,
+                    measure = measure,
+                    metric = metric,
+                    onOpenRecord = onOpenRecord
+                )
             }
         }
-        items(records, key = { "record-${it.recordId}" }) { record ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    RecordRow(
-                        record = record,
-                        metric = metric,
-                        themeColor = themeColor,
-                        dimmed = isolatedPersonId != null && isolatedPersonId != record.personId,
-                        onClick = { onOpen(record.recordId) }
-                    )
-                }
-                // Only where the scope is something a recording can be *taken out of*. A
-                // collection or a filter holds recordings by asking a question; an event holds
-                // them by being where they were filed, and misfiling one is easy.
-                onRemoveFromScope?.let { remove ->
-                    IconButton(onClick = { remove(record.recordId) }) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Remove from this event"
-                        )
+    }
+}
+
+/**
+ * Rate or bands, and which rate.
+ *
+ * Three rows of identically-shaped chips — measure, metric, axis — was the problem: nothing in the
+ * shape said which row was the question and which was the answer, so the whole tab read as one
+ * undifferentiated grid of things to tap. This is now a segmented control over three coloured
+ * dials, and only the axes below stay as chips.
+ *
+ * The dials are graphical because they are three points on one scale rather than three unrelated
+ * options, and because they are the colours the rest of the app already uses for low, average and
+ * peak. The word for whichever is chosen sits beside them, so the icons never have to carry the
+ * meaning alone.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CompareControls(
+    measure: CompareMeasure,
+    onSelectMeasure: (CompareMeasure) -> Unit,
+    metric: AnalysisViewModel.MetricType,
+    onSelectMetric: (AnalysisViewModel.MetricType) -> Unit,
+    isReversed: Boolean,
+    onToggleReverse: () -> Unit
+) {
+    Column {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            CompareMeasure.entries.forEachIndexed { index, option ->
+                SegmentedButton(
+                    selected = measure == option,
+                    onClick = { onSelectMeasure(option) },
+                    shape = SegmentedButtonDefaults.itemShape(index, CompareMeasure.entries.size),
+                    icon = {},
+                    label = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                when (option) {
+                                    CompareMeasure.RATE -> Icons.Default.MonitorHeart
+                                    CompareMeasure.ZONES -> Icons.Default.StackedBarChart
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(option.label)
+                        }
                     }
+                )
+            }
+        }
+
+        // Only when it decides anything. Beside "Zones" it would be a control over nothing.
+        if (measure == CompareMeasure.RATE) {
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AnalysisViewModel.MetricType.entries.forEach { type ->
+                    MetricDial(
+                        type = type,
+                        selected = metric == type,
+                        onClick = { onSelectMetric(type) }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    metricLabelFor(metric),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = toneFor(metric),
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onToggleReverse) {
+                    Icon(
+                        Icons.Default.SwapVert,
+                        contentDescription = if (isReversed) "Highest first" else "Lowest first",
+                        tint = if (isReversed) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
                 }
             }
         }
@@ -715,73 +719,45 @@ private fun RecordingsSection(
 }
 
 /**
- * The three headline numbers, which double as the metric selector.
+ * One of low, average, peak — as a coloured dial rather than a word in a box.
  *
- * Labelled now rather than left as three coloured hearts. The colours mean something once you know
- * them, and nothing at all the first time — and it is the selected one that decides how every
- * ranking below is sorted, which is too consequential to leave implied.
+ * The arrow says which end of the scale and the colour says which figure, both of them the ones
+ * used everywhere else in the app. Filled when chosen, so the row reads as a single setting with
+ * one position rather than as three separate switches.
  */
 @Composable
-private fun MetricSelector(
-    uiState: AnalysisUiState,
-    selected: AnalysisViewModel.MetricType,
-    onSelect: (AnalysisViewModel.MetricType) -> Unit
+private fun MetricDial(
+    type: AnalysisViewModel.MetricType,
+    selected: Boolean,
+    onClick: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.Bottom
+    val tone = toneFor(type)
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(if (selected) tone else tone.copy(alpha = 0.14f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
     ) {
-        MetricOption("Lowest", uiState.minTrio, BpmLow, selected == AnalysisViewModel.MetricType.LOW) {
-            onSelect(AnalysisViewModel.MetricType.LOW)
-        }
-        MetricOption("Average", uiState.avgTrio, BpmAvg, selected == AnalysisViewModel.MetricType.AVG) {
-            onSelect(AnalysisViewModel.MetricType.AVG)
-        }
-        MetricOption("Highest", uiState.maxTrio, BpmHigh, selected == AnalysisViewModel.MetricType.HIGH) {
-            onSelect(AnalysisViewModel.MetricType.HIGH)
-        }
+        Icon(
+            when (type) {
+                AnalysisViewModel.MetricType.LOW -> Icons.AutoMirrored.Filled.TrendingDown
+                AnalysisViewModel.MetricType.AVG -> Icons.AutoMirrored.Filled.TrendingFlat
+                AnalysisViewModel.MetricType.HIGH -> Icons.AutoMirrored.Filled.TrendingUp
+            },
+            contentDescription = metricLabelFor(type),
+            tint = if (selected) MaterialTheme.colorScheme.surface else tone,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 
-@Composable
-private fun MetricOption(
-    label: String,
-    value: Int,
-    color: Color,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (isSelected) color else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = if (isSelected) FontWeight.Bold else null
-        )
-        Text(
-            value.toString(),
-            style = if (isSelected) {
-                MaterialTheme.typography.headlineMedium
-            } else {
-                MaterialTheme.typography.headlineSmall
-            },
-            fontWeight = FontWeight.Bold,
-            color = if (isSelected) color else color.copy(alpha = 0.45f)
-        )
-        Box(
-            Modifier
-                .padding(top = 4.dp)
-                .height(3.dp)
-                .width(if (isSelected) 40.dp else 0.dp)
-                .background(color, MaterialTheme.shapes.extraSmall)
-        )
-    }
+/** The one colour for each figure, shared by the dial, the number and the bar under it. */
+private fun toneFor(metric: AnalysisViewModel.MetricType) = when (metric) {
+    AnalysisViewModel.MetricType.LOW -> BpmLow
+    AnalysisViewModel.MetricType.AVG -> BpmAvg
+    AnalysisViewModel.MetricType.HIGH -> BpmHigh
 }
 
 /**
@@ -842,165 +818,16 @@ private fun HeaderStat(label: String, value: String, modifier: Modifier = Modifi
 }
 
 @Composable
-private fun RankingsCard(
-    uiState: AnalysisUiState,
-    selectedCategoryId: Long?,
-    themeColor: Color,
-    isolatedPersonId: Long?,
-    peopleByName: Map<String, PersonTotals>,
-    onSelectCategory: (Long) -> Unit,
-    onToggleReverse: () -> Unit,
-    onOpenRanking: (TagRankingWithRecord) -> Unit
-) {
-    val currentName = uiState.availableCategories
-        .firstOrNull { it.categoryId == uiState.currentCategoryId }
-        ?.name
-        .orEmpty()
-
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            SectionTitle("Compare by $currentName", null)
-            IconButton(onClick = onToggleReverse) {
-                Icon(Icons.Default.SwapVert, contentDescription = "Reverse order")
-            }
-        }
-
-        val selectedTabIndex = uiState.availableCategories
-            .indexOfFirst { it.categoryId == selectedCategoryId }
-            .coerceAtLeast(0)
-
-        SecondaryScrollableTabRow(
-            selectedTabIndex = selectedTabIndex,
-            containerColor = Color.Transparent,
-            edgePadding = 0.dp,
-            divider = {}
-        ) {
-            uiState.availableCategories.forEach { category ->
-                Tab(
-                    selected = uiState.currentCategoryId == category.categoryId,
-                    onClick = { onSelectCategory(category.categoryId) },
-                    text = { Text(category.name, maxLines = 1) }
-                )
-            }
-        }
-
-        // Bars run relative to the leader rather than to a fixed 200 bpm ceiling. Against 200,
-        // a set of recordings all between 150 and 175 produced five bars of near-identical
-        // length — technically honest, and useless for the one thing a ranking is for.
-        val leader = uiState.categoricalRankings.maxOfOrNull { it.averageBpm } ?: 1.0
-
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                uiState.categoricalRankings.forEach { ranking ->
-                    val person = peopleByName[ranking.tagName]
-                    val dimmed = isolatedPersonId != null &&
-                        person != null &&
-                        person.personId != isolatedPersonId
-
-                    RankingBar(
-                        label = ranking.tagName,
-                        sublabel = if (ranking.recordCount > 0) {
-                            "${ranking.recordCount} recording" +
-                                if (ranking.recordCount == 1) "" else "s"
-                        } else null,
-                        progress = (ranking.averageBpm / leader).toFloat(),
-                        value = ranking.averageBpm.toInt(),
-                        // A wearer's own colour where the bar is a person, so the Wearer tab
-                        // matches every other place they appear.
-                        color = person?.colorArgb?.let { Color(it) } ?: themeColor,
-                        dimmed = dimmed,
-                        // Which artist kept people up there, rather than only who touched the
-                        // highest number once — the question a peak alone cannot answer.
-                        zoneTimes = ranking.zoneTimes,
-                        onClick = { onOpenRanking(ranking) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RankingBar(
-    label: String,
-    sublabel: String?,
-    progress: Float,
-    value: Int,
-    color: Color,
-    dimmed: Boolean,
-    zoneTimes: List<ZoneTime> = emptyList(),
-    onClick: () -> Unit
-) {
-    val alpha = if (dimmed) 0.3f else 1f
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom
-        ) {
-            Text(
-                label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
-                maxLines = 1
-            )
-            sublabel?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
-                )
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(18.dp)
-                    .clip(MaterialTheme.shapes.extraSmall)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(18.dp)
-                        .background(color.copy(alpha = alpha))
-                )
-            }
-            Text(
-                value.toString(),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = color.copy(alpha = alpha)
-            )
-        }
-        if (zoneTimes.any { it.durationMs > 0L }) {
-            Spacer(Modifier.height(4.dp))
-            ZoneBreakdown(zoneTimes, showDurations = false, alpha = alpha)
-        }
-    }
-}
-
-
-@Composable
 private fun PersonTotalsRow(
     person: PersonTotals,
+    /**
+     * Their profile, for the photograph.
+     *
+     * Null on a frozen selection, which stores names rather than ids and so has nobody to look
+     * up — [PersonAvatar] falls back to the initial on their colour, which is what it does
+     * everywhere else somebody has no picture.
+     */
+    profile: inga.bpmetrics.library.PersonEntity?,
     dimmed: Boolean,
     isolated: Boolean,
     onClick: (() -> Unit)?
@@ -1019,13 +846,20 @@ private fun PersonTotalsRow(
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Their face, ringed in their colour, rather than a dot of it. The colour is how
+                // the app identifies them everywhere — on a chart lane, on a tile, in an export —
+                // so keeping the ring keeps the row tied to those, while the photograph does what
+                // a twelve-pixel dot never could and says *who*.
                 Box(
                     Modifier
-                        .size(12.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
-                        .background(colour.copy(alpha = alpha))
-                )
-                Spacer(Modifier.width(8.dp))
+                        .border(2.dp, colour.copy(alpha = alpha), CircleShape)
+                        .padding(2.dp)
+                ) {
+                    inga.bpmetrics.ui.components.PersonAvatar(profile, size = 28.dp)
+                }
+                Spacer(Modifier.width(10.dp))
                 Text(
                     person.name,
                     style = MaterialTheme.typography.titleSmall,
@@ -1080,67 +914,6 @@ private fun MiniStat(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = color.copy(alpha = alpha)
-        )
-    }
-}
-
-@Composable
-private fun RecordRow(
-    record: AnalysisRecord,
-    metric: AnalysisViewModel.MetricType,
-    themeColor: Color,
-    dimmed: Boolean,
-    onClick: () -> Unit
-) {
-    val alpha = if (dimmed) 0.35f else 1f
-    val value = when (metric) {
-        AnalysisViewModel.MetricType.LOW -> record.minBpm
-        AnalysisViewModel.MetricType.AVG -> record.avgBpm
-        AnalysisViewModel.MetricType.HIGH -> record.maxBpm
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(
-                    (record.personColorArgb?.let { Color(it) } ?: themeColor).copy(alpha = alpha)
-                )
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                record.title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
-                maxLines = 1
-            )
-            // Who and where, so a list of recordings is readable without opening any of them.
-            val context = listOfNotNull(
-                record.wearerName.takeIf { it.isNotBlank() },
-                record.eventName.takeIf { it.isNotBlank() }
-            ).joinToString(" · ")
-            if (context.isNotEmpty()) {
-                Text(
-                    context,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
-                    maxLines = 1
-                )
-            }
-        }
-        Text(
-            value?.toInt()?.toString() ?: "—",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = themeColor.copy(alpha = alpha)
         )
     }
 }
@@ -1206,12 +979,6 @@ private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifie
     )
 }
 
-private fun metricLabel(metric: AnalysisViewModel.MetricType) = when (metric) {
-    AnalysisViewModel.MetricType.LOW -> "Lowest"
-    AnalysisViewModel.MetricType.AVG -> "Average"
-    AnalysisViewModel.MetricType.HIGH -> "Highest"
-}
-
 /**
  * The curves for whatever is in scope.
  *
@@ -1266,41 +1033,6 @@ private fun ScopeCurves(analysis: ConcurrentAnalysis) {
             }
         }
     }
-}
-
-/**
- * Which kind of export, before the flow starts.
- *
- * The export utility asks this as its own first question, but it asks it three steps in — after the
- * source is settled. From a detail page the source is already known, so the only thing left to
- * choose is the format, and choosing it here means the flow opens on Contents rather than on a
- * question that has already been answered.
- */
-@Composable
-private fun ExportKindDialog(
-    onDismiss: () -> Unit,
-    onPick: (inga.bpmetrics.ui.export.ExportKind) -> Unit
-) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Export as") },
-        text = {
-            Column {
-                DropdownMenuItem(
-                    text = { Text("Video") },
-                    leadingIcon = { Icon(Icons.Default.Movie, contentDescription = null) },
-                    onClick = { onPick(inga.bpmetrics.ui.export.ExportKind.VIDEO) }
-                )
-                DropdownMenuItem(
-                    text = { Text("Image") },
-                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
-                    onClick = { onPick(inga.bpmetrics.ui.export.ExportKind.IMAGE) }
-                )
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
 }
 
 /**
@@ -1378,6 +1110,116 @@ private fun MomentRow(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
+        }
+    }
+}
+
+
+/**
+ * The two or three facts worth knowing before looking at anything else.
+ *
+ * Summary would otherwise be a header and nothing, which is not worth a tab of its own.
+ */
+@Composable
+private fun Highlights(uiState: AnalysisUiState, onOpenRecord: (Long) -> (() -> Unit)?) {
+    val hardest = uiState.people.maxByOrNull { it.maxBpm }
+    val longest = uiState.people.maxByOrNull { it.activeDurationMs }
+    val peak = uiState.records.maxByOrNull { it.maxBpm ?: 0.0 }
+
+    if (hardest == null && peak == null) return
+
+    // The recording each claim came out of. A highlight is a statement about one moment, and the
+    // moment is in a recording — saying "Kyle hit 186" and giving no way to go and look at it made
+    // the section a dead end. Matched on the person where there is one and on the frozen name
+    // otherwise, so a saved snapshot still points somewhere.
+    val hardestRecord = hardest?.let { person ->
+        uiState.records
+            .filter {
+                if (person.personId != null) it.personId == person.personId
+                else it.wearerName == person.name
+            }
+            .maxByOrNull { it.maxBpm ?: 0.0 }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionTitle("Highlights", null)
+
+        hardest?.let {
+            HighlightRow(
+                "Highest peak",
+                it.name,
+                "${it.maxBpm.toInt()} bpm",
+                it.colorArgb?.let { argb -> Color(argb) },
+                onOpen = hardestRecord?.let { r -> onOpenRecord(r.recordId) }
+            )
+        }
+        // Only worth saying when it is not the same person again — repeating one name twice
+        // reads as a bug in the screen rather than as a fact about the weekend.
+        //
+        // Not a link: a total across eleven recordings is not any one of them, and picking the
+        // longest to open would be answering a question nobody asked.
+        longest?.takeIf { it.name != hardest?.name }?.let {
+            HighlightRow(
+                "Most time recorded",
+                it.name,
+                shortDuration(it.activeDurationMs),
+                it.colorArgb?.let { argb -> Color(argb) },
+                onOpen = null
+            )
+        }
+        peak?.takeIf { it.eventName.isNotBlank() }?.let {
+            HighlightRow(
+                "Peak came from",
+                it.eventName,
+                "${it.maxBpm?.toInt() ?: 0} bpm",
+                null,
+                onOpen = onOpenRecord(it.recordId)
+            )
+        }
+    }
+}
+
+@Composable
+private fun HighlightRow(
+    label: String,
+    subject: String,
+    value: String,
+    colour: Color?,
+    /** Null where the claim is a total rather than one recording. See [Highlights]. */
+    onOpen: (() -> Unit)?
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .let { if (onOpen != null) it.clickable(onClick = onOpen) else it }
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            colour?.let {
+                Box(Modifier.size(12.dp).clip(CircleShape).background(it))
+                Spacer(Modifier.width(10.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(subject, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            }
+            Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            // Only where there is somewhere to go. A chevron on every row would promise a
+            // destination the totals row does not have.
+            if (onOpen != null) {
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

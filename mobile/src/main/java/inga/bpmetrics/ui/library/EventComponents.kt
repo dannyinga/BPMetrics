@@ -277,6 +277,15 @@ fun EventCard(
             )
         } else {
             CardDefaults.cardColors()
+        },
+        // An outline, as on a recording tile, and for a reason that only shows up here: the cover
+        // is drawn *over* the card's container, so on an event with a picture — which is most of
+        // them — the selected tint was invisible and the card gave no sign it had been picked. The
+        // tint stays for the ones with no cover; the border is what actually says so.
+        border = if (isSelected) {
+            androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
         }
     ) {
         Column {

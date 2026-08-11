@@ -1735,4 +1735,55 @@ class LibraryDatabaseMigrationTest {
 
         db.close()
     }
+
+    /**
+     * A cover can be darkened, and an existing one is not.
+     *
+     * The sibling of `coverBlur`, on all three owners. Null is none — matching every other cover
+     * property, which is what keeps the entity definitions honest against the generated schema.
+     */
+    @Test
+    fun migrate29To30_addsCoverDimToEveryOwner() {
+        helper.createDatabase(TEST_DB, 29).apply {
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (1, 'Day 1', 0)")
+            execSQL(
+                "INSERT INTO collections (collectionId, name, createdAt) VALUES (1, 'Best of', 0)"
+            )
+            execSQL(
+                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
+                    "VALUES (1, 'Subtronics', 100, 100, 200, 100)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 30, true, LibraryDatabase.MIGRATION_29_30)
+
+        listOf(
+            "SELECT coverDim, name FROM events",
+            "SELECT coverDim, name FROM collections",
+            "SELECT coverDim, title FROM bpm_records"
+        ).forEach { sql ->
+            db.query(sql).use {
+                assertTrue(sql, it.moveToFirst())
+                assertTrue("nobody has darkened anything: $sql", it.isNull(0))
+                assertTrue("the row itself is untouched: $sql", it.getString(1).isNotEmpty())
+            }
+        }
+
+        db.close()
+    }
+
+    /** An empty library migrates without incident. */
+    @Test
+    fun migrate29To30_withNothingToDo() {
+        helper.createDatabase(TEST_DB, 29).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 30, true, LibraryDatabase.MIGRATION_29_30)
+
+        db.query("SELECT COUNT(*) FROM events").use {
+            it.moveToFirst()
+            assertEquals(0, it.getInt(0))
+        }
+
+        db.close()
+    }
 }

@@ -342,9 +342,12 @@ class SettingsRepository(context: Context) {
 
 /** The date formats on offer, as patterns so adding one is a single line. */
 object DateFormats {
-    const val DEFAULT = "MM/dd/yyyy"
+    // Written out. A date on a detail page is read once and remembered, not scanned down a
+    // column, and "03/14/2026" makes the reader parse a number before they know what month it is.
+    const val DEFAULT = "MMMM d, yyyy"
 
     val ALL: List<Pair<String, String>> = listOf(
+        "MMMM d, yyyy" to "March 14, 2026",
         "MM/dd/yyyy" to "03/14/2026",
         "dd/MM/yyyy" to "14/03/2026",
         "yyyy-MM-dd" to "2026-03-14",

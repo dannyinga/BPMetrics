@@ -227,11 +227,6 @@ class EventDetailViewModel(
         }
     }
 
-    /** Takes a recording out of the event. It goes back to Unfiled; it is never deleted. */
-    fun removeRecord(recordId: Long) {
-        viewModelScope.launch { repository.assignRecordsToEvent(listOf(recordId), null) }
-    }
-
     fun deleteEvent(onDone: () -> Unit) {
         viewModelScope.launch {
             repository.deleteEvent(eventId)

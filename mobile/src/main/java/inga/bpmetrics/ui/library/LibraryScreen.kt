@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Folder
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.components.rememberCoverPicker
 import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
@@ -82,7 +83,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import kotlinx.coroutines.launch
 import inga.bpmetrics.export.CsvExporter
-import inga.bpmetrics.ui.export.ExportKind
 import inga.bpmetrics.ui.Routes
 import androidx.compose.material3.Card
 import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
@@ -124,8 +124,6 @@ fun LibraryScreen(
      * say what it is waiting for rather than looking like it navigated somewhere arbitrary.
      */
     awaitingConcurrentSelection: Boolean = false,
-    /** Opens the export utility for the current multi-selection, as a video or an image. */
-    onExportSelection: (List<BpmRecord>, ExportKind) -> Unit = { _, _ -> },
     /** Analyses the library as currently filtered — the question, as its own scope. */
     onAnalyseFilter: (inga.bpmetrics.library.FilterState) -> Unit = {},
     /** Analyses a hand-picked set, which is a scope like any other. */
@@ -160,13 +158,23 @@ fun LibraryScreen(
     // arms the mode with nothing selected yet, so the gesture is now the shortcut rather than the
     // only door.
     var selectionArmed by rememberSaveable { mutableStateOf(false) }
-    val isSelectionMode = selectedRecordIds.isNotEmpty() || selectionArmed
+    val selectedEventIdsForMode by viewModel.selectedEventIds.collectAsStateWithLifecycle()
+    // Every recording the selection covers, a chosen event contributing its subtree. See
+    // [LibraryViewModel.selectedRecordIdsEffective].
+    val effectiveRecordIds by viewModel.selectedRecordIdsEffective.collectAsStateWithLifecycle()
+
+    // One mode for both kinds. There used to be two selections running side by side — recordings
+    // in the app bar, events in a strip above the list — each with its own count, its own exit and
+    // its own back handler, and no way to express "these two sets and that one recording", which
+    // is an entirely ordinary thing to want.
+    val isSelectionMode =
+        selectedRecordIds.isNotEmpty() || selectedEventIdsForMode.isNotEmpty() || selectionArmed
 
     // One way out, so no exit can clear the selection and leave the mode armed behind it — which
     // would look like the screen ignoring the close button.
     val exitSelection = {
         selectionArmed = false
-        viewModel.clearSelection()
+        viewModel.clearWholeSelection()
     }
 
     // Setting a cover from multi-select puts it on the *event* those recordings share, not on each
@@ -183,6 +191,7 @@ fun LibraryScreen(
     // Which collection a cover is being chosen for. Held outside the picker because the launcher is
     var showSortMenu by remember { mutableStateOf(false) }
     var showSelectionMenu by remember { mutableStateOf(false) }
+    var showLibraryMenu by remember { mutableStateOf(false) }
     var showBulkEdit by remember { mutableStateOf(false) }
     // The filter is a bar now, not a dialog. Kept only as "is the bar open" — the terms themselves
     // live in the ViewModel, so closing the bar no longer hides what is applied.
@@ -213,18 +222,18 @@ fun LibraryScreen(
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     var addingSelectionToCollection by remember { mutableStateOf(false) }
     var addingEventToCollection by remember { mutableStateOf<EventSummary?>(null) }
-    val selectedEventIds by viewModel.selectedEventIds.collectAsStateWithLifecycle()
+    val selectedEventIds = selectedEventIdsForMode
     var movingSelectedEvents by remember { mutableStateOf(false) }
     var addingSelectedEventsToCollection by remember { mutableStateOf(false) }
     val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
 
-    // Events and groups share one expansion set. Their ids come from different tables and could
-    // collide, but the two never appear in the same view, so a collision is never visible.
-    var expandedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
-
     var showCreateEventDialog by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var renamingEvent by remember { mutableStateOf<EventSummary?>(null) }
+    // The event whose photo the row editor is choosing, and whether the framing sheet is up. Held
+    // at screen level because a picker registered inside a dialog is gone by the time the gallery
+    // comes back.
+    var framingRowCover by remember { mutableStateOf(false) }
     var deletingEvent by remember { mutableStateOf<EventSummary?>(null) }
     var movingEvent by remember { mutableStateOf<EventSummary?>(null) }
     var showAddToEventDialog by remember { mutableStateOf(false) }
@@ -236,12 +245,6 @@ fun LibraryScreen(
         BackHandler {
             exitSelection()
         }
-    }
-
-    // Its own handler rather than a branch inside the one above: the two selections are separate,
-    // and back should undo whichever one is actually running.
-    if (selectedEventIds.isNotEmpty()) {
-        BackHandler { viewModel.clearEventSelection() }
     }
 
     // Launcher for importing CSV and JSON (.bpmjson) file(s)
@@ -360,10 +363,20 @@ fun LibraryScreen(
                             // "0 Selected" is a strange thing for a screen to announce when the
                             // mode was just armed and nothing has been tapped yet. Say what to do
                             // instead, and switch to the count once there is one.
-                            if (selectedRecordIds.isEmpty()) {
-                                "Select recordings"
-                            } else {
-                                "${selectedRecordIds.size} selected"
+                            when {
+                                selectedRecordIds.isEmpty() && selectedEventIds.isEmpty() ->
+                                    "Select"
+                                selectedEventIds.isEmpty() ->
+                                    "${selectedRecordIds.size} selected"
+                                selectedRecordIds.isEmpty() ->
+                                    "${selectedEventIds.size} event" +
+                                        if (selectedEventIds.size == 1) "" else "s"
+                                // Both kinds, said as both. One number would be a lie about what
+                                // the actions below are about to act on.
+                                else -> "${selectedEventIds.size} event" +
+                                    (if (selectedEventIds.size == 1) "" else "s") +
+                                    " · ${selectedRecordIds.size} recording" +
+                                    if (selectedRecordIds.size == 1) "" else "s"
                             },
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
@@ -375,10 +388,14 @@ fun LibraryScreen(
                         }
                     },
                     actions = {
+                        // Through the effective set, so a selected *event* contributes its whole
+                        // subtree. Every action here is an action on recordings; which kind of
+                        // row was tapped to name them is not something they should care about.
                         val selectedRecords = uiState.records.filter {
-                            it.metadata.recordId in selectedRecordIds
+                            it.metadata.recordId in effectiveRecordIds
                         }
-                        val hasSelection = selectedRecordIds.isNotEmpty()
+                        val hasSelection = effectiveRecordIds.isNotEmpty()
+                        val hasEvents = selectedEventIds.isNotEmpty()
 
                         IconButton(onClick = { viewModel.selectAll(uiState.records) }) {
                             Icon(Icons.Default.SelectAll, contentDescription = "Select All")
@@ -398,7 +415,7 @@ fun LibraryScreen(
                         // collection does, and the old rule about refusing unless the recordings
                         // overlapped went with the screen that needed it.
                         if (hasSelection) {
-                            IconButton(onClick = { onAnalyseSelection(selectedRecordIds) }) {
+                            IconButton(onClick = { onAnalyseSelection(effectiveRecordIds) }) {
                                 Icon(Icons.Default.Insights, contentDescription = "Analyse")
                             }
                         }
@@ -411,6 +428,25 @@ fun LibraryScreen(
                                 expanded = showSelectionMenu,
                                 onDismissRequest = { showSelectionMenu = false }
                             ) {
+                                // Filing, back where it can be reached. It was three levels down —
+                                // bulk edit, then "File into an event…", then the picker — which
+                                // is a long way to go for the most ordinary thing anyone does
+                                // with a fresh selection.
+                                DropdownMenuItem(
+                                    text = { Text("Add to an event…") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.PlaylistAdd,
+                                            contentDescription = null
+                                        )
+                                    },
+                                    enabled = hasSelection,
+                                    onClick = {
+                                        showSelectionMenu = false
+                                        showAddToEventDialog = true
+                                    }
+                                )
+
                                 // What is left is what is not an edit: joining recordings into
                                 // one, getting them out of the app, and destroying them.
                                 DropdownMenuItem(
@@ -424,6 +460,28 @@ fun LibraryScreen(
                                         showMergeDialog = true
                                     }
                                 )
+
+                                // The two things only an event can be. They were a separate strip
+                                // above the list with its own count and its own close button.
+                                if (hasEvents) {
+                                    DropdownMenuItem(
+                                        text = { Text("Move events into…") },
+                                        onClick = {
+                                            showSelectionMenu = false
+                                            movingSelectedEvents = true
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Add events to a collection…") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Bookmarks, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showSelectionMenu = false
+                                            addingSelectedEventsToCollection = true
+                                        }
+                                    )
+                                }
 
                                 HorizontalDivider()
 
@@ -591,18 +649,52 @@ fun LibraryScreen(
                             )
                         }
 
-                        IconButton(onClick = { selectionArmed = true }) {
-                            Icon(Icons.Default.Checklist, contentDescription = "Select recordings")
-                        }
-
-                        // Four, which the bar holds comfortably. Collections left this menu
-                        // entirely when it became a tab of its own — it was never a library
-                        // action, and a door to another section does not belong beside the
-                        // controls for the list in front of you.
-                        IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
-                            // Opening a file, not downloading one. FileDownload reads as "fetch
-                            // from somewhere", which is the opposite of what this does.
-                            Icon(Icons.Default.FileOpen, contentDescription = "Import recordings")
+                        // Sort and filter are the two controls over the list you are looking at,
+                        // and they stay on the bar. The rest are things you *do* — start
+                        // picking, bring recordings in, file them somewhere — and they were four
+                        // icons deep on a bar that also has to hold a title.
+                        Box {
+                            IconButton(onClick = { showLibraryMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "More")
+                            }
+                            DropdownMenu(
+                                expanded = showLibraryMenu,
+                                onDismissRequest = { showLibraryMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Select") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Checklist, contentDescription = null)
+                                    },
+                                    onClick = { showLibraryMenu = false; selectionArmed = true }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("New event…") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Add, contentDescription = null)
+                                    },
+                                    // Creating an empty one, which is a library action. Filing an
+                                    // existing selection into an event is not — it needs the
+                                    // selection — so it lives in the selection's own overflow.
+                                    onClick = {
+                                        showLibraryMenu = false
+                                        namingEventForSelection = false
+                                        showCreateEventDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Import recordings…") },
+                                    leadingIcon = {
+                                        // Opening a file, not downloading one. FileDownload reads
+                                        // as "fetch from somewhere", the opposite of this.
+                                        Icon(Icons.Default.FileOpen, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showLibraryMenu = false
+                                        importLauncher.launch(arrayOf("*/*"))
+                                    }
+                                )
+                            }
                         }
                     }
                 )
@@ -699,17 +791,9 @@ fun LibraryScreen(
                 )
 
                 currentSort.isGrouped -> Column(Modifier.fillMaxSize()) {
-                    // Above the list rather than in the app bar: the app bar already belongs to the
-                    // recording selection, and two selections competing for one bar is how you end
-                    // up acting on the wrong one.
-                    if (selectedEventIds.isNotEmpty()) {
-                        EventSelectionBar(
-                            count = selectedEventIds.size,
-                            onMove = { movingSelectedEvents = true },
-                            onAddToCollection = { addingSelectedEventsToCollection = true },
-                            onClear = { viewModel.clearEventSelection() }
-                        )
-                    }
+                    // The strip that used to sit here is gone: events and recordings are one
+                    // selection now and it lives in the app bar, which is where a selection
+                    // belongs and where the other half of it already was.
                     TimelineList(
                         rows = timeline,
                         summaries = eventSummariesById,
@@ -723,6 +807,7 @@ fun LibraryScreen(
                         expandedIds = timelineExpanded,
                         onToggleExpand = { viewModel.toggleTimelineExpansion(it) },
                         selectedEventIds = selectedEventIds,
+                        selectionMode = isSelectionMode,
                         onToggleEventSelection = { viewModel.toggleEventSelection(it) },
                         onCreateEvent = { showCreateEventDialog = true },
                         onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
@@ -844,7 +929,7 @@ fun LibraryScreen(
 
     if (showAddToEventDialog) {
         AddToEventDialog(
-            recordCount = selectedRecordIds.size,
+            recordCount = effectiveRecordIds.size,
             rows = eventPickerRows,
             onDismiss = { showAddToEventDialog = false },
             onPick = { eventId ->
@@ -861,7 +946,7 @@ fun LibraryScreen(
 
     if (showCreateEventDialog) {
         val forSelection = namingEventForSelection
-        val selected = selectedRecordIds
+        val selected = effectiveRecordIds
         val knownTypes by viewModel.eventTypesInUse.collectAsStateWithLifecycle()
         val windowError by viewModel.windowError.collectAsStateWithLifecycle()
 
@@ -913,6 +998,17 @@ fun LibraryScreen(
         )
     }
 
+    val pickRowCover = rememberCoverPicker { uri ->
+        renamingEvent?.let { summary ->
+            viewModel.setEventCover(context, summary.event.eventId, uri) { ok ->
+                if (ok) framingRowCover = true
+                else Toast.makeText(
+                    context, "That image could not be read", Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
     renamingEvent?.let { summary ->
         // The one implementation, shared with the event's own page. This screen used to carry its
         // own copy of the same wiring — name, type, window, the people a window applies to, the
@@ -922,11 +1018,31 @@ fun LibraryScreen(
             libraryViewModel = viewModel,
             event = summary.event,
             span = summary.span,
-            // Tags and the photo are edited on the event's own page, where the effective set —
-            // including what it inherits — and the picture itself are both visible. Offering them
-            // from a timeline row would show a count and a button with nothing to check them
-            // against. Opening the event is one tap from the same row.
-            onDismiss = { renamingEvent = null }
+            // Tags stay on the event's own page: a count and a button say nothing without the
+            // effective set, inherited tags included, to check them against. The photo does not
+            // have that problem any more — choosing one opens the framing sheet, which is the
+            // picture at the size the library will draw it.
+            coverEditor = {
+                val live = eventSummariesById[summary.event.eventId]?.event ?: summary.event
+                inga.bpmetrics.ui.components.CoverEditor(
+                    cover = live.ownCover,
+                    onPick = pickRowCover,
+                    framing = framingRowCover,
+                    onFramingChange = { framingRowCover = it },
+                    onCrop = { viewModel.setEventCoverCrop(live.eventId, it) },
+                    onRemove = { viewModel.clearEventCover(context, live.eventId) },
+                    title = "Frame ${live.displayName}",
+                    previewContent = {
+                        Text(
+                            live.displayName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = androidx.compose.ui.graphics.Color.White
+                        )
+                    }
+                )
+            },
+            onDismiss = { renamingEvent = null; framingRowCover = false }
         )
     }
 

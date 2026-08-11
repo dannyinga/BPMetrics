@@ -81,7 +81,9 @@ data class CollectionEntity(
     @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
+    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
+    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null
 ) {
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled collection"
 
@@ -92,7 +94,8 @@ data class CollectionEntity(
     val isFrozen: Boolean get() = frozenAt != null
 
     val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
+        coverDim
     )
 }
 

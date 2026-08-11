@@ -39,7 +39,8 @@ interface CollectionDao {
     /** See [EventDao.updateCover] for why all six move together. */
     @Query(
         "UPDATE collections SET coverPath = :path, coverCropLeft = :left, coverCropTop = :top, " +
-            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur " +
+            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur, " +
+            "coverDim = :dim " +
             "WHERE collectionId = :collectionId"
     )
     suspend fun updateCover(
@@ -49,7 +50,8 @@ interface CollectionDao {
         top: Float?,
         right: Float?,
         bottom: Float?,
-        blur: Float?
+        blur: Float?,
+        dim: Float?
     )
 
     @Query("SELECT coverPath FROM collections WHERE collectionId = :collectionId")

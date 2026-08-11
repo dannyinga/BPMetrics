@@ -68,7 +68,7 @@ fun RecordingDetailScreen(
     recordId: Long,
     onBack: () -> Unit,
     onDeleted: () -> Unit,
-    onExport: (inga.bpmetrics.ui.export.ExportKind) -> Unit,
+    onExport: () -> Unit,
     onOpenEvent: (Long) -> Unit
 ) {
     val context = LocalContext.current
@@ -94,9 +94,12 @@ fun RecordingDetailScreen(
 
     // Registered once for the screen: a launcher outlives the dialog that starts it, so it cannot
     // live inside the editor.
+    var framingCover by remember { mutableStateOf(false) }
     val pickCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
         subject.setOwnCover(context, uri) { ok ->
-            if (!ok) Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+            // Straight into framing, while the choice is fresh.
+            if (ok) framingCover = true
+            else Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -155,26 +158,15 @@ fun RecordingDetailScreen(
                     lowBpm = uiState.minTrio.takeIf { !uiState.isEmpty },
                     avgBpm = uiState.avgTrio.takeIf { !uiState.isEmpty },
                     highBpm = uiState.maxTrio.takeIf { !uiState.isEmpty },
+                    // How long it ran. It used to head the zone breakdown further down the page;
+                    // it belongs with the other figures for the same recording.
+                    counts = if (uiState.isEmpty) null else {
+                        inga.bpmetrics.ui.analysis.shortDuration(uiState.totalActiveDurationMs)
+                    },
                     onOpenAncestor = onOpenEvent,
-                    tags = if (effectiveTags.isEmpty()) null else {
-                        {
-                            inga.bpmetrics.ui.components.FlowRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                effectiveTags.forEach { effective ->
-                                    EffectiveTagChip(
-                                        effective = effective,
-                                        onRemove = { subject.removeTag(effective.tag.tagId) },
-                                        onExplain = {
-                                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    tags = effectiveTags,
+                    onRemoveTag = { subject.removeTag(it) },
+                    onExplainTag = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
                 )
             }
         },
@@ -237,9 +229,17 @@ fun RecordingDetailScreen(
             inheritedPlaceName = place?.takeIf { it.isInherited }?.location?.displayName,
             tagCount = r.tags.size,
             onEditTags = { tagging = true },
-            hasOwnCover = r.metadata.ownCover != null,
-            onPickCover = pickCover,
-            onRemoveCover = { subject.clearOwnCover(context) },
+            coverEditor = {
+                inga.bpmetrics.ui.components.CoverEditor(
+                    cover = r.metadata.ownCover,
+                    onPick = pickCover,
+                    framing = framingCover,
+                    onFramingChange = { framingCover = it },
+                    onCrop = { subject.setOwnCoverCrop(it) },
+                    onRemove = { subject.clearOwnCover(context) },
+                    title = "Frame this recording"
+                )
+            },
             onDismiss = { editing = false },
             onConfirm = { title, description, deviceId, personId, locationId ->
                 subject.updateTitle(title)

@@ -151,18 +151,40 @@ class ScopeRefinementTest {
     // --- The refinement sheet (TX-3.6) ---
 
     @Test
-    fun `the sheet lists one level, not the whole subtree`() {
-        // A festival with forty sets would otherwise open forty rows to scroll through.
+    fun `the sheet nests the whole subtree`() {
+        // One level was wrong. A festival offered its days and no way to reach the set that
+        // actually needs leaving out, and a recording filed three levels down was unreachable.
         val entries = ScopeRefinement.entriesFor(festival(), items(), 1)
 
-        assertEquals(listOf("Day 1"), entries.map { it.label })
+        // A row's own recordings come directly under it, before its child events. Emitting them
+        // after the whole nested subtree left Day 1's loose recording sitting below Subtronics'
+        // two, where it read as belonging to Subtronics.
+        assertEquals(
+            listOf("Day 1", "Record 13", "Merch queue", "Record 12", "Subtronics", "Record 10", "Record 11"),
+            entries.map { it.label }
+        )
+    }
+
+    @Test
+    fun `depth follows the tree`() {
+        val entries = ScopeRefinement.entriesFor(festival(), items(), 1)
+        val depths = entries.associate { it.label to it.depth }
+
+        assertEquals(0, depths["Day 1"])
+        assertEquals(1, depths["Subtronics"])
+        // A recording sits under whatever it is filed on, wherever that is.
+        assertEquals(2, depths["Record 10"])
+        assertEquals(1, depths["Record 13"])
     }
 
     @Test
     fun `the sheet lists loose recordings alongside the events`() {
         val entries = ScopeRefinement.entriesFor(festival(), items(), 2)
 
-        assertEquals(listOf("Merch queue", "Subtronics", "Record 13"), entries.map { it.label })
+        assertEquals(
+            listOf("Merch queue", "Record 12", "Subtronics", "Record 10", "Record 11", "Record 13"),
+            entries.map { it.label }
+        )
     }
 
     @Test
@@ -170,14 +192,59 @@ class ScopeRefinementTest {
         val entries = ScopeRefinement.entriesFor(festival(), items(), 1)
 
         // Day 1 holds two sets and a loose recording: four recordings in total.
-        assertEquals(4, entries.single().recordCount)
+        assertEquals(4, entries.first { it.label == "Day 1" }.recordCount)
     }
 
     @Test
     fun `everything is ticked by default`() {
         val entries = ScopeRefinement.entriesFor(festival(), items(), 1)
 
-        assertTrue(entries.all { it.isIncluded })
+        // Except the merch queue, which is out by its own standing flag rather than by a choice
+        // anyone made here — and Record 12, which is inside the merch queue.
+        val out = setOf("Merch queue", "Record 12")
+        assertTrue(entries.filterNot { it.label in out }.all { it.isIncluded })
+    }
+
+    // --- Excluding something takes everything under it (TX-3.6) ---
+
+    @Test
+    fun `unticking an event unticks its whole subtree`() {
+        // The rule was always in the numbers. The sheet drew the children ticked, which described
+        // a scope that did not exist — Day 1 out, and its six sets apparently still in.
+        val entries = ScopeRefinement.entriesFor(
+            festival(),
+            items(),
+            1,
+            ScopeExclusions(excludedEventIds = setOf(2))
+        )
+
+        assertTrue(entries.none { it.isIncluded })
+        // Only Day 1 itself was unticked by hand. Everything below it is out *with* it, which the
+        // sheet says rather than showing an identical-looking empty box.
+        assertFalse(entries.first { it.label == "Day 1" }.excludedByAncestor)
+        assertTrue(entries.first { it.label == "Subtronics" }.excludedByAncestor)
+        assertTrue(entries.first { it.label == "Record 10" }.excludedByAncestor)
+    }
+
+    @Test
+    fun `a recording inside a flagged event is out with it`() {
+        val entries = ScopeRefinement.entriesFor(festival(), items(), 1)
+
+        val record = entries.first { it.label == "Record 12" }
+        assertFalse(record.isIncluded)
+        assertTrue(record.excludedByAncestor)
+    }
+
+    @Test
+    fun `depth is what makes the sheet readable`() {
+        // Every row carries the level it sits at, and the dialog indents by it. Without this the
+        // sheet is one flat column of checkboxes with nothing saying what belongs to what.
+        val entries = ScopeRefinement.entriesFor(festival(), items(), 1)
+
+        assertEquals(
+            listOf(0, 1, 1, 2, 1, 2, 2),
+            entries.map { it.depth }
+        )
     }
 
     @Test
@@ -206,7 +273,11 @@ class ScopeRefinementTest {
     fun `unticking an event records it`() {
         val entries = ScopeRefinement.entriesFor(festival(), items(), 1)
 
-        val after = ScopeRefinement.toggle(ScopeExclusions(), entries.single(), include = false)
+        val after = ScopeRefinement.toggle(
+            ScopeExclusions(),
+            entries.first { it.label == "Day 1" },
+            include = false
+        )
 
         assertEquals(setOf(2L), after.excludedEventIds)
     }
@@ -238,7 +309,7 @@ class ScopeRefinementTest {
     @Test
     fun `ticking and unticking returns to where it started`() {
         val entries = ScopeRefinement.entriesFor(festival(), items(), 1)
-        val row = entries.single()
+        val row = entries.first { it.label == "Day 1" }
 
         val off = ScopeRefinement.toggle(ScopeExclusions(), row, include = false)
         val on = ScopeRefinement.toggle(off, row, include = true)
@@ -249,7 +320,8 @@ class ScopeRefinementTest {
     @Test
     fun `unticking a recording records it separately from events`() {
         val entries = ScopeRefinement.entriesFor(festival(), items(), 2)
-        val loose = entries.first { it.recordId != null }
+        // The one filed on Day 1 itself, which sits at the end after the nested sets.
+        val loose = entries.first { it.recordId != null && it.depth == 0 }
 
         val after = ScopeRefinement.toggle(ScopeExclusions(), loose, include = false)
 
@@ -273,13 +345,14 @@ class ScopeRefinementTest {
     // --- No root: a collection, a filter, or a saved analysis ---
 
     @Test
-    fun `with no root the sheet lists every event the records mention`() {
-        // A collection holds unrelated branches and a filter holds whatever it matched. Neither has
-        // a level to take, so the absence of a root is what selects the flat shape.
+    fun `with no root the sheet starts from whatever the scope reaches`() {
+        // A collection holds unrelated branches and a filter holds whatever it matched, so there is
+        // no single level to take. The tops are the events whose parent is not itself in scope —
+        // which for this fixture is the festival, since its whole subtree is present.
         val entries = ScopeRefinement.entriesFor(festival(), items(), rootId = null)
 
         assertEquals(
-            listOf("Day 1", "Merch queue", "Subtronics"),
+            listOf("Griztronics", "Day 1", "Merch queue", "Subtronics"),
             entries.filter { it.eventId != null }.map { it.label }
         )
     }
@@ -304,8 +377,13 @@ class ScopeRefinementTest {
 
         val entries = ScopeRefinement.entriesFor(emptyList(), snapshot, rootId = null)
 
+        // Its events, each with the recording that named it underneath — the label the snapshot
+        // carries is the only structure there is, and it is enough to tick a set off.
         assertEquals(
-            listOf("Excision  |  Griztronics", "Subtronics  |  Griztronics"),
+            listOf(
+                "Excision  |  Griztronics", "Record 11",
+                "Subtronics  |  Griztronics", "Record 10"
+            ),
             entries.map { it.label }
         )
         assertTrue(entries.all { it.isIncluded })

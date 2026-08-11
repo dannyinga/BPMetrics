@@ -40,7 +40,17 @@ data class ScopeEntry(
      * the other is about this analysis, and a screen that showed them identically would leave
      * people wondering why a box keeps unticking itself.
      */
-    val excludedByFlag: Boolean = false
+    val excludedByFlag: Boolean = false,
+    /**
+     * True when something above this row is out, so this is out with it.
+     *
+     * Excluding an event has always excluded its subtree — that is the rule, and it is what the
+     * numbers do. The sheet did not say so: unticking Day 1 left its six sets and their recordings
+     * sitting there ticked, describing a scope that did not exist. A row in this state shows
+     * unticked and cannot be ticked back on its own, because ticking it would be a lie about what
+     * the analysis covers; the way back is to tick its parent.
+     */
+    val excludedByAncestor: Boolean = false
 )
 
 /**
@@ -114,17 +124,21 @@ object ScopeRefinement {
     )
 
     /**
-     * What to list on the refinement sheet: the events inside the scope, and any recording sitting
-     * loose in it.
+     * The scope as a tree: every event under it, nested, with the recordings inside each.
      *
-     * With a root, this is **one level** — its children. A festival with forty sets would otherwise
-     * open forty-odd rows to scroll, when the question is nearly always "not that day" or "not that
-     * set".
+     * Flat was wrong. The list showed one level and stopped, so a festival offered its days and no
+     * way to reach the set that actually needs leaving out — and a recording filed three levels
+     * down could not be reached at all.
      *
-     * Without one it is every event the records mention, flat. That is the shape for a collection
-     * (whose members are unrelated branches), a filter, and a saved analysis (whose rows are a
-     * snapshot and whose events may since have been rearranged away). In none of those is there a
-     * level to take — so rather than guessing at one, the absence of a root *is* the signal.
+     * Depth is real nesting rather than a two-level fallback, and both kinds of row are here:
+     * unticking an event takes its whole subtree, unticking a recording takes only itself. Rows
+     * stay on screen when unticked — a row that vanished when you excluded it could never be
+     * put back.
+     *
+     * @param rootId The event everything hangs under, or null for a scope with no single root — a
+     *   collection holding unrelated branches, a filter, a hand-picked set. With no root the
+     *   top-level rows are whichever events have no parent *inside this scope*, which is what
+     *   makes a filtered scope readable rather than a flat list of forty sets.
      */
     fun entriesFor(
         events: List<EventEntity>,
@@ -132,54 +146,123 @@ object ScopeRefinement {
         rootId: Long?,
         exclusions: ScopeExclusions = ScopeExclusions()
     ): List<ScopeEntry> {
-        val byId = events.associateBy { it.eventId }
+        val inScope = records.mapNotNull { it.eventId }.toSet()
 
-        val eventRows = if (rootId == null) {
-            records.mapNotNull { it.eventId }.distinct().map { eventId ->
-                val inIt = records.filter { it.eventId == eventId }
-                val event = byId[eventId]
-                val byFlag = event?.excludedFromParentAnalysis == true &&
-                    eventId !in exclusions.includedDespiteFlag
-                val excludedHere = eventId in exclusions.excludedEventIds
-                ScopeEntry(
-                    eventId = eventId,
-                    recordId = null,
-                    label = inIt.firstOrNull()?.eventLabel?.takeIf { it.isNotBlank() }
-                        ?: event?.displayName.orEmpty(),
-                    depth = 0,
-                    recordCount = inIt.size,
-                    isIncluded = !excludedHere && !byFlag,
-                    excludedByFlag = byFlag && !excludedHere
-                )
-            }.sortedBy { it.label }
-        } else {
-            events.filter { it.parentId == rootId }
-                .sortedBy { it.windowStart ?: it.createdAt }
-                .map { event ->
-                    val subtree = EventTree.descendantsOf(events, event.eventId)
-                    val excludedHere = event.eventId in exclusions.excludedEventIds
-                    val byFlag = event.excludedFromParentAnalysis &&
-                        event.eventId !in exclusions.includedDespiteFlag
-                    ScopeEntry(
-                        eventId = event.eventId,
-                        recordId = null,
-                        label = records.firstOrNull { it.eventId == event.eventId }
-                            ?.eventLabel
-                            ?.takeIf { it.isNotBlank() }
-                            ?: event.displayName,
-                        depth = 0,
-                        recordCount = records.count { it.eventId in subtree },
-                        isIncluded = !excludedHere && !byFlag,
-                        excludedByFlag = byFlag && !excludedHere
-                    )
-                }
+        // Every event that either holds something in scope or lies between two that do. Without
+        // the middle ones a day whose recordings all sit in its sets would be missing from its own
+        // festival's list, and the sets would appear to hang off nothing.
+        val relevant = buildSet {
+            inScope.forEach { id -> addAll(EventTree.ancestryOf(events, id).map { it.eventId }) }
         }
 
-        val loose = records
+        val byParent = events
+            .filter { it.eventId in relevant }
+            .groupBy { it.parentId }
+
+        // With no root, start from the events whose parent is not itself in scope. Those are the
+        // tops of whatever branches this scope reaches, which is not the same as the tops of the
+        // library's tree.
+        val roots = if (rootId != null) byParent[rootId].orEmpty() else {
+            events.filter { it.eventId in relevant && it.parentId !in relevant }
+        }
+
+        val out = mutableListOf<ScopeEntry>()
+
+        fun walk(event: EventEntity, depth: Int, seen: MutableSet<Long>, ancestorOut: Boolean) {
+            if (!seen.add(event.eventId)) return
+
+            val subtree = EventTree.descendantsOf(events, event.eventId)
+            val excludedHere = event.eventId in exclusions.excludedEventIds
+            val byFlag = event.excludedFromParentAnalysis &&
+                event.eventId !in exclusions.includedDespiteFlag
+
+            out += ScopeEntry(
+                eventId = event.eventId,
+                recordId = null,
+                label = records.firstOrNull { it.eventId == event.eventId }
+                    ?.eventLabel
+                    ?.takeIf { it.isNotBlank() }
+                    ?: event.displayName,
+                depth = depth,
+                recordCount = records.count { it.eventId in subtree },
+                isIncluded = !ancestorOut && !excludedHere && !byFlag,
+                excludedByFlag = byFlag && !excludedHere && !ancestorOut,
+                excludedByAncestor = ancestorOut
+            )
+
+            // Everything under this row is out with it. The rule was always in the numbers — see
+            // [recordsIn] — but the sheet drew the children ticked, which described a scope that
+            // did not exist.
+            val subtreeOut = ancestorOut || excludedHere || byFlag
+
+            // Its own recordings first, directly beneath it, then the events inside it. A row's
+            // children should follow the row — putting the recordings after four nested sets
+            // leaves them looking like they belong to the last of those rather than to this.
+            records.filter { it.eventId == event.eventId }
+                .sortedBy { it.startTime }
+                .forEach { record ->
+                    out += ScopeEntry(
+                        eventId = null,
+                        recordId = record.recordId,
+                        label = record.title,
+                        depth = depth + 1,
+                        recordCount = 1,
+                        isIncluded = !subtreeOut &&
+                            record.recordId !in exclusions.excludedRecordIds,
+                        excludedByAncestor = subtreeOut
+                    )
+                }
+
+            byParent[event.eventId].orEmpty()
+                .sortedBy { it.windowStart ?: it.createdAt }
+                .forEach { walk(it, depth + 1, seen, subtreeOut) }
+        }
+
+        val seen = mutableSetOf<Long>()
+        roots.sortedBy { it.windowStart ?: it.createdAt }
+            .forEach { walk(it, 0, seen, ancestorOut = false) }
+
+        // Events the tree does not know about, from the records' own labels.
+        //
+        // A frozen selection has no live tree — its rows are a snapshot, and the events may since
+        // have been rearranged or deleted. Grouping by the label the snapshot carries is the only
+        // structure available, and it is enough to tick a set off.
+        records
+            .filter { it.eventId != null && it.eventId != rootId && it.eventId !in relevant }
+            .groupBy { it.eventId!! }
+            .toList()
+            .sortedBy { (_, its) -> its.firstOrNull()?.eventLabel.orEmpty() }
+            .forEach { (eventId, its) ->
+                val eventOut = eventId in exclusions.excludedEventIds
+                out += ScopeEntry(
+                    eventId = eventId,
+                    recordId = null,
+                    label = its.firstOrNull()?.eventLabel?.takeIf { it.isNotBlank() }
+                        ?: "Event $eventId",
+                    depth = 0,
+                    recordCount = its.size,
+                    isIncluded = !eventOut
+                )
+                its.sortedBy { it.startTime }.forEach { record ->
+                    out += ScopeEntry(
+                        eventId = null,
+                        recordId = record.recordId,
+                        label = record.title,
+                        depth = 1,
+                        recordCount = 1,
+                        isIncluded = !eventOut &&
+                            record.recordId !in exclusions.excludedRecordIds,
+                        excludedByAncestor = eventOut
+                    )
+                }
+            }
+
+        // Genuinely loose: filed under the root itself, or filed nowhere.
+        records
             .filter { it.eventId == rootId }
             .sortedBy { it.startTime }
-            .map { record ->
-                ScopeEntry(
+            .forEach { record ->
+                out += ScopeEntry(
                     eventId = null,
                     recordId = record.recordId,
                     label = record.title,
@@ -189,7 +272,7 @@ object ScopeRefinement {
                 )
             }
 
-        return eventRows + loose
+        return out
     }
 
     /** Ticks or unticks one row, returning the exclusions that result. */

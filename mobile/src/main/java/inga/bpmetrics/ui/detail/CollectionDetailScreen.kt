@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,7 +51,7 @@ fun CollectionDetailScreen(
     collectionId: Long,
     onBack: () -> Unit,
     onSave: (name: String, records: List<inga.bpmetrics.ui.analysis.AnalysisRecord>) -> Unit,
-    onExport: (inga.bpmetrics.ui.export.ExportKind) -> Unit
+    onExport: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -68,9 +69,12 @@ fun CollectionDetailScreen(
     var deleting by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
+    var framingCover by remember { mutableStateOf(false) }
     val pickCover = rememberCoverPicker { uri ->
         libraryViewModel.setCollectionCover(context, collectionId, uri) { ok ->
-            if (!ok) Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+            // Straight into framing, while the choice is fresh.
+            if (ok) framingCover = true
+            else Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -113,6 +117,16 @@ fun CollectionDetailScreen(
                         }
                         append("${summary.recordCount} recording")
                         if (summary.recordCount != 1) append("s")
+                        // The figure that used to head the zone breakdown. A total like the counts
+                        // beside it, not a heading for a chart.
+                        if (!uiState.isEmpty) {
+                            append(
+                                " · " +
+                                    inga.bpmetrics.ui.analysis.shortDuration(
+                                        uiState.totalActiveDurationMs
+                                    )
+                            )
+                        }
                     },
                     onOpenAncestor = { navController.navigate("${Routes.EVENT_DETAIL}/$it") }
                 )
@@ -129,21 +143,17 @@ fun CollectionDetailScreen(
                     Icon(Icons.Default.MoreVert, contentDescription = "More")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    // One item, not three. Choosing, framing and removing all happen inside the
+                    // sheet, where the picture is on screen while you do them.
                     DropdownMenuItem(
                         text = {
-                            Text(if (summary?.collection?.ownCover != null) "Change photo" else "Add photo")
+                            Text(
+                                if (summary?.collection?.ownCover != null) "Edit photo"
+                                else "Add photo"
+                            )
                         },
-                        onClick = { menuOpen = false; pickCover() }
+                        onClick = { menuOpen = false; framingCover = true }
                     )
-                    if (summary?.collection?.ownCover != null) {
-                        DropdownMenuItem(
-                            text = { Text("Remove photo") },
-                            onClick = {
-                                menuOpen = false
-                                libraryViewModel.clearCollectionCover(context, collectionId)
-                            }
-                        )
-                    }
                     DropdownMenuItem(
                         text = {
                             Text(
@@ -168,6 +178,29 @@ fun CollectionDetailScreen(
             }
         }
     )
+
+    if (framingCover && summary != null) {
+        inga.bpmetrics.ui.components.CoverCropDialog(
+            cover = summary.collection.ownCover,
+            onPick = pickCover,
+            title = "Frame ${summary.collection.displayName}",
+            previewContent = {
+                Text(
+                    summary.collection.displayName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = androidx.compose.ui.graphics.Color.White
+                )
+            },
+            onDismiss = { framingCover = false },
+            onConfirm = {
+                libraryViewModel.setCollectionCoverCrop(collectionId, it)
+                framingCover = false
+            },
+            // Stays open: removing is usually the first half of replacing.
+            onRemove = { libraryViewModel.clearCollectionCover(context, collectionId) }
+        )
+    }
 
     if (renaming && summary != null) {
         NameDialog(

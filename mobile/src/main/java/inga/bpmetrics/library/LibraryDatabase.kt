@@ -224,7 +224,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 29
+internal const val LIBRARY_DB_VERSION = 30
 
 @Database(
     entities = [
@@ -1432,6 +1432,27 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * How far to darken a cover.
+         *
+         * The sibling of `coverBlur`, added for the same reason and solving the other half of it.
+         * Blur is for a cover made of type; this is for one that is simply too bright — a
+         * white-sky festival shot, a flash photo — where the writing over it cannot hold whatever
+         * is done to the writing. Outlining the text was tried and looked like a sticker; the
+         * picture is what is too bright, so the picture is what gives.
+         *
+         * `REAL DEFAULT NULL`, matching the entities and [MIGRATION_21_22]. Null is none, which is
+         * what every existing cover has and what most should keep.
+         */
+        val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf("events", "collections", "bpm_records").forEach { table ->
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `coverDim` REAL DEFAULT NULL")
+                }
+                android.util.Log.i(TAG, "MIGRATION_29_30: a cover can be darkened")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -1504,7 +1525,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_25_26,
                         MIGRATION_26_27,
                         MIGRATION_27_28,
-                        MIGRATION_28_29
+                        MIGRATION_28_29,
+                        MIGRATION_29_30
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

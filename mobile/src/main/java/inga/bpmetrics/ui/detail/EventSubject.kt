@@ -176,9 +176,11 @@ fun EventEditorLauncher(
     span: TimeSpan?,
     tagCount: Int = 0,
     onEditTags: (() -> Unit)? = null,
-    hasOwnCover: Boolean = false,
-    onPickCover: (() -> Unit)? = null,
-    onRemoveCover: (() -> Unit)? = null,
+    /** See [inga.bpmetrics.ui.library.EventEditorDialog]. */
+    coverEditor: (@Composable () -> Unit)? = null,
+    /** See [inga.bpmetrics.ui.library.EventEditorDialog]. Null where there is no analysis behind it. */
+    excludedCount: Int = 0,
+    onRefineScope: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val knownTypes by libraryViewModel.eventTypesInUse.collectAsStateWithLifecycle()
@@ -212,9 +214,9 @@ fun EventEditorLauncher(
         collisionError = windowError,
         tagCount = tagCount,
         onEditTags = onEditTags,
-        hasOwnCover = hasOwnCover,
-        onPickCover = onPickCover,
-        onRemoveCover = onRemoveCover,
+        coverEditor = coverEditor,
+        excludedCount = excludedCount,
+        onRefineScope = onRefineScope,
         onDismiss = {
             libraryViewModel.clearWindowError()
             onDismiss()

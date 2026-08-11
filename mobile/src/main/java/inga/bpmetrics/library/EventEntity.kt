@@ -83,6 +83,8 @@ data class EventEntity(
     @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
     /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
     @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
+    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
+    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null,
 
     /**
      * Where this happened, by reference to the location registry.
@@ -102,7 +104,8 @@ data class EventEntity(
 
     /** This event's own cover, or null if it has none of its own to offer. */
     val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
+        coverDim
     )
 
 }
@@ -144,13 +147,16 @@ data class EventGroupEntity(
     @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
     /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
+    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
+    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null
 ) {
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled collection"
 
     /** This collection's own cover, or null if it has none of its own to offer. */
     val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
+        coverDim
     )
 }
 

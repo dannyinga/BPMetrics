@@ -87,38 +87,13 @@ fun SourceStep(
     recordings: List<BpmRecord>,
     peopleById: Map<Long, PersonEntity>,
     selected: ExportSource,
-    onSelect: (ExportSource) -> Unit,
-    exportKind: ExportKind,
-    onExportKindChange: (ExportKind) -> Unit
+    onSelect: (ExportSource) -> Unit
 ) {
     var kind by remember { mutableStateOf(SourceKind.EVENTS) }
 
     Column(Modifier.fillMaxSize()) {
-        // Asked here because it changes what the next step is *for*: a video picks clips, an image
-        // has none to pick. Deciding it later would mean answering a question that had already been
-        // framed the wrong way round.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ExportKind.entries.forEach { entry ->
-                FilterChip(
-                    selected = exportKind == entry,
-                    onClick = { onExportKindChange(entry) },
-                    label = { Text(entry.label) },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-        Text(
-            exportKind.description,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp)
-        )
-        Spacer(Modifier.height(8.dp))
+        // Video or image is asked on Contents now, at the top of the step it actually decides.
+        // Source is the same set of recordings either way.
 
         SecondaryScrollableTabRow(
             selectedTabIndex = kind.ordinal,

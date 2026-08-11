@@ -18,11 +18,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.material3.Text
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
+import androidx.compose.ui.unit.sp
 import inga.bpmetrics.library.Cover
 import inga.bpmetrics.library.CoverStore
 import inga.bpmetrics.ui.theme.BpmPalette
@@ -120,6 +129,10 @@ val CoverTextShadow: Shadow = Shadow(
  *
  * A no-op when there is no cover, so a call site can ask for it unconditionally rather than
  * branching — and so a tile with no picture keeps the flat, clean text it has always had.
+ *
+ * A halo and nothing more. A stroked outline was tried and reverted: at small sizes it thickens
+ * every letter into a smudge, and on a headline it reads as a cartoon. The legibility problem it was
+ * meant to fix belongs to the *picture*, and is solved on the picture — see [Cover.dim].
  */
 fun TextStyle.overCover(hasCover: Boolean): TextStyle =
     if (hasCover) copy(shadow = CoverTextShadow) else this
@@ -238,6 +251,13 @@ fun CoverBackground(
                     dstOffset = IntOffset.Zero,
                     dstSize = IntSize(size.width.toInt(), size.height.toInt())
                 )
+
+                // Darkening before the scrim, and flat rather than as a gradient: this is a
+                // correction to the *photograph* — it is too bright — not a device for protecting
+                // one corner of it. The scrim on top still does its own gradient job.
+                if (cover.dim > 0.005f) {
+                    drawRect(color = Color.Black.copy(alpha = cover.dim.coerceIn(0f, 0.85f)))
+                }
 
                 drawScrim(scrim)
             }

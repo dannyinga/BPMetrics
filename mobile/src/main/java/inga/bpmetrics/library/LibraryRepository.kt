@@ -943,10 +943,14 @@ class LibraryRepository(
         val r = cover?.cropRight
         val b = cover?.cropBottom
         val blur = cover?.blur
+        val dim = cover?.dim
         when (owner) {
-            is CoverOwner.Event -> eventDao.updateCover(owner.eventId, p, l, t, r, b, blur)
-            is CoverOwner.Collection -> collectionDao.updateCover(owner.groupId, p, l, t, r, b, blur)
-            is CoverOwner.Recording -> eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur)
+            is CoverOwner.Event ->
+                eventDao.updateCover(owner.eventId, p, l, t, r, b, blur, dim)
+            is CoverOwner.Collection ->
+                collectionDao.updateCover(owner.groupId, p, l, t, r, b, blur, dim)
+            is CoverOwner.Recording ->
+                eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur, dim)
         }
     }
 
@@ -1137,7 +1141,7 @@ class LibraryRepository(
         // list here would leave every collection cover behind while reporting them all cleared.
         eventDao.getAllEvents().forEach {
             if (it.coverPath != null) {
-                eventDao.updateCover(it.eventId, null, null, null, null, null, null)
+                eventDao.updateCover(it.eventId, null, null, null, null, null, null, null)
             }
         }
         val removed = CoverStore.clearAll(context)

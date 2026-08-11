@@ -27,7 +27,21 @@ data class Cover(
      *
      * Zero, and therefore off, for the ordinary case: a photograph of a crowd needs none of this.
      */
-    val blur: Float = 0f
+    val blur: Float = 0f,
+    /**
+     * How far to darken the picture, 0..1.
+     *
+     * The honest answer to "the writing is hard to read", and the one that survived. A stroked
+     * outline on the text was tried first: it fixes contrast at the cost of making every letter
+     * look like a sticker, and it treats the symptom on the wrong object. The picture is what is
+     * too bright — a white-sky festival shot, a flash photo — and the picture is what should give.
+     *
+     * Per-cover rather than a global scrim, because only *some* covers are too bright, and dimming
+     * all of them is how every photograph ends up the same grey rectangle.
+     *
+     * Zero, and therefore off, for the ordinary case.
+     */
+    val dim: Float = 0f
 ) {
     val cropWidth: Float get() = cropRight - cropLeft
     val cropHeight: Float get() = cropBottom - cropTop
@@ -46,17 +60,19 @@ data class Cover(
             top: Float?,
             right: Float?,
             bottom: Float?,
-            blur: Float? = null
+            blur: Float? = null,
+            dim: Float? = null
         ): Cover? {
             val name = path?.takeIf { it.isNotBlank() } ?: return null
             val softness = (blur ?: 0f).coerceIn(0f, 1f)
+            val darkness = (dim ?: 0f).coerceIn(0f, 1f)
             val l = left ?: 0f
             val t = top ?: 0f
             val r = right ?: 1f
             val b = bottom ?: 1f
             val degenerate = (r - l) < 0.01f || (b - t) < 0.01f
             return if (degenerate) {
-                Cover(name, blur = softness)
+                Cover(name, blur = softness, dim = darkness)
             } else {
                 Cover(
                     name,
@@ -64,7 +80,8 @@ data class Cover(
                     t.coerceIn(0f, 1f),
                     r.coerceIn(0f, 1f),
                     b.coerceIn(0f, 1f),
-                    softness
+                    softness,
+                    darkness
                 )
             }
         }

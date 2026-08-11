@@ -12,6 +12,16 @@ sealed interface SplitAxis {
     val key: String
     val label: String
 
+    /**
+     * What to call the lane holding everything this axis does not label.
+     *
+     * "Unlabelled" is right for a tag category — those recordings genuinely have no value on that
+     * axis. It is wrong for an axis that narrows to one kind of thing, where the residue is not
+     * unlabelled but *other*: the sports games are not missing an event type, they simply are not
+     * concerts.
+     */
+    val residualLabel: String get() = "Unlabelled"
+
     /** Who was wearing the watch. The comparison a multi-watch recording exists for. */
     data object Person : SplitAxis {
         override val key = "person"
@@ -42,6 +52,24 @@ sealed interface SplitAxis {
     }
 
     /**
+     * The events of one kind, against each other. Every concert; every sports game.
+     *
+     * An event type behaves like a tag category, and this is the half that was missing. [EventType]
+     * answers "concerts or sports games?" — one lane each — and that is the *category* question.
+     * The one people actually ask next is "which concert?", and there was no way to ask it: the
+     * [ChildEvent] axis puts every event in the scope side by side, so the concerts were scattered
+     * among the sports games with nothing to separate them.
+     *
+     * Keyed on the type string rather than an id because that is what an event type is — there is
+     * no registry behind it.
+     */
+    data class EventsOfType(val type: String) : SplitAxis {
+        override val key = "type-$type"
+        override val label = type
+        override val residualLabel = "Other event types"
+    }
+
+    /**
      * Where it happened. The Gorge against Showbox.
      *
      * Works whether or not any coordinates were ever captured — a venue is a registry entry with a
@@ -50,6 +78,18 @@ sealed interface SplitAxis {
     data object Place : SplitAxis {
         override val key = "place"
         override val label = "Location"
+    }
+
+    /**
+     * Every recording on its own.
+     *
+     * The finest split there is, and the reason the Recordings tab is gone: a list of recordings
+     * ranked by peak *is* a comparison, and having it on its own tab meant two ways of asking one
+     * question with two different controls and two different-looking answers.
+     */
+    data object Recording : SplitAxis {
+        override val key = "recording"
+        override val label = "Recording"
     }
 }
 
@@ -121,7 +161,11 @@ object AnalysisSplit {
      * is not a character comparison; it is one character and some gaps. The untagged still get a
      * lane when the axis does qualify, so the lanes always sum to the whole.
      */
-    fun axesFor(records: List<AnalysisRecord>): List<SplitAxis> {
+    fun axesFor(
+        records: List<AnalysisRecord>,
+        /** The event the scope *is*. It is never a lane, so it never makes an axis qualify. */
+        excludeEventId: Long? = null
+    ): List<SplitAxis> {
         if (records.isEmpty()) return emptyList()
 
         val axes = mutableListOf<SplitAxis>()
@@ -135,13 +179,26 @@ object AnalysisSplit {
         // By id, not by name. Two events called "Subtronics" from different weekends are two
         // nights, and counting them as one axis value would be a wrong answer rather than an
         // untidy one — short names are only unique within their own branch.
-        if (records.mapNotNull { it.eventId }.distinct().size > 1) {
+        val eventIds = records.mapNotNull { it.eventId }.filter { it != excludeEventId }.distinct()
+        if (eventIds.size > 1) {
             axes += SplitAxis.ChildEvent
         }
 
         if (records.map { it.eventType }.filter { it.isNotBlank() }.distinct().size > 1) {
             axes += SplitAxis.EventType
         }
+
+        // One axis per event type that holds more than one event, so "Concert" is offered as a
+        // thing to compare within and a type with a single event under it is not. Ordered by name
+        // rather than by however the records happened to arrive, or the row of chips would
+        // rearrange itself whenever an exclusion changed.
+        records
+            .filter { it.eventType.isNotBlank() && it.eventId != null && it.eventId != excludeEventId }
+            .groupBy { it.eventType }
+            .filter { (_, ofType) -> ofType.mapNotNull { it.eventId }.distinct().size > 1 }
+            .keys
+            .sorted()
+            .forEach { axes += SplitAxis.EventsOfType(it) }
 
         // By id where there is one, so two venues sharing a name stay two — the same reason events
         // split on identity rather than on what they are called.
@@ -158,6 +215,12 @@ object AnalysisSplit {
                 axes += SplitAxis.TagCategory(categoryId, tags.first().categoryName)
             }
 
+        // Last, because it is the finest cut there is and the least likely to be the question. It
+        // is offered at all because a list of recordings ranked by peak *is* a comparison — it used
+        // to be its own tab, with its own control and its own look, answering the same question in
+        // a second way.
+        if (records.size > 1) axes += SplitAxis.Recording
+
         return axes
     }
 
@@ -172,7 +235,24 @@ object AnalysisSplit {
      * Ordered by the thing being compared: hardest first, because the question is almost always
      * "which of these was the most". The unlabelled lane sits last regardless.
      */
-    fun split(records: List<AnalysisRecord>, axis: SplitAxis): List<SplitLane> {
+    fun split(
+        records: List<AnalysisRecord>,
+        axis: SplitAxis,
+        /**
+         * The event the scope *is*, so it does not become a lane of its own.
+         *
+         * Comparing a festival's events against each other should not include the festival: it
+         * would be one lane holding everything, drawn at full width, saying nothing.
+         */
+        excludeEventId: Long? = null,
+        /**
+         * Which figure decides the order.
+         *
+         * Ranking by peak while the screen displays averages is a list that looks mis-sorted, and
+         * the reader has no way to tell it is not.
+         */
+        orderBy: (SplitLane) -> Double? = { it.avgBpm }
+    ): List<SplitLane> {
         if (records.isEmpty()) return emptyList()
 
         // Keyed by identity, labelled separately. The two coincide for most axes and deliberately
@@ -188,10 +268,16 @@ object AnalysisSplit {
                 labels = { key, _ -> key }
                 unlabelled = records - named.toSet()
             }
+            is SplitAxis.Recording -> {
+                labelled = records.associateBy { it.recordId.toString() }.mapValues { listOf(it.value) }
+                labels = { _, inLane -> inLane.first().title }
+                unlabelled = emptyList()
+            }
+
             is SplitAxis.ChildEvent -> {
                 // Grouped by id and labelled by the qualified name, so two events sharing a short
                 // name stay two lanes and are told apart on screen.
-                val named = records.filter { it.eventId != null }
+                val named = records.filter { it.eventId != null && it.eventId != excludeEventId }
                 labelled = named.groupBy { it.eventId.toString() }
                 labels = { _, inLane -> inLane.first().eventLabel }
                 unlabelled = records - named.toSet()
@@ -200,6 +286,17 @@ object AnalysisSplit {
                 val named = records.filter { it.eventType.isNotBlank() }
                 labelled = named.groupBy { it.eventType }
                 labels = { key, _ -> key }
+                unlabelled = records - named.toSet()
+            }
+            is SplitAxis.EventsOfType -> {
+                // Narrowed to the type, then split by event exactly as [SplitAxis.ChildEvent] does.
+                // Everything of another type still gets its lane so the totals stay honest, but it
+                // is one lane called "Other event types" rather than a comparison of its own.
+                val named = records.filter {
+                    it.eventType == axis.type && it.eventId != null && it.eventId != excludeEventId
+                }
+                labelled = named.groupBy { it.eventId.toString() }
+                labels = { _, inLane -> inLane.first().eventLabel }
                 unlabelled = records - named.toSet()
             }
             is SplitAxis.Place -> {
@@ -233,9 +330,9 @@ object AnalysisSplit {
                 records = inLane,
                 colorArgb = if (axis is SplitAxis.Person) colours[key] else null
             )
-        }.sortedByDescending { it.maxBpm ?: Double.NEGATIVE_INFINITY }
+        }.sortedByDescending { orderBy(it) ?: Double.NEGATIVE_INFINITY }
 
         return if (unlabelled.isEmpty()) lanes
-        else lanes + SplitLane("unlabelled", "Unlabelled", unlabelled, isUnlabelled = true)
+        else lanes + SplitLane("unlabelled", axis.residualLabel, unlabelled, isUnlabelled = true)
     }
 }
