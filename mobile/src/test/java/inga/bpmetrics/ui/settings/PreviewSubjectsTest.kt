@@ -2,6 +2,7 @@ package inga.bpmetrics.ui.settings
 
 import inga.bpmetrics.library.BpmDataPointEntity
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -27,17 +28,17 @@ class PreviewSubjectsTest {
     ) = BpmRecord(
         metadata = BpmRecordEntity(
             recordId = id,
-            title = "Recording $id",
+            title = "Recording ",
             date = startTime,
             startTime = startTime,
             endTime = startTime + 60_000L,
             durationMs = 60_000L,
             personId = personId,
-            eventId = eventId
+            eventId = eventId,
+            // Whether a recording has readings is read from here now, not by counting them —
+            // choosing a preview subject must not load the library's readings to reject most.
+            activeDurationMs = points * 1_000L
         ),
-        dataPoints = (0 until points).map {
-            BpmDataPointEntity(recordOwnerId = id, timestamp = it * 1_000L, bpm = 90.0)
-        },
         minDataPoint = null,
         maxDataPoint = null
     )
@@ -46,18 +47,20 @@ class PreviewSubjectsTest {
     fun `an empty library still has something to preview`() {
         // The case this matters most in: a fresh install, which is exactly when someone is likely
         // to be arranging a preset.
-        val single = PreviewSubjects.onePerson(emptyList())
-        val several = PreviewSubjects.severalPeople(emptyList())
+        // The selectors find nothing, and the caller falls back to the made-up curves.
+        assertTrue(PreviewSubjects.onePerson(emptyList()).isEmpty())
+        assertTrue(PreviewSubjects.severalPeople(emptyList()).isEmpty())
 
+        val single = PreviewSubjects.syntheticOne()
         assertEquals(1, single.size)
         assertTrue(single.single().dataPoints.size > 2)
-        assertTrue("several must mean several", several.size > 1)
+        assertTrue("several must mean several", PreviewSubjects.syntheticSeveral().size > 1)
     }
 
     @Test
     fun `the sample curves are not flat`() {
         // A flat line would make every colour setting look identical and the gradient look broken.
-        val bpm = PreviewSubjects.onePerson(emptyList()).single().dataPoints.map { it.bpm }
+        val bpm = PreviewSubjects.syntheticOne().single().dataPoints.map { it.bpm }
 
         assertTrue("the sample must actually move", bpm.max() - bpm.min() > 20.0)
     }
@@ -66,8 +69,8 @@ class PreviewSubjectsTest {
     fun `the sample is the same every time it is asked for`() {
         // Redrawing differently on each recomposition would make it impossible to tell whether a
         // change to the preset had done anything.
-        val first = PreviewSubjects.onePerson(emptyList()).single().dataPoints.map { it.bpm }
-        val second = PreviewSubjects.onePerson(emptyList()).single().dataPoints.map { it.bpm }
+        val first = PreviewSubjects.syntheticOne().single().dataPoints.map { it.bpm }
+        val second = PreviewSubjects.syntheticOne().single().dataPoints.map { it.bpm }
 
         assertEquals(first, second)
     }
@@ -91,13 +94,14 @@ class PreviewSubjectsTest {
     }
 
     @Test
-    fun `a recording with almost no readings is not used as a sample`() {
-        // Two points draw a straight line, which shows nothing about a preset.
-        val stub = record(1, personId = 5, startTime = noon, points = 1)
+    fun `a recording with no readings is not used as a sample`() {
+        // Nothing measured means nothing to draw, and a flat line shows nothing about a preset.
+        val stub = record(1, personId = 5, startTime = noon, points = 0)
 
-        val chosen = PreviewSubjects.onePerson(listOf(stub))
-
-        assertTrue("must fall back rather than preview a stub", chosen.single().metadata.recordId < 0)
+        assertTrue(
+            "must find nothing rather than offer a stub",
+            PreviewSubjects.onePerson(listOf(stub)).isEmpty()
+        )
     }
 
     @Test
@@ -121,9 +125,10 @@ class PreviewSubjectsTest {
             record(2, personId = 5, startTime = noon + 60_000, eventId = 7)
         )
 
-        val chosen = PreviewSubjects.severalPeople(library)
-
-        assertTrue("must fall back to the sample trio", chosen.all { it.metadata.recordId < 0 })
+        assertTrue(
+            "one person is one lane, which is the other preview",
+            PreviewSubjects.severalPeople(library).isEmpty()
+        )
     }
 
     @Test

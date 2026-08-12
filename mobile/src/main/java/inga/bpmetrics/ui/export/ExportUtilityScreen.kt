@@ -30,6 +30,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -45,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import inga.bpmetrics.library.clock
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.LaunchedEffect
@@ -81,6 +85,9 @@ fun ExportUtilityScreen(
     val furthest by viewModel.furthestStep.collectAsStateWithLifecycle()
     val canAdvance by viewModel.canAdvance.collectAsStateWithLifecycle()
     val sourceLabel by viewModel.sourceLabel.collectAsStateWithLifecycle()
+    // What gets *drawn*, as opposed to what labels the step. The two differ on purpose: a step
+    // header wants "Tape B" and a caption wants "Tape B | Levitape". See [ExportUtilityViewModel].
+    val scopeTitle by viewModel.scopeTitle.collectAsStateWithLifecycle()
     val records by viewModel.records.collectAsStateWithLifecycle()
     val source by viewModel.source.collectAsStateWithLifecycle()
     val clips by viewModel.clips.collectAsStateWithLifecycle()
@@ -101,7 +108,7 @@ fun ExportUtilityScreen(
     }
     val events by remember { repository.getAllEvents() }
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val groups by remember { repository.getAllEventGroups() }
+    val collections by remember { repository.getAllCollections() }
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val people by remember { repository.getAllPeople() }
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -110,6 +117,7 @@ fun ExportUtilityScreen(
     val manualOverlay by viewModel.manualOverlay.collectAsStateWithLifecycle()
     val previewAt by viewModel.previewAt.collectAsStateWithLifecycle()
     val kind by viewModel.kind.collectAsStateWithLifecycle()
+    val clipTitles by viewModel.clipTitles.collectAsStateWithLifecycle()
     val imageGrouping by viewModel.imageGrouping.collectAsStateWithLifecycle()
     val imagePlan by viewModel.imagePlan.collectAsStateWithLifecycle()
     val imageCrop by viewModel.imageCrop.collectAsStateWithLifecycle()
@@ -346,42 +354,57 @@ fun ExportUtilityScreen(
             when (step) {
                 ExportStep.SOURCE -> SourceStep(
                     events = events,
-                    groups = groups,
+                    collections = collections,
                     recordings = allRecords,
                     peopleById = peopleById,
                     selected = source,
-                    onSelect = { viewModel.setSource(it) },
-                    exportKind = kind,
-                    onExportKindChange = { viewModel.setKind(it) }
+                    onSelect = { viewModel.setSource(it) }
                 )
 
-                ExportStep.CONTENTS -> if (kind == ExportKind.IMAGE) {
-                    ImageContentsStep(
-                        plan = imagePlan,
-                        grouping = imageGrouping,
-                        onGroupingChange = { viewModel.setImageGrouping(it) },
-                        // Only a group can become more than one image, so only a group is asked.
-                        showGroupingChoice = source is ExportSource.Group,
-                        crop = imageCrop,
-                        onCropChange = { viewModel.setImageCrop(it) },
-                        naturalSpan = imageNaturalSpan,
-                        timeZoneId = preset.timeZoneId,
-                        title = imageTitle,
-                        onTitleChange = { viewModel.setImageTitle(it) }
-                    )
-                } else {
-                    ContentsStep(
-                        clips = clips,
-                        records = records,
-                        peopleById = peopleById,
-                        loading = loadingClips,
-                        hasNoClips = hasNoClips,
-                        oldestFirst = oldestFirst,
-                        onToggleOrder = { viewModel.toggleClipOrder() },
-                        onSelectAll = { viewModel.setAllClipsSelected(it) },
-                        onToggleClip = { viewModel.toggleClip(it) },
-                        onToggleRecord = { uri, id -> viewModel.toggleRecordOnClip(uri, id) }
-                    )
+                // Video or image sits at the top of this step, because this step is what it
+                // decides — a video picks clips to draw on, an image asks which recordings share a
+                // timeline. It used to be asked on Source, where the answer changes nothing, and
+                // that forced every entry point outside the utility to put a modal in the way
+                // asking it first.
+                ExportStep.CONTENTS -> Column(Modifier.fillMaxSize()) {
+                    ExportKindToggle(kind) { viewModel.setKind(it) }
+
+                    // Weighted so the list below takes the space the toggle leaves, rather than
+                    // relying on the Column's remaining-space default.
+                    Box(Modifier.weight(1f)) {
+                        if (kind == ExportKind.IMAGE) {
+                            ImageContentsStep(
+                                plan = imagePlan,
+                                grouping = imageGrouping,
+                                onGroupingChange = { viewModel.setImageGrouping(it) },
+                                // Only a group can become more than one image, so only a group is
+                                // asked.
+                                showGroupingChoice = source is ExportSource.Group,
+                                crop = imageCrop,
+                                onCropChange = { viewModel.setImageCrop(it) },
+                                naturalSpan = imageNaturalSpan,
+                                timeZoneId = preset.timeZoneId,
+                                title = imageTitle,
+                                onTitleChange = { viewModel.setImageTitle(it) }
+                            )
+                        } else {
+                            ContentsStep(
+                                clips = clips,
+                                records = records,
+                                peopleById = peopleById,
+                                loading = loadingClips,
+                                hasNoClips = hasNoClips,
+                                oldestFirst = oldestFirst,
+                                onToggleOrder = { viewModel.toggleClipOrder() },
+                                onSelectAll = { viewModel.setAllClipsSelected(it) },
+                                onToggleClip = { viewModel.toggleClip(it) },
+                                onToggleRecord = { uri, id ->
+                                    viewModel.toggleRecordOnClip(uri, id)
+                                },
+                                titles = clipTitles
+                            )
+                        }
+                    }
                 }
 
                 ExportStep.LOOK -> LookStep(
@@ -405,9 +428,14 @@ fun ExportUtilityScreen(
                     previewOverlay = pendingJobs.firstOrNull()?.clip?.uri ?: manualOverlay,
                     previewColours = recordColours,
                     previewPhotos = recordPhotos,
-                    graphTitle = imageTitle ?: sourceLabel,
+                    // [scopeTitle], not [sourceLabel]. These three fed the bare name of the source
+                    // to the thing that gets drawn — so a Tape B export was captioned "Tape B"
+                    // with no sign of the Levitape it belongs to, while the image *plan* was
+                    // separately building the full title and the two disagreed. `sourceLabel` is
+                    // the short form, and it stays where it belongs: on the step header.
+                    graphTitle = imageTitle ?: scopeTitle,
                     onGraphTitleChange = { viewModel.setImageTitle(it) },
-                    previewTitle = (imageTitle ?: sourceLabel).takeIf { it.isNotBlank() },
+                    previewTitle = (imageTitle ?: scopeTitle).takeIf { it.isNotBlank() },
                     previewAt = previewAt,
                     onScrub = { viewModel.scrubPreview(it) },
                     framing = currentFraming,
@@ -494,7 +522,10 @@ fun ExportUtilityScreen(
                                 colours = recordColours,
                                 photos = recordPhotos,
                                 manualOverlay = manualOverlay,
-                                label = imageTitle?.takeIf { it.isNotBlank() } ?: sourceLabel
+                                // The caption burned into every video in the batch.
+                                label = imageTitle?.takeIf { it.isNotBlank() } ?: scopeTitle,
+                                clipTitles = clipTitles,
+                                titleOverride = imageTitle?.takeIf { it.isNotBlank() }
                             )
                         }
                     )
@@ -519,11 +550,19 @@ private fun queueBatch(
     context: android.content.Context,
     viewModel: ExportUtilityViewModel,
     jobs: List<ClipSelection>,
-    allRecords: List<inga.bpmetrics.library.BpmRecord>,
+    allRecords: List<inga.bpmetrics.library.BpmRecordWithPoints>,
     colours: Map<Long, Int>,
     photos: Map<Long, android.graphics.Bitmap>,
     manualOverlay: Uri?,
-    label: String
+    label: String,
+    /**
+     * What each clip's own video is captioned, keyed by uri — the same map step 2 shows on the
+     * cards. Without this every video in a batch was captioned with the batch's name, so a card
+     * promising "Tape B | Levitape" could render a file saying something broader.
+     */
+    clipTitles: Map<String, String> = emptyMap(),
+    /** A typed title, which is deliberately for the whole batch and outranks the per-clip one. */
+    titleOverride: String? = null
 ) {
     if (allRecords.isEmpty()) return
     val name = label.ifBlank { "Export" }
@@ -549,17 +588,21 @@ private fun queueBatch(
         val forThisClip = allRecords.filter { it.metadata.recordId in job.recordIds }
         if (forThisClip.isEmpty()) return@forEach
 
+        val caption = titleOverride
+            ?: clipTitles[job.clip.uri.toString()]?.takeIf { it.isNotBlank() }
+            ?: name
+
         BpmExportService.startExport(
             context,
             forThisClip.first().metadata.recordId,
             // Named by clip time, so a queue of six is readable rather than six identical rows.
-            "$name · ${getTimeString(job.clip.startedAtMs)}",
+            "$name · ${getTimeString(job.clip.startedAtMs, forThisClip.clock)}",
             viewModel.buildConfig(
                 forRecords = forThisClip,
                 overlay = job.clip.uri,
                 colours = colours,
                 photos = photos,
-                title = name,
+                title = caption,
                 clip = job.clip,
                 placement = job.graph
             ),
@@ -656,7 +699,7 @@ private fun formatMinutes(ms: Long): String {
  */
 @Composable
 private fun LookStep(
-    records: List<inga.bpmetrics.library.BpmRecord>,
+    records: List<inga.bpmetrics.library.BpmRecordWithPoints>,
     isImage: Boolean,
     renderImagePreview: () -> android.graphics.Bitmap?,
     imageRevision: Any,
@@ -756,6 +799,7 @@ private fun LookStep(
             // because both are decided once rather than watched.
             if (!isImage && records.isNotEmpty() && ticked.size > 1) {
                 ClipSelectorStrip(
+                    clock = records.clock,
                     clips = ticked,
                     selectedUri = previewing?.clip?.uri,
                     onSelect = onSelectClip
@@ -914,3 +958,37 @@ private fun StepPlaceholder(step: ExportStep, description: String) {
     }
 }
 
+
+/**
+ * Video or image, at the top of the step it decides.
+ *
+ * A segmented control rather than two chips, for the same reason the Compare tab uses one: it is a
+ * single setting with two positions, and two chips side by side look like two independent things to
+ * tap.
+ *
+ * Bare, with no explanation under it. "Curves drawn over footage, rendered in the background" told
+ * anyone who had reached step 2 of an export utility what a video is, and it sat between this
+ * control and the row that reports what is ticked — so the cost of the sentence was paid by the
+ * thing it was pushing down the screen.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ExportKindToggle(kind: ExportKind, onSelect: (ExportKind) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp)
+    ) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            ExportKind.entries.forEachIndexed { index, entry ->
+                SegmentedButton(
+                    selected = kind == entry,
+                    onClick = { onSelect(entry) },
+                    shape = SegmentedButtonDefaults.itemShape(index, ExportKind.entries.size),
+                    icon = {},
+                    label = { Text(entry.label) }
+                )
+            }
+        }
+    }
+}

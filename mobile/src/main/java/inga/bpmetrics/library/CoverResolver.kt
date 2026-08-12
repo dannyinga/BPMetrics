@@ -27,7 +27,21 @@ data class Cover(
      *
      * Zero, and therefore off, for the ordinary case: a photograph of a crowd needs none of this.
      */
-    val blur: Float = 0f
+    val blur: Float = 0f,
+    /**
+     * How far to darken the picture, 0..1.
+     *
+     * The honest answer to "the writing is hard to read", and the one that survived. A stroked
+     * outline on the text was tried first: it fixes contrast at the cost of making every letter
+     * look like a sticker, and it treats the symptom on the wrong object. The picture is what is
+     * too bright — a white-sky festival shot, a flash photo — and the picture is what should give.
+     *
+     * Per-cover rather than a global scrim, because only *some* covers are too bright, and dimming
+     * all of them is how every photograph ends up the same grey rectangle.
+     *
+     * Zero, and therefore off, for the ordinary case.
+     */
+    val dim: Float = 0f
 ) {
     val cropWidth: Float get() = cropRight - cropLeft
     val cropHeight: Float get() = cropBottom - cropTop
@@ -46,17 +60,19 @@ data class Cover(
             top: Float?,
             right: Float?,
             bottom: Float?,
-            blur: Float? = null
+            blur: Float? = null,
+            dim: Float? = null
         ): Cover? {
             val name = path?.takeIf { it.isNotBlank() } ?: return null
             val softness = (blur ?: 0f).coerceIn(0f, 1f)
+            val darkness = (dim ?: 0f).coerceIn(0f, 1f)
             val l = left ?: 0f
             val t = top ?: 0f
             val r = right ?: 1f
             val b = bottom ?: 1f
             val degenerate = (r - l) < 0.01f || (b - t) < 0.01f
             return if (degenerate) {
-                Cover(name, blur = softness)
+                Cover(name, blur = softness, dim = darkness)
             } else {
                 Cover(
                     name,
@@ -64,7 +80,8 @@ data class Cover(
                     t.coerceIn(0f, 1f),
                     r.coerceIn(0f, 1f),
                     b.coerceIn(0f, 1f),
-                    softness
+                    softness,
+                    darkness
                 )
             }
         }
@@ -79,8 +96,8 @@ enum class CoverSource {
     /** Set on the event this recording is filed under. */
     EVENT,
 
-    /** Set on a collection above it — its event's, or one of that collection's parents. */
-    GROUP
+    /** Set on an event further up the tree. See [TagSource.ANCESTOR]. */
+    ANCESTOR
 }
 
 /** A cover as it applies to something, and why. */
@@ -121,48 +138,50 @@ object CoverResolver {
         directCover?.let { return EffectiveCover(it, CoverSource.DIRECT) }
         eventCover?.let { return EffectiveCover(it, CoverSource.EVENT) }
         groupChainCovers.firstNotNullOfOrNull { it }
-            ?.let { return EffectiveCover(it, CoverSource.GROUP) }
+            ?.let { return EffectiveCover(it, CoverSource.ANCESTOR) }
         return null
-    }
-
-    /**
-     * The collections above [groupId], nearest first.
-     *
-     * Cycle-guarded. A collection that is its own ancestor should be impossible — `CollectionTree`
-     * refuses to create one — but a walk up parents is the code that *hangs* rather than throws if
-     * one ever exists, and this runs while a list is being drawn.
-     */
-    fun ancestryOf(groupId: Long?, parents: Map<Long, Long?>): List<Long> {
-        val chain = mutableListOf<Long>()
-        val seen = mutableSetOf<Long>()
-        var current = groupId
-        while (current != null && seen.add(current)) {
-            chain += current
-            current = parents[current]
-        }
-        return chain
     }
 
     /**
      * The cover for a recording, from whole maps rather than a pre-walked chain.
      *
-     * The convenience the UI actually wants: a screen holds every event and collection already, and
-     * asking it to assemble an ancestry per row is how one screen comes to walk the tree slightly
-     * differently from another.
+     * The convenience the UI actually wants: a screen holds every event already, and asking it to
+     * assemble an ancestry per row is how one screen comes to walk the tree slightly differently
+     * from another. This had its own copy of that walk until TX-1.4; it now calls the same
+     * [EventTree.ancestryOf] as everything else, cycle guard and all.
      */
     fun forRecording(
         directCover: Cover?,
         eventId: Long?,
         eventCovers: Map<Long, Cover?>,
-        eventGroups: Map<Long, Long?>,
-        groupCovers: Map<Long, Cover?>,
-        groupParents: Map<Long, Long?>
+        events: List<EventEntity>
     ): EffectiveCover? {
-        val groupId = eventId?.let { eventGroups[it] }
+        val ancestry = eventId?.let { EventTree.ancestryOf(events, it) }.orEmpty()
         return resolve(
             directCover = directCover,
-            eventCover = eventId?.let { eventCovers[it] },
-            groupChainCovers = ancestryOf(groupId, groupParents).map { groupCovers[it] }
+            eventCover = ancestry.firstOrNull()?.let { eventCovers[it.eventId] },
+            groupChainCovers = ancestry.drop(1).map { eventCovers[it.eventId] }
         )
+    }
+
+    /**
+     * Every event's picture, its own or the nearest one above it.
+     *
+     * The map any list of events wants. A day inside a festival shows the festival's photograph
+     * rather than nothing, which is what inheritance means everywhere else in the app — a cover put
+     * on "Coachella" that decorated the Coachella card and left all six days blank would be a cover
+     * that only worked at the level it was set.
+     *
+     * Shared because it had already been written twice with different answers: the library walked
+     * the ancestry, and the export picker read `ownCover` directly — so the same six days were
+     * photographs in one list and grey rows in the other.
+     */
+    fun byEvent(events: List<EventEntity>): Map<Long, Cover> {
+        val own = events.associate { it.eventId to it.ownCover }
+        return events.mapNotNull { event ->
+            EventTree.ancestryOf(events, event.eventId)
+                .firstNotNullOfOrNull { own[it.eventId] }
+                ?.let { event.eventId to it }
+        }.toMap()
     }
 }

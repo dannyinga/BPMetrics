@@ -34,18 +34,18 @@ object RecordMerge {
      * a person there is no evidence they are the same heart, and joining them would be a guess
      * presented as data.
      */
-    fun canMerge(records: List<BpmRecord>): Boolean {
+    fun canMerge(records: List<BpmRecordEntity>): Boolean {
         if (records.size < 2) return false
-        val people = records.map { it.metadata.personId }
+        val people = records.map { it.personId }
         return people.none { it == null } && people.distinct().size == 1
     }
 
     /** Why a merge is being refused, for the UI to say rather than just disabling a button. */
-    fun refusal(records: List<BpmRecord>): String? = when {
+    fun refusal(records: List<BpmRecordEntity>): String? = when {
         records.size < 2 -> "Select more than one recording."
-        records.any { it.metadata.personId == null } ->
+        records.any { it.personId == null } ->
             "Every recording has to be attributed to someone first."
-        records.map { it.metadata.personId }.distinct().size > 1 ->
+        records.map { it.personId }.distinct().size > 1 ->
             "These are different people. Compare them with a same-time analysis instead."
         else -> null
     }
@@ -59,7 +59,7 @@ object RecordMerge {
      *
      * @return null when there is nothing to draw, which is a refusal rather than an empty result.
      */
-    fun combine(records: List<BpmRecord>): Merged? {
+    fun combine(records: List<BpmRecordWithPoints>): Merged? {
         val withData = records.filter { it.dataPoints.isNotEmpty() }
         if (withData.isEmpty()) return null
 
@@ -87,11 +87,20 @@ object RecordMerge {
      * Worth showing before the merge rather than after: joining two sets an hour apart is a
      * legitimate thing to want, and it is also a mistake someone might be about to make.
      */
-    fun gapMs(records: List<BpmRecord>): Long {
-        val merged = combine(records) ?: return 0L
-        val covered = records
-            .filter { it.dataPoints.isNotEmpty() }
-            .sumOf { it.metadata.durationMs }
-        return (merged.durationMs - covered).coerceAtLeast(0L)
+    /**
+     * The time between the parts that no recording covers.
+     *
+     * Metadata only, so the preview dialog can show it without loading every reading of every
+     * recording being merged — the readings are what the merge itself needs, not the description
+     * of it. Span minus what the parts cover, which is the same answer [combine] arrives at.
+     *
+     * A recording with no readings at all counts toward the span here and contributes nothing to
+     * the merge, so the two differ in that one degenerate case. It is a preview.
+     */
+    fun gapMs(records: List<BpmRecordEntity>): Long {
+        if (records.size < 2) return 0L
+        val span = records.maxOf { it.startTime + it.durationMs } - records.minOf { it.startTime }
+        val covered = records.sumOf { it.durationMs }
+        return (span - covered).coerceAtLeast(0L)
     }
 }

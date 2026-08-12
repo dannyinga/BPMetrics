@@ -70,11 +70,21 @@ fun rememberCoverPicker(onPicked: (Uri) -> Unit): () -> Unit {
  */
 @Composable
 fun CoverCropDialog(
-    cover: Cover,
+    /**
+     * What there is so far, or null when nothing has been chosen yet.
+     *
+     * Nullable so this dialog is the *whole* of editing a cover. It used to require one, which put
+     * "Change photo", "Adjust" and "Remove" as three buttons in the editor behind it — three ways
+     * in to one thing, and the two that are not "adjust" both leave without ever showing the
+     * picture. Now the editor has one door and everything happens on the other side of it.
+     */
+    cover: Cover?,
     /** Drawn inside the preview, so the crop is judged against the words that will sit on it. */
     previewContent: @Composable () -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (Cover) -> Unit,
+    /** Opens the gallery. Remembered at screen level — see [rememberCoverPicker]. */
+    onPick: (() -> Unit)? = null,
     onRemove: (() -> Unit)? = null,
     /**
      * The shape the result will actually be drawn in.
@@ -92,7 +102,7 @@ fun CoverCropDialog(
 
     // The photograph's own proportions, needed to open on a window that fits the target rather than
     // on the whole image. Null until it has loaded.
-    val imageSize = rememberCoverSize(cover.path)
+    val imageSize = rememberCoverSize(cover?.path)
     val imageAspect = imageSize
         ?.takeIf { it.height > 0 }
         ?.let { it.width.toFloat() / it.height.toFloat() }
@@ -105,9 +115,9 @@ fun CoverCropDialog(
     //
     // So the window opens matched to the target shape, centred. Now it can be moved, and there is
     // somewhere for it to move to.
-    var crop by remember(cover.path, imageAspect) {
+    var crop by remember(cover?.path, imageAspect) {
         mutableStateOf(
-            if (cover.isWholeImage && imageAspect != null) {
+            if (cover != null && cover.isWholeImage && imageAspect != null) {
                 cover.fittedTo(targetAspect, imageAspect)
             } else {
                 cover
@@ -153,9 +163,9 @@ fun CoverCropDialog(
                         // Pinch and drag, which is what anyone reaches for on a photograph. The
                         // corner-handle model this replaces asked people to find a 28dp target they
                         // could not see, and did nothing at all anywhere else on the image.
-                        .pointerInput(cover.path, imageAspect) {
+                        .pointerInput(cover?.path, imageAspect) {
                             detectTransformGestures { _, pan, zoom, _ ->
-                                crop = crop.transformed(
+                                crop = crop?.transformed(
                                     zoom = zoom,
                                     // Dragging the picture right shows what was off to its left, so
                                     // the window moves opposite to the finger.
@@ -167,30 +177,45 @@ fun CoverCropDialog(
                             }
                         }
                 ) {
-                    CoverBackground(
-                        cover = crop,
-                        modifier = Modifier.fillMaxSize(),
-                        scrim = if (shape == CoverCropShape.CIRCLE) {
-                            CoverScrim.NONE
-                        } else {
-                            CoverScrim.TILE
+                    val framed = crop
+                    if (framed == null) {
+                        // The empty state is the same box at the same size, so choosing a photo
+                        // does not make the dialog jump.
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                "No photo yet",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                    ) {
-                        Box(Modifier.fillMaxSize().padding(BpmSpacing.Medium)) { previewContent() }
+                    } else {
+                        CoverBackground(
+                            cover = framed,
+                            modifier = Modifier.fillMaxSize(),
+                            scrim = if (shape == CoverCropShape.CIRCLE) {
+                                CoverScrim.NONE
+                            } else {
+                                CoverScrim.TILE
+                            }
+                        ) {
+                            Box(Modifier.fillMaxSize().padding(BpmSpacing.Medium)) { previewContent() }
+                        }
                     }
                 }
 
-                Spacer(Modifier.height(BpmSpacing.Small))
-                Text(
-                    "Showing ${(crop.cropWidth * 100).toInt()}% of the width " +
-                        "and ${(crop.cropHeight * 100).toInt()}% of the height.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                crop?.let { framed ->
+                    Spacer(Modifier.height(BpmSpacing.Small))
+                    Text(
+                        "Showing ${(framed.cropWidth * 100).toInt()}% of the width " +
+                            "and ${(framed.cropHeight * 100).toInt()}% of the height.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 // Only where writing will sit on it. A person's photograph is drawn in a circle
-                // with nothing over it, so softening it would be softening it for no reason.
-                if (shape != CoverCropShape.CIRCLE) {
+                // with nothing over it, so softening or dimming it would be for no reason.
+                if (shape != CoverCropShape.CIRCLE && crop != null) {
                     Spacer(Modifier.height(BpmSpacing.Medium))
                     Text(
                         "Soften",
@@ -207,8 +232,8 @@ fun CoverCropDialog(
                     )
                     Spacer(Modifier.height(BpmSpacing.Tiny))
                     androidx.compose.material3.Slider(
-                        value = crop.blur,
-                        onValueChange = { crop = crop.copy(blur = it) },
+                        value = crop?.blur ?: 0f,
+                        onValueChange = { v -> crop = crop?.copy(blur = v) },
                         // Continuous. It was stepped because each strength used to be a separately
                         // decoded bitmap and a free-running slider would have rebuilt one per pixel
                         // of travel. The blur is a render effect now, so there is nothing to
@@ -217,42 +242,125 @@ fun CoverCropDialog(
                         // that wants a smooth control.
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Spacer(Modifier.height(BpmSpacing.Medium))
+                    Text(
+                        "Darken",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    )
+                    Text(
+                        // The case this exists for, named. It replaced outlining the text, which
+                        // fixed the contrast and made every letter look like a sticker — and was
+                        // treating the symptom on the wrong object. The picture is what is too
+                        // bright.
+                        "For a cover the writing cannot hold against — a white sky, a flash photo. " +
+                            "Only this cover, so the rest keep their brightness.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(BpmSpacing.Tiny))
+                    androidx.compose.material3.Slider(
+                        value = crop?.dim ?: 0f,
+                        onValueChange = { v -> crop = crop?.copy(dim = v) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
 
+                // Everything you can do to a cover, in the one place that shows you the cover.
+                // Choosing and removing used to be buttons in the editor *behind* this dialog,
+                // which meant two of the three ways of editing a picture never showed it.
                 Spacer(Modifier.height(BpmSpacing.Small))
                 Row(horizontalArrangement = Arrangement.spacedBy(BpmSpacing.Small)) {
-                    TextButton(
-                        onClick = {
-                            // As much of the picture as this shape can hold, not literally all of
-                            // it — a window wider than the target gets centre-cropped on the way
-                            // out anyway, so "whole picture" would show something the library then
-                            // trims.
-                            crop = imageAspect
-                                ?.let { crop.fittedTo(targetAspect, it) }
-                                ?: crop.copy(
-                                    cropLeft = 0f,
-                                    cropTop = 0f,
-                                    cropRight = 1f,
-                                    cropBottom = 1f
-                                )
+                    onPick?.let { pick ->
+                        TextButton(onClick = pick) {
+                            Text(if (crop == null) "Choose photo" else "Replace")
                         }
-                    ) {
-                        Text("Fit picture")
                     }
-                    onRemove?.let {
+                    if (crop != null) {
                         TextButton(
-                            onClick = it,
-                            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            )
-                        ) { Text("Remove cover") }
+                            onClick = {
+                                // As much of the picture as this shape can hold, not literally all
+                                // of it — a window wider than the target gets centre-cropped on
+                                // the way out anyway, so "whole picture" would show something the
+                                // library then trims.
+                                crop = imageAspect
+                                    ?.let { aspect -> crop?.fittedTo(targetAspect, aspect) }
+                                    ?: crop?.copy(
+                                        cropLeft = 0f,
+                                        cropTop = 0f,
+                                        cropRight = 1f,
+                                        cropBottom = 1f
+                                    )
+                            }
+                        ) {
+                            Text("Fit")
+                        }
+                        onRemove?.let {
+                            TextButton(
+                                onClick = it,
+                                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) { Text("Remove") }
+                        }
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(crop) }) { Text("Save") } },
+        confirmButton = {
+            TextButton(
+                enabled = crop != null,
+                onClick = { crop?.let(onConfirm) }
+            ) { Text("Save") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+/**
+ * One door to everything a cover is.
+ *
+ * A single button. It was three — "Change photo", "Adjust", "Remove" — sitting in the editor in
+ * front of the dialog, which is clunky to read and wrong in principle: two of those three act on a
+ * picture without ever showing it, and all three are things [CoverCropDialog] can do with the
+ * picture on screen. So editing a cover is: open this, choose or do not choose a photograph, frame
+ * it, save.
+ *
+ *  cover The owner's **own** cover, not an inherited one. Decides only what the button says.
+ *  framing Hoisted rather than held here, because an import raises it from the caller's own
+ *   result callback — landing straight in the sheet while the choice is fresh.
+ */
+@Composable
+fun CoverEditor(
+    cover: Cover?,
+    /** Opens the gallery. Remembered at screen level — see [rememberCoverPicker]. */
+    onPick: () -> Unit,
+    framing: Boolean,
+    onFramingChange: (Boolean) -> Unit,
+    onCrop: (Cover) -> Unit,
+    onRemove: () -> Unit,
+    /** Drawn inside the preview, so the frame is judged against the words that will sit on it. */
+    previewContent: @Composable () -> Unit = {},
+    title: String = "Frame the cover"
+) {
+    androidx.compose.material3.OutlinedButton(onClick = { onFramingChange(true) }) {
+        Text(if (cover != null) "Edit photo" else "Add photo")
+    }
+
+    if (framing) {
+        CoverCropDialog(
+            cover = cover,
+            previewContent = previewContent,
+            title = title,
+            onPick = onPick,
+            onDismiss = { onFramingChange(false) },
+            onConfirm = { onCrop(it); onFramingChange(false) },
+            // Stays open. Removing is usually the first half of replacing, and closing the sheet
+            // to make someone reopen it would be the old three-button flow again in slow motion.
+            onRemove = onRemove
+        )
+    }
 }
 
 /** What the framed image will be drawn as, so the preview can be that. */

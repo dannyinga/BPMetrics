@@ -1,7 +1,7 @@
 package inga.bpmetrics.export
 
 import inga.bpmetrics.library.BpmDataPointEntity
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -24,7 +24,7 @@ class ImageExporterAlignmentTest {
         startTime: Long,
         durationMs: Long,
         firstSampleOffsetMs: Long = 0L
-    ): BpmRecord {
+    ): BpmRecordWithPoints {
         val points = (0..(durationMs / 1000)).map { i ->
             BpmDataPointEntity(
                 dataPointId = id * 1000 + i,
@@ -33,7 +33,7 @@ class ImageExporterAlignmentTest {
                 bpm = 70.0 + i
             )
         }
-        return BpmRecord(
+        return BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = id,
                 title = "Record $id",
@@ -167,7 +167,7 @@ class ImageExporterAlignmentTest {
     fun `an empty selection yields an empty timeline rather than failing`() {
         val aligned = ImageExporter.alignRecords(emptyList(), alignByElapsedTime = false)
 
-        assertEquals(emptyList<BpmRecord>(), aligned.records)
+        assertEquals(emptyList<BpmRecordWithPoints>(), aligned.records)
         assertEquals(0L, aligned.timeline.durationMs)
     }
 }

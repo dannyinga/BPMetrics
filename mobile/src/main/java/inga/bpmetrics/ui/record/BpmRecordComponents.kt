@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import inga.bpmetrics.library.clock
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.displayName
 import inga.bpmetrics.library.PersonEntity
@@ -175,9 +176,9 @@ private fun TileBody(
                     // duration said no more than this does and cost two thirds of the tile.
                     Text(
                         text = buildString {
-                            append(getDateString(record.metadata.date))
+                            append(getDateString(record.metadata.date, record.clock))
                             append(" · ")
-                            append(getTimeString(record.metadata.startTime))
+                            append(getTimeString(record.metadata.startTime, record.clock))
                             append(" · ")
                             append(getDurationString(record.metadata.durationMs))
                         },
@@ -393,6 +394,12 @@ private fun BpmMetric(
  * back to the model the watch reported, which is all an unregistered or imported record has.
  */
 fun BpmRecord.watchLabel(watchName: String?): String =
+    watchName?.takeIf { it.isNotBlank() }
+        ?: metadata.deviceId.takeIf { it.isNotBlank() }
+        ?: "Watch"
+
+/** The same, for a recording carrying its readings. See [BpmRecord.watchLabel]. */
+fun inga.bpmetrics.library.BpmRecordWithPoints.watchLabel(watchName: String?): String =
     watchName?.takeIf { it.isNotBlank() }
         ?: metadata.deviceId.takeIf { it.isNotBlank() }
         ?: "Watch"

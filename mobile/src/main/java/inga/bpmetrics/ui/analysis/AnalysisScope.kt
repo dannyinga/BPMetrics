@@ -1,6 +1,7 @@
 package inga.bpmetrics.ui.analysis
 
-import inga.bpmetrics.library.EventGroupEntity
+import inga.bpmetrics.library.FilterState
+import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.ui.library.LibraryViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -22,14 +23,30 @@ sealed interface AnalysisScope {
     /** One line under the title saying what was included. Empty when there is nothing to add. */
     val detail: String
 
-    /** A group of events. */
+    /**
+     * A collection: an arbitrary set of events and recordings.
+     *
+     * "Compare every festival" is the same machinery as analysing one event, pointed at a set
+     * whose members did not happen together. What it resolves to is decided by
+     * [inga.bpmetrics.library.Scope], so the count here and the recordings analysed come from one
+     * walk.
+     */
     data class Group(
-        val group: EventGroupEntity,
-        val eventCount: Int
+        val name: String,
+        val eventCount: Int,
+        val recordCount: Int,
+        /** Whether membership answers a question, which changes what the count means. */
+        val isSmart: Boolean = false
     ) : AnalysisScope {
-        override val title: String get() = group.displayName
+        override val title: String get() = name
         override val detail: String
-            get() = "$eventCount event${if (eventCount == 1) "" else "s"}"
+            get() = buildString {
+                if (eventCount > 0) append("$eventCount event${if (eventCount == 1) "" else "s"}, ")
+                append("$recordCount recording${if (recordCount == 1) "" else "s"}")
+                // Says the count will move. A smart collection reporting "12 recordings" reads like
+                // a fixed set, and next month it will quietly be fourteen.
+                if (isSmart) append(" · smart, re-asked each time")
+            }
     }
 
     /**
@@ -40,7 +57,7 @@ sealed interface AnalysisScope {
      * of a header.
      */
     data class Filter(
-        val filter: LibraryViewModel.FilterState,
+        val filter: FilterState,
         val labels: FilterLabels = FilterLabels()
     ) : AnalysisScope {
         override val title: String
@@ -102,7 +119,7 @@ sealed interface AnalysisScope {
          * informative exactly when it is not.
          */
         private fun describe(
-            filter: LibraryViewModel.FilterState,
+            filter: FilterState,
             labels: FilterLabels
         ): String {
             val parts = buildList {
@@ -152,8 +169,11 @@ sealed interface AnalysisScope {
         /** Beyond this, names stop being readable and a count says more. */
         private const val MAX_NAMED = 3
 
+        // Through [StringFormatHelpers], like every other date on screen.
         private fun shortDate(ms: Long): String =
-            SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(ms))
+            inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(
+                ms, inga.bpmetrics.ui.util.ReaderClock
+            )
     }
 }
 
@@ -170,16 +190,13 @@ fun dateRangeText(records: List<AnalysisRecord>): String {
     val first = records.minOf { it.date }
     val last = records.maxOf { it.date }
 
-    val thisYear = Calendar.getInstance().get(Calendar.YEAR)
-    val firstCal = Calendar.getInstance().apply { timeInMillis = first }
-    val lastCal = Calendar.getInstance().apply { timeInMillis = last }
+    val zone = inga.bpmetrics.ui.util.ReaderClock
+    val firstDay = java.time.Instant.ofEpochMilli(first).atZone(zone).toLocalDate()
+    val lastDay = java.time.Instant.ofEpochMilli(last).atZone(zone).toLocalDate()
 
-    val pattern = if (firstCal.get(Calendar.YEAR) == thisYear) "d MMM" else "d MMM yyyy"
-    val format = SimpleDateFormat(pattern, Locale.getDefault())
+    // One formatter for the whole app — see [StringFormatHelpers]. This held its own pattern and
+    // dropped the year for the current one, which no shared setting can honour.
+    val text = { ms: Long -> inga.bpmetrics.ui.util.StringFormatHelpers.getDateString(ms, zone) }
 
-    val sameDay = firstCal.get(Calendar.YEAR) == lastCal.get(Calendar.YEAR) &&
-        firstCal.get(Calendar.DAY_OF_YEAR) == lastCal.get(Calendar.DAY_OF_YEAR)
-
-    return if (sameDay) format.format(Date(first))
-    else "${format.format(Date(first))} – ${format.format(Date(last))}"
+    return if (firstDay == lastDay) text(first) else "${text(first)} – ${text(last)}"
 }

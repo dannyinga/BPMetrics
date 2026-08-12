@@ -10,16 +10,22 @@ data class OwnedTag(
     @Embedded val tag: TagEntity
 )
 
-/** Where a tag on a recording came from. */
+/**
+ * Where a tag on a recording came from.
+ *
+ * `GROUP` used to be the third case, meaning "the collection that event belongs to". Collections
+ * are events now, so the distinction that survives is how far up it was found, not what kind of
+ * thing found it.
+ */
 enum class TagSource {
     /** Applied to this recording directly. Removable here. */
     DIRECT,
 
-    /** Applied to the event this recording is filed under. Removable only on the event. */
+    /** Applied to the event this recording is filed under. Removable only on that event. */
     EVENT,
 
-    /** Applied to the group that event belongs to. Removable only on the group. */
-    GROUP
+    /** Applied to an event further up the tree. Removable only where it was applied. */
+    ANCESTOR
 }
 
 /**
@@ -50,24 +56,21 @@ object EffectiveTagsResolver {
 
     /**
      * @param directTags The recording's own tags.
-     * @param eventId Which event it is filed under, if any.
-     * @param groupChain The collections above it, nearest first — its event's collection, then
-     *   that collection's parent, and so on to the top.
-     * @param eventTags Tag ids by event id.
-     * @param groupTags Tag ids by group id.
+     * @param ancestry The events containing it, **innermost first** — the one it is filed under,
+     *   then that one's parent, and so on to the top. Exactly what [EventTree.ancestryOf] returns;
+     *   pass its output rather than assembling a chain, which is the whole point of TX-1.4.
+     * @param eventTags Tags by event id.
      */
     fun resolve(
         directTags: List<TagEntity>,
-        eventId: Long?,
-        groupChain: List<Long>,
-        eventTags: Map<Long, List<TagEntity>>,
-        groupTags: Map<Long, List<TagEntity>>
+        ancestry: List<Long>,
+        eventTags: Map<Long, List<TagEntity>>
     ): List<EffectiveTag> {
         val seen = mutableSetOf<Long>()
         val result = mutableListOf<EffectiveTag>()
 
-        // Nearest source wins. The same tag applied to a recording *and* to its collection is one
-        // tag, and calling it direct is what keeps it removable where it was actually applied.
+        // Nearest source wins. The same tag applied to a recording *and* to an event above it is
+        // one tag, and calling it direct is what keeps it removable where it was actually applied.
         fun add(tags: List<TagEntity>, source: TagSource) {
             tags.forEach { tag ->
                 if (seen.add(tag.tagId)) result += EffectiveTag(tag, source)
@@ -75,11 +78,15 @@ object EffectiveTagsResolver {
         }
 
         add(directTags, TagSource.DIRECT)
-        eventId?.let { add(eventTags[it].orEmpty(), TagSource.EVENT) }
-        // Nearest first, so a tag set on both a day and the festival above it is attributed to the
-        // day. Collections nest, so this is a walk rather than a single lookup — but "nearest
-        // wins" is unchanged, which is what stops nesting complicating the rule.
-        groupChain.forEach { add(groupTags[it].orEmpty(), TagSource.GROUP) }
+        // Innermost first, so a tag set on both a day and the festival above it is attributed to
+        // the day. One loop over one chain: before the fold this was a lookup for the event and
+        // then a separate walk for its collections, which is two rules to keep in agreement.
+        ancestry.forEachIndexed { depth, eventId ->
+            add(
+                eventTags[eventId].orEmpty(),
+                if (depth == 0) TagSource.EVENT else TagSource.ANCESTOR
+            )
+        }
 
         return result
     }
@@ -87,41 +94,25 @@ object EffectiveTagsResolver {
     /**
      * The same thing for a whole library, resolved once rather than per row.
      *
-     * @param groupIdByEvent Which group each event belongs to, so a recording reaches its group
-     *   through its event rather than storing a second link that could disagree.
+     * @param events Every event, so ancestry comes from [EventTree] rather than from a chain
+     *   assembled here. A screen holding the whole library already has this.
      */
     fun resolveAll(
         records: List<BpmRecord>,
         eventTags: Map<Long, List<TagEntity>>,
-        groupTags: Map<Long, List<TagEntity>>,
-        groupIdByEvent: Map<Long, Long?>,
-        /** Each collection's parent, so a recording reaches every collection above it. */
-        parentByGroup: Map<Long, Long?> = emptyMap()
+        events: List<EventEntity>
     ): Map<Long, List<EffectiveTag>> {
-        // Chains are resolved once per collection rather than once per recording: a festival with
-        // four hundred recordings would otherwise walk the same three links four hundred times.
+        // Resolved once per event rather than once per recording: a festival with four hundred
+        // recordings would otherwise walk the same three links four hundred times.
         val chains = mutableMapOf<Long, List<Long>>()
-        fun chainFor(groupId: Long): List<Long> = chains.getOrPut(groupId) {
-            val chain = mutableListOf<Long>()
-            var current: Long? = groupId
-            val seen = mutableSetOf<Long>()
-            // Guarded, because a cycle here would hang the library rather than throw.
-            while (current != null && seen.add(current)) {
-                chain += current
-                current = parentByGroup[current]
-            }
-            chain
-        }
+        fun chainFor(eventId: Long): List<Long> =
+            chains.getOrPut(eventId) { EventTree.ancestryOf(events, eventId).map { it.eventId } }
 
         return records.associate { record ->
-            val eventId = record.metadata.eventId
-            val groupId = eventId?.let { groupIdByEvent[it] }
             record.metadata.recordId to resolve(
                 directTags = record.tags,
-                eventId = eventId,
-                groupChain = groupId?.let(::chainFor).orEmpty(),
-                eventTags = eventTags,
-                groupTags = groupTags
+                ancestry = record.metadata.eventId?.let(::chainFor).orEmpty(),
+                eventTags = eventTags
             )
         }
     }

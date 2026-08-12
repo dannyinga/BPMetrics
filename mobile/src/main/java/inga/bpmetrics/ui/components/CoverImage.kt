@@ -4,9 +4,12 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -18,14 +21,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.material3.Text
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
+import androidx.compose.ui.unit.sp
 import inga.bpmetrics.library.Cover
 import inga.bpmetrics.library.CoverStore
-import inga.bpmetrics.ui.theme.BpmPalette
+import inga.bpmetrics.core.BpmPalette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -120,9 +132,59 @@ val CoverTextShadow: Shadow = Shadow(
  *
  * A no-op when there is no cover, so a call site can ask for it unconditionally rather than
  * branching — and so a tile with no picture keeps the flat, clean text it has always had.
+ *
+ * A halo and nothing more. A stroked outline was tried and reverted: at small sizes it thickens
+ * every letter into a smudge, and on a headline it reads as a cartoon. The legibility problem it was
+ * meant to fix belongs to the *picture*, and is solved on the picture — see [Cover.dim].
  */
 fun TextStyle.overCover(hasCover: Boolean): TextStyle =
     if (hasCover) copy(shadow = CoverTextShadow) else this
+
+/**
+ * A cover at thumbnail size, or a placeholder where there is none.
+ *
+ * For the pickers — a filter narrowing to an event, an export choosing its source. A list of names
+ * makes you read every row; the picture is how you find the right "Day 1" out of four without
+ * reading any of them.
+ *
+ * Deliberately the owner's **own** cover rather than the inherited one. In a nested list the
+ * inherited answer paints the festival's picture on all six of its sets, which says they are the
+ * same thing when the list exists to tell them apart.
+ */
+@Composable
+fun CoverThumbnail(
+    cover: Cover?,
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 34.dp,
+    /** Drawn when there is no picture. A kind of thing, so the gap still says what the row is. */
+    placeholder: androidx.compose.ui.graphics.vector.ImageVector? = null
+) {
+    val shape = androidx.compose.material3.MaterialTheme.shapes.small
+    if (cover == null) {
+        Box(
+            modifier
+                .size(size)
+                .clip(shape)
+                .background(androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = androidx.compose.ui.Alignment.Center
+        ) {
+            placeholder?.let {
+                androidx.compose.material3.Icon(
+                    it,
+                    contentDescription = null,
+                    tint = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(size / 2)
+                )
+            }
+        }
+    } else {
+        CoverBackground(
+            cover = cover,
+            modifier = modifier.size(size).clip(shape),
+            scrim = CoverScrim.NONE
+        ) {}
+    }
+}
 
 /**
  * How hard the scrim works.
@@ -238,6 +300,13 @@ fun CoverBackground(
                     dstOffset = IntOffset.Zero,
                     dstSize = IntSize(size.width.toInt(), size.height.toInt())
                 )
+
+                // Darkening before the scrim, and flat rather than as a gradient: this is a
+                // correction to the *photograph* — it is too bright — not a device for protecting
+                // one corner of it. The scrim on top still does its own gradient job.
+                if (cover.dim > 0.005f) {
+                    drawRect(color = Color.Black.copy(alpha = cover.dim.coerceIn(0f, 0.85f)))
+                }
 
                 drawScrim(scrim)
             }

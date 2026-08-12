@@ -1,7 +1,8 @@
 package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.export.ImageExporter
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.clock
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmZones
 import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.library.PersonColors
@@ -148,8 +149,22 @@ data class ConcurrentAnalysis(
     val windowStartMs: Long = 0L,
     val windowEndMs: Long = 0L,
     val intensity: List<GroupMoment> = emptyList(),
-    val peaks: List<GroupMoment> = emptyList()
+    val peaks: List<GroupMoment> = emptyList(),
+    /**
+     * The clock these recordings are read in, as an IANA id.
+     *
+     * Carried on the analysis rather than looked up per label: the chart axis, the scrubber and the
+     * legend all print times, and three of them working it out separately is three chances to draw
+     * an axis in one zone and a readout in another.
+     */
+    val zoneId: String? = null
 ) {
+    val clock: java.time.ZoneId
+        get() = zoneId
+            ?.takeIf { it in java.util.TimeZone.getAvailableIDs() }
+            ?.let { runCatching { java.time.ZoneId.of(it) }.getOrNull() }
+            ?: java.time.ZoneId.systemDefault()
+
     val isEmpty: Boolean get() = series.isEmpty()
     val durationMs: Long get() = (windowEndMs - windowStartMs).coerceAtLeast(0L)
 
@@ -177,7 +192,7 @@ data class ConcurrentAnalysis(
          * @param window Restricts the analysis to part of the span, for looking at a single set.
          */
         fun from(
-            records: List<BpmRecord>,
+            records: List<BpmRecordWithPoints>,
             watches: List<WatchEntity> = emptyList(),
             people: List<PersonEntity> = emptyList(),
             window: LongRange? = null
@@ -205,7 +220,7 @@ data class ConcurrentAnalysis(
                 )
             }
 
-            return of(series, window)
+            return of(series, window, records.clock.id)
         }
 
         /**
@@ -215,7 +230,11 @@ data class ConcurrentAnalysis(
          * gets the same group intensity, the same peak selection and the same chart, rather than a
          * parallel implementation free to disagree with this one about what a moment is.
          */
-        fun of(series: List<ConcurrentSeries>, window: LongRange? = null): ConcurrentAnalysis {
+        fun of(
+            series: List<ConcurrentSeries>,
+            window: LongRange? = null,
+            zoneId: String? = null
+        ): ConcurrentAnalysis {
             if (series.isEmpty()) return ConcurrentAnalysis()
 
             val start = window?.first ?: series.minOf { it.points.first().wallClockMs }
@@ -228,7 +247,8 @@ data class ConcurrentAnalysis(
                 windowStartMs = start,
                 windowEndMs = end,
                 intensity = intensity,
-                peaks = findPeaks(intensity)
+                peaks = findPeaks(intensity),
+                zoneId = zoneId
             )
         }
 
@@ -244,10 +264,10 @@ data class ConcurrentAnalysis(
          * There is nothing to compare across recordings made on different days, so this gates the
          * action rather than letting it open onto a chart of unrelated curves.
          */
-        fun anyOverlap(records: List<BpmRecord>): Boolean {
+        fun anyOverlap(records: List<inga.bpmetrics.library.BpmRecordEntity>): Boolean {
             if (records.size < 2) return false
             val spans = records
-                .map { it.metadata.startTime to it.metadata.startTime + it.metadata.durationMs }
+                .map { it.startTime to it.startTime + it.durationMs }
                 .sortedBy { it.first }
             // Sorted by start, an overlap exists if any recording begins before the furthest end
             // seen so far.
@@ -259,7 +279,7 @@ data class ConcurrentAnalysis(
             return false
         }
 
-        fun overlapping(record: BpmRecord, candidates: List<BpmRecord>): List<BpmRecord> {
+        fun overlapping(record: BpmRecordWithPoints, candidates: List<BpmRecordWithPoints>): List<BpmRecordWithPoints> {
             val start = record.metadata.startTime
             val end = start + record.metadata.durationMs
             return candidates.filter { other ->
@@ -347,7 +367,7 @@ data class ConcurrentAnalysis(
          * before profiles existed, else the watch.
          */
         private fun labelFor(
-            record: BpmRecord,
+            record: BpmRecordWithPoints,
             people: Map<Long, PersonEntity>,
             watchNames: Map<String, String>
         ): String =
@@ -362,7 +382,7 @@ data class ConcurrentAnalysis(
          * recording with no wearer already falls back to naming the watch.
          */
         private fun watchLabelFor(
-            record: BpmRecord,
+            record: BpmRecordWithPoints,
             people: Map<Long, PersonEntity>,
             watchNames: Map<String, String>
         ): String? {

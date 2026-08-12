@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -79,14 +80,15 @@ class LibraryInstrumentationTest {
 
         // 2. Verify it's in the library with default name
         val saved = repository.getRecordWithId(recordId)
-        assertTrue(saved.metadata.title.contains("Untitled"))
+        assertNotNull(saved)
+        assertTrue(saved!!.metadata.title.contains("Untitled"))
 
         // 3. Edit the title
         repository.updateRecordTitle(recordId, "Morning Run")
         
         // 4. Verify title change
         val updatedRecord = repository.getRecordWithId(recordId)
-        assertEquals("Morning Run", updatedRecord.metadata.title)
+        assertEquals("Morning Run", updatedRecord?.metadata?.title)
     }
 
     @Test

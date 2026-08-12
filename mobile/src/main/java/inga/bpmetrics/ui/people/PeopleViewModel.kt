@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.people
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -46,15 +48,15 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
 
     /** Record counts are a per-person query, so they are refreshed rather than observed. */
     fun refreshCounts() {
-        viewModelScope.launch {
+        launchGuarded {
             val ids = uiState.value.people.map { it.person.personId }
-            if (ids.isEmpty()) return@launch
+            if (ids.isEmpty()) return@launchGuarded
             _recordCounts.value = ids.associateWith { repository.countRecordsForPerson(it) }
         }
     }
 
     fun addPerson(name: String, colorArgb: Int?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.addPerson(name, colorArgb)
             refreshCounts()
             _message.value = "${name.trim()} added."
@@ -74,7 +76,7 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
         source: android.net.Uri,
         onResult: (Boolean) -> Unit
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             val name = repository.getPerson(personId)?.displayName ?: "person"
             onResult(repository.setPersonPhoto(context, personId, source, name))
         }
@@ -82,15 +84,15 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
 
     /** Re-frames the photograph they already have, leaving the file alone. */
     fun setPhotoCrop(personId: Long, photo: inga.bpmetrics.library.Cover) {
-        viewModelScope.launch { repository.setPersonPhotoCrop(personId, photo) }
+        launchGuarded { repository.setPersonPhotoCrop(personId, photo) }
     }
 
     fun clearPhoto(context: android.content.Context, personId: Long) {
-        viewModelScope.launch { repository.clearPersonPhoto(context, personId) }
+        launchGuarded { repository.clearPersonPhoto(context, personId) }
     }
 
     fun save(personId: Long, name: String, colorArgb: Int, restingBpm: Int?, maxBpm: Int?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.renamePerson(personId, name)
             repository.setPersonColor(personId, colorArgb)
             repository.setPersonZones(personId, restingBpm, maxBpm)
@@ -99,7 +101,7 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
     }
 
     fun delete(personId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             val count = repository.countRecordsForPerson(personId)
             repository.deletePerson(personId)
             refreshCounts()

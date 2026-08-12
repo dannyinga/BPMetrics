@@ -182,7 +182,7 @@ fun RenderStatsPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(16.dp),
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )
@@ -269,8 +269,8 @@ fun RenderJobCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, cardBorderColor, RoundedCornerShape(14.dp)),
-        shape = RoundedCornerShape(14.dp),
+            .border(1.dp, cardBorderColor, MaterialTheme.shapes.medium),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = when (job.status) {
                 RenderStatus.RENDERING -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
@@ -456,7 +456,7 @@ fun RenderJobCard(
                         modifier = Modifier
                             .weight(1f)
                             .height(8.dp)
-                            .clip(RoundedCornerShape(4.dp)),
+                            .clip(MaterialTheme.shapes.extraSmall),
                         color = BpmAccent,
                         trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
@@ -485,7 +485,7 @@ fun RenderJobCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(MaterialTheme.shapes.small)
                         .background(BpmHigh.copy(alpha = 0.08f))
                         .clickable { expandedError = !expandedError }
                         .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -516,7 +516,7 @@ fun RenderJobCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 8.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(MaterialTheme.shapes.small)
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
                             .padding(12.dp)
                     ) {

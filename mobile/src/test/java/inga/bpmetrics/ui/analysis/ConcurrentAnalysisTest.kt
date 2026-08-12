@@ -1,7 +1,7 @@
 package inga.bpmetrics.ui.analysis
 
 import inga.bpmetrics.library.BpmDataPointEntity
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmRecordEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -24,7 +24,7 @@ class ConcurrentAnalysisTest {
         startTime: Long,
         bpms: List<Double>,
         wearer: String = "Wearer $id"
-    ): BpmRecord {
+    ): BpmRecordWithPoints {
         val points = bpms.mapIndexed { i, bpm ->
             BpmDataPointEntity(
                 dataPointId = id * 10_000 + i,
@@ -33,7 +33,7 @@ class ConcurrentAnalysisTest {
                 bpm = bpm
             )
         }
-        return BpmRecord(
+        return BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = id,
                 title = "Record $id",
@@ -130,7 +130,7 @@ class ConcurrentAnalysisTest {
             BpmDataPointEntity(dataPointId = i.toLong(), recordOwnerId = 1, timestamp = i * 1000L, bpm = bpm)
         } + BpmDataPointEntity(dataPointId = 99, recordOwnerId = 1, timestamp = 90_000L, bpm = 75.0)
 
-        val record = BpmRecord(
+        val record = BpmRecordWithPoints(
             metadata = BpmRecordEntity(
                 recordId = 1,
                 title = "Gappy",
@@ -182,13 +182,13 @@ class ConcurrentAnalysisTest {
         val muchLater = record(3, tenPm + 10_000_000L, List(60) { 70.0 })
 
         // Nothing to compare a recording against on its own.
-        assertTrue(!ConcurrentAnalysis.anyOverlap(listOf(a)))
+        assertTrue(!ConcurrentAnalysis.anyOverlap(listOf(a).map { it.metadata }))
         // Different days share no moment, so there is no chart worth drawing.
-        assertTrue(!ConcurrentAnalysis.anyOverlap(listOf(a, muchLater)))
+        assertTrue(!ConcurrentAnalysis.anyOverlap(listOf(a, muchLater).map { it.metadata }))
 
-        assertTrue(ConcurrentAnalysis.anyOverlap(listOf(a, duringA)))
+        assertTrue(ConcurrentAnalysis.anyOverlap(listOf(a, duringA).map { it.metadata }))
         // Only one pair needs to overlap for the comparison to mean something.
-        assertTrue(ConcurrentAnalysis.anyOverlap(listOf(a, muchLater, duringA)))
+        assertTrue(ConcurrentAnalysis.anyOverlap(listOf(a, muchLater, duringA).map { it.metadata }))
     }
 
     @Test
@@ -196,7 +196,7 @@ class ConcurrentAnalysisTest {
         val early = record(1, tenPm, List(120) { 70.0 })
         val late = record(2, tenPm + 60_000L, List(120) { 70.0 })
 
-        assertTrue(ConcurrentAnalysis.anyOverlap(listOf(late, early)))
+        assertTrue(ConcurrentAnalysis.anyOverlap(listOf(late, early).map { it.metadata }))
     }
 
     @Test

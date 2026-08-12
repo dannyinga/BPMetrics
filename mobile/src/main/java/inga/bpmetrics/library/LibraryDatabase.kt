@@ -70,6 +70,45 @@ interface BpmRecordDao {
      */
     @Query("UPDATE bpm_records SET minId = :minId, maxId = :maxId, avg = :avg WHERE recordId = :id")
     suspend fun updateAnalysis(id: Long, minId: Long?, maxId: Long?, avg: Double?)
+
+    /**
+     * The two figures that used to be recomputed from the readings on every read.
+     *
+     * Written at ingest and by the backfill. See [BpmRecordEntity.activeDurationMs].
+     */
+    @Query(
+        "UPDATE bpm_records SET activeDurationMs = :activeDurationMs, zonesEncoded = :zonesEncoded " +
+            "WHERE recordId = :id"
+    )
+    suspend fun updateDerivedFigures(id: Long, activeDurationMs: Long, zonesEncoded: String)
+
+    /**
+     * Recordings whose derived figures have never been computed, oldest first.
+     *
+     * The gate for the backfill: a query rather than a preference, so it is self-healing. A pass
+     * that dies halfway leaves the rest still null and simply finishes next launch, and a row
+     * arriving by some path that forgets to compute them is repaired rather than wrong forever.
+     */
+    @Query("SELECT recordId FROM bpm_records WHERE activeDurationMs IS NULL LIMIT :limit")
+    suspend fun recordIdsMissingDerivedFigures(limit: Int): List<Long>
+
+    /** The readings for one recording, in time order. */
+    @Query(
+        "SELECT * FROM bpm_data_points WHERE recordOwnerId = :recordId ORDER BY timestamp ASC"
+    )
+    suspend fun dataPointsFor(recordId: Long): List<BpmDataPointEntity>
+
+    /**
+     * The readings for a set of recordings, in one query.
+     *
+     * What a chart or an export asks for once it knows its scope. Chunked by the caller against
+     * [LibraryRepository.SQL_VARIABLE_LIMIT], as every other multi-id query here is.
+     */
+    @Query(
+        "SELECT * FROM bpm_data_points WHERE recordOwnerId IN (:recordIds) " +
+            "ORDER BY recordOwnerId ASC, timestamp ASC"
+    )
+    suspend fun dataPointsForAll(recordIds: List<Long>): List<BpmDataPointEntity>
     
     /**
      * Counts how many records have a title starting with the specified prefix.
@@ -96,22 +135,49 @@ interface BpmRecordDao {
     @Query("SELECT * FROM bpm_records")
     suspend fun getAllRecordEntities() : List<BpmRecordEntity>
 
+    /** The clock a recording is read in, as resolved by the one writer. */
+    @Query("UPDATE bpm_records SET timeZoneId = :zoneId WHERE recordId = :id")
+    suspend fun updateResolvedTimeZone(id: Long, zoneId: String?)
+
+    /** A location chosen for this recording specifically, overriding what it inherits. */
+    @Query("UPDATE bpm_records SET locationId = :locationId WHERE recordId = :id")
+    suspend fun updateRecordLocation(id: Long, locationId: Long?)
+
+    /** Forgets a location that has been deleted. See [EventDao.forgetLocation]. */
+    @Query("UPDATE bpm_records SET locationId = NULL WHERE locationId = :locationId")
+    suspend fun forgetLocation(locationId: Long)
+
+    /** The same as a flow, for anything that has to recompute when the library changes. */
+    @Query("SELECT * FROM bpm_records")
+    fun getAllRecordEntitiesFlow(): Flow<List<BpmRecordEntity>>
+
     /**
      * Retrieves the metadata for a specific BPM record by its ID.
      */
     @Query("SELECT * FROM bpm_records WHERE recordId = :id")
     suspend fun getRecordEntity(id: Long) : BpmRecordEntity
 
-    /**
-     * Retrieves a complete [BpmRecord] (including all associated data points and tags) by its ID.
-     */
+    /** One recording with its readings, for a chart or an export. */
     @Transaction
     @Query("SELECT * FROM bpm_records WHERE recordId = :id")
-    suspend fun getRecord(id: Long) : BpmRecord
+    suspend fun getRecord(id: Long) : BpmRecordWithPoints?
 
     /**
-     * Returns a [Flow] that emits an updated list of all complete [BpmRecord]s
-     * whenever the database content changes.
+     * The recordings in a scope, with their readings.
+     *
+     * The only bulk path that loads readings, and it is bounded by the scope that asked. Chunk
+     * against [LibraryRepository.SQL_VARIABLE_LIMIT].
+     */
+    @Transaction
+    @Query("SELECT * FROM bpm_records WHERE recordId IN (:ids) ORDER BY date DESC")
+    suspend fun getRecordsWithPoints(ids: List<Long>): List<BpmRecordWithPoints>
+
+    /**
+     * Every recording, **without** its readings, as a flow.
+     *
+     * What the library is. This used to join `bpm_data_points`, so the always-on stream held every
+     * reading in the library and Room rebuilt all of them on any write — see §9 of the product
+     * doc. Everything a list, a filter or a summary needs is a column on the row.
      */
     @Transaction
     @Query("SELECT * FROM bpm_records ORDER BY date DESC")
@@ -158,7 +224,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 22
+internal const val LIBRARY_DB_VERSION = 30
 
 @Database(
     entities = [
@@ -170,10 +236,12 @@ internal const val LIBRARY_DB_VERSION = 22
         WatchEntity::class,
         PersonEntity::class,
         EventEntity::class,
-        EventGroupEntity::class,
         EventTagCrossRef::class,
-        EventGroupTagCrossRef::class,
-        SavedAnalysisEntity::class,
+        CollectionEntity::class,
+        CollectionEventCrossRef::class,
+        CollectionRecordCrossRef::class,
+        LocationEntity::class,
+        EventWindowPersonCrossRef::class,
         SavedAnalysisRecordEntity::class,
         ExportPresetEntity::class,
         RenderJobEntity::class
@@ -187,8 +255,8 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun watchDao(): WatchDao
     abstract fun personDao(): PersonDao
     abstract fun eventDao(): EventDao
-    abstract fun eventGroupDao(): EventGroupDao
-    abstract fun savedAnalysisDao(): SavedAnalysisDao
+    abstract fun collectionDao(): CollectionDao
+    abstract fun locationDao(): LocationDao
     abstract fun exportPresetDao(): ExportPresetDao
     abstract fun renderJobDao(): RenderJobDao
 
@@ -929,12 +997,493 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Events become the timeline: nesting, optionally time-bounded, typed.
+         *
+         * Additive only. Every column is nullable or defaulted, `event_groups` is untouched, and
+         * nothing existing changes meaning — an event with no parent and no window behaves exactly
+         * as it did. Folding collections into this tree is a separate migration, deliberately,
+         * because that one rewrites data and this one cannot break anything.
+         *
+         * `excludedFromParentAnalysis` is `INTEGER NOT NULL DEFAULT 0` rather than nullable: there
+         * is no third state between excluded and not, and a nullable boolean invites one.
+         *
+         * SQL copied from the generated `23.json`.
+         */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `parentId` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `windowStart` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `windowEnd` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `type` TEXT DEFAULT NULL")
+                db.execSQL(
+                    "ALTER TABLE `events` ADD COLUMN `excludedFromParentAnalysis` " +
+                        "INTEGER NOT NULL DEFAULT 0"
+                )
+
+                // No rows means the window applies to everyone, which is the common case and the
+                // one that needs no storage at all.
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `event_window_people` (" +
+                        "`eventId` INTEGER NOT NULL, `personId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`eventId`, `personId`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_event_window_people_personId` " +
+                        "ON `event_window_people` (`personId`)"
+                )
+
+                android.util.Log.i(TAG, "MIGRATION_22_23: Events nest, and may carry a window")
+            }
+        }
+
+        /**
+         * Collections become events. One tree, where there were two kinds of container.
+         *
+         * A collection was already an event in everything but name — a thing with a title, notes, a
+         * cover, tags, and other things inside it. The only difference was that it could not hold a
+         * time window and events could not nest. Both of those went away in 23, so keeping two
+         * tables meant maintaining two of every count, span and roll-up. That duplication is the
+         * direct cause of four separate "0 recordings" defects in this app, each one a second
+         * implementation of a walk disagreeing with the first.
+         *
+         * **`event_groups` is not dropped.** Everything is copied out, nothing is deleted, and
+         * `events.groupId` keeps pointing where it always did. If this fold turns out to be wrong,
+         * the original arrangement is still sitting there to be read back. The table goes a version
+         * or two later, once a real library has lived on the new shape — a destructive migration
+         * that runs the same day as the code that needs it has no way back.
+         */
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // A migration must survive being run twice — a failure rolls back and is retried on
+                // the next launch — and this one cannot rely on `INSERT OR IGNORE` to make that
+                // true. The ids it inserts are derived from the current maximum, so a second pass
+                // computes a *different* offset, collides with nothing, and cheerfully duplicates
+                // every collection in the library. Hence an explicit guard rather than a clever
+                // conflict clause.
+                //
+                // `type` is safe to test on: it arrived in 23 and nothing writes it yet, so no
+                // event can carry a type unless this migration put it there.
+                val alreadyFolded = db.query(
+                    "SELECT COUNT(*) FROM events WHERE type = 'Collection'"
+                ).use { if (it.moveToFirst()) it.getLong(0) else 0L } > 0L
+
+                if (alreadyFolded) {
+                    android.util.Log.i(TAG, "MIGRATION_23_24: collections already folded, skipping")
+                    return
+                }
+
+                // Read once, before anything is inserted, and used as a literal below.
+                //
+                // The obvious `groupId + (SELECT MAX(eventId) FROM events)` inside the INSERT is a
+                // trap: the subquery is re-evaluated per row as the insert proceeds, so the offset
+                // grows underneath its own statement and the mapping stops being a mapping. Frozen
+                // here, `newEventId = groupId + offset` holds for every row, which is what lets the
+                // reparenting below be plain arithmetic instead of a temporary table.
+                val offset = db.query("SELECT IFNULL(MAX(eventId), 0) FROM events").use {
+                    if (it.moveToFirst()) it.getLong(0) else 0L
+                }
+
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO events (
+                        eventId, name, notes, createdAt, groupId, parentId, type,
+                        excludedFromParentAnalysis,
+                        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom,
+                        coverBlur
+                    )
+                    SELECT
+                        groupId + $offset, name, notes, createdAt, NULL,
+                        CASE WHEN parentGroupId IS NULL THEN NULL ELSE parentGroupId + $offset END,
+                        'Collection', 0,
+                        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom,
+                        coverBlur
+                    FROM event_groups
+                    """.trimIndent()
+                )
+
+                // Every event that was in a collection now sits under the event that collection
+                // became. Restricted to rows that had no parent: an event nested in 23 was put
+                // there deliberately and by something further down the tree, and its collection
+                // membership is the older, coarser statement of where it lives.
+                db.execSQL(
+                    """
+                    UPDATE events
+                    SET parentId = groupId + $offset
+                    WHERE groupId IS NOT NULL
+                      AND parentId IS NULL
+                      AND groupId IN (SELECT groupId FROM event_groups)
+                    """.trimIndent()
+                )
+
+                // Tags follow their collection. Without this the fold would quietly strip the
+                // labelling off every container in the library, which is the failure the backup
+                // format just had to be rescued from.
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO event_tag_cross_ref (eventId, tagId)
+                    SELECT groupId + $offset, tagId FROM event_group_tag_cross_ref
+                    """.trimIndent()
+                )
+
+                val folded = db.query("SELECT COUNT(*) FROM event_groups").use {
+                    if (it.moveToFirst()) it.getLong(0) else 0L
+                }
+                android.util.Log.i(
+                    TAG,
+                    "MIGRATION_23_24: folded $folded collections into the event tree " +
+                        "(id offset $offset); event_groups kept as a safety net"
+                )
+            }
+        }
+
+        /**
+         * Collections, as arbitrary sets this time.
+         *
+         * Different from what 23→24 folded away, and the difference is the point. Those were
+         * *tiers* — a second container type being used for hierarchy — so they became events,
+         * which is what the tree is for. This is a set: it holds events and recordings by
+         * reference, many-to-many, with no window, no parent and no claim on where anything lives.
+         * "Festivals" holds two festivals months apart while both stay put on the timeline.
+         *
+         * The `type = 'Collection'` marker is cleared from the folded events. It was scaffolding to
+         * keep them listed separately while the old screens caught up, and leaving it would put two
+         * meanings of one word in front of the same user — which is the confusion this whole rework
+         * exists to remove. Their names and their nesting carry everything that mattered; the label
+         * carried nothing.
+         *
+         * No set is created for them. They were containers and they still are, one rung of the
+         * tree each; turning them into sets would throw away the hierarchy 23→24 just rebuilt.
+         */
+        val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `collections` (" +
+                        "`collectionId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`notes` TEXT NOT NULL DEFAULT '', " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`coverPath` TEXT DEFAULT NULL, " +
+                        "`coverCropLeft` REAL DEFAULT NULL, " +
+                        "`coverCropTop` REAL DEFAULT NULL, " +
+                        "`coverCropRight` REAL DEFAULT NULL, " +
+                        "`coverCropBottom` REAL DEFAULT NULL, " +
+                        "`coverBlur` REAL DEFAULT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `collection_events` (" +
+                        "`collectionId` INTEGER NOT NULL, `eventId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`collectionId`, `eventId`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_collection_events_eventId` " +
+                        "ON `collection_events` (`eventId`)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `collection_records` (" +
+                        "`collectionId` INTEGER NOT NULL, `recordId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`collectionId`, `recordId`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_collection_records_recordId` " +
+                        "ON `collection_records` (`recordId`)"
+                )
+
+                db.execSQL("UPDATE events SET type = NULL WHERE type = 'Collection'")
+
+                android.util.Log.i(TAG, "MIGRATION_24_25: collections are sets; tier marker cleared")
+            }
+        }
+
+        /**
+         * Venues, as a registry, and the clock each one keeps.
+         *
+         * A location is the same kind of thing as a person or a watch: made once, pointed at by
+         * many events, renamed in one place. That is what makes comparing across venues a
+         * comparison of identities rather than of two strings matching, and it is why the Gorge
+         * spelled three ways is not three venues.
+         *
+         * The zone is stored on the location and **chosen rather than derived**. The only reason to
+         * work one out from coordinates is not knowing it, and someone naming a venue knows what
+         * time it is there — so this needs no boundary dataset, no third-party dependency, and no
+         * network. Coordinates are optional and informational; nothing depends on them.
+         *
+         * References are nullable and nothing is backfilled. A zone could be guessed for existing
+         * recordings from the device default, and it would be wrong for every one made away from
+         * home — which is exactly the set this feature exists for. Null means "nobody has said",
+         * and the app falls back to the reader's zone as it always did.
+         */
+        val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `locations` (" +
+                        "`locationId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`timeZoneId` TEXT DEFAULT NULL, " +
+                        "`latitude` REAL DEFAULT NULL, " +
+                        "`longitude` REAL DEFAULT NULL, " +
+                        "`photoPath` TEXT DEFAULT NULL, " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
+                // Not foreign keys, matching every other reference in this model: deleting a venue
+                // must leave its events alone rather than take the night with it.
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `locationId` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `bpm_records` ADD COLUMN `locationId` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `bpm_records` ADD COLUMN `timeZoneId` TEXT DEFAULT NULL")
+                android.util.Log.i(TAG, "MIGRATION_25_26: venues, and the clock each one keeps")
+            }
+        }
+
+        /**
+         * Saved views: a filter someone kept.
+         *
+         * The filter is stored as text rather than as a column per dimension. The dimensions change
+         * — location arrived one sprint after the rest — and a table that grows a column each time
+         * is a migration each time. Nothing queries a view in SQL; they are read as a list and
+         * applied in memory.
+         */
+        val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `saved_views` (" +
+                        "`viewId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`filterJson` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`isPinned` INTEGER NOT NULL DEFAULT 1)"
+                )
+                android.util.Log.i(TAG, "MIGRATION_26_27: saved views")
+            }
+        }
+
+        /**
+         * Collections, saved views and saved analyses become one thing.
+         *
+         * They were three tables holding the same idea — a named set of recordings — differing only
+         * in how membership was decided: enumerated, computed, or frozen. That is one property of a
+         * selection, not three kinds of object, and keeping them apart had already produced two
+         * live defects. See §8 of the product doc.
+         *
+         * A saved view folds in as a collection with a rule and no members. A saved analysis folds
+         * in as a collection with `frozenAt` set, its snapshot rows re-keyed from `analysisId` to
+         * `collectionId`.
+         *
+         * **The re-key is done in Kotlin, row by row.** Both tables autoincrement from 1, so their
+         * ids collide and no SQL join can tell which new collection a snapshot row belongs to. The
+         * arithmetic alternative — assume the nth insert landed at `max(id) + n` — is true right up
+         * until it is not, and it fails silently by attaching someone's numbers to the wrong set.
+         *
+         * Also drops `event_groups` and `event_group_tag_cross_ref`, which the 23→24 fold left with
+         * no readers, and the now-empty `saved_views` and `saved_analyses`.
+         */
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE collections ADD COLUMN filterJson TEXT DEFAULT NULL")
+                db.execSQL(
+                    "ALTER TABLE collections ADD COLUMN excludedRecordJson TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL("ALTER TABLE collections ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE collections ADD COLUMN frozenAt INTEGER DEFAULT NULL")
+
+                // Saved views: a rule, no members, pinned as they were.
+                db.execSQL(
+                    "INSERT INTO collections (name, notes, createdAt, filterJson, isPinned) " +
+                        "SELECT name, '', createdAt, filterJson, isPinned FROM saved_views"
+                )
+
+                // saved_analysis_records is rebuilt rather than altered: SQLite cannot change a
+                // foreign key in place, and the column is being renamed as well as re-pointed.
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `saved_analysis_records_new` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`collectionId` INTEGER NOT NULL, " +
+                        "`recordId` INTEGER NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`date` INTEGER NOT NULL, " +
+                        "`minBpm` REAL, `avgBpm` REAL, `maxBpm` REAL, " +
+                        "`activeDurationMs` INTEGER NOT NULL, " +
+                        "`tagsEncoded` TEXT NOT NULL DEFAULT '', " +
+                        "`wearerName` TEXT NOT NULL DEFAULT '', " +
+                        "`watchName` TEXT NOT NULL DEFAULT '', " +
+                        "`personId` INTEGER DEFAULT NULL, " +
+                        "`personColorArgb` INTEGER DEFAULT NULL, " +
+                        "`eventId` INTEGER DEFAULT NULL, " +
+                        "`eventName` TEXT NOT NULL DEFAULT '', " +
+                        "`zonesEncoded` TEXT NOT NULL DEFAULT '', " +
+                        "FOREIGN KEY(`collectionId`) REFERENCES `collections`(`collectionId`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+
+                // One collection per saved analysis, carrying its own id forward so the snapshot
+                // rows can follow it.
+                //
+                // The two kinds fold differently, because they were never the same thing:
+                //
+                // - A **group** analysis was a snapshot. It becomes a frozen collection with no
+                //   members, which is exactly what it was.
+                // - A **same-time** analysis was not frozen at all. It stored *which* recordings
+                //   and re-read them from the library on open — so it becomes a live collection
+                //   whose members are those recordings. That is a hand-made set, which is what it
+                //   always was underneath.
+                //
+                // This replaces `convertConcurrentAnalysesToEvents`, which turned them into events
+                // and then deleted them. Its own reasoning said that rewriting `bpm_records.eventId`
+                // on a correlation the schema does not express was too dangerous for a migration,
+                // and it was right — so this does not do that. Nothing is deleted and nothing is
+                // re-filed; a set that would rather be an event can be promoted by hand.
+                db.query(
+                    "SELECT analysisId, name, createdAt, filterDescription, kind FROM saved_analyses"
+                )
+                    .use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val analysisId = cursor.getLong(0)
+                            val name = cursor.getString(1) ?: ""
+                            val createdAt = cursor.getLong(2)
+                            val note = cursor.getString(3) ?: ""
+                            val wasConcurrent = cursor.getString(4) == "CONCURRENT"
+
+                            db.execSQL(
+                                "INSERT INTO collections (name, notes, createdAt, frozenAt) " +
+                                    "VALUES (?, ?, ?, ?)",
+                                arrayOf(name, note, createdAt, createdAt.takeUnless { wasConcurrent })
+                            )
+
+                            // Read back rather than assumed. last_insert_rowid() is the only thing
+                            // that actually knows where the row landed.
+                            val collectionId = db.query("SELECT last_insert_rowid()").use {
+                                if (it.moveToFirst()) it.getLong(0) else -1L
+                            }
+                            if (collectionId <= 0) continue
+
+                            if (wasConcurrent) {
+                                // Members, not a snapshot. Only recordings still in the library: a
+                                // membership row pointing at a deleted one refers to nothing. Its
+                                // captured numbers are deliberately dropped — they were never
+                                // authoritative, since the screen recomputed them from the library
+                                // every time it opened.
+                                db.execSQL(
+                                    "INSERT OR IGNORE INTO collection_records " +
+                                        "(collectionId, recordId) " +
+                                        "SELECT ?, recordId FROM saved_analysis_records " +
+                                        "WHERE analysisId = ? " +
+                                        "  AND recordId IN (SELECT recordId FROM bpm_records)",
+                                    arrayOf<Any>(collectionId, analysisId)
+                                )
+                            } else {
+                                db.execSQL(
+                                    "INSERT INTO saved_analysis_records_new (" +
+                                        "collectionId, recordId, title, date, minBpm, avgBpm, " +
+                                        "maxBpm, activeDurationMs, tagsEncoded, wearerName, " +
+                                        "watchName, personId, personColorArgb, eventId, " +
+                                        "eventName, zonesEncoded) " +
+                                        "SELECT ?, recordId, title, date, minBpm, avgBpm, maxBpm, " +
+                                        "activeDurationMs, tagsEncoded, wearerName, watchName, " +
+                                        "personId, personColorArgb, eventId, eventName, " +
+                                        "zonesEncoded " +
+                                        "FROM saved_analysis_records WHERE analysisId = ?",
+                                    arrayOf<Any>(collectionId, analysisId)
+                                )
+                            }
+                        }
+                    }
+
+                db.execSQL("DROP TABLE saved_analysis_records")
+                db.execSQL("ALTER TABLE saved_analysis_records_new RENAME TO saved_analysis_records")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_saved_analysis_records_collectionId` " +
+                        "ON `saved_analysis_records` (`collectionId`)"
+                )
+
+                db.execSQL("DROP TABLE IF EXISTS saved_views")
+                db.execSQL("DROP TABLE IF EXISTS saved_analyses")
+
+                // Left with no readers by the 23→24 fold. Dropped now rather than left to look like
+                // something still in use.
+                db.execSQL("DROP TABLE IF EXISTS event_group_tag_cross_ref")
+                db.execSQL("DROP TABLE IF EXISTS event_groups")
+
+                android.util.Log.i(TAG, "MIGRATION_27_28: selections folded into collections")
+            }
+        }
+
+        /**
+         * The two derived figures a summary needs, moved out of the readings.
+         *
+         * `bpm_records` already stored min, avg and max. Active duration and the zone split were
+         * recomputed from the readings every time, which is why the library stream loaded every
+         * reading in the library and rebuilt them on every write — see §9 of the product doc.
+         *
+         * **Adds the columns and nothing else.** Existing rows are left null and empty, and filled
+         * by [LibraryRepository.backfillDerivedFigures] on the next launch, in Kotlin, against the
+         * same functions the app has always used. Computing them here would mean a second
+         * implementation of the gap rule in SQL, and two definitions of one number is the failure
+         * this initiative exists to unwind. It also keeps a pass over every reading in the library
+         * out of a migration, where failing means an app that will not open.
+         */
+        val MIGRATION_28_29 = object : Migration(28, 29) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE bpm_records ADD COLUMN activeDurationMs INTEGER DEFAULT NULL"
+                )
+                db.execSQL(
+                    "ALTER TABLE bpm_records ADD COLUMN zonesEncoded TEXT NOT NULL DEFAULT ''"
+                )
+                android.util.Log.i(TAG, "MIGRATION_28_29: derived figures move onto the record")
+            }
+        }
+
+        /**
+         * How far to darken a cover.
+         *
+         * The sibling of `coverBlur`, added for the same reason and solving the other half of it.
+         * Blur is for a cover made of type; this is for one that is simply too bright — a
+         * white-sky festival shot, a flash photo — where the writing over it cannot hold whatever
+         * is done to the writing. Outlining the text was tried and looked like a sticker; the
+         * picture is what is too bright, so the picture is what gives.
+         *
+         * `REAL DEFAULT NULL`, matching the entities and [MIGRATION_21_22]. Null is none, which is
+         * what every existing cover has and what most should keep.
+         */
+        val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf("events", "collections", "bpm_records").forEach { table ->
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `coverDim` REAL DEFAULT NULL")
+                }
+                android.util.Log.i(TAG, "MIGRATION_29_30: a cover can be darkened")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
          * before anything is opened. If it cannot be read the answer is "yes": an unreadable file
          * is the case where a backup is worth the most.
          */
+        /**
+         * The version stored in the database file, or null when it cannot be read.
+         *
+         * Read off the file rather than through Room, because the case this exists for is Room
+         * refusing to open it. A file newer than the code — the app downgraded, an older build
+         * installed over a newer one — throws "a migration from 30 to 29 was required but not
+         * found", which is accurate and says nothing anyone can act on.
+         */
+        fun fileVersion(context: Context): Int? {
+            val dbFile = context.getDatabasePath(DB_NAME)?.takeIf { it.exists() } ?: return null
+            return try {
+                android.database.sqlite.SQLiteDatabase.openDatabase(
+                    dbFile.path,
+                    null,
+                    android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+                ).use { it.version }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Could not read the database version", e)
+                null
+            }
+        }
+
+        /** The version this build of the app knows how to open. See [LIBRARY_DB_VERSION]. */
+        const val EXPECTED_VERSION = LIBRARY_DB_VERSION
+
         private fun migrationPending(dbFile: java.io.File): Boolean = try {
             android.database.sqlite.SQLiteDatabase.openDatabase(
                 dbFile.path,
@@ -994,7 +1543,15 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_18_19,
                         MIGRATION_19_20,
                         MIGRATION_20_21,
-                        MIGRATION_21_22
+                        MIGRATION_21_22,
+                        MIGRATION_22_23,
+                        MIGRATION_23_24,
+                        MIGRATION_24_25,
+                        MIGRATION_25_26,
+                        MIGRATION_26_27,
+                        MIGRATION_27_28,
+                        MIGRATION_28_29,
+                        MIGRATION_29_30
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

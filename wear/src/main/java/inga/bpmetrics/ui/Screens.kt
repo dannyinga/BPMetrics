@@ -42,6 +42,7 @@ import inga.bpmetrics.R
 import inga.bpmetrics.recording.RecordingState
 import inga.bpmetrics.theme.BpmAccent
 import inga.bpmetrics.theme.HeartRed
+import inga.bpmetrics.theme.RecordingRed
 import kotlinx.coroutines.delay
 
 /**
@@ -192,7 +193,7 @@ fun ExerciseCapabilitiesScreen(
  * A consistent loading screen used during permission and capability checks.
  */
 @Composable
-private fun LoadingScreen(label: String) {
+fun LoadingScreen(label: String) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -311,12 +312,23 @@ fun RecordingContent(
                 color = BpmAccent,
                 textAlign = TextAlign.Center
             )
+        }
 
+        // Outside the count, deliberately. The whole block used to sit inside it, which meant the
+        // one press most worth giving an answer to gave none: press Send now on a recording the
+        // phone already has, the reconcile confirms it, the count drops to zero, and the chip —
+        // along with the "Phone has everything" it was about to display — is removed from the
+        // composition mid-press. The wearer sees the row vanish and has no idea whether that was
+        // success or the app falling over.
+        //
+        // So the chip stays for as long as there is either something outstanding or something to
+        // say about the last press.
+        if (state.pendingRecordCount > 0 || state.sendResult != null || state.isSending) {
             // Sending is automatic; this is for when it visibly is not working. Nothing is
             // deleted by it, so pressing it repeatedly is harmless.
             CompactChip(
                 onClick = onSendNow,
-                enabled = !state.isSending,
+                enabled = !state.isSending && state.pendingRecordCount > 0,
                 label = {
                     Text(
                         text = state.sendResult ?: if (state.isSending) "Sending…" else "Send now",
@@ -346,7 +358,7 @@ fun RecordingContent(
                 },
                 modifier = Modifier.size(56.dp),
                 colors = ButtonDefaults.buttonColors(
-                    backgroundColor = if (isRecording) Color(0xFFD32F2F) else BpmAccent
+                    backgroundColor = if (isRecording) RecordingRed else BpmAccent
                 )
             ) {
                 Icon(

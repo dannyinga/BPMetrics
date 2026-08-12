@@ -13,6 +13,7 @@ import android.graphics.Shader
 import androidx.core.graphics.createBitmap
 import inga.bpmetrics.library.BpmDataPointEntity
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.RecordNameFormatter
 import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.ui.graph.TimeUtils
@@ -44,11 +45,11 @@ object ImageExporter {
         val endTimeMs: Long = 0L,
         val backgroundOpacity: Int = 100,
         val showLabels: Boolean = true,
-        val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
+        val labelsColor: Int = inga.bpmetrics.core.BpmPalette.ON_SURFACE,
         val showGrid: Boolean = true,
-        val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
-        val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
-        val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
+        val gridColor: Int = inga.bpmetrics.core.BpmPalette.GRID,
+        val lowBpmColor: Int = inga.bpmetrics.core.BpmPalette.LOW,
+        val highBpmColor: Int = inga.bpmetrics.core.BpmPalette.HIGH,
         val showTitle: Boolean = true,
         val showCurrentStats: Boolean = true,
         val headerXPercent: Float = 0.85f,
@@ -101,7 +102,7 @@ object ImageExporter {
      * @param config The configuration for rendering.
      * @return A [Bitmap] containing the rendered graph.
      */
-    fun renderGraphToBitmap(record: BpmRecord, config: ImageExportConfig): Bitmap {
+    fun renderGraphToBitmap(record: BpmRecordWithPoints, config: ImageExportConfig): Bitmap {
         val bitmap = createBitmap(config.width, config.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         renderOnCanvas(canvas, record, config)
@@ -187,7 +188,7 @@ object ImageExporter {
      */
     fun renderOnCanvas(
         canvas: Canvas,
-        record: BpmRecord,
+        record: BpmRecordWithPoints,
         config: ImageExportConfig,
         currentTimeMs: Double? = null,
         windowSizeMs: Long? = null,
@@ -396,11 +397,11 @@ object ImageExporter {
         // transparent and keeps the footage — but where it does show, a still exported from
         // BPMetrics should be the same near-black the app itself is, rather than a flat #000 that
         // belongs to no palette.
-        if (canvas.isOpaque) canvas.drawColor(inga.bpmetrics.ui.theme.BpmPalette.SURFACE)
+        if (canvas.isOpaque) canvas.drawColor(inga.bpmetrics.core.BpmPalette.SURFACE)
         val bgAlpha = (config.backgroundOpacity * 255 / 100).coerceIn(0, 255)
         if (bgAlpha > 0) {
             paint.resetForExport()
-            paint.color = inga.bpmetrics.ui.theme.BpmPalette.SURFACE
+            paint.color = inga.bpmetrics.core.BpmPalette.SURFACE
             paint.alpha = bgAlpha
             canvas.drawRect(dims.outerRect, paint)
         }
@@ -586,9 +587,12 @@ object ImageExporter {
         timelineOriginMs: Long
     ): String? = when (config.clockMode) {
         ClockMode.NONE -> null
+        // With seconds: this one is a running clock rather than a stamp, and it advances a frame
+        // at a time.
         ClockMode.CLOCK -> StringFormatHelpers.getTimeString(
             timelineOriginMs + viewport.playhead.toLong(),
-            java.time.ZoneId.of(config.timeZoneId)
+            java.time.ZoneId.of(config.timeZoneId),
+            withSeconds = true
         )
         // From the start of the session, which is well defined however many people are on the
         // frame — unlike "into the recording", which with five wearers is five different numbers.
@@ -597,7 +601,7 @@ object ImageExporter {
         )
     }
 
-    private fun drawDataCurve(canvas: Canvas, dims: RenderingDimensions, ranges: BpmRanges, viewport: Viewport, record: BpmRecord, config: ImageExportConfig, paint: Paint) {
+    private fun drawDataCurve(canvas: Canvas, dims: RenderingDimensions, ranges: BpmRanges, viewport: Viewport, record: BpmRecordWithPoints, config: ImageExportConfig, paint: Paint) {
         canvas.withClip(dims.graphLeft, dims.graphTop, dims.graphRight, dims.graphBottom) {
             val visiblePoints = record.dataPoints.filter {
                 it.timestamp >= (viewport.start - viewport.lookahead) && it.timestamp <= (viewport.end + viewport.lookahead)
@@ -860,7 +864,7 @@ object ImageExporter {
      * video as they do everywhere else in the app. The fallback is only for a recording nobody is
      * assigned to.
      */
-    private fun colorForRecord(record: BpmRecord, index: Int, config: ImageExportConfig): Int =
+    private fun colorForRecord(record: BpmRecordWithPoints, index: Int, config: ImageExportConfig): Int =
         config.customRecordColors[record.metadata.recordId]
             ?: PersonColors.defaultFor(index)
 
@@ -883,7 +887,7 @@ object ImageExporter {
      * The title is only used when it says something. A pill reading "Untitled 4" over someone's
      * heart rate is worse than one reading "Unknown", and it goes out in a video.
      */
-    private fun wearerLabelOf(record: BpmRecord): String =
+    private fun wearerLabelOf(record: BpmRecordWithPoints): String =
         record.metadata.wearerName.takeIf { it.isNotBlank() }
             ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
             ?: record.metadata.title.takeIf { !RecordNameFormatter.isPlaceholder(it) }
@@ -894,7 +898,7 @@ object ImageExporter {
         dims: RenderingDimensions,
         ranges: BpmRanges,
         viewport: Viewport,
-        record: BpmRecord,
+        record: BpmRecordWithPoints,
         config: ImageExportConfig,
         /** When the session began, so the beat can be placed on an absolute clock. */
         timelineOriginMs: Long,
@@ -978,7 +982,7 @@ object ImageExporter {
 
     private class Viewport(val start: Double, val end: Double, val playhead: Double, val duration: Double, val lookahead: Long)
 
-    private fun calculateRanges(record: BpmRecord, config: ImageExportConfig, windowSizeMs: Long? = null): BpmRanges {
+    private fun calculateRanges(record: BpmRecordWithPoints, config: ImageExportConfig, windowSizeMs: Long? = null): BpmRanges {
         // Expand the search range by the window size (or 5s default) to capture everything that will be visible
         val margin = windowSizeMs ?: 5000L
         val searchStart = config.startTimeMs - margin
@@ -1006,7 +1010,7 @@ object ImageExporter {
         return BpmRanges(sMin, sMax, snapped.start, snapped.endInclusive, record.metadata.title)
     }
 
-    private fun calculateViewport(currentTime: Double?, windowSize: Long?, config: ImageExportConfig, record: BpmRecord): Viewport {
+    private fun calculateViewport(currentTime: Double?, windowSize: Long?, config: ImageExportConfig, record: BpmRecordWithPoints): Viewport {
         // 1. Determine the playhead position (50% through the selected snippet if currentTime is null)
         val playhead = currentTime ?: ((config.startTimeMs + config.endTimeMs) / 2.0)
 
@@ -1035,7 +1039,7 @@ object ImageExporter {
         val fraction = ((bpm - ranges.uiMin) / ranges.uiRange).coerceIn(0.0, 1.0).toFloat()
         // The same walk the on-screen chart uses, against this preset's endpoints — which default
         // to the app's own low and high.
-        return inga.bpmetrics.ui.theme.BpmRamp.blend(
+        return inga.bpmetrics.core.BpmRamp.blend(
             config.lowBpmColor,
             config.highBpmColor,
             fraction
@@ -1060,7 +1064,7 @@ object ImageExporter {
     /**
      * Records whose data point timestamps have been rewritten onto a shared [timeline].
      */
-    data class AlignedRecords(val records: List<BpmRecord>, val timeline: Timeline)
+    data class AlignedRecords(val records: List<BpmRecordWithPoints>, val timeline: Timeline)
 
     /**
      * Computes the shared time axis for [records] without rewriting any data points.
@@ -1075,7 +1079,7 @@ object ImageExporter {
      * - **Clock time** ([alignByElapsedTime] false): the origin is the earliest session start,
      *   and each record sits at its real distance from it.
      */
-    fun timelineFor(records: List<BpmRecord>, alignByElapsedTime: Boolean): Timeline {
+    fun timelineFor(records: List<BpmRecordWithPoints>, alignByElapsedTime: Boolean): Timeline {
         if (records.isEmpty()) return Timeline(0L, 0L)
 
         return if (alignByElapsedTime) {
@@ -1099,7 +1103,7 @@ object ImageExporter {
      *
      * See [timelineFor] for the meaning of [alignByElapsedTime].
      */
-    fun alignRecords(records: List<BpmRecord>, alignByElapsedTime: Boolean): AlignedRecords {
+    fun alignRecords(records: List<BpmRecordWithPoints>, alignByElapsedTime: Boolean): AlignedRecords {
         val timeline = timelineFor(records, alignByElapsedTime)
         if (records.isEmpty()) return AlignedRecords(emptyList(), timeline)
 
@@ -1117,10 +1121,10 @@ object ImageExporter {
         return AlignedRecords(shifted, timeline)
     }
 
-    private fun firstTimestampOf(record: BpmRecord): Long =
+    private fun firstTimestampOf(record: BpmRecordWithPoints): Long =
         record.dataPoints.firstOrNull()?.timestamp ?: 0L
 
-    private fun lastTimestampOf(record: BpmRecord): Long =
+    private fun lastTimestampOf(record: BpmRecordWithPoints): Long =
         record.dataPoints.lastOrNull()?.timestamp ?: record.metadata.durationMs
 
     /**
@@ -1128,7 +1132,7 @@ object ImageExporter {
      */
     fun renderMultiRecordsOnCanvas(
         canvas: Canvas,
-        records: List<BpmRecord>,
+        records: List<BpmRecordWithPoints>,
         config: ImageExportConfig,
         currentTimeMs: Double? = null,
         windowSizeMs: Long? = null,
@@ -1286,7 +1290,7 @@ object ImageExporter {
 
     private fun measureReadouts(
         dims: RenderingDimensions,
-        records: List<BpmRecord>,
+        records: List<BpmRecordWithPoints>,
         config: ImageExportConfig,
         paint: Paint
     ): ReadoutMetrics {
@@ -1455,7 +1459,7 @@ object ImageExporter {
         canvas: Canvas,
         dims: RenderingDimensions,
         viewport: Viewport,
-        records: List<BpmRecord>,
+        records: List<BpmRecordWithPoints>,
         config: ImageExportConfig,
         /** The vertical scale, so a lone wearer's reading can be coloured by value. */
         ranges: BpmRanges,
@@ -1689,7 +1693,7 @@ object ImageExporter {
      */
     private const val RANK_ANIM_SAMPLES = 16
 
-    internal fun animatedRankSlots(records: List<BpmRecord>, playhead: Double): FloatArray {
+    internal fun animatedRankSlots(records: List<BpmRecordWithPoints>, playhead: Double): FloatArray {
         val slots = FloatArray(records.size)
         if (records.size < 2) return slots
 
@@ -1715,7 +1719,7 @@ object ImageExporter {
      * A wearer with no reading at this instant sorts to the bottom rather than out of the list, and
      * equal readings keep their original order, so neither a dropout nor a tie shuffles the stack.
      */
-    internal fun rankOrderAt(records: List<BpmRecord>, at: Double): List<Int> {
+    internal fun rankOrderAt(records: List<BpmRecordWithPoints>, at: Double): List<Int> {
         val bpms = records.map { getInterpolatedBpm(it.dataPoints, at) }
         return records.indices.sortedWith(
             compareByDescending<Int> { bpms[it] ?: Double.NEGATIVE_INFINITY }.thenBy { it }
@@ -1725,7 +1729,7 @@ object ImageExporter {
     private fun drawMultiLegend(
         canvas: Canvas,
         dims: RenderingDimensions,
-        records: List<BpmRecord>,
+        records: List<BpmRecordWithPoints>,
         config: ImageExportConfig,
         paint: Paint
     ) {

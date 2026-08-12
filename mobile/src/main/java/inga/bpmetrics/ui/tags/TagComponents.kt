@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,12 +32,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,69 +55,57 @@ import inga.bpmetrics.ui.components.ExpandableSection
 import inga.bpmetrics.ui.components.FlowRow
 
 import kotlinx.coroutines.flow.Flow
-
 /**
- * A dialog allowing the user to multi-select tags for a specific record.
+ * Choosing a recording's tags, and making new ones without leaving.
  *
- * @param onDismiss Callback to dismiss the dialog.
- * @param onSave Callback when the user saves the selection.
- * @param onManageTags Callback to navigate to the tag management screen.
- * @param viewModel The ViewModel to fetch categories and tags from.
- * @param initialSelectedTagIds The tags already assigned to the record.
+ * There is no management screen any more. Creating a tag was a trip to a separate part of the app,
+ * done before you could label anything — which meant labelling happened rarely, and the comparison
+ * features that depend on labels went unused. A tag is made where it is applied, and its axis is
+ * chosen or created in the same gesture.
+ *
+ * **One tag per category.** Picking a second value on an axis replaces the first rather than adding
+ * to it, matching what `LibraryRepository.addTagToRecord` does on write. A dialog that let you tick
+ * both and then silently dropped one would be worse than the constraint.
+ *
+ * @param onCreateTag Makes a tag on an axis, creating the axis if it is new, and hands back its id.
  */
 @Composable
 fun TagSelectionDialog(
     onDismiss: () -> Unit,
     onSave: (List<Long>) -> Unit,
-    onManageTags: () -> Unit,
-    viewModel: BpmRecordViewModel,
-    initialSelectedTagIds: List<Long>
-) {
-    val categories by viewModel.getAllCategories().collectAsState(initial = emptyList())
-    TagSelectionDialog(
-        onDismiss = onDismiss,
-        onSave = onSave,
-        onManageTags = onManageTags,
-        categories = categories,
-        getTagsByCategoryFlow = { viewModel.getTagsByCategory(it) },
-        initialSelectedTagIds = initialSelectedTagIds
-    )
-}
-
-/**
- * A decoupled dialog allowing multi-selection of tags, reusable across different view models or screen states.
- */
-@Composable
-fun TagSelectionDialog(
-    onDismiss: () -> Unit,
-    onSave: (List<Long>) -> Unit,
-    onManageTags: () -> Unit,
     categories: List<CategoryEntity>,
     getTagsByCategoryFlow: (Long) -> Flow<List<TagEntity>>,
-    initialSelectedTagIds: List<Long>
+    initialSelectedTagIds: List<Long>,
+    onCreateTag: (categoryName: String, tagName: String, onMade: (Long) -> Unit) -> Unit =
+        { _, _, _ -> }
 ) {
     var selectedTagIds by remember { mutableStateOf(initialSelectedTagIds.toSet()) }
     var expandedCategories by remember { mutableStateOf(emptySet<Long>()) }
+    var creatingIn by remember { mutableStateOf<CategoryEntity?>(null) }
+    var creatingNewAxis by remember { mutableStateOf(false) }
+
+    // Which tags belong to which axis, gathered as the sections open. Needed because choosing a
+    // value has to clear the others on its own axis, and the dialog only learns an axis's values
+    // once that section has been opened.
+    val tagsByCategory = remember { mutableStateMapOf<Long, List<TagEntity>>() }
+
+    fun choose(tag: TagEntity) {
+        val siblings = tagsByCategory[tag.parentCategoryId].orEmpty().map { it.tagId }.toSet()
+        selectedTagIds = if (tag.tagId in selectedTagIds) {
+            selectedTagIds - tag.tagId
+        } else {
+            (selectedTagIds - siblings) + tag.tagId
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Assign Tags")
-                TextButton(onClick = onManageTags) {
-                    Text("Manage", fontSize = 14.sp)
-                }
-            }
-        },
+        title = { Text("Tags") },
         text = {
-            LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+            LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
                 items(categories) { category ->
                     val isExpanded = expandedCategories.contains(category.categoryId)
-                    
+
                     ExpandableSection(
                         title = category.name,
                         isExpanded = isExpanded,
@@ -127,32 +118,38 @@ fun TagSelectionDialog(
                         },
                         titleStyle = MaterialTheme.typography.titleMedium
                     ) {
-                        val tags by getTagsByCategoryFlow(category.categoryId).collectAsState(initial = emptyList())
+                        val tags by getTagsByCategoryFlow(category.categoryId)
+                            .collectAsState(initial = emptyList())
+                        tagsByCategory[category.categoryId] = tags
+
                         Column {
                             tags.forEach { tag ->
                                 val isSelected = selectedTagIds.contains(tag.tagId)
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable {
-                                            selectedTagIds = if (isSelected) selectedTagIds - tag.tagId else selectedTagIds + tag.tagId
-                                        }
+                                        .clickable { choose(tag) }
                                         .padding(vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text(text = tag.name, style = MaterialTheme.typography.bodyMedium)
-                                    Checkbox(
-                                        checked = isSelected,
-                                        onCheckedChange = {
-                                            selectedTagIds = if (isSelected) selectedTagIds - tag.tagId else selectedTagIds + tag.tagId
-                                        }
-                                    )
+                                    Text(tag.name, style = MaterialTheme.typography.bodyMedium)
+                                    // A radio rather than a checkbox: one value per axis, said by
+                                    // the control instead of by a correction afterwards.
+                                    RadioButton(selected = isSelected, onClick = { choose(tag) })
                                 }
+                            }
+                            TextButton(onClick = { creatingIn = category }) {
+                                Text("New ${category.name.lowercase()}…", fontSize = 14.sp)
                             }
                         }
                     }
                     HorizontalDivider()
+                }
+                item {
+                    TextButton(onClick = { creatingNewAxis = true }) {
+                        Text("New category…", fontSize = 14.sp)
+                    }
                 }
             }
         },
@@ -162,6 +159,95 @@ fun TagSelectionDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
+    )
+
+    creatingIn?.let { category ->
+        NewTagDialog(
+            axisName = category.name,
+            axisFixed = true,
+            onDismiss = { creatingIn = null },
+            onConfirm = { _, tagName ->
+                onCreateTag(category.name, tagName) { newId ->
+                    // Selected straight away, clearing the axis as any other choice would.
+                    val siblings = tagsByCategory[category.categoryId].orEmpty()
+                        .map { it.tagId }
+                        .toSet()
+                    selectedTagIds = (selectedTagIds - siblings) + newId
+                }
+                expandedCategories = expandedCategories + category.categoryId
+                creatingIn = null
+            }
+        )
+    }
+
+    if (creatingNewAxis) {
+        NewTagDialog(
+            axisName = "",
+            axisFixed = false,
+            onDismiss = { creatingNewAxis = false },
+            onConfirm = { axis, tagName ->
+                onCreateTag(axis, tagName) { newId -> selectedTagIds = selectedTagIds + newId }
+                creatingNewAxis = false
+            }
+        )
+    }
+}
+
+/**
+ * Making a tag, and its axis if that is new too.
+ *
+ * The axis is mandatory and always visible, even when it is fixed. A tag with no axis cannot be
+ * compared against anything, and an app where half the tags are uncomparable has given up the
+ * feature tags exist for — so the field is shown rather than tucked behind a disclosure.
+ */
+@Composable
+private fun NewTagDialog(
+    axisName: String,
+    axisFixed: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (axis: String, tag: String) -> Unit
+) {
+    var axis by remember { mutableStateOf(axisName) }
+    var tag by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (axisFixed) "New $axisName" else "New tag") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = axis,
+                    onValueChange = { axis = it },
+                    label = { Text("Category") },
+                    placeholder = { Text("Character, Venue, Mode…") },
+                    enabled = !axisFixed,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = tag,
+                    onValueChange = { tag = it },
+                    label = { Text("Tag") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "A category is what this tag gets compared along — Spiderman against Hulk. " +
+                        "A recording carries one tag per category.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = axis.isNotBlank() && tag.isNotBlank(),
+                onClick = { onConfirm(axis.trim(), tag.trim()) }
+            ) { Text("Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
@@ -187,7 +273,7 @@ fun EffectiveTagChip(
     if (effective.isInherited) {
         val from = when (effective.source) {
             TagSource.EVENT -> "this event"
-            TagSource.GROUP -> "a collection above it"
+            TagSource.ANCESTOR -> "an event above it"
             TagSource.DIRECT -> ""
         }
         AssistChip(

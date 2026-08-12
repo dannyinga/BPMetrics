@@ -24,7 +24,7 @@ class RecordMergeTest {
         startTime: Long,
         durationMs: Long,
         bpm: List<Pair<Long, Double>> = listOf(0L to 90.0)
-    ) = BpmRecord(
+    ) = BpmRecordWithPoints(
         metadata = BpmRecordEntity(
             recordId = id,
             title = "Recording $id",
@@ -48,8 +48,8 @@ class RecordMergeTest {
             record(2, personId = 5, startTime = noon + 120_000, durationMs = 60_000)
         )
 
-        assertTrue(RecordMerge.canMerge(records))
-        assertNull(RecordMerge.refusal(records))
+        assertTrue(RecordMerge.canMerge(records.map { it.metadata }))
+        assertNull(RecordMerge.refusal(records.map { it.metadata }))
     }
 
     @Test
@@ -60,8 +60,8 @@ class RecordMergeTest {
             record(2, personId = 6, startTime = noon, durationMs = 60_000)
         )
 
-        assertFalse(RecordMerge.canMerge(records))
-        assertNotNull(RecordMerge.refusal(records))
+        assertFalse(RecordMerge.canMerge(records.map { it.metadata }))
+        assertNotNull(RecordMerge.refusal(records.map { it.metadata }))
     }
 
     @Test
@@ -73,13 +73,13 @@ class RecordMergeTest {
             record(2, personId = null, startTime = noon + 60_000, durationMs = 60_000)
         )
 
-        assertFalse(RecordMerge.canMerge(records))
-        assertNotNull(RecordMerge.refusal(records))
+        assertFalse(RecordMerge.canMerge(records.map { it.metadata }))
+        assertNotNull(RecordMerge.refusal(records.map { it.metadata }))
     }
 
     @Test
     fun `one recording is not a merge`() {
-        assertFalse(RecordMerge.canMerge(listOf(record(1, 5, noon, 60_000))))
+        assertFalse(RecordMerge.canMerge(listOf(record(1, 5, noon, 60_000).metadata)))
     }
 
     @Test
@@ -134,7 +134,7 @@ class RecordMergeTest {
         )
 
         // First ends 60s in, second starts 600s in: nine minutes of silence between them.
-        assertEquals(540_000L, RecordMerge.gapMs(records))
+        assertEquals(540_000L, RecordMerge.gapMs(records.map { it.metadata }))
     }
 
     @Test
@@ -144,7 +144,7 @@ class RecordMergeTest {
             record(2, 5, noon + 60_000, 60_000)
         )
 
-        assertEquals(0L, RecordMerge.gapMs(records))
+        assertEquals(0L, RecordMerge.gapMs(records.map { it.metadata }))
     }
 
     @Test

@@ -1,15 +1,18 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EffectiveTagsResolver
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.library.TimeSpan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,6 +22,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -30,10 +35,15 @@ import kotlinx.coroutines.launch
  */
 data class EventDetailState(
     val event: EventEntity? = null,
-    val group: EventGroupEntity? = null,
-    val records: List<BpmRecord> = emptyList(),
+    val group: EventEntity? = null,
+    /** With readings, because this page draws a merged curve over them. */
+    /** Everything in the subtree, without readings — the header counts them, it does not draw them. */
+    val records: List<inga.bpmetrics.library.BpmRecord> = emptyList(),
     val people: Map<Long, PersonEntity> = emptyMap(),
-    val analysis: ConcurrentAnalysis = ConcurrentAnalysis(),
+    /** How many distinct people are in it, for the header's one-line summary. */
+    val personCount: Int = 0,
+    /** What it actually covers, from its contents rather than its window. */
+    val span: TimeSpan? = null,
     val isLoading: Boolean = true
 ) {
     val missing: Boolean get() = !isLoading && event == null
@@ -57,40 +67,56 @@ class EventDetailViewModel(
      * Kept here rather than in the composable so the chart, the readout legend and the summary rows
      * all read one answer. Three copies of "who is selected" is three chances to disagree.
      */
-    private val _isolatedId = MutableStateFlow<String?>(null)
-    val isolatedId: StateFlow<String?> = _isolatedId.asStateFlow()
-
-    fun isolate(id: String?) {
-        _isolatedId.value = if (id == _isolatedId.value) null else id
-    }
-
     private val eventFlow = repository.getAllEvents()
         .map { events -> events.firstOrNull { it.eventId == eventId } }
 
-    private val recordsFlow = repository.records
-        .map { records -> records.filter { it.metadata.eventId == eventId } }
+    // The readings flow that used to sit here is gone. It was dead from the Sprint 5 fold — the
+    // curves belong to the *scope* now and every subject's scope is served by one
+    // [AnalysisViewModel] — and it matched `eventId == eventId`, one level deep. Leaving a private,
+    // unread, wrong implementation of "this event's recordings" in the file is leaving the answer
+    // somebody copies next, which is how that mistake has now been made six times.
 
+    /**
+     * The subject, and nothing about the analysis.
+     *
+     * The readings, the curves and the numbers left with Sprint 5: they belong to the *scope*, and
+     * every subject's scope is served by one [AnalysisViewModel]. What is left here is what makes
+     * an event an event rather than a set or a recording — its name, its window, where it sits in
+     * the tree, and the things you can do to it.
+     *
+     * Points-free, so opening an event no longer loads a single reading to draw its header.
+     */
     val state: StateFlow<EventDetailState> = combine(
         eventFlow,
-        recordsFlow,
-        repository.getAllEventGroups(),
-        repository.getAllPeople(),
-        repository.getAllWatches()
-    ) { event, records, groups, people, watches ->
+        repository.records,
+        // The whole tree. This read the collections flow, which returns nothing since sets
+        // arrived, so the breadcrumb never resolved and every event looked top-level.
+        repository.allEventsInTree,
+        repository.getAllPeople()
+    ) { event, rows, tree, people ->
+        val within = if (event == null) emptySet()
+            else inga.bpmetrics.library.EventTree.descendantsOf(tree, event.eventId)
+        val mine = rows.filter { it.metadata.eventId in within }
+
         EventDetailState(
             event = event,
-            group = event?.groupId?.let { id -> groups.firstOrNull { it.groupId == id } },
-            records = records.sortedBy { it.metadata.startTime },
+            // `parentId`/`eventId`, not the legacy `groupId` on either side — that column is null
+            // on anything created since the fold, so the breadcrumb would stop appearing.
+            group = event?.parentId?.let { id -> tree.firstOrNull { it.eventId == id } },
+            records = mine.sortedBy { it.metadata.startTime },
             people = people.associateBy { it.personId },
-            analysis = EventAnalysis.from(records, watches = watches, people = people),
+            // The subtree, not the direct children: a festival's count has to include the
+            // recordings inside its days, which is what its analysis covers.
+            personCount = mine.mapNotNull { it.metadata.personId }.distinct().size,
+            span = mine.takeIf { it.isNotEmpty() }?.let { rows2 ->
+                TimeSpan(
+                    rows2.minOf { it.metadata.startTime },
+                    rows2.maxOf { it.metadata.endTime }
+                )
+            },
             isLoading = false
         )
-    }
-        // Merging and sampling every reading in an event is real work — an evening across four
-        // watches is tens of thousands of points — and doing it on the main thread stalls the
-        // screen it is meant to draw.
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EventDetailState())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EventDetailState())
 
     /**
      * Tags applied to this event, and the ones it inherits from its group.
@@ -100,52 +126,45 @@ class EventDetailViewModel(
      */
     val tags: StateFlow<List<EffectiveTag>> = combine(
         repository.getTagsForEvent(eventId),
-        eventFlow,
-        // Observed rather than read once, so tagging the collection refreshes this page rather
-        // than waiting for something else to reload it.
-        repository.allGroupTags,
-        repository.getAllEventGroups()
-    ) { own, event, groupTags, groups ->
+        // Observed rather than read once, so tagging an event above this one refreshes this page
+        // rather than waiting for something else to reload it.
+        repository.allEventTags,
+        repository.allEventsInTree
+    ) { own, eventTags, events ->
         EffectiveTagsResolver.resolve(
             // The event's own tags are direct *here*: this is the level they were applied at. The
             // same resolver, asked from one rung down the hierarchy.
             directTags = own,
-            eventId = null,
-            // Every collection above this event, nearest first — its own, then the one that holds
-            // that, and so on. A tag set on a festival reaches the sets inside its days.
-            groupChain = event?.groupId
-                ?.let { inga.bpmetrics.library.CollectionTree.ancestryOf(groups, it) }
-                ?.map { it.groupId }
-                ?.reversed()
-                .orEmpty(),
-            eventTags = emptyMap(),
-            groupTags = groupTags
+            // The full ancestry, this event included, rather than only what is above it. Its own
+            // tags are already in `directTags` and the resolver takes the nearest attribution, so
+            // they stay direct — while dropping the first entry would put its *parent* at depth
+            // zero, where the resolver labels tags "this event". That reads as a tag applied here
+            // and removable here, and it is neither.
+            ancestry = inga.bpmetrics.library.EventTree.ancestryOf(events, eventId)
+                .map { it.eventId },
+            eventTags = eventTags
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun setTags(tagIds: List<Long>) {
-        viewModelScope.launch {
-            val current = repository.getTagsForEvent(eventId).first().map { it.tagId }
-            current.filterNot { it in tagIds }.forEach { repository.removeTagFromEvent(eventId, it) }
-            tagIds.filterNot { it in current }.forEach { repository.addTagToEvent(eventId, it) }
-        }
-    }
-
+    /**
+     * Takes one tag off, from the chip on the header.
+     *
+     * The only tag operation left here. Choosing tags, and creating them, moved to the editor —
+     * which is opened from the library as well as from this page and so cannot be built on a
+     * ViewModel only this page has. `createTag`, `setTags`, `categories` and `tagsInCategory` went
+     * with them rather than being left as a second, unreachable implementation of the same thing:
+     * an unused copy is the answer somebody reaches for next.
+     */
     fun removeTag(tagId: Long) {
-        viewModelScope.launch { repository.removeTagFromEvent(eventId, tagId) }
+        launchGuarded { repository.removeTagFromEvent(eventId, tagId) }
     }
-
-    val categories = repository.getAllCategories()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    fun tagsInCategory(categoryId: Long) = repository.getTagsByCategory(categoryId)
 
     fun rename(name: String) {
-        viewModelScope.launch { repository.renameEvent(eventId, name) }
+        launchGuarded { repository.renameEvent(eventId, name) }
     }
 
     fun setNotes(notes: String) {
-        viewModelScope.launch { repository.setEventNotes(eventId, notes) }
+        launchGuarded { repository.setEventNotes(eventId, notes) }
     }
 
     /**
@@ -159,7 +178,7 @@ class EventDetailViewModel(
         source: android.net.Uri,
         onResult: (Boolean) -> Unit
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             val hint = repository.getEvent(eventId)?.displayName ?: "event"
             onResult(
                 repository.setCover(
@@ -174,7 +193,7 @@ class EventDetailViewModel(
 
     /** Re-frames the picture this event already has, leaving the file alone. */
     fun setCoverCrop(cover: inga.bpmetrics.library.Cover) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setCoverCrop(LibraryRepository.CoverOwner.Event(eventId), cover)
         }
     }
@@ -186,22 +205,13 @@ class EventDetailViewModel(
      * column stores null rather than an empty string.
      */
     fun clearCover(context: android.content.Context) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
         }
     }
 
-    /** Takes a recording out of the event. It goes back to Unfiled; it is never deleted. */
-    fun removeRecord(recordId: Long) {
-        viewModelScope.launch { repository.assignRecordsToEvent(listOf(recordId), null) }
-    }
-
-    fun deleteEvent(onDone: () -> Unit) {
-        viewModelScope.launch {
-            repository.deleteEvent(eventId)
-            onDone()
-        }
-    }
+    // `deleteEvent` was here too, and is gone for the same reason: the editor deletes, through
+    // `LibraryViewModel.deleteEvent`, wherever it was opened from.
 
     class Factory(
         private val repository: LibraryRepository,

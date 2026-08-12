@@ -89,12 +89,71 @@ data class BpmRecordEntity (
     @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
     @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
     /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null
+    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
+    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
+    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null,
+
+    /**
+     * The clock this recording is read in — an IANA id like "America/Los_Angeles".
+     *
+     * **Resolved, then stored.** [inga.bpmetrics.library.LocationResolver] decides it by walking up
+     * the event tree; one writer puts the answer here. Same reasoning as event membership: it
+     * changes rarely, is read on every screen that shows a time, and a stored value can be checked
+     * against the pure function that produced it.
+     *
+     * Storing it also means a backed-up or exported recording carries its own clock rather than
+     * depending on a tree that may since have been rearranged.
+     *
+     * Null means nobody has said — fall back to the reader's zone, which is what the app did
+     * everywhere before this existed.
+     */
+    @ColumnInfo(defaultValue = "NULL") val timeZoneId: String? = null,
+
+    /**
+     * A location set on this recording specifically, overriding whatever it would inherit.
+     *
+     * For the recording that genuinely differs from its event — someone who joined from elsewhere,
+     * a watch left on the wrong clock. Kept apart from [timeZoneId] so a reconcile can overwrite
+     * the resolved answer without destroying a deliberate one.
+     */
+    @ColumnInfo(defaultValue = "NULL") val locationId: Long? = null,
+
+    /**
+     * Measured time with the dropouts taken out, or null on a row that predates the column.
+     *
+     * Stored because it is the only per-reading number a summary needs, and because a recording's
+     * readings never change: they are written once at ingest, and merge and split create new
+     * records rather than editing old ones. Deriving it live meant loading every reading in the
+     * library to answer "how long was this" — see §9 of the product doc.
+     *
+     * Null is "nobody has computed it yet", which the backfill in
+     * [LibraryRepository.backfillDerivedFigures] fixes. Distinct from `0`, which is a real answer
+     * for a recording with no readings, and the reason this is not simply defaulted.
+     *
+     * There is one definition of the calculation, [BpmRecord.calculateActiveDurationMs], and this
+     * column holds its output rather than a second implementation of it in SQL.
+     */
+    @ColumnInfo(defaultValue = "NULL") val activeDurationMs: Long? = null,
+
+    /**
+     * Time in each heart rate band, as `name:ms`, one per line.
+     *
+     * The other per-reading number, stored for the same reason and in the same encoding
+     * `saved_analysis_records` already used — that path had to store it because a frozen analysis
+     * has no readings to recompute from, which is the same problem a points-free library stream
+     * has.
+     *
+     * **Depends on [BpmZones.DEFAULT] being constant.** The bands are absolute and hard-coded, so
+     * this never goes stale. Making them configurable would mean recomputing every row, and that
+     * repass has to be built at the same time or the numbers quietly describe the old bands.
+     */
+    @ColumnInfo(defaultValue = "") val zonesEncoded: String = ""
     ) {
 
     /** This recording's own cover, if it was given one. */
     val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur
+        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
+        coverDim
     )
 
 

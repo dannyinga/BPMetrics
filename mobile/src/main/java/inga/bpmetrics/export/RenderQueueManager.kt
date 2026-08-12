@@ -2,7 +2,7 @@ package inga.bpmetrics.export
 
 import android.net.Uri
 import android.util.Log
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -88,7 +88,9 @@ object RenderQueueManager {
 
     /** Set once, by the application object. Absent in tests, where the queue stays in memory. */
     private var store: RenderJobStore? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    // Through [backgroundScope]. This one persists the queue to disk; a failure there is worth a
+    // log and a degraded queue, never a crash on a screen the user is not even looking at.
+    private val scope = inga.bpmetrics.util.backgroundScope("RenderQueueManager")
 
     /**
      * Restores the queue from disk and starts persisting changes to it.

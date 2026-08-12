@@ -27,9 +27,9 @@ data class ExportPreset(
 
     // Graph
     val showLabels: Boolean = true,
-    val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
+    val labelsColor: Int = inga.bpmetrics.core.BpmPalette.ON_SURFACE,
     val showGrid: Boolean = true,
-    val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
+    val gridColor: Int = inga.bpmetrics.core.BpmPalette.GRID,
     /**
      * The ends of the ramp a curve is drawn along.
      *
@@ -38,8 +38,8 @@ data class ExportPreset(
      * it was made from. A colour meaning "peak" has to mean peak in the picture as well as on the
      * screen. See `ui/theme/Color.kt`.
      */
-    val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
-    val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
+    val lowBpmColor: Int = inga.bpmetrics.core.BpmPalette.LOW,
+    val highBpmColor: Int = inga.bpmetrics.core.BpmPalette.HIGH,
     val showTitle: Boolean = true,
     val showCurrentStats: Boolean = true,
     val headerXPercent: Float = 0.85f,

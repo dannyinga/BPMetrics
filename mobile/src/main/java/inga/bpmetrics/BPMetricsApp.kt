@@ -48,6 +48,38 @@ class BPMetricsApp : Application() {
         DataClientListener(dataClient, dataClientProcessor)
     }
 
+    /**
+     * Why the library could not be opened, or null when it opened.
+     *
+     * The database is built as a default constructor argument to [LibraryRepository], so the first
+     * touch of [libraryRepository] opens it — and until now that first touch was here, in
+     * `onCreate`, on the main thread. Anything wrong with the file therefore killed the process
+     * before a single pixel was drawn: no message, no way to reach the pre-migration backups
+     * sitting on disk a directory away, and an identical crash on every subsequent launch.
+     *
+     * That is what turned "you are running an older build than the one that migrated your library"
+     * into an app that appeared to have destroyed itself. The failure is caught and kept now, and
+     * [inga.bpmetrics.ui.recovery.RecoveryScreen] says what happened.
+     */
+    @Volatile
+    var databaseFailure: Throwable? = null
+        private set
+
+    /**
+     * Opens the library, once, reporting failure rather than dying.
+     *
+     * @return true when everything below can safely touch the database.
+     */
+    fun openLibrary(): Boolean {
+        databaseFailure?.let { return false }
+        return runCatching { libraryRepository }
+            .onFailure {
+                databaseFailure = it
+                Log.e("BPMetricsApp", "The library could not be opened", it)
+            }
+            .isSuccess
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -65,10 +97,15 @@ class BPMetricsApp : Application() {
         runCatching { ExportUtils.clearStagedExports(this) }
             .onFailure { Log.e("BPMetricsApp", "Could not reclaim staged exports", it) }
 
-        // Saved same-time analyses become events, once. They were events in all but name — a set
-        // of recordings that happened together, under a name — and leaving both would be two half
-        // features that do not know about each other.
-        libraryRepository.convertConcurrentAnalysesOnce()
+        // Everything below touches the database, and opening it is what can fail. Guarded rather
+        // than assumed: the whole point is that a bad file no longer takes the process down before
+        // anything can say so. [MainActivity] reads [databaseFailure] and shows the recovery screen.
+        if (!openLibrary()) return
+
+        // Recordings from before the derived figures were columns get them computed once, off the
+        // main thread. Self-healing: the gate is "still null", so this also repairs anything that
+        // later arrives without them.
+        libraryRepository.backfillDerivedFiguresOnce()
 
         // The export presets the app ships with. Seeded from Kotlin rather than the migration so
         // a fresh install and an upgrade take the same path and there is one definition of what

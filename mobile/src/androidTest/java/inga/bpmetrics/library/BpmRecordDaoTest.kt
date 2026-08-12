@@ -54,7 +54,7 @@ class BpmRecordDaoTest {
         
         val fetchedRecord = dao.getRecord(id)
         assertNotNull(fetchedRecord)
-        assertEquals("Test Record", fetchedRecord.metadata.title)
+        assertEquals("Test Record", fetchedRecord!!.metadata.title)
     }
 
     @Test

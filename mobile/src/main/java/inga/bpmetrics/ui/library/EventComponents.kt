@@ -1,6 +1,7 @@
 package inga.bpmetrics.ui.library
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,11 +9,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
@@ -37,7 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import inga.bpmetrics.library.EventSuggestion
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.ui.components.PersonSwatch
@@ -48,7 +53,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
-import java.text.SimpleDateFormat
+import inga.bpmetrics.ui.util.ReaderClock
+import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
+import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
+import java.time.Instant
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
@@ -191,28 +199,28 @@ private fun StatPair(label: String, value: Int, tone: Color, hasCover: Boolean) 
 /**
  * Renders a span the way someone would say it out loud.
  *
- * "14 Mar, 19:40 – 21:05" when it is one day, and both dates when it straddles midnight. The year
- * is dropped for the current year, which is nearly every row.
+ * "March 14, 2026, 7:40 PM – 9:05 PM" when it is one day, and both dates when it straddles midnight.
+ *
+ * Through [StringFormatHelpers], so a card in the library reads the way the same event reads on its
+ * own page. It used to hold its own `SimpleDateFormat` patterns — "d MMM" and a 24-hour clock — so
+ * the library ignored the Appearance setting entirely and two screens described one event two
+ * different ways.
+ *
+ * The year is no longer dropped for the current year. That was a nicety this could afford while it
+ * owned its own pattern; it cannot survive somebody else's, and one format everywhere is worth more
+ * than four characters saved on a row.
  */
-fun formatSpan(span: TimeSpan?): String {
+fun formatSpan(span: TimeSpan?, zone: java.time.ZoneId = ReaderClock): String {
     if (span == null) return "No recordings yet"
 
-    val thisYear = Calendar.getInstance().get(Calendar.YEAR)
-    val startCal = Calendar.getInstance().apply { timeInMillis = span.startMs }
-    val endCal = Calendar.getInstance().apply { timeInMillis = span.endMs }
+    val startDay = Instant.ofEpochMilli(span.startMs).atZone(zone).toLocalDate()
+    val endDay = Instant.ofEpochMilli(span.endMs).atZone(zone).toLocalDate()
 
-    val datePattern = if (startCal.get(Calendar.YEAR) == thisYear) "d MMM" else "d MMM yyyy"
-    val date = SimpleDateFormat(datePattern, Locale.getDefault())
-    val time = SimpleDateFormat("HH:mm", Locale.getDefault())
-
-    val sameDay = startCal.get(Calendar.YEAR) == endCal.get(Calendar.YEAR) &&
-        startCal.get(Calendar.DAY_OF_YEAR) == endCal.get(Calendar.DAY_OF_YEAR)
-
-    return if (sameDay) {
-        "${date.format(Date(span.startMs))}, ${time.format(Date(span.startMs))} – " +
-            time.format(Date(span.endMs))
+    return if (startDay == endDay) {
+        getDateString(span.startMs, zone) + ", " +
+            getTimeString(span.startMs, zone) + " – " + getTimeString(span.endMs, zone)
     } else {
-        "${date.format(Date(span.startMs))} – ${date.format(Date(span.endMs))}"
+        getDateString(span.startMs, zone) + " – " + getDateString(span.endMs, zone)
     }
 }
 
@@ -226,21 +234,67 @@ private fun countLabel(count: Int, noun: String) =
  * answer different questions — "what happened here" wants the analysis, and "is this recording
  * already filed" wants a peek without losing your place in the list.
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun EventCard(
     summary: EventSummary,
     groupName: String?,
+    /** The venue it resolves to, inherited included, or null where none applies. */
+    placeName: String? = null,
+    onAddToCollection: (() -> Unit)? = null,
     expanded: Boolean,
     onOpen: () -> Unit,
     onToggleExpand: () -> Unit,
     onRename: () -> Unit,
+    /** Makes a new event inside this one. See [EventOverflow]. */
+    onAddInside: (() -> Unit)? = null,
     onMoveToGroup: () -> Unit,
     onDelete: () -> Unit,
     /** Its own picture or the one it inherits, resolved by the caller. */
     cover: inga.bpmetrics.library.Cover? = null,
-    content: @Composable () -> Unit
+    /**
+     * Whether opening it would reveal anything.
+     *
+     * A chevron that expands into nothing reads as a broken row, and an event with no recordings
+     * is an ordinary state — one that has been created but not yet had a window drawn round it.
+     */
+    expandable: Boolean = true,
+    /**
+     * Whether this event is picked out for a bulk action.
+     *
+     * The same press-and-hold gesture as a recording tile, and the same tint, because it is the
+     * same idea — "these ones" — and teaching it twice would be teaching it badly.
+     */
+    isSelected: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+    /**
+     * What the card reveals when opened, if it reveals it inline.
+     *
+     * Empty in the timeline, where children are rows of the outer list rather than of the card:
+     * a nested event has to be selectable, draggable and openable exactly like a top-level one,
+     * and something drawn inside another card is none of those.
+     */
+    content: @Composable () -> Unit = {}
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = if (isSelected) {
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            )
+        } else {
+            CardDefaults.cardColors()
+        },
+        // An outline, as on a recording tile, and for a reason that only shows up here: the cover
+        // is drawn *over* the card's container, so on an event with a picture — which is most of
+        // them — the selected tint was invisible and the card gave no sign it had been picked. The
+        // tint stays for the ones with no cover; the border is what actually says so.
+        border = if (isSelected) {
+            androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        }
+    ) {
         Column {
             // Behind the header only, not the expanded list underneath. A picture behind a list of
             // nested rows competes with every one of them; behind the name it identifies the card.
@@ -252,7 +306,10 @@ fun EventCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onOpen)
+                    .combinedClickable(
+                        onClick = onOpen,
+                        onLongClick = { onLongClick?.invoke() }
+                    )
                     .padding(start = 16.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -270,7 +327,15 @@ fun EventCard(
                     // collection line saying half a fact each.
                     Text(
                         buildString {
+                            // Type first when there is one: "Concert · 14 Aug, 21:00–22:30" reads as
+                            // what the thing was, then when. The span alone makes every card look
+                            // the same at a glance.
+                            summary.event.type?.takeIf { it.isNotBlank() }?.let { append("$it  ·  ") }
                             append(formatSpan(summary.span))
+                            // Where, after when. A venue was set once and then visible nowhere,
+                            // which made it impossible to tell an event with the right clock from
+                            // one that had simply never been given one.
+                            placeName?.takeIf { it.isNotBlank() }?.let { append("  ·  $it") }
                             groupName?.let { append("  ·  $it") }
                         },
                         style = MaterialTheme.typography.bodySmall.overCover(cover != null),
@@ -298,15 +363,20 @@ fun EventCard(
                     }
                 }
 
-                IconButton(onClick = onToggleExpand) {
-                    Icon(
-                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (expanded) "Collapse" else "Show recordings"
-                    )
+                if (expandable) {
+                    IconButton(onClick = onToggleExpand) {
+                        Icon(
+                            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) "Collapse" else "Show contents"
+                        )
+                    }
                 }
                 EventOverflow(
+                    renameLabel = "Edit",
                     onRename = onRename,
+                    onAddInside = onAddInside,
                     onMoveToGroup = onMoveToGroup,
+                    onAddToCollection = onAddToCollection,
                     onDelete = onDelete,
                     deleteLabel = "Delete event"
                 )
@@ -335,152 +405,23 @@ fun EventCard(
     }
 }
 
-/**
- * A group in the groups list.
- *
- * Tapping the card opens the group's aggregate analysis; the chevron expands to its events. Same
- * split as [EventCard], for the same reason.
- */
-@Composable
-fun GroupCard(
-    summary: GroupSummary,
-    expanded: Boolean,
-    onOpen: () -> Unit,
-    onToggleExpand: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    /** Files this collection inside another. Null at the depth cap, where it cannot go deeper. */
-    onMoveToCollection: (() -> Unit)? = null,
-    /** Sets this collection's cover, which everything nested under it inherits. */
-    onSetCover: (() -> Unit)? = null,
-    onFrameCover: (() -> Unit)? = null,
-    onRemoveCover: (() -> Unit)? = null,
-    /** Its own picture or the one it inherits from a parent, resolved by the caller. */
-    cover: inga.bpmetrics.library.Cover? = null,
-    /** How deep this sits, so the tree reads as a tree rather than a flat list. */
-    depth: Int = 1,
-    content: @Composable () -> Unit
-) {
-    Card(
-        // Indented by depth, which is the whole point of nesting being visible: a day inside a
-        // festival should look like it is inside it.
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = ((depth - 1) * 14).dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
-    ) {
-        Column {
-            inga.bpmetrics.ui.components.CoverBackground(
-                cover = cover,
-                modifier = Modifier.fillMaxWidth(),
-                scrim = inga.bpmetrics.ui.components.CoverScrim.TILE
-            ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpen)
-                    .padding(start = 16.dp, top = 12.dp, bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        summary.group.displayName,
-                        style = MaterialTheme.typography.titleMedium.overCover(cover != null),
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        formatSpan(summary.span),
-                        style = MaterialTheme.typography.bodySmall.overCover(cover != null),
-                        color = if (cover != null) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    // Nested collections named on their own line when there are any, because that
-                    // is what explains the shape of everything after it: a festival of two days
-                    // reads differently from six loose events.
-                    if (summary.nestedCollectionCount > 0) {
-                        Text(
-                            countLabel(summary.nestedCollectionCount, "collection") + " inside",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (summary.people.isNotEmpty()) {
-                            PersonFaces(summary.people)
-                            Spacer(Modifier.width(12.dp))
-                        }
-                        CardCounts(summary.recordCount, summary.eventCount, hasCover = cover != null)
-                    }
-
-                    if (summary.peakBpm != null || summary.avgBpm != null) {
-                        Spacer(Modifier.height(6.dp))
-                        CardVitals(summary.peakBpm, summary.avgBpm, hasCover = cover != null)
-                    }
-                }
-
-                IconButton(onClick = onToggleExpand) {
-                    Icon(
-                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        // "Contents", not "events": this now reveals the collections nested inside
-                        // as well, which is the whole point of collapsing one.
-                        contentDescription = if (expanded) "Collapse" else "Show contents"
-                    )
-                }
-                EventOverflow(
-                    onRename = onRename,
-                    onMoveToGroup = onMoveToCollection,
-                    onDelete = onDelete,
-                    deleteLabel = "Delete collection",
-                    onSetCover = onSetCover,
-                    onFrameCover = onFrameCover,
-                    onRemoveCover = onRemoveCover,
-                    // Its own, not an inherited one. "Remove cover" on a collection showing its
-                    // parent's picture would appear to do nothing, because the parent's would still
-                    // resolve — the menu offers only what this collection can actually change.
-                    hasCover = summary.group.coverPath != null
-                )
-            }
-            }
-
-            if (expanded) {
-                HorizontalDivider()
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (summary.events.isEmpty()) {
-                        Text(
-                            // A collection holding only other collections is not empty, and
-                            // saying so would contradict the count on the row above it. Its
-                            // children are cards of their own, listed beneath this one.
-                            if (summary.nestedCollectionCount > 0) {
-                                "No events directly in this collection — they are in the " +
-                                    "${countLabel(summary.nestedCollectionCount, "collection")} " +
-                                    "below."
-                            } else {
-                                "Nothing in this collection yet."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        content()
-                    }
-                }
-            }
-        }
-    }
-}
-
 @Composable
 private fun EventOverflow(
+    /** "Rename" for a collection, "Edit" for an event — the event dialog does rather more. */
+    renameLabel: String = "Rename",
     onRename: () -> Unit,
+    /**
+     * Makes a new event inside this one.
+     *
+     * Nesting existed and was awkward to *build*: creating an event put it at the top level, and
+     * putting it where it belonged was a second trip through "Move into…". A set inside Day 1 is
+     * one thought and should be one action, started from the thing it goes inside.
+     */
+    onAddInside: (() -> Unit)? = null,
+    /** Files this event inside another. Nesting is the tree; see EventParentPickerDialog. */
     onMoveToGroup: (() -> Unit)?,
+    /** Puts it in an arbitrary set, which is a different thing from where it lives. */
+    onAddToCollection: (() -> Unit)? = null,
     onDelete: () -> Unit,
     deleteLabel: String,
     /**
@@ -501,13 +442,26 @@ private fun EventOverflow(
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
-                text = { Text("Rename") },
+                text = { Text(renameLabel) },
                 onClick = { open = false; onRename() }
             )
+            onAddInside?.let { add ->
+                DropdownMenuItem(
+                    text = { Text("New event inside…") },
+                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    onClick = { open = false; add() }
+                )
+            }
             onMoveToGroup?.let { move ->
                 DropdownMenuItem(
-                    text = { Text("Move…") },
+                    text = { Text("Move into…") },
                     onClick = { open = false; move() }
+                )
+            }
+            onAddToCollection?.let { add ->
+                DropdownMenuItem(
+                    text = { Text("Add to collection…") },
+                    onClick = { open = false; add() }
                 )
             }
             onSetCover?.let { set ->
@@ -590,106 +544,131 @@ fun NameDialog(
 }
 
 /**
- * Chooses which group an event belongs to, including none.
- *
- * @param groups Every group, offered by name.
- * @param currentGroupId Marked so the current answer is visible rather than remembered.
- */
-@Composable
-fun GroupPickerDialog(
-    eventName: String,
-    groups: List<GroupSummary>,
-    currentGroupId: Long?,
-    onDismiss: () -> Unit,
-    onPick: (Long?) -> Unit,
-    onCreateGroup: () -> Unit,
-    /** What "nowhere" is called here: no collection for an event, top level for a collection. */
-    topLevelLabel: String = "No collection"
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Move $eventName") },
-        text = {
-            Column {
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            topLevelLabel,
-                            fontWeight = if (currentGroupId == null) FontWeight.Bold else null
-                        )
-                    },
-                    onClick = { onPick(null) }
-                )
-                groups.forEach { group ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                group.group.displayName,
-                                fontWeight = if (currentGroupId == group.group.groupId) {
-                                    FontWeight.Bold
-                                } else null
-                            )
-                        },
-                        onClick = { onPick(group.group.groupId) }
-                    )
-                }
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text("New collection…") },
-                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    onClick = onCreateGroup
-                )
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-/**
  * Files the selected recordings under an event, existing or new.
  *
  * Mirrors [BulkWearerDialog]: the same gesture — select, then say what they have in common.
+ *
+ * The two actions that are not "pick one of these" sit at the top, because they are what somebody
+ * with a fresh selection most often wants and neither is findable below a list of forty: making the
+ * event this belongs in, and taking it out of whatever it is in now.
+ *
+ * The tree collapses and carries its covers, like the export and filter pickers. This was the one
+ * nested list still drawn flat and fully open, which turns a library of forty events into a wall.
+ * The argument for leaving it open — that a picker offering somewhere to put a thing has to offer
+ * everywhere — does not hold: collapsing hides nothing that expanding cannot reach.
  */
 @Composable
 fun AddToEventDialog(
     recordCount: Int,
-    events: List<EventSummary>,
+    /** The whole tree. Containers included: a recording can belong to a festival directly. */
+    events: List<inga.bpmetrics.library.EventEntity>,
+    /** When each happened, for ordering. See [inga.bpmetrics.library.EventTree.startsOf]. */
+    starts: Map<Long, Long> = emptyMap(),
+    /**
+     * How many recordings each already holds, subtree included.
+     *
+     * Worth knowing before filing something into one, and worth being the *subtree* count: a
+     * festival showing "0 recordings" beside its days showing twelve each reads as a container
+     * that lost them. See [inga.bpmetrics.library.EventTree.recordCountsByEvent].
+     */
+    counts: Map<Long, Int> = emptyMap(),
     onDismiss: () -> Unit,
     onPick: (Long?) -> Unit,
     onCreateEvent: () -> Unit
 ) {
+    var expanded by remember { mutableStateOf(emptySet<Long>()) }
+    val rows = remember(events, expanded, starts) {
+        inga.bpmetrics.library.EventTree.flatten(
+            events,
+            expanded = expanded,
+            newestFirst = true,
+            startBy = starts
+        )
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add $recordCount recording${if (recordCount == 1) "" else "s"} to…") },
         text = {
-            Column {
+            Column(
+                Modifier
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 DropdownMenuItem(
                     text = { Text("New event…") },
                     leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
                     onClick = onCreateEvent
                 )
-                if (events.isNotEmpty()) HorizontalDivider()
-                events.forEach { summary ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(summary.event.displayName)
-                                Text(
-                                    formatSpan(summary.span),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        },
-                        onClick = { onPick(summary.event.eventId) }
-                    )
-                }
-                HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("Remove from event") },
+                    text = { Text("No event") },
+                    leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
                     onClick = { onPick(null) }
                 )
+
+                if (rows.isNotEmpty()) HorizontalDivider()
+
+                rows.forEach { node ->
+                    val event = node.event
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = (node.depth.coerceAtMost(4) * 16).dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onPick(event.eventId) }
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            inga.bpmetrics.ui.components.CoverThumbnail(
+                                event.ownCover,
+                                placeholder = Icons.Default.Event
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(event.displayName, style = MaterialTheme.typography.bodyMedium)
+                                val held = counts[event.eventId] ?: 0
+                                val detail = listOfNotNull(
+                                    event.type?.takeIf { it.isNotBlank() },
+                                    "$held recording" + if (held == 1) "" else "s",
+                                    event.windowStart?.let { start ->
+                                        event.windowEnd?.let { formatSpan(TimeSpan(start, it)) }
+                                    }
+                                ).joinToString("  ·  ")
+                                if (detail.isNotBlank()) {
+                                    Text(
+                                        detail,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                        // Only where opening it reveals something, and separate from choosing it:
+                        // filing into a festival and looking inside it are different intentions.
+                        if (node.hasChildren) {
+                            IconButton(
+                                onClick = {
+                                    expanded = if (event.eventId in expanded) {
+                                        expanded - event.eventId
+                                    } else {
+                                        expanded + event.eventId
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    if (event.eventId in expanded) Icons.Default.ExpandLess
+                                    else Icons.Default.ExpandMore,
+                                    contentDescription = if (event.eventId in expanded) "Collapse"
+                                    else "Show what is inside"
+                                )
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {},
@@ -697,87 +676,6 @@ fun AddToEventDialog(
     )
 }
 
-/**
- * Offers to turn a cluster of unfiled recordings into an event.
- *
- * Deliberately a card in the list rather than a prompt: it is a shortcut, and a shortcut that
- * interrupts is worse than the work it saves.
- */
-@Composable
-fun SuggestionCard(
-    suggestion: EventSuggestion,
-    people: List<PersonEntity>,
-    onAccept: () -> Unit,
-    onDismiss: () -> Unit,
-    onDismissForever: () -> Unit
-) {
-    var showConfirmDismiss by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        )
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                "These ${suggestion.size} recordings ran together",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                formatSpan(suggestion.span),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(6.dp))
-            PersonDots(people)
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = onAccept) { Text("Create event") }
-                // "Not now" hides it until relaunch; "Dismiss" means never again. Both exist
-                // because they answer different questions — "not yet" and "no".
-                TextButton(onClick = onDismiss) { Text("Not now") }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = { showConfirmDismiss = true }) {
-                    Text(
-                        "Dismiss",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-    }
-
-    // Confirmed because there is no undo. The recordings stay exactly where they are; only the
-    // offer to group them goes away, which the wording has to make clear or "dismiss" reads as
-    // something that might delete them.
-    if (showConfirmDismiss) {
-        AlertDialog(
-            onDismissRequest = { showConfirmDismiss = false },
-            title = { Text("Stop suggesting these?") },
-            text = {
-                Text(
-                    "These ${suggestion.size} recordings will not be suggested as an event again. " +
-                        "They stay in your library and can still be filed by hand at any time."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showConfirmDismiss = false
-                    onDismissForever()
-                }) { Text("Stop suggesting") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConfirmDismiss = false }) { Text("Cancel") }
-            }
-        )
-    }
-}
 
 /** A one-line row for an event nested inside an expanded group. */
 @Composable

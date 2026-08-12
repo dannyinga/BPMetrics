@@ -48,7 +48,7 @@ class CoverResolverTest {
         val effective = CoverResolver.resolve(null, null, listOf(dayOne, coachella))!!
 
         assertEquals(dayOne, effective.cover)
-        assertEquals(CoverSource.GROUP, effective.source)
+        assertEquals(CoverSource.ANCESTOR, effective.source)
     }
 
     @Test
@@ -58,7 +58,7 @@ class CoverResolverTest {
         val effective = CoverResolver.resolve(null, null, listOf(null, coachella))!!
 
         assertEquals(coachella, effective.cover)
-        assertEquals(CoverSource.GROUP, effective.source)
+        assertEquals(CoverSource.ANCESTOR, effective.source)
     }
 
     @Test
@@ -77,51 +77,57 @@ class CoverResolverTest {
         )
     }
 
-    @Test
-    fun `ancestry runs from the nearest collection to the top`() {
-        // Coachella (3) ← Day 1 (2) ← the event's collection is 2.
-        val parents = mapOf(2L to 3L, 3L to null)
+    // Ancestry itself is no longer tested here. This resolver had its own copy of that walk, cycle
+    // guard and all, until TX-1.4 pointed it at EventTree — where the same properties are asserted
+    // once, against the walk that also decides membership, counts and spans. Two walks tested
+    // separately is how they came to disagree.
 
-        assertEquals(listOf(2L, 3L), CoverResolver.ancestryOf(2L, parents))
-    }
-
-    @Test
-    fun `an unfiled event has no ancestry`() {
-        assertEquals(emptyList<Long>(), CoverResolver.ancestryOf(null, mapOf(1L to null)))
-    }
-
-    @Test
-    fun `a cycle in the collections is walked once rather than forever`() {
-        // Should be impossible — CollectionTree refuses to create one — but this walk is the code
-        // that hangs rather than throws if one ever exists, and it runs while a list is drawn.
-        val cyclic = mapOf(1L to 2L, 2L to 3L, 3L to 1L)
-
-        val chain = CoverResolver.ancestryOf(1L, cyclic)
-
-        assertEquals(listOf(1L, 2L, 3L), chain)
-    }
+    /** Subtronics (10) inside Day 1 (2) inside Coachella (3). */
+    private fun festival() = listOf(
+        EventEntity(eventId = 3, name = "Coachella"),
+        EventEntity(eventId = 2, name = "Day 1", parentId = 3),
+        EventEntity(eventId = 10, name = "Subtronics", parentId = 2)
+    )
 
     @Test
-    fun `a collection that is its own parent does not hang`() {
-        assertEquals(listOf(7L), CoverResolver.ancestryOf(7L, mapOf(7L to 7L)))
-    }
-
-    @Test
-    fun `resolving from whole maps matches walking the chain by hand`() {
+    fun `a cover is found however far up the tree it was set`() {
         // The convenience the UI uses. If it disagreed with resolve(), two screens would show
         // different covers for the same recording — which is the failure mode this whole resolver
         // exists to prevent.
         val effective = CoverResolver.forRecording(
             directCover = null,
             eventId = 10L,
-            eventCovers = mapOf(10L to null),
-            eventGroups = mapOf(10L to 2L),
-            groupCovers = mapOf(2L to null, 3L to coachella),
-            groupParents = mapOf(2L to 3L, 3L to null)
+            eventCovers = mapOf(10L to null, 2L to null, 3L to coachella),
+            events = festival()
         )!!
 
         assertEquals(coachella, effective.cover)
-        assertEquals(CoverSource.GROUP, effective.source)
+        assertEquals(CoverSource.ANCESTOR, effective.source)
+    }
+
+    @Test
+    fun `the nearest cover in the tree wins`() {
+        val effective = CoverResolver.forRecording(
+            directCover = null,
+            eventId = 10L,
+            eventCovers = mapOf(10L to null, 2L to dayOne, 3L to coachella),
+            events = festival()
+        )!!
+
+        assertEquals(dayOne, effective.cover)
+    }
+
+    @Test
+    fun `an event's own cover is not reported as inherited`() {
+        val effective = CoverResolver.forRecording(
+            directCover = null,
+            eventId = 10L,
+            eventCovers = mapOf(10L to subtronics, 3L to coachella),
+            events = festival()
+        )!!
+
+        assertEquals(subtronics, effective.cover)
+        assertEquals(CoverSource.EVENT, effective.source)
     }
 
     @Test
@@ -131,9 +137,7 @@ class CoverResolverTest {
                 directCover = null,
                 eventId = null,
                 eventCovers = mapOf(10L to subtronics),
-                eventGroups = mapOf(10L to 2L),
-                groupCovers = mapOf(2L to dayOne),
-                groupParents = mapOf(2L to null)
+                events = festival()
             )
         )
     }

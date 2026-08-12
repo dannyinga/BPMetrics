@@ -77,8 +77,8 @@ class LibraryRepository(
     private val watchDao = database.watchDao()
     private val personDao = database.personDao()
     private val eventDao = database.eventDao()
-    private val eventGroupDao = database.eventGroupDao()
-    private val savedAnalysisDao = database.savedAnalysisDao()
+    private val collectionDao = database.collectionDao()
+    private val locationDao = database.locationDao()
     private val presetDao = database.exportPresetDao()
 
     /** Backs the render queue, so a batch outlives the process that queued it. */
@@ -89,21 +89,79 @@ class LibraryRepository(
     }
 
     /**
-     * Turns any saved same-time analyses into events, once per install.
-     *
-     * Called from [inga.bpmetrics.BPMetricsApp] rather than from this constructor. Constructing a
-     * repository should not move a user's data around — a caller that only wanted to read one
-     * record would trigger it, and a unit test with mocked DAOs would start doing I/O it never
-     * asked for.
-     *
-     * Marked done only on success, so a failure retries next launch rather than stranding them.
-     */
-    /**
      * Writes the built-in presets on first launch, off the main thread.
      *
-     * Same reasoning as [convertConcurrentAnalysesOnce]: constructing a repository should not write
-     * to the database, so this is called from the application object rather than from `init`.
+     * Constructing a repository should not write to the database — a unit test with mocked DAOs
+     * would start doing I/O it never asked for — so this is called from the application object
+     * rather than from `init`.
      */
+
+    /**
+     * Fills in the derived figures for recordings that predate them.
+     *
+     * Called from [inga.bpmetrics.BPMetricsApp] rather than from this constructor, for the same
+     * reason the preset seeding is: constructing a repository should not walk the user's library.
+     *
+     * **Gated on a query, not a preference, so it repairs rather than runs once.** A pass that dies
+     * halfway leaves the rest still null and finishes on the next launch; a row arriving by some
+     * path that forgets to compute them is picked up rather than being wrong forever. There is no
+     * flag to get out of step with the data.
+     *
+     * One recording at a time. This is the one place in the app that deliberately reads every
+     * reading it can find, and doing it in a batch would put the whole library in memory to avoid
+     * exactly that — which is the problem being solved.
+     */
+    fun backfillDerivedFiguresOnce() {
+        scope.launch {
+            try {
+                val filled = backfillDerivedFigures()
+                if (filled > 0) Log.i(tag, "Computed derived figures for $filled recording(s)")
+            } catch (e: Exception) {
+                // Retried next launch. Until then the affected recordings report a zero active
+                // duration and no bands, which is visibly unfinished rather than quietly wrong.
+                Log.e(tag, "Could not backfill derived figures", e)
+            }
+        }
+    }
+
+    /**
+     * The pass itself.
+     *
+     * @param batch How many to take per round. Bounded so a very large library yields between
+     *   rounds rather than holding one long transaction.
+     * @return how many recordings were filled in.
+     */
+    suspend fun backfillDerivedFigures(batch: Int = 50): Int {
+        var filled = 0
+        while (true) {
+            val ids = recordDao.recordIdsMissingDerivedFigures(batch)
+            if (ids.isEmpty()) return filled
+
+            var filledThisRound = 0
+            ids.forEach { recordId ->
+                val meta = recordDao.getRecordEntity(recordId) ?: return@forEach
+                val points = recordDao.dataPointsFor(recordId)
+                val derived = DerivedFigures.of(points, meta.startTime, meta.durationMs)
+                recordDao.updateDerivedFigures(
+                    recordId,
+                    derived.activeDurationMs,
+                    derived.zonesEncoded
+                )
+                filledThisRound++
+            }
+            filled += filledThisRound
+
+            // The gate is "still null", so a row that cannot be read stays selected and would be
+            // handed back forever. A round that fills nothing means every row in it is that kind,
+            // and the loop stops rather than spinning — the next launch tries again, and the log
+            // says how few were filled.
+            if (filledThisRound == 0) {
+                Log.w(tag, "Backfill could not read ${ids.size} recording(s); stopping")
+                return filled
+            }
+        }
+    }
+
     fun seedBuiltInPresetsOnce() {
         scope.launch {
             try {
@@ -115,18 +173,6 @@ class LibraryRepository(
                 rescueLegacyExportDefaults()
             } catch (e: Exception) {
                 Log.e(tag, "Could not seed the built-in export presets", e)
-            }
-        }
-    }
-
-    fun convertConcurrentAnalysesOnce() {
-        scope.launch {
-            try {
-                if (settingsRepository.hasConvertedConcurrentAnalyses()) return@launch
-                val result = convertConcurrentAnalysesToEvents(this@LibraryRepository)
-                if (result.failure == null) settingsRepository.setConvertedConcurrentAnalyses()
-            } catch (e: Exception) {
-                Log.e(tag, "Could not check whether same-time analyses need converting", e)
             }
         }
     }
@@ -194,6 +240,8 @@ class LibraryRepository(
         Log.d(tag, "Deleting record and data points for ID: $id")
         recordDao.deleteRecordById(id)
         recordDao.deleteDataPointsByRecordId(id)
+        collectionDao.forgetRecord(id)
+        reconcileMembership()
     }
 
     /**
@@ -206,13 +254,55 @@ class LibraryRepository(
     }
 
     /**
-     * Retrieves a BPM record by its ID.
+     * One recording with its readings.
      *
-     * @param id The ID of the record to retrieve.
-     * @return The BpmRecord with the specified ID.
+     * The readings are not in the library stream — see §9 of the product doc — so anything drawing
+     * a curve asks for them by id. Null when the recording has since been deleted, which is a
+     * state a screen opened by a link can genuinely be in.
      */
-    suspend fun getRecordWithId(id: Long) : BpmRecord {
-        return recordDao.getRecord(id)
+    suspend fun getRecordWithId(id: Long): BpmRecordWithPoints? = recordDao.getRecord(id)
+
+    /**
+     * The readings for a scope, loaded on demand.
+     *
+     * The one bulk path that reads `bpm_data_points`, and it is bounded by whatever asked. Chunked
+     * because SQLite caps the variables in an `IN` clause, and re-sorted afterwards: the chunks
+     * come back independently ordered, so concatenating them would interleave dates.
+     */
+    suspend fun recordsWithPoints(recordIds: Collection<Long>): List<BpmRecordWithPoints> {
+        if (recordIds.isEmpty()) return emptyList()
+        return recordIds.distinct()
+            .chunked(SQL_VARIABLE_LIMIT)
+            .flatMap { recordDao.getRecordsWithPoints(it) }
+            .sortedByDescending { it.metadata.date }
+    }
+
+    /** The same, for whatever a [ScopeRef] resolves to. */
+    suspend fun recordsWithPointsIn(ref: ScopeRef): List<BpmRecordWithPoints> =
+        recordsWithPoints(
+            Scope.recordsIn(ref, librarySnapshot()).map { it.metadata.recordId }
+        )
+
+    /** Everything [Scope] needs to answer a question, read once. */
+    suspend fun librarySnapshot(): Library {
+        val events = eventDao.getAllEventsUnfiltered()
+        return Library(
+            records = records.first(),
+            events = events,
+            collections = collectionDao.getAll(),
+            collectionEvents = collectionDao.allEventLinks(),
+            collectionRecords = collectionDao.allRecordLinks(),
+            // The whole context, not just the tags. It carried only those, so a collection whose
+            // rule named an event type, a venue or a tag category resolved to nothing here — and
+            // this is what the export scope, the analysis scope and every `recordsInCollection`
+            // read. See [filterContextOf].
+            filterContext = filterContextOf(
+                events = events,
+                places = locationDao.getAll(),
+                effectiveTags = effectiveTags.first(),
+                tags = tagDao.getAllTags()
+            )
+        )
     }
 
     /**
@@ -294,41 +384,55 @@ class LibraryRepository(
             autoNameRecord(recordId, "Untitled")
         }
         
+        // A recording arriving may land inside an existing window, so where it lives is not
+        // something ingest can decide — only the one resolver can.
+        reconcileMembership()
+
         _savingRecord.value = false
         Log.d(tag, "Finished saveWatchRecordToLibrary for ID: $recordId")
         return recordId
     }
 
-    // --- Saved Analyses ---
-
-    /** Saved analyses, newest first. */
-    fun getSavedAnalyses(): Flow<List<SavedAnalysisEntity>> = savedAnalysisDao.getAllFlow()
+    // --- Frozen selections: what saved analyses became after the fold ---
 
     /**
-     * Stores an analysis, copying the values it was computed from.
+     * Selections whose numbers are frozen, newest first.
      *
-     * Copying rather than referencing is the point: the analysis is a statement about a moment,
-     * and must not change when the library does.
+     * A frozen selection is a [CollectionEntity] with `frozenAt` set. It is listed apart from live
+     * ones only because the screen showing it is different, not because it is a different kind of
+     * thing — see §8 of the product doc.
+     */
+    fun getSavedAnalyses(): Flow<List<CollectionEntity>> =
+        collectionDao.getAllFlow().map { all -> all.filter { it.isFrozen } }
+
+    /**
+     * Freezes a set of numbers under a name, copying the values they were computed from.
      *
-     * @return the id of the stored analysis.
+     * Copying rather than referencing is the point: the numbers are a statement about a moment and
+     * must not change when the library does. What is created is an ordinary collection — renameable,
+     * pinnable, deletable like any other — that happens to carry its own answer.
+     *
+     * @return the id of the collection created.
      */
     suspend fun saveAnalysis(
         name: String,
         filterDescription: String,
         records: List<AnalysisSnapshotRecord>
     ): Long {
-        val analysisId = savedAnalysisDao.insertAnalysis(
-            SavedAnalysisEntity(
+        val now = System.currentTimeMillis()
+        val collectionId = collectionDao.insert(
+            CollectionEntity(
                 name = name.trim(),
-                createdAt = System.currentTimeMillis(),
-                filterDescription = filterDescription
+                notes = filterDescription,
+                createdAt = now,
+                frozenAt = now
             )
         )
 
-        savedAnalysisDao.insertRecords(
+        collectionDao.insertFrozenRecords(
             records.map { record ->
                 SavedAnalysisRecordEntity(
-                    analysisId = analysisId,
+                    collectionId = collectionId,
                     recordId = record.recordId,
                     title = record.title,
                     date = record.date,
@@ -348,25 +452,15 @@ class LibraryRepository(
             }
         )
 
-        Log.d(tag, "Saved analysis '$name' with ${records.size} record(s)")
-        return analysisId
+        Log.d(tag, "Froze '$name' with ${records.size} record(s)")
+        return collectionId
     }
 
-    /**
-     * Every stored same-time analysis, with its rows.
-     *
-     * Exists for the one-time conversion into events — see [convertConcurrentAnalysesToEvents].
-     */
-    suspend fun getConcurrentAnalyses(): List<LoadedAnalysis> =
-        savedAnalysisDao.getAllFlow().first()
-            .filter { it.isConcurrent }
-            .mapNotNull { loadSavedAnalysis(it.analysisId) }
-
-    /** Reads a stored analysis back into the shape the analysis screen works from. */
-    suspend fun loadSavedAnalysis(analysisId: Long): LoadedAnalysis? {
-        val stored = savedAnalysisDao.getAnalysis(analysisId) ?: return null
+    /** Reads a frozen selection back into the shape the analysis screen works from. */
+    suspend fun loadSavedAnalysis(collectionId: Long): LoadedAnalysis? {
+        val stored = collectionDao.getWithFrozenRecords(collectionId) ?: return null
         return LoadedAnalysis(
-            metadata = stored.metadata,
+            metadata = stored.collection,
             records = stored.records.map { entity ->
                 AnalysisSnapshotRecord(
                     recordId = entity.recordId,
@@ -386,14 +480,15 @@ class LibraryRepository(
                     zones = decodeZones(entity.zonesEncoded)
                 )
             },
-            recordsStillInLibrary = savedAnalysisDao.countRecordsStillPresent(analysisId)
+            recordsStillInLibrary = collectionDao.countFrozenRecordsStillPresent(collectionId)
         )
     }
 
-    suspend fun renameSavedAnalysis(analysisId: Long, name: String) =
-        savedAnalysisDao.rename(analysisId, name.trim())
+    suspend fun renameSavedAnalysis(collectionId: Long, name: String) =
+        collectionDao.rename(collectionId, name.trim())
 
-    suspend fun deleteSavedAnalysis(analysisId: Long) = savedAnalysisDao.deleteAnalysis(analysisId)
+    /** Cascades to the frozen rows through the foreign key. */
+    suspend fun deleteSavedAnalysis(collectionId: Long) = collectionDao.delete(collectionId)
 
     // --- Events and groups ---
 
@@ -424,12 +519,408 @@ class LibraryRepository(
             EventEntity(name = name.trim(), groupId = groupId, createdAt = System.currentTimeMillis())
         )
         Log.d(tag, "Created event '${name.trim()}' as $id")
+        reconcileMembership()
         return id
+    }
+
+    /**
+     * How many bulk operations are in progress. See [inBulk].
+     *
+     * Not thread-safe, and deliberately not: every mutation path here runs on the repository's own
+     * IO dispatcher from a single caller at a time, and a lock around a counter would suggest a
+     * concurrency guarantee the rest of this class does not make.
+     */
+    private var bulkDepth = 0
+
+    /**
+     * Runs [block] with membership reconciliation deferred until it finishes.
+     *
+     * Every mutation reconciles, which is what makes the stored column trustworthy — but a restore
+     * creating fifty events and importing a thousand recordings would then run a thousand full
+     * reconciles, each walking the whole library. The result is identical and the wait is minutes.
+     *
+     * Nested calls are counted rather than flagged, so a bulk operation calling another one still
+     * reconciles exactly once, at the outermost exit.
+     *
+     * The reconcile runs in a `finally`: a restore that fails halfway has still moved rows, and
+     * leaving the derived column stale would be a worse state than either finishing or not starting.
+     */
+    suspend fun <T> inBulk(block: suspend () -> T): T {
+        bulkDepth++
+        return try {
+            block()
+        } finally {
+            bulkDepth--
+            if (bulkDepth == 0) {
+                reconcileMembership()
+                reconcileTimeZones()
+            }
+        }
+    }
+
+    /**
+     * Recomputes where every recording lives, and writes it. The only thing that writes it.
+     *
+     * `bpm_records.eventId` is a cache of what [EventMembership.resolve] says, kept because reads
+     * are constant and the things that change the answer happen twice a week. What makes a cache
+     * safe is not the cache, it is having exactly one writer — the previous arrangement made every
+     * feature that changed something also responsible for correcting what depended on it, and four
+     * separate "0 recordings" defects came from one of them not knowing it had to.
+     *
+     * So: callers read the column, and call this after one of the mutations below. Nothing else
+     * assigns membership.
+     *
+     * | Invalidates | Does not |
+     * |---|---|
+     * | A recording arriving, deleted, split or merged | A title or note |
+     * | A window created, moved or cleared | A tag, cover or type |
+     * | An event created, deleted or reparented | Anything on a person or watch |
+     * | The people qualifying a window | |
+     *
+     * Being able to write that table down is the point. A short closed list can be audited;
+     * "wherever it matters" cannot.
+     *
+     * The **whole** library is recomputed rather than the part that changed. A few thousand
+     * recordings against a few hundred events is milliseconds, and working out which rows *could*
+     * have been affected would be a second, subtler definition of membership sitting next to the
+     * first — the same class of mistake in a new place.
+     *
+     * @return how many recordings changed hands, which is normally zero and is worth logging when
+     * it is not.
+     */
+    suspend fun reconcileMembership(): Int {
+        if (bulkDepth > 0) return 0
+        val events = eventDao.getAllEvents()
+        val recordings = recordDao.getAllRecordEntities()
+        val windowPeople = eventDao.getAllWindowPeople()
+            .groupBy({ it.eventId }, { it.personId })
+            .mapValues { it.value.toSet() }
+
+        val resolved = EventMembership.resolve(events, windowPeople, recordings)
+
+        // Grouped so this is one statement per destination rather than one per recording, then
+        // chunked because Room turns `IN (:ids)` into one bind variable per id and SQLite caps
+        // those at 999 — which a first reconcile over a whole unfiled library reaches immediately.
+        val moved = recordings.filter { resolved[it.recordId] != it.eventId }
+        moved.groupBy { resolved[it.recordId] }.forEach { (eventId, records) ->
+            records.map { it.recordId }.chunked(SQL_VARIABLE_LIMIT).forEach { chunk ->
+                eventDao.assignRecordsToEvent(chunk, eventId)
+            }
+        }
+
+        if (moved.isNotEmpty()) {
+            Log.i(tag, "Reconciled membership: ${moved.size} recordings moved")
+            // Where a recording lives decides which clock it inherits, so the two answers move
+            // together. Leaving this to the caller is how one of them ends up stale.
+            reconcileTimeZones()
+        }
+        return moved.size
+    }
+
+    /** What a window edit did, so the screen can say what went wrong rather than just refusing. */
+    sealed interface WindowResult {
+        data object Saved : WindowResult
+
+        /** Another event at the same level would claim the same recordings. */
+        data class Collides(val withName: String) : WindowResult
+
+        /** The end is before the start, or one of the two is missing. */
+        data object Backwards : WindowResult
+    }
+
+    /**
+     * Gives an event a time window, or clears it.
+     *
+     * A window is not a hint. It *is* the membership rule — every recording starting inside it
+     * belongs to this event unless something deeper claims it — so this reconciles the library
+     * afterwards and recordings move without anyone filing them.
+     *
+     * Refused when a sibling would claim the same recordings, and the refusal names it: two events
+     * overlapping in both time and people has no answer, and the place to say so is here, before
+     * the ambiguity exists. Overlapping in time alone is fine and expected — that is two stages at
+     * one festival, separated by who was at each.
+     *
+     * @param people Who the window applies to. Empty means everyone, which is the common case.
+     */
+    suspend fun setEventWindow(
+        eventId: Long,
+        startMs: Long?,
+        endMs: Long?,
+        people: Set<Long> = emptySet()
+    ): WindowResult {
+        val all = eventDao.getAllEvents()
+        val event = all.firstOrNull { it.eventId == eventId } ?: return WindowResult.Backwards
+
+        if (startMs != null && endMs != null) {
+            if (endMs < startMs) return WindowResult.Backwards
+
+            val windowPeople = eventDao.getAllWindowPeople()
+                .groupBy({ it.eventId }, { it.personId })
+                .mapValues { it.value.toSet() }
+                // The proposed people, not the stored ones — the collision has to be judged against
+                // what is being saved, or narrowing a window to one person would still be refused
+                // on the strength of the version it is replacing.
+                .plus(eventId to people)
+
+            EventMembership.wouldCollide(
+                events = all,
+                windowPeople = windowPeople,
+                eventId = eventId,
+                parentId = event.parentId,
+                startMs = startMs,
+                endMs = endMs,
+                people = people
+            )?.let { other ->
+                val name = all.firstOrNull { it.eventId == other }?.displayName ?: "another event"
+                Log.w(tag, "Refused a window on $eventId: collides with $other")
+                return WindowResult.Collides(name)
+            }
+        }
+
+        eventDao.updateTaxonomy(
+            eventId = eventId,
+            parentId = event.parentId,
+            // Half a window claims nothing, so a partial edit clears rather than half-applies.
+            windowStart = startMs?.takeIf { endMs != null },
+            windowEnd = endMs?.takeIf { startMs != null },
+            type = event.type,
+            excluded = event.excludedFromParentAnalysis
+        )
+
+        eventDao.clearWindowPeople(eventId)
+        people.forEach { eventDao.addWindowPerson(EventWindowPersonCrossRef(eventId, it)) }
+
+        reconcileMembership()
+        return WindowResult.Saved
+    }
+
+    /** Who an event's window applies to. Empty means everyone. */
+    fun windowPeople(eventId: Long): Flow<Set<Long>> =
+        eventDao.windowPeopleFlow(eventId).map { it.toSet() }
+
+    /**
+     * What kind of thing this event is — "Concert", "Gaming Session", whatever the user calls it.
+     *
+     * Free text on purpose. A fixed list would be the app deciding what people record, and the
+     * whole reason for the taxonomy rework was that it had been doing too much of that.
+     */
+    suspend fun setEventType(eventId: Long, type: String?) {
+        val event = eventDao.getEvent(eventId) ?: return
+        eventDao.updateTaxonomy(
+            eventId = eventId,
+            parentId = event.parentId,
+            windowStart = event.windowStart,
+            windowEnd = event.windowEnd,
+            type = type?.trim()?.takeIf { it.isNotBlank() },
+            excluded = event.excludedFromParentAnalysis
+        )
+        // No reconcile: a type does not decide where anything lives. See the table on
+        // [reconcileMembership] for what does.
+    }
+
+    /**
+     * Where an event happened, by reference to the venue registry.
+     *
+     * Reconciles afterwards: the zone a recording is read in is inherited, so pointing an event at
+     * a different venue changes what every recording under it says the time was.
+     */
+    suspend fun setEventLocation(eventId: Long, locationId: Long?) {
+        eventDao.updateLocation(eventId, locationId)
+        reconcileTimeZones()
+    }
+
+    /** A venue chosen for one recording, overriding what it would inherit. */
+    suspend fun setRecordLocation(recordId: Long, locationId: Long?) {
+        recordDao.updateRecordLocation(recordId, locationId)
+        reconcileTimeZones()
+    }
+
+    /**
+     * Resolves and writes the clock every recording is read in. The only thing that writes it.
+     *
+     * The same single-writer rule as membership, for the same reason: the answer is inherited, it
+     * is read on every screen that shows a time, and a stored value is only trustworthy if exactly
+     * one thing puts it there. Deferred inside [inBulk] alongside the membership pass.
+     */
+    suspend fun reconcileTimeZones(): Int {
+        if (bulkDepth > 0) return 0
+        val events = eventDao.getAllEvents()
+        val records = recordDao.getAllRecordEntities()
+
+        val locations = locationDao.getAll().associateBy { it.locationId }
+
+        val changed = records.mapNotNull { record ->
+            val resolved = LocationResolver.resolvedZoneId(
+                record.locationId, record.eventId, events, locations
+            )
+            if (resolved != record.timeZoneId) record.recordId to resolved else null
+        }
+        changed.forEach { (id, zone) -> recordDao.updateResolvedTimeZone(id, zone) }
+
+        if (changed.isNotEmpty()) Log.i(tag, "Reconciled ${changed.size} recording clock(s)")
+        return changed.size
+    }
+
+    // --- Pinned selections: what saved views became after the fold ---
+
+    /**
+     * The selections pinned to the library bar.
+     *
+     * Saved views and collections are one thing now. A view was a selection whose membership was a
+     * rule; a collection is one whose membership is a list; either can be pinned, and both read as
+     * a chip you tap to see that set. §8 of the product doc has the reasoning.
+     */
+    fun getPinnedSelections(): Flow<List<CollectionEntity>> = collectionDao.pinnedFlow()
+
+    /**
+     * Keeps the current question as a pinned, smart collection.
+     *
+     * It stores the *question*, so a recording added tomorrow appears in it. Freezing the answer
+     * instead is [saveAnalysis], which is the same object with `frozenAt` set.
+     */
+    suspend fun saveSelection(name: String, filterJson: String): Long =
+        collectionDao.insert(
+            CollectionEntity(
+                name = name.trim(),
+                filterJson = filterJson,
+                isPinned = true,
+                createdAt = System.currentTimeMillis()
+            )
+        ).also { Log.d(tag, "Pinned selection '${name.trim()}' as $it") }
+
+    /**
+     * Replaces what a selection asks, for "I meant this, plus Ben".
+     *
+     * Refuses a rule that would make the collection reach itself. Resolution survives a cycle by
+     * declining to revisit, but a library where Festivals contains Best Of contains Festivals is
+     * not something anyone meant, and it is far easier to explain here than to unpick later.
+     *
+     * @return whether it was saved.
+     */
+    suspend fun setCollectionRule(collectionId: Long, filterJson: String?): Boolean {
+        val rule = filterJson?.let(FilterCodec::parseOrNull)
+        if (rule != null) {
+            val all = collectionDao.getAll()
+            if (rule.selectedGroupIds.any { Scope.ruleWouldCycle(collectionId, it, all) }) {
+                Log.w(tag, "Refused a rule that would make collection $collectionId contain itself")
+                return false
+            }
+        }
+        collectionDao.updateRule(collectionId, filterJson)
+        return true
+    }
+
+    suspend fun setCollectionPinned(collectionId: Long, pinned: Boolean) =
+        collectionDao.setPinned(collectionId, pinned)
+
+    /** Strikes a recording out of a collection whose rule would otherwise pull it in. */
+    suspend fun setCollectionExclusions(collectionId: Long, excluded: Set<Long>) =
+        collectionDao.updateExclusions(collectionId, excluded.asExclusionJson())
+
+    // --- Locations ---
+
+    fun getAllLocations(): Flow<List<LocationEntity>> = locationDao.getAllFlow()
+
+    suspend fun getLocation(locationId: Long): LocationEntity? = locationDao.get(locationId)
+
+    suspend fun createLocation(
+        name: String,
+        timeZoneId: String? = null,
+        latitude: Double? = null,
+        longitude: Double? = null
+    ): Long = locationDao.insert(
+        LocationEntity(
+            name = name.trim(),
+            timeZoneId = timeZoneId?.takeIf { it.isNotBlank() },
+            latitude = latitude,
+            longitude = longitude,
+            createdAt = System.currentTimeMillis()
+        )
+    ).also { Log.d(tag, "Created location '${name.trim()}' as $it") }
+
+    suspend fun renameLocation(locationId: Long, name: String) =
+        locationDao.rename(locationId, name.trim())
+
+    /** Changing a venue's clock changes what every recording under it says the time was. */
+    suspend fun setLocationZone(locationId: Long, timeZoneId: String?) {
+        locationDao.updateZone(locationId, timeZoneId?.takeIf { it.isNotBlank() })
+        reconcileTimeZones()
+    }
+
+    suspend fun setLocationCoordinates(locationId: Long, latitude: Double?, longitude: Double?) =
+        locationDao.updateCoordinates(locationId, latitude, longitude)
+
+    suspend fun countEventsAt(locationId: Long): Int = locationDao.countEventsAt(locationId)
+
+    /**
+     * Removes a venue and forgets it everywhere, leaving everything else alone.
+     *
+     * Orphans rather than cascades, like every other reference in this model: an event whose venue
+     * was deleted keeps its recordings and its times and simply stops saying where.
+     */
+    suspend fun deleteLocation(context: android.content.Context, locationId: Long) {
+        val photo = locationDao.photoPathOf(locationId)
+        eventDao.forgetLocation(locationId)
+        recordDao.forgetLocation(locationId)
+        locationDao.delete(locationId)
+        photo?.let {
+            CoverStore.delete(context, it)
+            inga.bpmetrics.ui.components.invalidateCover(it)
+        }
+        reconcileTimeZones()
+    }
+
+    /** A picture for a venue, stored the same way a person's photograph is. */
+    suspend fun restoreLocationPhoto(
+        context: android.content.Context,
+        locationId: Long,
+        bytes: ByteArray,
+        nameHint: String
+    ) {
+        CoverStore.writeBytes(context, bytes, nameHint, locationId, CoverStore.Kind.PERSON)
+            ?.let { locationDao.updatePhoto(locationId, it) }
+    }
+
+    /** Types already in use, most used first, for the editor to offer. */
+    fun eventTypesInUse(): Flow<List<String>> = eventDao.typesInUseFlow()
+
+    /**
+     * Sibling windows that could both claim a recording, for the library to show as needing a
+     * decision rather than resolving one arbitrarily behind the user's back.
+     */
+    suspend fun windowConflicts(): List<EventMembership.Conflict> {
+        val windowPeople = eventDao.getAllWindowPeople()
+            .groupBy({ it.eventId }, { it.personId })
+            .mapValues { it.value.toSet() }
+        return EventMembership.conflicts(eventDao.getAllEvents(), windowPeople)
     }
 
     suspend fun renameEvent(eventId: Long, name: String) = eventDao.rename(eventId, name.trim())
 
     suspend fun setEventNotes(eventId: Long, notes: String) = eventDao.updateNotes(eventId, notes)
+
+    /**
+     * Puts an event's place in the tree back as a backup recorded it.
+     *
+     * Deliberately unguarded, unlike an editor's move: a backup is a snapshot of a tree that was
+     * already valid, and refusing part of it would restore a *different* library from the one that
+     * was saved. [EventTree] tolerates a cycle rather than hanging on one, so a corrupt file makes
+     * a repairable mess instead of an unopenable app.
+     */
+    suspend fun restoreEventTaxonomy(
+        eventId: Long,
+        parentId: Long?,
+        windowStart: Long?,
+        windowEnd: Long?,
+        type: String?,
+        excludedFromParentAnalysis: Boolean
+    ) {
+        eventDao.updateTaxonomy(
+            eventId, parentId, windowStart, windowEnd, type, excludedFromParentAnalysis
+        )
+        // A window is the membership rule, so changing one changes where recordings live.
+        reconcileMembership()
+    }
 
     // --- Cover images ---
 
@@ -449,7 +940,11 @@ class LibraryRepository(
 
     private suspend fun currentCoverPath(owner: CoverOwner): String? = when (owner) {
         is CoverOwner.Event -> eventDao.coverPathOf(owner.eventId)
-        is CoverOwner.Collection -> eventGroupDao.coverPathOf(owner.groupId)
+        // A collection is an event, so both go to the same table. Two calls into two tables is
+        // how a cover set on a collection came to be read back from an event and found missing.
+        // The collections table, not events. A set has its own row; writing this through the event
+        // DAO would have stamped the cover onto whichever event happened to share the id.
+        is CoverOwner.Collection -> collectionDao.coverPathOf(owner.groupId)
         is CoverOwner.Recording -> eventDao.recordCoverPathOf(owner.recordId)
     }
 
@@ -460,10 +955,14 @@ class LibraryRepository(
         val r = cover?.cropRight
         val b = cover?.cropBottom
         val blur = cover?.blur
+        val dim = cover?.dim
         when (owner) {
-            is CoverOwner.Event -> eventDao.updateCover(owner.eventId, p, l, t, r, b, blur)
-            is CoverOwner.Collection -> eventGroupDao.updateCover(owner.groupId, p, l, t, r, b, blur)
-            is CoverOwner.Recording -> eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur)
+            is CoverOwner.Event ->
+                eventDao.updateCover(owner.eventId, p, l, t, r, b, blur, dim)
+            is CoverOwner.Collection ->
+                collectionDao.updateCover(owner.groupId, p, l, t, r, b, blur, dim)
+            is CoverOwner.Recording ->
+                eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur, dim)
         }
     }
 
@@ -530,6 +1029,69 @@ class LibraryRepository(
         return true
     }
 
+    /**
+     * Restores a cover from the bytes a backup carried, keeping the framing it was saved with.
+     *
+     * Distinct from [setCover], which starts from a gallery `Uri` and deliberately resets the crop
+     * because a new picture's fractions describe somewhere arbitrary. Here the picture and the crop
+     * belong together — they are the same cover, coming home.
+     *
+     * The crop is written even when [bytes] is null or unwritable, so a backup whose image could not
+     * be read still restores the framing. Replacing the missing picture then lands it as it was set,
+     * rather than resetting to the whole frame.
+     */
+    suspend fun restoreCover(
+        context: android.content.Context,
+        owner: CoverOwner,
+        bytes: ByteArray?,
+        crop: Cover,
+        nameHint: String
+    ) {
+        val id = when (owner) {
+            is CoverOwner.Event -> owner.eventId
+            is CoverOwner.Collection -> owner.groupId
+            is CoverOwner.Recording -> owner.recordId
+        }
+        val stored = bytes?.let { CoverStore.writeBytes(context, it, nameHint, id) }
+        writeCover(owner, crop.copy(path = stored ?: ""))
+    }
+
+    /** The same, for a person's photograph. See [restoreCover]. */
+    suspend fun restorePersonPhoto(
+        context: android.content.Context,
+        personId: Long,
+        bytes: ByteArray?,
+        crop: Cover,
+        nameHint: String
+    ) {
+        val stored = bytes?.let {
+            CoverStore.writeBytes(context, it, nameHint, personId, CoverStore.Kind.PERSON)
+        }
+        personDao.updatePhoto(
+            personId, stored, crop.cropLeft, crop.cropTop, crop.cropRight, crop.cropBottom
+        )
+    }
+
+    /**
+     * The tag with this name on this axis, creating either if it is not there.
+     *
+     * A restore needs this because a backup names tags rather than numbering them — ids are
+     * reassigned on insert, so "Character:Hulk" has to be looked up or made afresh. Restoring into a
+     * library that already has the tag reuses it, which is what merging two libraries should do.
+     */
+    suspend fun findOrCreateTag(categoryName: String, tagName: String): Long? {
+        if (tagName.isBlank()) return null
+        val categoryId = tagDao.getAllCategories()
+            .firstOrNull { it.name.equals(categoryName, ignoreCase = true) }
+            ?.categoryId
+            ?: tagDao.insertCategory(CategoryEntity(name = categoryName))
+
+        return tagDao.getAllTags()
+            .firstOrNull { it.parentCategoryId == categoryId && it.name.equals(tagName, true) }
+            ?.tagId
+            ?: tagDao.insertTag(TagEntity(name = tagName, parentCategoryId = categoryId))
+    }
+
     /** Re-frames the photograph a person already has, leaving the file alone. */
     suspend fun setPersonPhotoCrop(personId: Long, photo: Cover) {
         personDao.updatePhoto(
@@ -587,12 +1149,11 @@ class LibraryRepository(
 
     /** Removes every stored cover and the rows pointing at them. */
     suspend fun clearAllCovers(context: android.content.Context): Int {
-        eventDao.getAllEventsFlow().first().forEach {
-            if (it.coverPath != null) eventDao.updateCover(it.eventId, null, null, null, null, null, null)
-        }
-        eventGroupDao.getAllGroups().forEach {
+        // The whole tree, so collections are included — they are events. Reading the filtered
+        // list here would leave every collection cover behind while reporting them all cleared.
+        eventDao.getAllEvents().forEach {
             if (it.coverPath != null) {
-                eventGroupDao.updateCover(it.groupId, null, null, null, null, null, null)
+                eventDao.updateCover(it.eventId, null, null, null, null, null, null, null)
             }
         }
         val removed = CoverStore.clearAll(context)
@@ -601,7 +1162,8 @@ class LibraryRepository(
         return removed
     }
 
-    suspend fun setEventGroup(eventId: Long, groupId: Long?) = eventDao.setGroup(eventId, groupId)
+    /** Files an event under a collection, refusing a move that would make a cycle. */
+    suspend fun setEventGroup(eventId: Long, groupId: Long?) = setEventParent(eventId, groupId)
 
     /**
      * Removes an event and releases its recordings.
@@ -612,6 +1174,10 @@ class LibraryRepository(
     suspend fun deleteEvent(eventId: Long) {
         eventDao.unfileRecordsForEvent(eventId)
         eventDao.deleteEvent(eventId)
+        // A set naming it must forget it, or the set keeps a reference to nothing and quietly
+        // resolves to fewer recordings than it says it holds.
+        collectionDao.forgetEvent(eventId)
+        reconcileMembership()
         Log.d(tag, "Deleted event $eventId; its recordings are unfiled, not removed")
     }
 
@@ -628,6 +1194,10 @@ class LibraryRepository(
         val changed = recordIds.toList()
             .chunked(SQL_VARIABLE_LIMIT)
             .sumOf { chunk -> eventDao.assignRecordsToEvent(chunk, eventId) }
+        // Hand filing is an input to membership, not the answer: a window covering these
+        // recordings still wins. Reconciling here means the library shows the real answer at once
+        // rather than the requested one until something else happens to recompute.
+        reconcileMembership()
         Log.d(tag, "Filed $changed recording(s) under event ${eventId ?: "nothing"}")
         return changed
     }
@@ -638,32 +1208,172 @@ class LibraryRepository(
             .chunked(SQL_VARIABLE_LIMIT)
             .flatMap { chunk -> eventDao.recordIdsWithoutEvent(chunk) }
 
-    fun getAllEventGroups(): Flow<List<EventGroupEntity>> = eventGroupDao.getAllGroupsFlow()
+    // --- Collections ---
+    //
+    // A collection is a set with its own table. Not to be confused with the tier-collections that
+    // everything below now reads and writes the one tree, so a count, a span or a roll-up has one
+    // implementation instead of two that have to be kept agreeing. `event_groups` still exists and
+    // is no longer read — see MIGRATION_23_24 for why it is still there.
+    //
+    // The names are unchanged so the screens did not all have to move at once. They read a little
+    // oddly against `EventEntity`, and go when the library screen is redesigned in Sprint 3.
 
-    suspend fun getEventGroup(groupId: Long): EventGroupEntity? = eventGroupDao.getGroup(groupId)
+    // --- Collections, as sets ---
+    //
+    // A set holds events and recordings by reference, many-to-many, with no window and no parent.
+    // Everything derived — what it contains, its span, its people — comes from [Scope]
+    // walking the same [EventTree] the timeline and the export scope walk. A set is a different
+    // question asked of one walk, not a second walk.
 
-    fun getRecordsForGroup(groupId: Long): Flow<List<BpmRecordEntity>> =
-        eventGroupDao.getRecordsForGroupFlow(groupId)
+    /**
+     * Every collection, alphabetically.
+     *
+     * A set has no time of its own — it gathers things that did not happen together, which is the
+     * whole point of it — so insertion order is the one ordering that means nothing at all. Sorted
+     * here rather than at each screen, so the tab, the export picker and the filter agree.
+     */
+    fun getAllCollections(): Flow<List<CollectionEntity>> = collectionDao.getAllFlow()
+        .map { sets -> sets.sortedBy { it.displayName.lowercase() } }
 
-    suspend fun getGroupSpan(groupId: Long): TimeSpan? = eventGroupDao.getGroupSpan(groupId)?.toSpan()
+    suspend fun getCollection(collectionId: Long): CollectionEntity? =
+        collectionDao.get(collectionId)
 
-    suspend fun countEventsForGroup(groupId: Long): Int = eventGroupDao.countEventsForGroup(groupId)
+    fun allCollectionEventLinks(): Flow<List<CollectionEventCrossRef>> =
+        collectionDao.allEventLinksFlow()
 
-    suspend fun countRecordsForGroup(groupId: Long): Int = eventGroupDao.countRecordsForGroup(groupId)
+    fun allCollectionRecordLinks(): Flow<List<CollectionRecordCrossRef>> =
+        collectionDao.allRecordLinksFlow()
 
+    suspend fun createCollection(name: String): Long =
+        collectionDao.insert(
+            CollectionEntity(name = name.trim(), createdAt = System.currentTimeMillis())
+        ).also { Log.d(tag, "Created collection '${name.trim()}' as $it") }
+
+    suspend fun renameCollection(collectionId: Long, name: String) =
+        collectionDao.rename(collectionId, name.trim())
+
+    suspend fun setCollectionNotes(collectionId: Long, notes: String) =
+        collectionDao.updateNotes(collectionId, notes)
+
+    /**
+     * Removes a set. Nothing it named goes with it.
+     *
+     * The whole difference from deleting an event: a set was a second view over things that live
+     * elsewhere, so this removes a grouping and no data. No reconcile either — membership in a set
+     * has never had anything to do with where a recording lives.
+     */
+    suspend fun deleteCollection(collectionId: Long) {
+        collectionDao.clearEvents(collectionId)
+        collectionDao.clearRecords(collectionId)
+        collectionDao.delete(collectionId)
+        Log.d(tag, "Deleted collection $collectionId; what it held is untouched")
+    }
+
+    suspend fun addEventToCollection(collectionId: Long, eventId: Long) =
+        collectionDao.addEvent(CollectionEventCrossRef(collectionId, eventId))
+
+    suspend fun removeEventFromCollection(collectionId: Long, eventId: Long) =
+        collectionDao.removeEvent(collectionId, eventId)
+
+    suspend fun addRecordsToCollection(collectionId: Long, recordIds: Collection<Long>) {
+        recordIds.forEach { collectionDao.addRecord(CollectionRecordCrossRef(collectionId, it)) }
+    }
+
+    suspend fun removeRecordFromCollection(collectionId: Long, recordId: Long) =
+        collectionDao.removeRecord(collectionId, recordId)
+
+    fun collectionsHoldingEvent(eventId: Long): Flow<Set<Long>> =
+        collectionDao.collectionsHoldingEventFlow(eventId).map { it.toSet() }
+
+    fun collectionsHoldingRecord(recordId: Long): Flow<Set<Long>> =
+        collectionDao.collectionsHoldingRecordFlow(recordId).map { it.toSet() }
+
+    /**
+     * Every recording in a collection, references followed.
+     *
+     * Through [Scope], which resolves at the point of asking rather than storing descendants — so
+     * a recording filed into a day tomorrow is in "compare every festival" tomorrow, without anyone
+     * re-adding anything, and a smart collection reports what its rule finds today.
+     */
+    suspend fun recordsInCollection(collectionId: Long): List<BpmRecordEntity> =
+        Scope.recordsIn(ScopeRef.Collection(collectionId), librarySnapshot()).map { it.metadata }
+
+    /**
+     * Turns a living collection into a static one, keeping what its rule had found.
+     *
+     * The difference from simply clearing the rule, which is the operation that already existed:
+     * clearing stops it re-asking, so everything the rule found and nobody named by hand quietly
+     * leaves. That is right when the rule was a mistake and wrong when the rule was the *point* and
+     * you now want the answer held still — which is the ordinary case, and the one nothing offered.
+     *
+     * So the current answer is written down as membership first. Nothing is copied: these are
+     * references, so a recording that is later renamed or refiled stays in the set and stays
+     * correct. Freezing, which does copy, is a different thing again — see [saveAnalysis].
+     *
+     * @return how many recordings it kept.
+     */
+    suspend fun materialiseCollection(collectionId: Long): Int {
+        val found = recordsInCollection(collectionId).map { it.recordId }
+        addRecordsToCollection(collectionId, found)
+        collectionDao.updateRule(collectionId, null)
+        Log.i(tag, "Collection $collectionId materialised: ${found.size} recordings kept")
+        return found.size
+    }
+
+    /**
+     * Brings a frozen selection back to life, keeping the recordings it was frozen over.
+     *
+     * Its snapshot rows name recordings by id, so those become ordinary membership and the set
+     * carries on as a hand-made one. Anything deleted in the meantime is simply gone — the numbers
+     * a snapshot holds cannot be recomputed from a recording that no longer exists, which is the
+     * whole reason freezing exists.
+     *
+     * The snapshot rows are left in place rather than deleted: re-freezing overwrites them, and
+     * keeping them means thawing by mistake is not destructive.
+     *
+     * @return how many recordings survived into the live set.
+     */
+    suspend fun thawCollection(collectionId: Long): Int {
+        val ids = loadSavedAnalysis(collectionId)?.records?.map { it.recordId }.orEmpty()
+        // Through the snapshot rather than a query per id: the library is already in memory for
+        // [Scope], and "which of these still exist" is a set intersection.
+        val existing = librarySnapshot().records.mapTo(mutableSetOf()) { it.metadata.recordId }
+        val alive = ids.filter { it in existing }
+        addRecordsToCollection(collectionId, alive)
+        collectionDao.setFrozenAt(collectionId, null)
+        Log.i(tag, "Collection $collectionId thawed: ${alive.size} of ${ids.size} still exist")
+        return alive.size
+    }
+
+    /**
+     * The whole tree, collections included.
+     *
+     * What anything walking ancestry or descendants needs. [getAllEvents] hides collections so the
+     * screens do not list them twice; a walk that hid them would break the chain in the middle.
+     */
+    val allEventsInTree: Flow<List<EventEntity>> = eventDao.getAllEventsFlowUnfiltered()
+
+    suspend fun getEventGroup(groupId: Long): CollectionEntity? = collectionDao.get(groupId)
+
+    /**
+     * Recreates a pre-fold collection while restoring an old backup, as a plain event.
+     *
+     * Only [inga.bpmetrics.export.restoreBackup] calls this, and only for a file written at format
+     * 3 or earlier. Those collections were tiers — containers holding events — so a container is
+     * what they come back as. It carries no type: the tier marker meant something for one schema
+     * version and would now read as a user-chosen word.
+     */
     suspend fun createEventGroup(name: String): Long {
-        val id = eventGroupDao.insertGroup(
-            EventGroupEntity(name = name.trim(), createdAt = System.currentTimeMillis())
+        val id = eventDao.insertEvent(
+            EventEntity(name = name.trim(), createdAt = System.currentTimeMillis())
         )
-        Log.d(tag, "Created group '${name.trim()}' as $id")
+        Log.d(tag, "Restored legacy collection '${name.trim()}' as event $id")
+        reconcileMembership()
         return id
     }
 
-    suspend fun renameEventGroup(groupId: Long, name: String) =
-        eventGroupDao.rename(groupId, name.trim())
-
     suspend fun setEventGroupNotes(groupId: Long, notes: String) =
-        eventGroupDao.updateNotes(groupId, notes)
+        eventDao.updateNotes(groupId, notes)
 
     /**
      * Joins several recordings of one person into a single one.
@@ -677,8 +1387,11 @@ class LibraryRepository(
      *
      * @return the new record's id, or null when the recordings could not honestly be joined.
      */
-    suspend fun mergeRecords(records: List<BpmRecord>, deleteOriginals: Boolean): Long? {
-        if (!RecordMerge.canMerge(records)) {
+    suspend fun mergeRecords(recordIds: Collection<Long>, deleteOriginals: Boolean): Long? {
+        // The readings are loaded here rather than handed in: the library stream does not carry
+        // them, and merging is the one library action that genuinely needs every one.
+        val records = recordsWithPoints(recordIds).sortedBy { it.metadata.startTime }
+        if (!RecordMerge.canMerge(records.map { it.metadata })) {
             Log.w(tag, "Refused to merge ${records.size} recording(s)")
             return null
         }
@@ -711,54 +1424,114 @@ class LibraryRepository(
         return newId
     }
 
-    /** Removes a collection and releases what it held. Its events and children survive. */
-    suspend fun deleteEventGroup(groupId: Long) {
-        eventGroupDao.ungroupEvents(groupId)
-        eventGroupDao.orphanChildren(groupId)
-        eventGroupDao.deleteGroup(groupId)
-        Log.d(tag, "Deleted collection $groupId; its events and children are released, not removed")
-    }
-
     /**
      * Files one collection inside another.
      *
      * @return false when the move would make a collection its own ancestor, or nest deeper than
-     *   [CollectionTree.MAX_DEPTH]. Both are refused here rather than in the UI: a cycle makes
+     *   a cycle. Refused here rather than in the UI: a cycle makes
      *   every walk of the tree non-terminating, and no screen should be the only thing standing
      *   between the database and an infinite loop.
      */
-    suspend fun setEventGroupParent(groupId: Long, parentGroupId: Long?): Boolean {
-        val all = eventGroupDao.getAllGroups()
-        if (!CollectionTree.canReparent(all, groupId, parentGroupId)) {
-            Log.w(tag, "Refused to file collection $groupId under $parentGroupId")
+    suspend fun setEventGroupParent(groupId: Long, parentGroupId: Long?): Boolean =
+        setEventParent(groupId, parentGroupId)
+
+    /**
+     * Files one event inside another.
+     *
+     * @return false when the move would make an event its own ancestor. Refused here rather than in
+     *   the UI: a cycle makes every walk of the tree non-terminating, and no screen should be the
+     *   only thing standing between the database and an infinite loop.
+     */
+    suspend fun setEventParent(eventId: Long, parentId: Long?): Boolean {
+        val all = eventDao.getAllEvents()
+        if (parentId != null && EventTree.wouldCycle(all, eventId, parentId)) {
+            Log.w(tag, "Refused to file event $eventId under $parentId")
             return false
         }
-        eventGroupDao.setParent(groupId, parentGroupId)
+        val current = all.firstOrNull { it.eventId == eventId } ?: return false
+        eventDao.updateTaxonomy(
+            eventId = eventId,
+            parentId = parentId,
+            windowStart = current.windowStart,
+            windowEnd = current.windowEnd,
+            type = current.type,
+            excluded = current.excludedFromParentAnalysis
+        )
+        reconcileMembership()
         return true
     }
 
     /**
-     * A collection and everything nested inside it, itself included.
+     * Every selection with its members and any frozen rows, for a backup to carry.
      *
-     * What "analyse Coachella" resolves to: the festival, its days, and every event in any of them.
+     * Collections had never been backed up at all. The coverage test that exists to catch exactly
+     * that was pointed at `EventGroupEntity` — the table the 23→24 fold left dead — so it passed
+     * while asserting nothing about the table actually in use.
+     *
+     * Returns entities rather than DTOs because a cover has to be inlined as bytes, and reading
+     * files is [inga.bpmetrics.export.JsonExporter]'s job, not the repository's.
      */
-    suspend fun descendantGroupIds(groupId: Long): Set<Long> =
-        CollectionTree.descendantsOf(eventGroupDao.getAllGroups(), groupId)
+    suspend fun getCollectionsForBackup(): List<CollectionBackup> {
+        val eventNames = eventDao.getAllEvents().associate { it.eventId to it.name }
+        val eventLinks = collectionDao.allEventLinks().groupBy { it.collectionId }
+        val recordLinks = collectionDao.allRecordLinks().groupBy { it.collectionId }
 
-    /** Every saved analysis with its frozen rows, for a backup to carry. */
-    suspend fun getSavedAnalysesForBackup(): List<inga.bpmetrics.export.SavedAnalysisDto> =
-        savedAnalysisDao.getAllFlow().first().mapNotNull { meta ->
-            val full = savedAnalysisDao.getAnalysis(meta.analysisId) ?: return@mapNotNull null
-            inga.bpmetrics.export.SavedAnalysisDto(
-                name = full.metadata.name,
-                createdAt = full.metadata.createdAt,
-                filterDescription = full.metadata.filterDescription,
-                kind = full.metadata.kind,
-                windowStartMs = full.metadata.windowStartMs,
-                windowEndMs = full.metadata.windowEndMs,
-                records = full.records.map { row ->
-                    inga.bpmetrics.export.SavedAnalysisRecordDto(
-                        recordId = row.recordId,
+        return collectionDao.getAll().map { set ->
+            CollectionBackup(
+                collection = set,
+                // By name, as everything else in a backup is: ids are reassigned on import, so a
+                // reference by id would come back pointing at whatever now holds that number.
+                eventNames = eventLinks[set.collectionId].orEmpty()
+                    .mapNotNull { eventNames[it.eventId] },
+                recordIds = recordLinks[set.collectionId].orEmpty().map { it.recordId },
+                frozenRecords = if (!set.isFrozen) emptyList() else
+                    collectionDao.getWithFrozenRecords(set.collectionId)?.records.orEmpty()
+            )
+        }
+    }
+
+    /**
+     * Writes a selection back from a backup.
+     *
+     * @param eventIdsByName Where each event landed on import, so members can be re-linked.
+     * @param recordIdByOldId Where each recording landed, for directly-named members and for the
+     *   frozen rows, which reference recordings by their id in the library the backup came from.
+     */
+    suspend fun restoreCollection(
+        dto: inga.bpmetrics.export.CollectionDto,
+        eventIdsByName: Map<String, Long>,
+        recordIdByOldId: Map<Long, Long>,
+    ): Long {
+        val collectionId = collectionDao.insert(
+            CollectionEntity(
+                name = dto.name,
+                notes = dto.notes,
+                createdAt = dto.createdAt,
+                filterJson = dto.filterJson,
+                excludedRecordJson = dto.excludedRecordJson,
+                isPinned = dto.isPinned,
+                frozenAt = dto.frozenAt
+                // The cover is written afterwards, by the caller, through restoreCover — that is
+                // what decodes the bytes and stores the file.
+            )
+        )
+
+        dto.eventNames.mapNotNull { eventIdsByName[it] }.forEach {
+            collectionDao.addEvent(CollectionEventCrossRef(collectionId, it))
+        }
+        dto.recordIds.mapNotNull { recordIdByOldId[it] }.forEach {
+            collectionDao.addRecord(CollectionRecordCrossRef(collectionId, it))
+        }
+
+        if (dto.frozenRecords.isNotEmpty()) {
+            collectionDao.insertFrozenRecords(
+                dto.frozenRecords.map { row ->
+                    SavedAnalysisRecordEntity(
+                        collectionId = collectionId,
+                        // Remapped where the recording came across, kept as-is where it did not: a
+                        // frozen row stands on its own numbers, and dropping it because its
+                        // recording had already been deleted would defeat the point of freezing.
+                        recordId = recordIdByOldId[row.recordId] ?: row.recordId,
                         title = row.title,
                         date = row.date,
                         minBpm = row.minBpm,
@@ -772,28 +1545,29 @@ class LibraryRepository(
                 }
             )
         }
+        return collectionId
+    }
 
     /**
-     * Writes a saved analysis back from a backup.
+     * A pre-format-5 saved analysis, restored as a frozen collection.
      *
-     * Its rows arrive already re-pointed at the recordings' new ids — the caller does the remapping,
-     * because only the restore knows where each recording landed.
+     * Read-only compatibility. Nothing writes `savedAnalyses` any more — a frozen analysis is a
+     * collection now — but a file taken before the fold still carries them, and dropping them on
+     * restore would lose numbers that cannot be recomputed.
      */
     suspend fun restoreSavedAnalysis(dto: inga.bpmetrics.export.SavedAnalysisDto) {
-        val analysisId = savedAnalysisDao.insertAnalysis(
-            SavedAnalysisEntity(
+        val collectionId = collectionDao.insert(
+            CollectionEntity(
                 name = dto.name,
+                notes = dto.filterDescription,
                 createdAt = dto.createdAt,
-                filterDescription = dto.filterDescription,
-                kind = dto.kind,
-                windowStartMs = dto.windowStartMs,
-                windowEndMs = dto.windowEndMs
+                frozenAt = dto.createdAt
             )
         )
-        savedAnalysisDao.insertRecords(
+        collectionDao.insertFrozenRecords(
             dto.records.map { row ->
                 SavedAnalysisRecordEntity(
-                    analysisId = analysisId,
+                    collectionId = collectionId,
                     recordId = row.recordId,
                     title = row.title,
                     date = row.date,
@@ -812,24 +1586,35 @@ class LibraryRepository(
     /** Every app preference, for a backup to carry. */
     suspend fun getSettingsForBackup() = settingsRepository.exportPreferences()
 
+    /**
+     * The tags applied to each event, keyed by event id.
+     *
+     * A backup carried record tags from the beginning and never carried these, so a restore returned
+     * every recording and lost the labelling of the containers holding them.
+     */
+    suspend fun getEventTagsForBackup(): Map<Long, List<TagEntity>> =
+        tagDao.getAllEventTagsFlow().first()
+            .groupBy({ it.ownerId }, { it.tag })
+
+    /** The tags applied to each collection, keyed by collection id. See [getEventTagsForBackup]. */
+    suspend fun getGroupTagsForBackup(): Map<Long, List<TagEntity>> = getEventTagsForBackup()
+
     /** Applies preferences from a backup. Returns how many were understood. */
     suspend fun restoreSettings(snapshots: List<inga.bpmetrics.ui.settings.PreferenceSnapshot>): Int =
         settingsRepository.importPreferences(snapshots)
 
-    /**
-     * Which library view the user last had open, read once rather than observed.
-     *
-     * The library owns this while it is on screen; settings only remembers it across launches.
-     */
-    suspend fun getLibraryViewMode(): String = settingsRepository.libraryViewMode.first()
-
-    suspend fun setLibraryViewMode(mode: String) = settingsRepository.setLibraryViewMode(mode)
-
     /** The sort the library should open on, or null to keep the built-in order. */
     suspend fun getDefaultSort(): String? = settingsRepository.defaultSort.first()
 
-    /** Recordings the user has permanently waved off as an event suggestion. */
-    val dismissedSuggestionRecords: Flow<Set<Long>> = settingsRepository.dismissedSuggestionRecords
+    /**
+     * Remembers how the library was last sorted.
+     *
+     * Written from the library rather than only from Settings, because the sort decides the
+     * library's *shape* as well as its order — grouped into events, or flat. The view switcher
+     * that used to persist that choice is gone, and losing it on every restart would mean reopening
+     * on a list nobody asked for.
+     */
+    suspend fun setDefaultSort(sort: String) = settingsRepository.setDefaultSort(sort)
 
     // --- Export presets ---
 
@@ -971,9 +1756,6 @@ class LibraryRepository(
     }
 
     suspend fun deleteExportPreset(presetId: Long) = presetDao.delete(presetId)
-
-    suspend fun dismissSuggestionRecords(recordIds: Set<Long>) =
-        settingsRepository.dismissSuggestionRecords(recordIds)
 
     /**
      * Flattens tags to `categoryId:categoryName:tagName`, one per line.
@@ -1142,6 +1924,13 @@ class LibraryRepository(
         personDao.updateName(personId, name.trim())
         Log.d(tag, "Person $personId is now called '${name.trim()}'")
     }
+
+    /**
+     * Puts a profile's creation time back to what a backup recorded, so the people list keeps the
+     * order it had. Only a restore has any business calling this.
+     */
+    suspend fun setPersonCreatedAt(personId: Long, createdAt: Long) =
+        personDao.updateCreatedAt(personId, createdAt)
 
     suspend fun setPersonColor(personId: Long, colorArgb: Int) =
         personDao.updateColor(personId, colorArgb)
@@ -1353,8 +2142,13 @@ class LibraryRepository(
         val minId = dataPointIds.getOrNull(minIndex)
         val maxId = dataPointIds.getOrNull(maxIndex)
 
-        Log.d(tag, "Updating analysis for record ID: $recordId. Avg: $avg, MinID: $minId, MaxID: $maxId")
+        Log.d(tag, "Updating analysis for record ID: . Avg: , MinID: , MaxID: ")
         recordDao.updateAnalysis(recordId, minId, maxId, avg)
+
+        // The two figures a summary needs, worked out here while the readings are already in hand
+        // rather than re-derived from them on every read — §9 of the product doc.
+        val derived = DerivedFigures.of(dataPointEntities, record.startTime, record.durationMs)
+        recordDao.updateDerivedFigures(recordId, derived.activeDurationMs, derived.zonesEncoded)
     }
 
     /**
@@ -1444,16 +2238,39 @@ class LibraryRepository(
      * @param recordId The ID of the record.
      * @param tagId The ID of the tag to assign.
      */
-    suspend fun addTagToRecord(recordId: Long, tagId: Long) {
+    /**
+     * Tags a recording, replacing whatever it already had on that axis.
+     *
+     * **One tag per category per recording.** A recording is Spiderman or Hulk, not both. That makes
+     * a category a partition — every recording in scope falls in exactly one lane, the lanes sum to
+     * the whole, and no total counts anything twice. A comparison whose lanes overlap is one whose
+     * percentages mean nothing, and explaining that at every total is worse than the constraint.
+     *
+     * Enforced by *replacing* rather than refusing. Someone tapping Hulk on a recording marked
+     * Spiderman plainly means to change it; an error saying "already has a character" would be the
+     * app telling them what they can see.
+     *
+     *  the tag that was displaced, if one was, so a caller can say so.
+     */
+    suspend fun addTagToRecord(recordId: Long, tagId: Long): TagEntity? {
+        val tag = tagDao.getTagById(tagId)
+
+        val displaced = tag?.let { incoming ->
+            tagDao.getTagsForRecordFlow(recordId).first()
+                .firstOrNull {
+                    it.parentCategoryId == incoming.parentCategoryId && it.tagId != incoming.tagId
+                }
+        }
+        displaced?.let { tagDao.untagRecord(recordId, it.tagId) }
+
         tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
-        
+
         // Auto-Rename logic: Pull default naming category from settings
         val defaultNamingCatId = settingsRepository.defaultNamingCategoryId.first()
-        val tag = tagDao.getTagById(tagId)
-        
         if (tag != null && tag.parentCategoryId == defaultNamingCatId) {
             autoNameRecord(recordId, tag.name)
         }
+        return displaced
     }
 
     /**
@@ -1478,20 +2295,26 @@ class LibraryRepository(
 
     fun getTagsForEvent(eventId: Long): Flow<List<TagEntity>> = tagDao.getTagsForEventFlow(eventId)
 
-    suspend fun addTagToGroup(groupId: Long, tagId: Long) =
-        tagDao.insertGroupTagCrossRef(EventGroupTagCrossRef(groupId, tagId))
+    // Collections are events, so their tags live in `event_tag_cross_ref` alongside everything
+    // else — migration 23→24 copied the existing ones across. These three used to write and read
+    // `event_group_tag_cross_ref`, which would have put new tags somewhere inheritance no longer
+    // looks: applied, visible on the collection, and silently absent from every recording under it.
 
-    suspend fun removeTagFromGroup(groupId: Long, tagId: Long) = tagDao.untagGroup(groupId, tagId)
+    suspend fun addTagToGroup(groupId: Long, tagId: Long) = addTagToEvent(groupId, tagId)
 
-    fun getTagsForGroup(groupId: Long): Flow<List<TagEntity>> = tagDao.getTagsForGroupFlow(groupId)
+    suspend fun removeTagFromGroup(groupId: Long, tagId: Long) = removeTagFromEvent(groupId, tagId)
+
+    fun getTagsForGroup(groupId: Long): Flow<List<TagEntity>> = getTagsForEvent(groupId)
+
+    /** Every tag in the library, live, for the filter bar to offer. */
+    val allTags: Flow<List<TagEntity>> = tagDao.getAllTagsFlow()
 
     /** Every event's tags, indexed by event. Live, so applying one anywhere updates every reader. */
     val allEventTags: Flow<Map<Long, List<TagEntity>>> =
         tagDao.getAllEventTagsFlow().map { EffectiveTagsResolver.index(it) }
 
-    /** Every group's tags, indexed by group. */
-    val allGroupTags: Flow<Map<Long, List<TagEntity>>> =
-        tagDao.getAllGroupTagsFlow().map { EffectiveTagsResolver.index(it) }
+    /** Collections are events, so their tags come from the same index. */
+    val allGroupTags: Flow<Map<Long, List<TagEntity>>> get() = allEventTags
 
     /**
      * Effective tags for every recording in the library, keyed by record id.
@@ -1503,18 +2326,16 @@ class LibraryRepository(
     val effectiveTags: Flow<Map<Long, List<EffectiveTag>>> = combine(
         records,
         tagDao.getAllEventTagsFlow(),
-        tagDao.getAllGroupTagsFlow(),
-        eventDao.getAllEventsFlow(),
-        eventGroupDao.getAllGroupsFlow()
-    ) { library, eventTags, groupTags, events, groups ->
+        eventDao.getAllEventsFlowUnfiltered()
+    ) { library, eventTags, events ->
+        // One chain, walked once. This used to take an event-to-collection map and a
+        // collection-to-parent map and stitch them together inside the resolver; a tag on a
+        // festival reaching a recording two levels down depended on those two agreeing. Since the
+        // fold there is only `parentId`, so inheritance climbs the same tree membership does.
         EffectiveTagsResolver.resolveAll(
             records = library,
             eventTags = EffectiveTagsResolver.index(eventTags),
-            groupTags = EffectiveTagsResolver.index(groupTags),
-            groupIdByEvent = events.associate { it.eventId to it.groupId },
-            // Collections nest, so inheritance climbs the whole chain: a tag on a festival reaches
-            // the recordings inside its days without being applied to each of them.
-            parentByGroup = groups.associate { it.groupId to it.parentGroupId }
+            events = events
         )
     }
 

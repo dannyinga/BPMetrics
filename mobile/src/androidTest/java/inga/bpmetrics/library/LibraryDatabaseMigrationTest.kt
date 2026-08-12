@@ -50,7 +50,14 @@ class LibraryDatabaseMigrationTest {
             LibraryDatabase.MIGRATION_18_19,
             LibraryDatabase.MIGRATION_19_20,
             LibraryDatabase.MIGRATION_20_21,
-            LibraryDatabase.MIGRATION_21_22
+            LibraryDatabase.MIGRATION_21_22,
+            LibraryDatabase.MIGRATION_22_23,
+            LibraryDatabase.MIGRATION_23_24,
+            LibraryDatabase.MIGRATION_24_25,
+            LibraryDatabase.MIGRATION_25_26,
+            LibraryDatabase.MIGRATION_26_27,
+            LibraryDatabase.MIGRATION_27_28,
+            LibraryDatabase.MIGRATION_28_29
         )
     }
 
@@ -763,6 +770,63 @@ class LibraryDatabaseMigrationTest {
         db.close()
     }
 
+    /** The schema check for events becoming the timeline. */
+    @Test
+    fun migrate22To23_producesTheSchemaRoomExpects() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 23, true, *ALL_MIGRATIONS).close()
+    }
+
+    /**
+     * Every existing event comes through unchanged.
+     *
+     * This migration is additive on purpose — folding collections into the tree is a separate one,
+     * because that rewrites data and this cannot break anything. An event with no parent and no
+     * window has to behave exactly as it did before, or the split was pointless.
+     */
+    @Test
+    fun migrate22To23_leavesExistingEventsAtTheTopWithNoWindow() {
+        helper.createDatabase(TEST_DB, 5).close()
+        var db = helper.runMigrationsAndValidate(TEST_DB, 22, true, *ALL_MIGRATIONS)
+        db.execSQL(
+            "INSERT INTO events (eventId, name, groupId, notes, createdAt) " +
+                "VALUES (1, 'Subtronics', NULL, '', 1700000000000)"
+        )
+        db.close()
+
+        db = helper.runMigrationsAndValidate(TEST_DB, 23, true, *ALL_MIGRATIONS)
+
+        db.query(
+            "SELECT name, parentId, windowStart, windowEnd, type, excludedFromParentAnalysis " +
+                "FROM events WHERE eventId = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Subtronics", cursor.getString(0))
+            assertTrue("an existing event must stay at the top", cursor.isNull(1))
+            assertTrue("and must not gain a window", cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            // Not nullable: there is no third state between excluded and not.
+            assertEquals(0, cursor.getInt(5))
+        }
+        db.close()
+    }
+
+    /** Two stages at one festival: the table that lets their windows overlap. */
+    @Test
+    fun migrate22To23_letsAWindowNameThePeopleItAppliesTo() {
+        helper.createDatabase(TEST_DB, 5).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 23, true, *ALL_MIGRATIONS)
+
+        db.execSQL("INSERT INTO event_window_people (eventId, personId) VALUES (1, 100), (1, 200)")
+
+        db.query("SELECT COUNT(*) FROM event_window_people WHERE eventId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(2, cursor.getInt(0))
+        }
+        db.close()
+    }
+
     /** Inserts records into a fresh version 5 database and closes it. */
     private fun seedVersion5With(vararg rows: String) {
         helper.createDatabase(TEST_DB, 5).apply {
@@ -1016,6 +1080,710 @@ class LibraryDatabaseMigrationTest {
         LibraryDatabase.MIGRATION_5_6.migrate(db)
 
         assertNotNull(db)
+        db.close()
+    }
+
+    // --- 23 -> 24: collections fold into the event tree ---
+
+    /**
+     * The whole point of the fold: a collection comes out the other side as an event.
+     *
+     * Room cannot help here. The entities did not change, so `24.json` has the same identity hash as
+     * `23.json` and `runMigrationsAndValidate` passes however wrong the data SQL is. Every assertion
+     * below is the only thing standing between a mistake and a real library.
+     */
+    @Test
+    fun migrate23To24_turnsCollectionsIntoEvents() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL(
+                "INSERT INTO event_groups (groupId, name, notes, createdAt, parentGroupId) " +
+                    "VALUES (1, 'Griztronics', 'the big one', 100, NULL)"
+            )
+            execSQL(
+                "INSERT INTO event_groups (groupId, name, notes, createdAt, parentGroupId) " +
+                    "VALUES (2, 'Day 1', '', 200, 1)"
+            )
+            execSQL(
+                "INSERT INTO events (eventId, name, notes, createdAt, groupId) " +
+                    "VALUES (5, 'Subtronics', '', 300, 2)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        // Both collections are now events, carrying their names, notes and creation times.
+        db.query(
+            "SELECT name, notes, createdAt FROM events WHERE type = 'Collection' ORDER BY createdAt"
+        ).use {
+            assertEquals(2, it.count)
+            it.moveToFirst()
+            assertEquals("Griztronics", it.getString(0))
+            assertEquals("the big one", it.getString(1))
+            assertEquals(100L, it.getLong(2))
+        }
+
+        // Day 1 sits under Griztronics — collection nesting became event nesting.
+        db.query(
+            "SELECT p.name FROM events c JOIN events p ON c.parentId = p.eventId " +
+                "WHERE c.name = 'Day 1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Griztronics", it.getString(0))
+        }
+
+        // And the event that was *in* Day 1 is now under it.
+        db.query(
+            "SELECT p.name FROM events c JOIN events p ON c.parentId = p.eventId " +
+                "WHERE c.name = 'Subtronics'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Day 1", it.getString(0))
+        }
+
+        db.close()
+    }
+
+    /**
+     * Nothing is thrown away.
+     *
+     * The promise this migration was written under: `event_groups` stays exactly as it was, so if
+     * the fold turns out to be the wrong shape the original arrangement can still be read back. A
+     * destructive migration shipping the same day as the code that needs it has no way back.
+     */
+    @Test
+    fun migrate23To24_keepsTheOriginalCollections() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'Grizt', 100)")
+            execSQL("INSERT INTO events (eventId, name, createdAt, groupId) VALUES (5, 'Sub', 300, 1)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query("SELECT name FROM event_groups").use {
+            assertEquals(1, it.count)
+            it.moveToFirst()
+            assertEquals("Grizt", it.getString(0))
+        }
+        // The old link is left pointing where it always did, for the same reason.
+        db.query("SELECT groupId FROM events WHERE name = 'Sub'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1L, it.getLong(0))
+        }
+
+        db.close()
+    }
+
+    /** A collection's tags follow it, or the fold would strip the labelling off every container. */
+    @Test
+    fun migrate23To24_carriesCollectionTags() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO categories (categoryId, name) VALUES (1, 'Venue')")
+            execSQL("INSERT INTO tags (tagId, name, parentCategoryId) VALUES (1, 'Red Rocks', 1)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'Grizt', 100)")
+            execSQL("INSERT INTO event_group_tag_cross_ref (groupId, tagId) VALUES (1, 1)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query(
+            "SELECT t.name FROM tags t " +
+                "JOIN event_tag_cross_ref x ON x.tagId = t.tagId " +
+                "JOIN events e ON e.eventId = x.eventId WHERE e.name = 'Grizt'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Red Rocks", it.getString(0))
+        }
+
+        db.close()
+    }
+
+    /** A cover set on a collection is still there once it is an event. */
+    @Test
+    fun migrate23To24_carriesCollectionCovers() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL(
+                "INSERT INTO event_groups " +
+                    "(groupId, name, createdAt, coverPath, coverCropTop, coverBlur) " +
+                    "VALUES (1, 'Grizt', 100, 'cover-1.jpg', 0.25, 0.4)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query(
+            "SELECT coverPath, coverCropTop, coverBlur FROM events WHERE name = 'Grizt'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("cover-1.jpg", it.getString(0))
+            assertEquals(0.25f, it.getFloat(1), 0.001f)
+            assertEquals(0.4f, it.getFloat(2), 0.001f)
+        }
+
+        db.close()
+    }
+
+    /**
+     * A new event id must not land on an existing one.
+     *
+     * The mapping is `groupId + max(eventId)`, and the tempting way to write that — the subquery
+     * inline in the INSERT — is re-evaluated per row, so the offset climbs underneath its own
+     * statement. Low group ids against existing events is the arrangement that exposes it.
+     */
+    @Test
+    fun migrate23To24_doesNotCollideWithExistingEventIds() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (1, 'Existing A', 10)")
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (2, 'Existing B', 20)")
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (3, 'Existing C', 30)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'One', 100)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (2, 'Two', 200)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (3, 'Three', 300)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        // Six distinct events, and none of the originals overwritten.
+        db.query("SELECT COUNT(*), COUNT(DISTINCT eventId) FROM events").use {
+            it.moveToFirst()
+            assertEquals(6, it.getInt(0))
+            assertEquals(6, it.getInt(1))
+        }
+        db.query("SELECT name FROM events WHERE eventId = 1").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Existing A", it.getString(0))
+        }
+
+        db.close()
+    }
+
+    /**
+     * An event already nested in 23 keeps the parent it was given.
+     *
+     * Nesting was the deliberate, finer statement of where something lives; a collection is the
+     * older and coarser one. Letting the collection win would undo a filing decision.
+     */
+    @Test
+    fun migrate23To24_leavesAnExistingParentAlone() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'Grizt', 100)")
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (5, 'Day 1', 200)")
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, groupId, parentId) " +
+                    "VALUES (6, 'Sub', 300, 1, 5)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query("SELECT parentId FROM events WHERE name = 'Sub'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(5L, it.getLong(0))
+        }
+
+        db.close()
+    }
+
+    /**
+     * Running it twice must not duplicate the library.
+     *
+     * `INSERT OR IGNORE` does not make this safe on its own: a second pass computes a larger offset,
+     * so the same collections arrive under fresh ids and conflict with nothing. The guard inside the
+     * migration is what this asserts.
+     */
+    @Test
+    fun migrate23To24_isIdempotent() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (1, 'Grizt', 100)")
+            execSQL("INSERT INTO event_groups (groupId, name, createdAt) VALUES (2, 'Day 1', 200)")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        LibraryDatabase.MIGRATION_23_24.migrate(db)
+
+        db.query("SELECT COUNT(*) FROM events").use {
+            it.moveToFirst()
+            assertEquals(2, it.getInt(0))
+        }
+
+        db.close()
+    }
+
+    // --- 24 -> 25: collections become sets ---
+
+    /**
+     * The tier marker is cleared, so one word does not mean two things.
+     *
+     * 23→24 folded tier-collections into the event tree and marked them `type = 'Collection'` so
+     * the old screens could keep listing them separately. 24→25 introduces a genuinely different
+     * thing under that name — an arbitrary set — and leaving the marker would put both in front of
+     * the same person.
+     */
+    @Test
+    fun migrate24To25_clearsTheTierMarker() {
+        helper.createDatabase(TEST_DB, 24).apply {
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, type) " +
+                    "VALUES (1, 'Griztronics', 100, 'Collection')"
+            )
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, type) " +
+                    "VALUES (2, 'Subtronics', 200, 'Concert')"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, LibraryDatabase.MIGRATION_24_25)
+
+        db.query("SELECT type FROM events WHERE eventId = 1").use {
+            assertTrue(it.moveToFirst())
+            assertTrue(it.isNull(0))
+        }
+        // A type someone actually chose is left alone.
+        db.query("SELECT type FROM events WHERE eventId = 2").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Concert", it.getString(0))
+        }
+
+        db.close()
+    }
+
+    /** Clearing the marker must not disturb the tree those events form. */
+    @Test
+    fun migrate24To25_keepsTheNestingIntact() {
+        helper.createDatabase(TEST_DB, 24).apply {
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, type) " +
+                    "VALUES (1, 'Griztronics', 100, 'Collection')"
+            )
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, parentId, type) " +
+                    "VALUES (2, 'Day 1', 200, 1, 'Collection')"
+            )
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, parentId) " +
+                    "VALUES (3, 'Subtronics', 300, 2)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, LibraryDatabase.MIGRATION_24_25)
+
+        db.query("SELECT parentId FROM events WHERE eventId = 2").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1L, it.getLong(0))
+        }
+        db.query("SELECT parentId FROM events WHERE eventId = 3").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(2L, it.getLong(0))
+        }
+
+        db.close()
+    }
+
+    /** The set tables arrive empty. Nothing is converted into a set; they were containers. */
+    @Test
+    fun migrate24To25_createsEmptyCollectionTables() {
+        helper.createDatabase(TEST_DB, 24).apply {
+            execSQL(
+                "INSERT INTO events (eventId, name, createdAt, type) " +
+                    "VALUES (1, 'Griztronics', 100, 'Collection')"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, LibraryDatabase.MIGRATION_24_25)
+
+        listOf("collections", "collection_events", "collection_records").forEach { table ->
+            db.query("SELECT COUNT(*) FROM $table").use {
+                it.moveToFirst()
+                assertEquals("$table should start empty", 0, it.getInt(0))
+            }
+        }
+
+        db.close()
+    }
+
+    @Test
+    fun migrate24To25_isIdempotent() {
+        helper.createDatabase(TEST_DB, 24).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, LibraryDatabase.MIGRATION_24_25)
+
+        LibraryDatabase.MIGRATION_24_25.migrate(db)
+
+        assertNotNull(db)
+        db.close()
+    }
+
+    /** A library with no collections migrates to a library with no collections. */
+    @Test
+    fun migrate23To24_withNothingToFold() {
+        helper.createDatabase(TEST_DB, 23).apply {
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (1, 'Just an event', 10)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, LibraryDatabase.MIGRATION_23_24)
+
+        db.query("SELECT COUNT(*) FROM events").use {
+            it.moveToFirst()
+            assertEquals(1, it.getInt(0))
+        }
+        db.query("SELECT parentId FROM events WHERE eventId = 1").use {
+            it.moveToFirst()
+            assertTrue(it.isNull(0))
+        }
+
+        db.close()
+    }
+    // --- 27 → 28: collections, views and analyses become one thing ---
+
+    /** A saved view comes back as a smart collection, still pinned and still asking the same thing. */
+    @Test
+    fun migrate27To28_foldsSavedViewsIntoCollections() {
+        helper.createDatabase(TEST_DB, 27).apply {
+            execSQL(
+                "INSERT INTO saved_views (viewId, name, filterJson, createdAt, isPinned) " +
+                    """VALUES (1, 'Kyle at festivals', '{"selectedPersonIds":[3]}', 500, 1)"""
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 28, true, LibraryDatabase.MIGRATION_27_28)
+
+        db.query("SELECT name, filterJson, isPinned, frozenAt, createdAt FROM collections").use {
+            assertTrue("The view should have become a collection", it.moveToFirst())
+            assertEquals("Kyle at festivals", it.getString(0))
+            assertEquals("""{"selectedPersonIds":[3]}""", it.getString(1))
+            assertEquals("Pinning should survive", 1, it.getInt(2))
+            assertTrue("A view is live, not frozen", it.isNull(3))
+            assertEquals(500L, it.getLong(4))
+        }
+
+        db.close()
+    }
+
+    /**
+     * A group analysis comes back frozen, with its captured rows re-keyed onto the new collection.
+     *
+     * The re-key is the part worth asserting. Both tables autoincrement from 1, so their ids
+     * collide, and attaching someone's numbers to the wrong set is a failure with no error and no
+     * way back — which is why the migration reads `last_insert_rowid()` per row rather than
+     * assuming the nth insert landed at `max(id) + n`.
+     */
+    @Test
+    fun migrate27To28_foldsSavedAnalysesAndRekeysTheirRows() {
+        helper.createDatabase(TEST_DB, 27).apply {
+            // A collection already numbered 1, so the analyses cannot simply keep their own ids.
+            execSQL("INSERT INTO collections (collectionId, name, createdAt) VALUES (1, 'Festivals', 10)")
+            execSQL(
+                "INSERT INTO saved_analyses (analysisId, name, createdAt, filterDescription, kind) " +
+                    "VALUES (1, 'Coachella 2026', 900, 'Kyle', 'GROUP')"
+            )
+            execSQL(
+                "INSERT INTO saved_analyses (analysisId, name, createdAt, filterDescription, kind) " +
+                    "VALUES (2, 'Bass Canyon', 950, '', 'GROUP')"
+            )
+            execSQL(
+                "INSERT INTO saved_analysis_records " +
+                    "(analysisId, recordId, title, date, activeDurationMs, maxBpm) " +
+                    "VALUES (1, 77, 'Subtronics', 900, 1000, 186.0)"
+            )
+            execSQL(
+                "INSERT INTO saved_analysis_records " +
+                    "(analysisId, recordId, title, date, activeDurationMs, maxBpm) " +
+                    "VALUES (2, 88, 'Excision', 950, 2000, 191.0)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 28, true, LibraryDatabase.MIGRATION_27_28)
+
+        mapOf("Coachella 2026" to "Subtronics", "Bass Canyon" to "Excision").forEach { (set, row) ->
+            db.query(
+                "SELECT r.title FROM saved_analysis_records r " +
+                    "JOIN collections c ON c.collectionId = r.collectionId " +
+                    "WHERE c.name = '$set'"
+            ).use {
+                assertTrue("$set should have kept its rows", it.moveToFirst())
+                assertEquals(row, it.getString(0))
+                assertEquals("$set should have exactly one row", 1, it.count)
+            }
+        }
+
+        db.query("SELECT frozenAt, notes FROM collections WHERE name = 'Coachella 2026'").use {
+            it.moveToFirst()
+            assertEquals("A saved analysis is frozen", 900L, it.getLong(0))
+            assertEquals("Its description becomes the note", "Kyle", it.getString(1))
+        }
+
+        db.close()
+    }
+
+    /**
+     * A same-time analysis comes back as a live set naming its recordings.
+     *
+     * It was never frozen: it stored *which* recordings and re-read them from the library every
+     * time it opened. Freezing it on the way through would turn a live comparison into a snapshot
+     * nobody asked for.
+     */
+    @Test
+    fun migrate27To28_turnsSameTimeAnalysesIntoLiveSets() {
+        helper.createDatabase(TEST_DB, 27).apply {
+            execSQL(
+                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
+                    "VALUES (5, 'Kyle', 100, 100, 200, 100)"
+            )
+            execSQL(
+                "INSERT INTO saved_analyses (analysisId, name, createdAt, kind) " +
+                    "VALUES (1, 'Griztronics together', 700, 'CONCURRENT')"
+            )
+            // One recording still in the library, one deleted since.
+            execSQL(
+                "INSERT INTO saved_analysis_records " +
+                    "(analysisId, recordId, title, date, activeDurationMs) " +
+                    "VALUES (1, 5, 'Kyle', 100, 100)"
+            )
+            execSQL(
+                "INSERT INTO saved_analysis_records " +
+                    "(analysisId, recordId, title, date, activeDurationMs) " +
+                    "VALUES (1, 6, 'Gone', 100, 100)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 28, true, LibraryDatabase.MIGRATION_27_28)
+
+        db.query("SELECT collectionId, frozenAt FROM collections WHERE name = 'Griztronics together'")
+            .use {
+                assertTrue(it.moveToFirst())
+                val collectionId = it.getLong(0)
+                assertTrue("A same-time analysis was never frozen", it.isNull(1))
+
+                db.query(
+                    "SELECT recordId FROM collection_records WHERE collectionId = $collectionId"
+                ).use { members ->
+                    assertEquals("Only recordings still in the library", 1, members.count)
+                    members.moveToFirst()
+                    assertEquals(5L, members.getLong(0))
+                }
+            }
+
+        // Its captured numbers are dropped rather than kept as a frozen answer it never had.
+        db.query("SELECT COUNT(*) FROM saved_analysis_records").use {
+            it.moveToFirst()
+            assertEquals(0, it.getInt(0))
+        }
+
+        db.close()
+    }
+
+    /** The tables the earlier folds left with no readers are gone. */
+    @Test
+    fun migrate27To28_dropsTheDeadTables() {
+        helper.createDatabase(TEST_DB, 27).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 28, true, LibraryDatabase.MIGRATION_27_28)
+
+        listOf("event_groups", "event_group_tag_cross_ref", "saved_views", "saved_analyses")
+            .forEach { table ->
+                db.query(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '$table'"
+                ).use {
+                    it.moveToFirst()
+                    assertEquals("$table should have been dropped", 0, it.getInt(0))
+                }
+            }
+
+        db.close()
+    }
+
+    /** A hand-made collection is untouched by the fold. */
+    @Test
+    fun migrate27To28_leavesExistingCollectionsAlone() {
+        helper.createDatabase(TEST_DB, 27).apply {
+            execSQL(
+                "INSERT INTO collections (collectionId, name, notes, createdAt) " +
+                    "VALUES (1, 'Festivals', 'mine', 10)"
+            )
+            execSQL("INSERT INTO collection_events (collectionId, eventId) VALUES (1, 4)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 28, true, LibraryDatabase.MIGRATION_27_28)
+
+        db.query(
+            "SELECT name, notes, filterJson, isPinned, frozenAt, excludedRecordJson " +
+                "FROM collections WHERE collectionId = 1"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Festivals", it.getString(0))
+            assertEquals("mine", it.getString(1))
+            assertTrue("A hand-made set has no rule", it.isNull(2))
+            assertEquals("And is not pinned by default", 0, it.getInt(3))
+            assertTrue("Nor frozen", it.isNull(4))
+            assertEquals("", it.getString(5))
+        }
+
+        db.query("SELECT eventId FROM collection_events WHERE collectionId = 1").use {
+            assertTrue("Its membership should survive", it.moveToFirst())
+            assertEquals(4L, it.getLong(0))
+        }
+
+        db.close()
+    }
+
+    /** Nothing to fold is not a failure. */
+    @Test
+    fun migrate27To28_withNothingToFold() {
+        helper.createDatabase(TEST_DB, 27).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 28, true, LibraryDatabase.MIGRATION_27_28)
+
+        db.query("SELECT COUNT(*) FROM collections").use {
+            it.moveToFirst()
+            assertEquals(0, it.getInt(0))
+        }
+
+        db.close()
+    }
+    // --- 28 → 29: the derived figures move onto the record ---
+
+    /**
+     * The columns arrive empty and existing recordings are untouched.
+     *
+     * Deliberately not backfilled here. Computing them would mean a second implementation of the
+     * gap rule in SQL, and a pass over every reading in the library inside a migration — where
+     * failing means an app that will not open. [LibraryRepository.backfillDerivedFigures] does it
+     * afterwards, in Kotlin, against the same functions the app has always used.
+     */
+    @Test
+    fun migrate28To29_addsTheColumnsEmpty() {
+        helper.createDatabase(TEST_DB, 28).apply {
+            execSQL(
+                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
+                    "VALUES (1, 'Subtronics', 100, 100, 200, 100)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 29, true, LibraryDatabase.MIGRATION_28_29)
+
+        db.query("SELECT activeDurationMs, zonesEncoded, title FROM bpm_records").use {
+            assertTrue(it.moveToFirst())
+            assertTrue("nobody has computed it yet", it.isNull(0))
+            assertEquals("", it.getString(1))
+            assertEquals("the recording itself is untouched", "Subtronics", it.getString(2))
+        }
+
+        db.close()
+    }
+
+    /**
+     * Null is distinct from zero, and the backfill's gate depends on it.
+     *
+     * A recording with no readings has a real active duration of zero. If the column defaulted to
+     * zero instead of null, that recording would be indistinguishable from one nobody has computed
+     * yet — and `WHERE activeDurationMs IS NULL` would either miss real work or repeat it forever.
+     */
+    @Test
+    fun migrate28To29_leavesTheBackfillGateUsable() {
+        helper.createDatabase(TEST_DB, 28).apply {
+            execSQL(
+                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
+                    "VALUES (1, 'A', 100, 100, 200, 100)"
+            )
+            execSQL(
+                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
+                    "VALUES (2, 'B', 200, 200, 300, 100)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 29, true, LibraryDatabase.MIGRATION_28_29)
+
+        db.query("SELECT COUNT(*) FROM bpm_records WHERE activeDurationMs IS NULL").use {
+            it.moveToFirst()
+            assertEquals("every existing row is waiting for the backfill", 2, it.getInt(0))
+        }
+
+        // And once one is filled in, it stops being selected — including when the answer is zero.
+        db.execSQL("UPDATE bpm_records SET activeDurationMs = 0 WHERE recordId = 1")
+        db.query("SELECT recordId FROM bpm_records WHERE activeDurationMs IS NULL").use {
+            assertEquals(1, it.count)
+            it.moveToFirst()
+            assertEquals("a measured zero is not the same as unmeasured", 2L, it.getLong(0))
+        }
+
+        db.close()
+    }
+
+    /** An empty library migrates without incident. */
+    @Test
+    fun migrate28To29_withNothingToDo() {
+        helper.createDatabase(TEST_DB, 28).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 29, true, LibraryDatabase.MIGRATION_28_29)
+
+        db.query("SELECT COUNT(*) FROM bpm_records").use {
+            it.moveToFirst()
+            assertEquals(0, it.getInt(0))
+        }
+
+        db.close()
+    }
+
+    /**
+     * A cover can be darkened, and an existing one is not.
+     *
+     * The sibling of `coverBlur`, on all three owners. Null is none — matching every other cover
+     * property, which is what keeps the entity definitions honest against the generated schema.
+     */
+    @Test
+    fun migrate29To30_addsCoverDimToEveryOwner() {
+        helper.createDatabase(TEST_DB, 29).apply {
+            execSQL("INSERT INTO events (eventId, name, createdAt) VALUES (1, 'Day 1', 0)")
+            execSQL(
+                "INSERT INTO collections (collectionId, name, createdAt) VALUES (1, 'Best of', 0)"
+            )
+            execSQL(
+                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
+                    "VALUES (1, 'Subtronics', 100, 100, 200, 100)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 30, true, LibraryDatabase.MIGRATION_29_30)
+
+        listOf(
+            "SELECT coverDim, name FROM events",
+            "SELECT coverDim, name FROM collections",
+            "SELECT coverDim, title FROM bpm_records"
+        ).forEach { sql ->
+            db.query(sql).use {
+                assertTrue(sql, it.moveToFirst())
+                assertTrue("nobody has darkened anything: $sql", it.isNull(0))
+                assertTrue("the row itself is untouched: $sql", it.getString(1).isNotEmpty())
+            }
+        }
+
+        db.close()
+    }
+
+    /** An empty library migrates without incident. */
+    @Test
+    fun migrate29To30_withNothingToDo() {
+        helper.createDatabase(TEST_DB, 29).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 30, true, LibraryDatabase.MIGRATION_29_30)
+
+        db.query("SELECT COUNT(*) FROM events").use {
+            it.moveToFirst()
+            assertEquals(0, it.getInt(0))
+        }
+
         db.close()
     }
 }

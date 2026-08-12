@@ -55,13 +55,13 @@ class SettingsRepository(context: Context) {
         val DEFAULT_TIME_ZONE = stringPreferencesKey("default_timezone")
 
         /** Which of the library's three views was last open. */
-        val LIBRARY_VIEW_MODE = stringPreferencesKey("library_view_mode")
 
         /** Whether saved same-time analyses have already been turned into events. */
-        val CONCURRENT_ANALYSES_CONVERTED = booleanPreferencesKey("concurrent_analyses_converted")
 
         /** Recordings the user has said, permanently, not to suggest an event for. */
-        val DISMISSED_SUGGESTION_RECORDS = stringSetPreferencesKey("dismissed_suggestion_records")
+        // "dismissed_suggestion_records" lived here until event suggestions retired in TX-2.1.
+        // Deliberately not re-declared: a value still on disk is simply never read, and reusing
+        // the name for something else would hand a new feature somebody's stale answers.
 
         /** The export appearance last used, for when no preset has been made default. */
         val LAST_USED_EXPORT_PRESET = stringPreferencesKey("last_used_export_preset")
@@ -105,48 +105,6 @@ class SettingsRepository(context: Context) {
         )
     }
 
-    /**
-     * The library view last used, so the app reopens where it was left.
-     *
-     * Stored as the enum's name rather than its ordinal: reordering or inserting a mode later would
-     * silently reassign everyone's saved choice to a different view.
-     */
-    val libraryViewMode: Flow<String> = dataStore.data
-        .map { it[PreferencesKeys.LIBRARY_VIEW_MODE] ?: "RECORDINGS" }
-
-    suspend fun setLibraryViewMode(mode: String) {
-        dataStore.edit { it[PreferencesKeys.LIBRARY_VIEW_MODE] = mode }
-    }
-
-    /**
-     * Whether the one-time conversion of saved same-time analyses into events has run.
-     *
-     * A preference rather than a schema version because the conversion is not a schema change and
-     * must be allowed to fail and retry. A Room migration gets one attempt, and failing it means an
-     * app that will not open.
-     */
-    suspend fun hasConvertedConcurrentAnalyses(): Boolean =
-        dataStore.data.first()[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] ?: false
-
-    suspend fun setConvertedConcurrentAnalyses() {
-        dataStore.edit { it[PreferencesKeys.CONCURRENT_ANALYSES_CONVERTED] = true }
-    }
-
-    /**
-     * Recordings that should never be suggested as an event again.
-     *
-     * Stored by record id rather than by cluster, because a cluster has no identity — one more
-     * recording arriving from a watch changes its membership and it would come back as a new
-     * suggestion the user has to dismiss all over again. The recordings are the thing the user
-     * actually said no about.
-     */
-    val dismissedSuggestionRecords: Flow<Set<Long>> = dataStore.data
-        .map { prefs ->
-            prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS]
-                .orEmpty()
-                .mapNotNull { it.toLongOrNull() }
-                .toSet()
-        }
 
     /**
      * The export appearance last used, as a serialized preset.
@@ -160,14 +118,6 @@ class SettingsRepository(context: Context) {
 
     suspend fun setLastUsedExportPreset(json: String) {
         dataStore.edit { it[PreferencesKeys.LAST_USED_EXPORT_PRESET] = json }
-    }
-
-    suspend fun dismissSuggestionRecords(recordIds: Set<Long>) {
-        dataStore.edit { prefs ->
-            val existing = prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS].orEmpty()
-            prefs[PreferencesKeys.DISMISSED_SUGGESTION_RECORDS] =
-                existing + recordIds.map { it.toString() }
-        }
     }
 
     /**
@@ -392,9 +342,12 @@ class SettingsRepository(context: Context) {
 
 /** The date formats on offer, as patterns so adding one is a single line. */
 object DateFormats {
-    const val DEFAULT = "MM/dd/yyyy"
+    // Written out. A date on a detail page is read once and remembered, not scanned down a
+    // column, and "03/14/2026" makes the reader parse a number before they know what month it is.
+    const val DEFAULT = "MMMM d, yyyy"
 
     val ALL: List<Pair<String, String>> = listOf(
+        "MMMM d, yyyy" to "March 14, 2026",
         "MM/dd/yyyy" to "03/14/2026",
         "dd/MM/yyyy" to "14/03/2026",
         "yyyy-MM-dd" to "2026-03-14",

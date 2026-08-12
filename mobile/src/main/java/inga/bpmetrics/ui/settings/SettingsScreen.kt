@@ -49,8 +49,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import inga.bpmetrics.ui.components.ExpandableSection
 import kotlinx.coroutines.launch
 import inga.bpmetrics.ui.components.FlowRow
-import inga.bpmetrics.ui.library.LibraryViewMode
 import inga.bpmetrics.ui.library.LibraryViewModel
+import inga.bpmetrics.ui.util.ReaderClock
 import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 
 /**
@@ -157,39 +157,24 @@ private fun AppearanceSection(viewModel: SettingsViewModel) {
             }
         }
         Spacer(Modifier.height(4.dp))
-        Hint("Today reads as ${getDateString(System.currentTimeMillis())}")
+        Hint("Today reads as ${getDateString(System.currentTimeMillis(), ReaderClock)}")
     }
 }
 
 @Composable
 private fun LibrarySection(viewModel: SettingsViewModel) {
-    val viewMode by viewModel.defaultViewMode.collectAsStateWithLifecycle()
     val categories by viewModel.allCategories.collectAsStateWithLifecycle(initialValue = emptyList())
     val namingCategoryId by viewModel.defaultNamingCategoryId.collectAsStateWithLifecycle()
     val defaultSort by viewModel.defaultSort.collectAsStateWithLifecycle()
 
-    SettingsGroup("Library", "What the library opens on, and how new recordings are named") {
-        Label("Opens on")
-        Hint("Also updated as you switch views in the library, so it reopens where you left it.")
-        Spacer(Modifier.height(6.dp))
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            LibraryViewMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = viewMode == mode.name,
-                    onClick = { viewModel.setDefaultViewMode(mode.name) },
-                    label = {
-                        Text(mode.name.lowercase().replaceFirstChar { it.uppercase() })
-                    }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
+    SettingsGroup("Library", "How the library opens, and how new recordings are named") {
         Label("Sorted by")
+        // The sort decides the shape as well as the order, so this is also the "opens on"
+        // preference the segmented view switcher used to need.
+        Hint(
+            "By time keeps your events; any other order lists every recording. Updated as you " +
+                "change it in the library, so it reopens the way you left it."
+        )
         Spacer(Modifier.height(6.dp))
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -200,7 +185,7 @@ private fun LibrarySection(viewModel: SettingsViewModel) {
                 FilterChip(
                     selected = defaultSort == option.name,
                     onClick = { viewModel.setDefaultSort(option.name) },
-                    label = { Text(option.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }) }
+                    label = { Text("${option.label} — ${option.shapeLabel}") }
                 )
             }
         }
@@ -321,7 +306,7 @@ private fun StorageSection(viewModel: SettingsViewModel) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            getDateString(backup.takenAtMs),
+                            getDateString(backup.takenAtMs, ReaderClock),
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Hint(StorageInspector.formatSize(backup.bytes))
@@ -342,7 +327,7 @@ private fun StorageSection(viewModel: SettingsViewModel) {
             text = {
                 Text(
                     "Everything currently in the app will be replaced with what this backup held " +
-                        "on ${getDateString(backup.takenAtMs)}. Your current database is kept " +
+                        "on ${getDateString(backup.takenAtMs, ReaderClock)}. Your current database is kept " +
                         "alongside the backups in case you want it back, and BPMetrics will close " +
                         "so the change can take effect."
                 )
@@ -716,8 +701,9 @@ private fun ExportSection(viewModel: SettingsViewModel) {
 private fun PresetEditorDialog(
     initial: inga.bpmetrics.export.ExportPreset,
     heading: String,
-    onePerson: List<inga.bpmetrics.library.BpmRecord>,
-    severalPeople: List<inga.bpmetrics.library.BpmRecord>,
+    // A preset preview draws real curves, so these carry their readings.
+    onePerson: List<inga.bpmetrics.library.BpmRecordWithPoints>,
+    severalPeople: List<inga.bpmetrics.library.BpmRecordWithPoints>,
     people: Map<Long, inga.bpmetrics.library.PersonEntity>,
     onDismiss: () -> Unit,
     onSave: (String, inga.bpmetrics.export.ExportPreset) -> Unit

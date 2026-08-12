@@ -70,6 +70,49 @@ object CoverStore {
     fun exists(context: Context, name: String): Boolean = fileFor(context, name).isFile
 
     /**
+     * Writes already-stored image bytes back into app storage, and returns the new stored name.
+     *
+     * The restore counterpart of [importFrom]. Bytes rather than a `Uri` because a backup carries
+     * the picture inline — a stored *name* means nothing on the device the file is being restored
+     * onto, which is how a restore came back with every crop intact and no images behind them.
+     *
+     * No downscale: these bytes left this app through [importFrom], so they are already within
+     * [MAX_EDGE_PX]. Decoding and re-encoding them would only lose a generation of JPEG quality.
+     *
+     * A fresh name each time, rather than the one the backup came from, so restoring the same file
+     * twice cannot have two libraries' entities pointing at one file — where deleting a cover in one
+     * would blank it in the other.
+     */
+    fun writeBytes(
+        context: Context,
+        bytes: ByteArray,
+        nameHint: String,
+        id: Long,
+        kind: Kind = Kind.COVER,
+        stamp: Long = System.currentTimeMillis()
+    ): String? {
+        val name = storedName(nameHint, id, kind, stamp)
+        return try {
+            fileFor(context, name).writeBytes(bytes)
+            name
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not write a restored image", e)
+            null
+        }
+    }
+
+    /** The name a stored image gets. Shared so import and restore cannot drift apart. */
+    private fun storedName(nameHint: String, id: Long, kind: Kind, stamp: Long): String {
+        val safeHint = nameHint.lowercase()
+            .replace(Regex("[^a-z0-9]+"), "-")
+            .trim('-')
+            .take(24)
+            .ifBlank { "image" }
+        val prefix = if (kind == Kind.PERSON) PERSON_PREFIX else ""
+        return "$prefix$safeHint-$id-$stamp.jpg"
+    }
+
+    /**
      * Copies [source] into app storage, downscaled, and returns the stored name.
      *
      * @param nameHint Something to make the file recognisable when someone goes looking; the id
@@ -88,13 +131,7 @@ object CoverStore {
             return null
         }
 
-        val safeHint = nameHint.lowercase()
-            .replace(Regex("[^a-z0-9]+"), "-")
-            .trim('-')
-            .take(24)
-            .ifBlank { "image" }
-        val prefix = if (kind == Kind.PERSON) PERSON_PREFIX else ""
-        val name = "$prefix$safeHint-$id-${System.currentTimeMillis()}.jpg"
+        val name = storedName(nameHint, id, kind, System.currentTimeMillis())
 
         return try {
             FileOutputStream(fileFor(context, name)).use { out ->

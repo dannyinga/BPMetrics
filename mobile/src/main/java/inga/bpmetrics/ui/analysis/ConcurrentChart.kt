@@ -156,7 +156,7 @@ fun ConcurrentChart(
                 )
             }
 
-            drawTimeLabels(window, plotWidth, plotHeight, timeLabelPaint)
+            drawTimeLabels(window, plotWidth, plotHeight, timeLabelPaint, analysis.clock)
 
             scrubbedMs?.let { drawScrubLine(it, window, scrubColor, plotWidth, plotHeight) }
         }
@@ -235,7 +235,9 @@ private fun DrawScope.drawTimeLabels(
     window: ConcurrentViewWindow,
     plotWidth: Float,
     plotHeight: Float,
-    labelPaint: Paint
+    labelPaint: Paint,
+    /** The recordings' clock, so the axis and the readout above it agree. */
+    clock: java.time.ZoneId
 ) {
     val divisions = (plotWidth / 220f).toInt().coerceIn(2, 6)
     val y = plotHeight + 30f
@@ -250,7 +252,7 @@ private fun DrawScope.drawTimeLabels(
         val rightLimit = (size.width - 24f).coerceAtLeast(leftLimit)
         val x = (AXIS_GUTTER_PX + fraction * plotWidth).coerceIn(leftLimit, rightLimit)
 
-        drawContext.canvas.nativeCanvas.drawText(getTimeString(at), x, y, labelPaint)
+        drawContext.canvas.nativeCanvas.drawText(getTimeString(at, clock), x, y, labelPaint)
     }
 }
 

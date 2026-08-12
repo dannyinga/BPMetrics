@@ -2,7 +2,7 @@ package inga.bpmetrics.export
 
 import android.net.Uri
 import android.util.Log
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.RenderJobDao
 import inga.bpmetrics.library.RenderJobEntity
 
@@ -14,7 +14,7 @@ import inga.bpmetrics.library.RenderJobEntity
  * So this splits it the same way [ExportPreset] does: the look goes out as preset JSON, and the
  * content — which recordings, which clip, what window — goes into columns.
  *
- * Records are stored as *ids*. Writing whole `BpmRecord`s here would copy the library into a second
+ * Records are stored as *ids*. Writing whole `BpmRecordWithPoints`s here would copy the library into a second
  * table that starts drifting from it immediately, and a queue row is not the right place to be the
  * authority on what someone's heart rate did.
  */
@@ -50,7 +50,7 @@ class RenderJobStore(private val dao: RenderJobDao) {
          * runnable again. A job whose recordings have since been deleted returns null: failing
          * honestly is the only correct answer, since there is nothing left to draw.
          */
-        fun rehydrate(job: RenderJob, available: List<BpmRecord>): RenderJob? {
+        fun rehydrate(job: RenderJob, available: List<BpmRecordWithPoints>): RenderJob? {
             if (job.config.records.isNotEmpty()) return job
             val wanted = job.recordIds.toSet()
             val found = available.filter { it.metadata.recordId in wanted }

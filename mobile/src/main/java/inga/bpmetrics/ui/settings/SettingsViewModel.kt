@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.settings
 
+import inga.bpmetrics.util.launchGuarded
+
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -44,7 +47,7 @@ class SettingsViewModel(
     val allCategories: Flow<List<CategoryEntity>> = repository.getAllCategories()
 
     fun setDefaultNamingCategory(categoryId: Long?) {
-        viewModelScope.launch {
+        launchGuarded {
             if (categoryId == null) {
                 settingsRepository.clearDefaultNamingCategory()
             } else {
@@ -53,18 +56,11 @@ class SettingsViewModel(
         }
     }
 
-    val defaultViewMode: StateFlow<String> = settingsRepository.libraryViewMode
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "RECORDINGS")
-
-    fun setDefaultViewMode(mode: String) {
-        viewModelScope.launch { settingsRepository.setLibraryViewMode(mode) }
-    }
-
     val defaultSort: StateFlow<String?> = settingsRepository.defaultSort
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     fun setDefaultSort(sort: String) {
-        viewModelScope.launch { settingsRepository.setDefaultSort(sort) }
+        launchGuarded { settingsRepository.setDefaultSort(sort) }
     }
 
     // --- Appearance ---
@@ -73,21 +69,21 @@ class SettingsViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
     fun setDynamicColour(enabled: Boolean) {
-        viewModelScope.launch { settingsRepository.setDynamicColour(enabled) }
+        launchGuarded { settingsRepository.setDynamicColour(enabled) }
     }
 
     val use24Hour: StateFlow<Boolean> = settingsRepository.use24Hour
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     fun setUse24Hour(enabled: Boolean) {
-        viewModelScope.launch { settingsRepository.setUse24Hour(enabled) }
+        launchGuarded { settingsRepository.setUse24Hour(enabled) }
     }
 
     val dateFormat: StateFlow<String> = settingsRepository.dateFormat
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DateFormats.DEFAULT)
 
     fun setDateFormat(pattern: String) {
-        viewModelScope.launch { settingsRepository.setDateFormat(pattern) }
+        launchGuarded { settingsRepository.setDateFormat(pattern) }
     }
 
     // --- Heart rate ---
@@ -100,7 +96,7 @@ class SettingsViewModel(
         )
 
     fun setRestingBpm(bpm: Int) {
-        viewModelScope.launch { settingsRepository.setRestingBpm(bpm) }
+        launchGuarded { settingsRepository.setRestingBpm(bpm) }
     }
 
     val maxBpm: StateFlow<Int> = settingsRepository.maxBpm
@@ -111,7 +107,7 @@ class SettingsViewModel(
         )
 
     fun setMaxBpm(bpm: Int) {
-        viewModelScope.launch { settingsRepository.setMaxBpm(bpm) }
+        launchGuarded { settingsRepository.setMaxBpm(bpm) }
     }
 
     // --- Sync ---
@@ -120,7 +116,7 @@ class SettingsViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 15)
 
     fun setSyncRetryMinutes(minutes: Int) {
-        viewModelScope.launch { settingsRepository.setSyncRetryMinutes(minutes) }
+        launchGuarded { settingsRepository.setSyncRetryMinutes(minutes) }
     }
 
     /** How many recordings are still on their way from a watch. */
@@ -136,7 +132,7 @@ class SettingsViewModel(
         )
 
     fun setDefaultTimeZone(zoneId: String) {
-        viewModelScope.launch { settingsRepository.setDefaultTimeZone(zoneId) }
+        launchGuarded { settingsRepository.setDefaultTimeZone(zoneId) }
     }
 
     // --- Export ---
@@ -146,11 +142,11 @@ class SettingsViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun setDefaultPreset(preset: inga.bpmetrics.library.ExportPresetEntity) {
-        viewModelScope.launch { repository.setDefaultExportPreset(preset.presetId) }
+        launchGuarded { repository.setDefaultExportPreset(preset.presetId) }
     }
 
     fun deletePreset(preset: inga.bpmetrics.library.ExportPresetEntity) {
-        viewModelScope.launch { repository.deleteExportPreset(preset.presetId) }
+        launchGuarded { repository.deleteExportPreset(preset.presetId) }
     }
 
     /**
@@ -161,13 +157,35 @@ class SettingsViewModel(
      *
      * Real recordings when there are any, since judging a look against your own data is the point.
      */
-    val previewSubjects: StateFlow<Pair<List<inga.bpmetrics.library.BpmRecord>, List<inga.bpmetrics.library.BpmRecord>>> =
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val previewSubjects: StateFlow<Pair<
+        List<inga.bpmetrics.library.BpmRecordWithPoints>,
+        List<inga.bpmetrics.library.BpmRecordWithPoints>
+    >> =
         repository.records
-            .map { library -> PreviewSubjects.onePerson(library) to PreviewSubjects.severalPeople(library) }
+            .mapLatest { library ->
+                // A preview is a drawing, so it needs readings — but only for the handful it
+                // picks. Which recordings is decided from the rows first, and the readings are
+                // loaded for those alone.
+                val subjects = repository.recordsWithPoints(
+                    (PreviewSubjects.onePerson(library) + PreviewSubjects.severalPeople(library))
+                        .map { it.metadata.recordId }
+                ).associateBy { it.metadata.recordId }
+
+                fun hydrate(chosen: List<inga.bpmetrics.library.BpmRecord>) =
+                    chosen.mapNotNull { subjects[it.metadata.recordId] }
+
+                // Made-up curves only when the library genuinely has nothing to show, which is a
+                // fresh install. Judging a look against your own data is the point of this.
+                hydrate(PreviewSubjects.onePerson(library))
+                    .ifEmpty { PreviewSubjects.syntheticOne() } to
+                    hydrate(PreviewSubjects.severalPeople(library))
+                        .ifEmpty { PreviewSubjects.syntheticSeveral() }
+            }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5000),
-                emptyList<inga.bpmetrics.library.BpmRecord>() to emptyList()
+                emptyList<inga.bpmetrics.library.BpmRecordWithPoints>() to emptyList()
             )
 
     val peopleById: StateFlow<Map<Long, inga.bpmetrics.library.PersonEntity>> =
@@ -176,7 +194,7 @@ class SettingsViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     fun createPreset(name: String, preset: inga.bpmetrics.export.ExportPreset) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.saveExportPreset(name, preset.copy(name = name).toJson())
             _message.emit("Saved $name")
         }
@@ -193,7 +211,7 @@ class SettingsViewModel(
         name: String,
         preset: inga.bpmetrics.export.ExportPreset
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateExportPreset(entity.presetId, name, preset.copy(name = name).toJson())
             _message.emit("Saved $name")
         }
@@ -214,7 +232,7 @@ class SettingsViewModel(
     fun writePendingPreset(context: Context, uri: android.net.Uri) {
         val preset = pendingPresetExport ?: return
         pendingPresetExport = null
-        viewModelScope.launch {
+        launchGuarded {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
                     context.contentResolver.openOutputStream(uri)?.use {
@@ -234,7 +252,7 @@ class SettingsViewModel(
      * says why.
      */
     fun importPreset(context: Context, uri: android.net.Uri) {
-        viewModelScope.launch {
+        launchGuarded {
             val json = withContext(Dispatchers.IO) {
                 runCatching {
                     context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
@@ -243,7 +261,7 @@ class SettingsViewModel(
             val preset = json?.let { inga.bpmetrics.export.ExportPreset.fromJson(it) }
             if (preset == null) {
                 _message.emit("That file is not a preset this version can read")
-                return@launch
+                return@launchGuarded
             }
             val name = preset.name.ifBlank { "Imported preset" }
             repository.saveExportPreset(name, preset.copy(name = name).toJson())
@@ -264,14 +282,14 @@ class SettingsViewModel(
     val restarting: StateFlow<Boolean> = _restarting.asStateFlow()
 
     fun refreshStorage(context: Context) {
-        viewModelScope.launch {
+        launchGuarded {
             // Walks directories, so never on the main thread.
             _storage.value = withContext(Dispatchers.IO) { StorageInspector.inspect(context) }
         }
     }
 
     fun clearStagedExports(context: Context) {
-        viewModelScope.launch {
+        launchGuarded {
             val freed = withContext(Dispatchers.IO) {
                 val before = StorageInspector.inspect(context)
                     .items.firstOrNull { it.label == "Staged exports" }?.bytes ?: 0L
@@ -284,7 +302,7 @@ class SettingsViewModel(
     }
 
     fun deleteBackup(context: Context, backup: StorageInspector.Backup) {
-        viewModelScope.launch {
+        launchGuarded {
             withContext(Dispatchers.IO) { StorageInspector.deleteBackup(backup) }
             refreshStorage(context)
         }
@@ -298,7 +316,7 @@ class SettingsViewModel(
      * every subsequent query reading a handle to a file that is gone.
      */
     fun restoreBackup(context: Context, backup: StorageInspector.Backup) {
-        viewModelScope.launch {
+        launchGuarded {
             val failure = withContext(Dispatchers.IO) { StorageInspector.restore(context, backup) }
             if (failure != null) {
                 _message.emit(failure)

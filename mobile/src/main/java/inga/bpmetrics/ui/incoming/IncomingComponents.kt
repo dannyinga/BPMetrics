@@ -39,6 +39,7 @@ import inga.bpmetrics.datasync.IncomingRecord
 import inga.bpmetrics.datasync.IncomingRecordManager
 import inga.bpmetrics.datasync.IncomingStatus
 import inga.bpmetrics.datasync.isActive
+import inga.bpmetrics.ui.util.ReaderClock
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
 
 /**
@@ -140,7 +141,7 @@ private fun describe(record: IncomingRecord): String = when (record.status) {
     IncomingStatus.COMPLETED -> buildString {
         append("Added to your library")
         if (record.receivedBytes > 0) append(" · ${record.receivedBytes / 1024} KB")
-        record.finishedAt?.let { append(" · ${getTimeString(it)}") }
+        record.finishedAt?.let { append(" · ${getTimeString(it, ReaderClock)}") }
     }
     IncomingStatus.FAILED -> "Failed — the watch still has it and will retry. " +
             (record.error ?: "")

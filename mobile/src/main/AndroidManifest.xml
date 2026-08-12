@@ -8,6 +8,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
+    <!--
+      Optional, and never required. Fills in a venue's coordinates from the device so nobody has to
+      type two numbers; a GPS fix needs no network. Everything about locations — naming them, their
+      time zones, comparing across them — works with this refused.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
     <application
         android:name=".BPMetricsApp"
         android:dataExtractionRules="@xml/data_extraction_rules"

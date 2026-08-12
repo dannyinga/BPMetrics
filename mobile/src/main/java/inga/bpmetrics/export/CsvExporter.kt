@@ -4,7 +4,8 @@ import android.content.Context
 import android.net.Uri
 import inga.bpmetrics.core.BpmDataPoint
 import inga.bpmetrics.core.BpmWatchRecord
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.clock
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.ui.util.StringFormatHelpers
 import java.io.BufferedReader
 import java.io.File
@@ -19,19 +20,19 @@ import android.provider.DocumentsContract
 object CsvExporter {
 
     /**
-     * Formats a [BpmRecord] into a CSV string.
+     * Formats a [BpmRecordWithPoints] into a CSV string.
      *
      * @param record The BPM record to format.
      * @return A string containing the record metadata and all data points in CSV format.
      */
-    fun getCsvString(record: BpmRecord, categoryNames: Map<Long, String> = emptyMap()): String {
+    fun getCsvString(record: BpmRecordWithPoints, categoryNames: Map<Long, String> = emptyMap()): String {
         val writer = StringBuilder()
         writer.appendLine("BPMetrics Data Export")
         writer.appendLine("Title,${record.metadata.title}")
         writer.appendLine("Description,${record.metadata.description}")
         writer.appendLine("Device ID,${record.metadata.deviceId}")
         writer.appendLine("Wearer Name,${record.metadata.wearerName}")
-        writer.appendLine("Date,${StringFormatHelpers.getDateString(record.metadata.date)}")
+        writer.appendLine("Date,${StringFormatHelpers.getDateString(record.metadata.date, record.clock)}")
         writer.appendLine("Start Time (ms),${record.metadata.startTime}")
         writer.appendLine("End Time (ms),${record.metadata.endTime}")
         writer.appendLine("Duration (ms),${record.metadata.durationMs}")
@@ -118,12 +119,12 @@ object CsvExporter {
     }
 
     /**
-     * Shares a [BpmRecord] as a CSV file using an Intent.
+     * Shares a [BpmRecordWithPoints] as a CSV file using an Intent.
      *
      * @param context Android context to start the sharing intent.
      * @param record The record to share.
      */
-    fun shareCsv(context: Context, record: BpmRecord) {
+    fun shareCsv(context: Context, record: BpmRecordWithPoints) {
         val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
         val fileName = "${sanitizedTitle}_data.csv"
         val tempFile = File(context.cacheDir, fileName)
@@ -137,9 +138,9 @@ object CsvExporter {
     }
 
     /**
-     * Shares multiple [BpmRecord]s as CSV files using an Intent.
+     * Shares multiple [BpmRecordWithPoints]s as CSV files using an Intent.
      */
-    fun shareCsvs(context: Context, records: List<BpmRecord>) {
+    fun shareCsvs(context: Context, records: List<BpmRecordWithPoints>) {
         if (records.isEmpty()) return
         val files = records.map { record ->
             val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
@@ -156,9 +157,9 @@ object CsvExporter {
     }
 
     /**
-     * Exports multiple [BpmRecord]s as CSV files into a directory specified by folderUri.
+     * Exports multiple [BpmRecordWithPoints]s as CSV files into a directory specified by folderUri.
      */
-    fun exportToFolder(context: Context, records: List<BpmRecord>, folderUri: Uri): Boolean {
+    fun exportToFolder(context: Context, records: List<BpmRecordWithPoints>, folderUri: Uri): Boolean {
         if (records.isEmpty()) return true
         return try {
             val contentResolver = context.contentResolver

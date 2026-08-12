@@ -2,7 +2,7 @@ package inga.bpmetrics.ui.analysis
 
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import inga.bpmetrics.ui.theme.BpmRamp
+import inga.bpmetrics.core.BpmRamp
 
 /**
  * The blue-to-red heart rate gradient, as Compose sees it.

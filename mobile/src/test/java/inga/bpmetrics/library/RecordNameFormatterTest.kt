@@ -2,7 +2,8 @@ package inga.bpmetrics.library
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import java.text.SimpleDateFormat
+import inga.bpmetrics.ui.util.ReaderClock
+import inga.bpmetrics.ui.util.StringFormatHelpers
 import java.util.Date
 import java.util.Locale
 
@@ -17,8 +18,12 @@ class RecordNameFormatterTest {
 
     private val startTime = 1_772_000_000_000L
 
+    // Derived from [StringFormatHelpers] rather than re-stated here. The point of the change these
+    // pin is that a name the app invents reads the way every other date in the app reads, so a test
+    // carrying its own pattern would be asserting the opposite of the thing that matters.
     private val expectedTime =
-        SimpleDateFormat("d MMM, HH:mm", Locale.getDefault()).format(Date(startTime))
+        StringFormatHelpers.getDateString(startTime, ReaderClock) + ", " +
+            StringFormatHelpers.getTimeString(startTime, ReaderClock)
 
     private fun record(
         title: String,

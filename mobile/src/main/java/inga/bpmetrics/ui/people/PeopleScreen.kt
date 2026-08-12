@@ -139,8 +139,8 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
             viewModel.setPhoto(context, person.personId, uri) { ok ->
                 if (ok) {
                     // Straight into framing, while the choice is fresh. A photograph that lands
-                    // showing the wrong person's shoulder and has to be hunted down to fix is worse
-                    // than one extra step now.
+                    // showing the wrong shoulder and has to be hunted down to fix is worse than
+                    // one extra step now. Already open when the pick came from inside the sheet.
                     framingPhoto = true
                 } else {
                     Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
@@ -148,9 +148,10 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
             }
         }
 
-        person.ownPhoto?.takeIf { framingPhoto }?.let { photo ->
+        if (framingPhoto) {
             CoverCropDialog(
-                cover = photo,
+                cover = person.ownPhoto,
+                onPick = pickPhoto,
                 shape = CoverCropShape.CIRCLE,
                 title = "Frame ${person.displayName}",
                 hint = "Drag to move the photo, or a corner to zoom. Only what is inside the " +
@@ -161,10 +162,8 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
                     viewModel.setPhotoCrop(person.personId, it)
                     framingPhoto = false
                 },
-                onRemove = {
-                    viewModel.clearPhoto(context, person.personId)
-                    framingPhoto = false
-                }
+                // Stays open: removing is usually the first half of replacing.
+                onRemove = { viewModel.clearPhoto(context, person.personId) }
             )
         }
 

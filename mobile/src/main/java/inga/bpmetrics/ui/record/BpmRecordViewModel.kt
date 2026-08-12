@@ -1,14 +1,15 @@
 package inga.bpmetrics.ui.record
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.core.BpmWatchRecord
-import inga.bpmetrics.library.BpmRecord
+import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EffectiveTag
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EventGroupEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.TagEntity
@@ -30,7 +31,7 @@ import kotlinx.coroutines.launch
 /** Where a recording sits in the hierarchy, for the breadcrumb. Both null when it is unfiled. */
 data class RecordPlacement(
     val event: EventEntity? = null,
-    val group: EventGroupEntity? = null
+    val group: EventEntity? = null
 )
 
 /**
@@ -44,11 +45,11 @@ class BpmRecordViewModel(
     private val recordId: Long
 ) : ViewModel() {
 
-    private val _record = MutableStateFlow<BpmRecord?>(null)
+    private val _record = MutableStateFlow<BpmRecordWithPoints?>(null)
     /**
-     * A [kotlinx.coroutines.flow.StateFlow] emitting the current [BpmRecord] details, or null if the record is still loading.
+     * A [kotlinx.coroutines.flow.StateFlow] emitting the current [BpmRecordWithPoints] details, or null if the record is still loading.
      */
-    val record: StateFlow<BpmRecord?> = _record
+    val record: StateFlow<BpmRecordWithPoints?> = _record
 
     /**
      * The given name of the watch this recording came from, or null if it has none.
@@ -98,16 +99,55 @@ class BpmRecordViewModel(
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConcurrentAnalysis())
 
+    /** The venue registry, for the override picker to offer. */
+    val locations: StateFlow<List<inga.bpmetrics.library.LocationEntity>> =
+        repository.getAllLocations()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Where this recording was, and whether that came from itself or from an event above it.
+     *
+     * Resolved rather than read off the row, so a recording inside a festival says "The Gorge"
+     * instead of nothing — and the screen can say the venue is inherited, which is the difference
+     * between "nobody set this" and "the festival already did".
+     */
+    val place: StateFlow<inga.bpmetrics.library.EffectivePlace?> = combine(
+        _record, repository.allEventsInTree, locations
+    ) { rec, events, places ->
+        rec?.let {
+            inga.bpmetrics.library.LocationResolver.forRecording(
+                directLocationId = it.metadata.locationId,
+                eventId = it.metadata.eventId,
+                events = events,
+                locations = places.associateBy { p -> p.locationId }
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * Pins this recording to a venue, or clears the pin so it inherits again.
+     *
+     * For the one that genuinely differs — someone who joined from elsewhere, a watch left on the
+     * wrong clock. Null puts it back to whatever its event says, which is right far more often.
+     */
+    fun setLocation(locationId: Long?) {
+        launchGuarded {
+            repository.setRecordLocation(recordId, locationId)
+            loadRecord()
+        }
+    }
+
     /** Which event and group this belongs to, for the breadcrumb. */
     val placement: StateFlow<RecordPlacement> = combine(
         _record,
-        repository.getAllEvents(),
-        repository.getAllEventGroups()
-    ) { rec, events, groups ->
+        repository.allEventsInTree
+    ) { rec, events ->
         val event = rec?.metadata?.eventId?.let { id -> events.firstOrNull { it.eventId == id } }
         RecordPlacement(
             event = event,
-            group = event?.groupId?.let { id -> groups.firstOrNull { it.groupId == id } }
+            // The event above it, whatever kind of thing that is. Before the fold the breadcrumb
+            // could only name a collection, so a set nested inside a day showed no context at all.
+            group = event?.parentId?.let { id -> events.firstOrNull { it.eventId == id } }
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecordPlacement())
 
@@ -119,17 +159,14 @@ class BpmRecordViewModel(
      */
     val cover: StateFlow<inga.bpmetrics.library.Cover?> = combine(
         _record,
-        repository.getAllEvents(),
-        repository.getAllEventGroups()
-    ) { rec, events, groups ->
+        repository.allEventsInTree
+    ) { rec, events ->
         if (rec == null) return@combine null
         inga.bpmetrics.library.CoverResolver.forRecording(
             directCover = rec.metadata.ownCover,
             eventId = rec.metadata.eventId,
             eventCovers = events.associate { it.eventId to it.ownCover },
-            eventGroups = events.associate { it.eventId to it.groupId },
-            groupCovers = groups.associate { it.groupId to it.ownCover },
-            groupParents = groups.associate { it.groupId to it.parentGroupId }
+            events = events
         )?.cover
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
@@ -150,7 +187,9 @@ class BpmRecordViewModel(
                 it.metadata.personId == personId && it.metadata.recordId != rec.metadata.recordId
             }
         }.orEmpty()
-        RecordAnalysis.from(current.series.firstOrNull(), rec, theirs)
+        // Comparison reads peaks and averages, which are columns — no readings needed on either
+        // side, so the summary form is what goes in.
+        RecordAnalysis.from(current.series.firstOrNull(), rec.summary, theirs)
     }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecordInsights())
@@ -163,7 +202,7 @@ class BpmRecordViewModel(
      * Fetches the record from the repository and updates the UI state.
      */
     private fun loadRecord() {
-        viewModelScope.launch {
+        launchGuarded {
             val fetchedRecord = repository.getRecordWithId(recordId)
             _record.value = fetchedRecord
         }
@@ -181,7 +220,7 @@ class BpmRecordViewModel(
      * the way to give one recording in a set its own picture.
      */
     fun setOwnCover(context: android.content.Context, source: android.net.Uri, onResult: (Boolean) -> Unit) {
-        viewModelScope.launch {
+        launchGuarded {
             val hint = _record.value?.metadata?.title?.takeIf { it.isNotBlank() } ?: "recording"
             val stored = repository.setCover(
                 context = context,
@@ -196,7 +235,7 @@ class BpmRecordViewModel(
 
     /** Re-frames this recording's own cover. */
     fun setOwnCoverCrop(cover: inga.bpmetrics.library.Cover) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setCoverCrop(LibraryRepository.CoverOwner.Recording(recordId), cover)
             loadRecord()
         }
@@ -209,7 +248,7 @@ class BpmRecordViewModel(
      * stores null rather than an empty string.
      */
     fun clearOwnCover(context: android.content.Context) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.clearCover(context, LibraryRepository.CoverOwner.Recording(recordId))
             loadRecord()
         }
@@ -219,7 +258,7 @@ class BpmRecordViewModel(
      * Deletes the current record from the database.
      */
     fun deleteRecord() {
-        viewModelScope.launch {
+        launchGuarded {
             repository.deleteRecordWithId(recordId)
         }
     }
@@ -230,7 +269,7 @@ class BpmRecordViewModel(
      * @param newTitle The new string title to assign to the record.
      */
     fun updateTitle(newTitle: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateRecordTitle(recordId, newTitle)
             loadRecord()
         }
@@ -242,7 +281,7 @@ class BpmRecordViewModel(
      * @param newDescription The new description to assign to the record.
      */
     fun updateDescription(newDescription: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateRecordDescription(recordId, newDescription)
             loadRecord()
         }
@@ -254,7 +293,7 @@ class BpmRecordViewModel(
      * A per-record override, for the recording that arrived before its watch had anyone assigned.
      */
     fun updateDeviceAndWearer(deviceId: String, personId: Long?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateRecordDeviceAndWearer(recordId, deviceId, personId)
             loadRecord()
         }
@@ -266,7 +305,7 @@ class BpmRecordViewModel(
      * @param tagId The ID of the tag to assign.
      */
     fun addTag(tagId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.addTagToRecord(recordId, tagId)
             loadRecord()
         }
@@ -278,7 +317,7 @@ class BpmRecordViewModel(
      * @param tagId The ID of the tag to remove.
      */
     fun removeTag(tagId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.removeTagFromRecord(recordId, tagId)
             loadRecord()
         }
@@ -289,7 +328,7 @@ class BpmRecordViewModel(
      * Inherits tags from the original record.
      */
     fun splitRecord(newRecord: BpmWatchRecord, title: String) {
-        viewModelScope.launch {
+        launchGuarded {
             val tagsToCopy = _record.value?.tags ?: emptyList()
             val newRecordId = repository.saveWatchRecordToLibrary(newRecord, title)
             
@@ -311,6 +350,11 @@ class BpmRecordViewModel(
      * @param categoryId The ID of the category.
      */
     fun getTagsByCategory(categoryId: Long): Flow<List<TagEntity>> = repository.getTagsByCategory(categoryId)
+
+    /** Makes a tag where it is applied, creating its axis if new. */
+    fun createTag(categoryName: String, tagName: String, onMade: (Long) -> Unit) {
+        launchGuarded { repository.findOrCreateTag(categoryName, tagName)?.let(onMade) }
+    }
 
     /**
      * Manually triggers a reload of the record from the database.
