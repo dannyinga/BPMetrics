@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.locations
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -45,15 +47,15 @@ class LocationsViewModel(private val repository: LibraryRepository) : ViewModel(
 
     /** A per-location query, so refreshed rather than observed — as with People. */
     fun refreshCounts() {
-        viewModelScope.launch {
+        launchGuarded {
             val ids = uiState.value.locations.map { it.location.locationId }
-            if (ids.isEmpty()) return@launch
+            if (ids.isEmpty()) return@launchGuarded
             _eventCounts.value = ids.associateWith { repository.countEventsAt(it) }
         }
     }
 
     fun addLocation(name: String, timeZoneId: String?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.createLocation(name, timeZoneId)
             refreshCounts()
             _message.value = "${name.trim()} added."
@@ -61,7 +63,7 @@ class LocationsViewModel(private val repository: LibraryRepository) : ViewModel(
     }
 
     fun rename(locationId: Long, name: String) {
-        viewModelScope.launch { repository.renameLocation(locationId, name) }
+        launchGuarded { repository.renameLocation(locationId, name) }
     }
 
     /**
@@ -71,21 +73,21 @@ class LocationsViewModel(private val repository: LibraryRepository) : ViewModel(
      * shown in is inherited rather than stored per recording by hand.
      */
     fun setZone(locationId: Long, timeZoneId: String?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setLocationZone(locationId, timeZoneId)
             _message.value = "Clock updated. Recordings there now read in it."
         }
     }
 
     fun setCoordinates(locationId: Long, latitude: Double?, longitude: Double?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setLocationCoordinates(locationId, latitude, longitude)
             _message.value = if (latitude == null) "Coordinates cleared." else "Coordinates saved."
         }
     }
 
     fun delete(context: android.content.Context, locationId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.deleteLocation(context, locationId)
             refreshCounts()
             _message.value = "Deleted. The events that were there keep their recordings."

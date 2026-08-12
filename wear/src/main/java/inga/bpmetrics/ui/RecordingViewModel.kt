@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.recording.RecordingRepository
@@ -7,6 +8,7 @@ import inga.bpmetrics.recording.RecordingState
 import inga.bpmetrics.recording.SignalState
 import inga.bpmetrics.sync.PhoneSyncManager
 import inga.bpmetrics.sync.SyncOutcome
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -103,6 +105,20 @@ class RecordingViewModel(
             _sendResult.value = null
             try {
                 _sendResult.value = describe(manager.syncNow())
+            } catch (e: CancellationException) {
+                // The screen went away mid-send. Not a failure, and rethrowing is required or the
+                // coroutine machinery is left believing a cancelled job completed.
+                throw e
+            } catch (t: Throwable) {
+                // `Throwable`, not `Exception`. `syncNow` already catches `Exception` internally,
+                // so anything arriving here is the kind that does not get caught by tidy code —
+                // a missing Play Services class, a `LinkageError` from a partial update. The point
+                // is not that any of those is expected. It is that `viewModelScope` carries no
+                // exception handler, so *whatever* escapes this block kills the app, and the last
+                // thing a wearer should get for pressing a button labelled "Send now" is the app
+                // disappearing off their wrist with the recording still on it.
+                Log.e(TAG, "Manual send failed", t)
+                _sendResult.value = "Send failed"
             } finally {
                 _sending.value = false
             }
@@ -112,6 +128,8 @@ class RecordingViewModel(
     }
 
     private companion object {
+        const val TAG = "RecordingViewModel"
+
         /** How long the outcome of a manual send stays on the watch face. */
         const val RESULT_VISIBLE_MS = 4_000L
 

@@ -177,7 +177,10 @@ private fun LaneRow(
             Box(
                 Modifier
                     .size(10.dp)
-                    .clip(RoundedCornerShape(5.dp))
+                    // A circle, said as one. It was `RoundedCornerShape(5.dp)` on a 10dp box —
+                    // the same shape, expressed as a number that has to be kept in step with the
+                    // size above it, which is how a dot becomes a lozenge when someone resizes it.
+                    .clip(androidx.compose.foundation.shape.CircleShape)
                     .background((lane.colorArgb?.let { Color(it) } ?: tone).copy(alpha = alpha))
             )
             Spacer(Modifier.width(10.dp))

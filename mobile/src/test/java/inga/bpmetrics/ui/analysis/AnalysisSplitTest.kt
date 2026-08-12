@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.core.BpmPalette
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -369,15 +370,66 @@ class AnalysisSplitTest {
         assertEquals(-16776961, lanes.first { it.value == "Ben" }.colorArgb)
     }
 
+    /**
+     * Replaces `a tag lane carries no colour`, which pinned the defect rather than the rule.
+     *
+     * Carrying no colour was not a neutral choice: it fell back at the drawing site to the metric's
+     * own colour, so a comparison split six ways by tag drew six identical dots and the colour
+     * column said nothing at all.
+     */
     @Test
-    fun `a tag lane carries no colour`() {
+    fun `tag lanes take distinct colours from the neutral series`() {
         val records = listOf(
             record(1, colour = -65536, tags = listOf(tag("Spiderman"))),
             record(2, colour = -65536, tags = listOf(tag("Hulk")))
         )
 
-        assertTrue(AnalysisSplit.split(records, SplitAxis.TagCategory(1, "Character"))
-            .all { it.colorArgb == null })
+        val lanes = AnalysisSplit.split(records, SplitAxis.TagCategory(1, "Character"))
+        val colours = lanes.map { it.colorArgb }
+
+        assertTrue("a lane came back uncoloured", colours.all { it != null })
+        assertEquals("two lanes shared a colour", lanes.size, colours.distinct().size)
+
+        // Never a person's colour, whatever the records happen to carry. §5: identity means a
+        // person, and a tag lane borrowing that palette would claim a tag was somebody.
+        assertTrue(colours.none { it == -65536 })
+        assertTrue(colours.all { it in BpmPalette.NEUTRAL })
+    }
+
+    /**
+     * A lane keeps its colour when the ranking changes.
+     *
+     * Colours are assigned over the keys in sorted order, not over the lanes in ranked order —
+     * "Hulk" before "Spiderman" — because lanes are re-sorted by whichever metric is selected. A
+     * dot that changed from sage to clay when you switched from average to peak would read as a
+     * different lane rather than the same one re-ranked.
+     */
+    @Test
+    fun `a tag's colour follows the tag, not its rank`() {
+        val records = listOf(
+            record(1, tags = listOf(tag("Spiderman"))),
+            record(2, tags = listOf(tag("Hulk")))
+        )
+
+        val lanes = AnalysisSplit.split(records, SplitAxis.TagCategory(1, "Character"))
+
+        assertEquals(BpmPalette.neutral(0), lanes.first { it.value == "Hulk" }.colorArgb)
+        assertEquals(BpmPalette.neutral(1), lanes.first { it.value == "Spiderman" }.colorArgb)
+    }
+
+    /** The residual is the absence of a category, and recedes rather than competing. */
+    @Test
+    fun `the unlabelled lane is the residual colour`() {
+        val records = listOf(
+            record(1, tags = listOf(tag("Hulk"))),
+            record(2)
+        )
+
+        val lanes = AnalysisSplit.split(records, SplitAxis.TagCategory(1, "Character"))
+        val residual = lanes.first { it.isUnlabelled }
+
+        assertEquals(BpmPalette.RESIDUAL, residual.colorArgb)
+        assertTrue(BpmPalette.RESIDUAL !in BpmPalette.NEUTRAL)
     }
 
     @Test

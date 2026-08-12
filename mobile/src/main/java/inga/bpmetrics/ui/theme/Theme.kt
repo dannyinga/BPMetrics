@@ -77,6 +77,9 @@ fun BPMetricsTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
+        // Declared rather than defaulted. See [BpmShapes] — the values are Material's own, and
+        // writing them down is what gives the inline `RoundedCornerShape(14.dp)`s somewhere to go.
+        shapes = BpmShapes,
         content = content
     )
 }

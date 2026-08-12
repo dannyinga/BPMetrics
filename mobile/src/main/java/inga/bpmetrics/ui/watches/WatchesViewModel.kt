@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.watches
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -54,9 +56,9 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
 
     /** Record counts are a per-watch query, so they are refreshed rather than observed. */
     fun refreshCounts() {
-        viewModelScope.launch {
+        launchGuarded {
             val watches = uiState.value.watches.map { it.watch.watchId }
-            if (watches.isEmpty()) return@launch
+            if (watches.isEmpty()) return@launchGuarded
             _recordCounts.value = watches.associateWith { repository.countRecordsForWatch(it) }
         }
     }
@@ -67,7 +69,7 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
      * Only the wearer affects recordings, and only ones that arrive from here on.
      */
     fun save(watchId: String, deviceName: String, personId: Long?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.renameWatch(watchId, deviceName)
             repository.setWatchPerson(watchId, personId)
             val name = personId?.let { repository.getPerson(it)?.name }
@@ -83,7 +85,7 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
      * Registers a watch that has not sent anything yet, so its first recordings are attributed.
      */
     fun addWatch(watchId: String, deviceName: String, personId: Long?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.registerWatch(
                 watchId = watchId.trim(),
                 deviceName = deviceName,
@@ -100,7 +102,7 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
      * The recovery path for a watch that recorded before anyone was assigned to it.
      */
     fun reattribute(watchId: String, personId: Long, fromDate: Long, toDate: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             val changed = repository.reattributeRecords(watchId, personId, fromDate, toDate)
             val name = repository.getPerson(personId)?.name ?: "them"
             _message.value = when (changed) {
@@ -112,7 +114,7 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
     }
 
     fun merge(fromWatchId: String, intoWatchId: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.mergeWatches(fromWatchId, intoWatchId)
             refreshCounts()
             _message.value = "Watches merged."
@@ -120,7 +122,7 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
     }
 
     fun delete(watchId: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.deleteWatch(watchId)
             refreshCounts()
             _message.value = "Watch removed. Existing recordings keep their names."

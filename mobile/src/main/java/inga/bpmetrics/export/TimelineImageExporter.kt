@@ -55,10 +55,10 @@ object TimelineImageExporter {
         val showGrid: Boolean = true,
         val showLabels: Boolean = true,
         val showStats: Boolean = true,
-        val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
-        val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
-        val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
-        val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
+        val lowBpmColor: Int = inga.bpmetrics.core.BpmPalette.LOW,
+        val highBpmColor: Int = inga.bpmetrics.core.BpmPalette.HIGH,
+        val labelsColor: Int = inga.bpmetrics.core.BpmPalette.ON_SURFACE,
+        val gridColor: Int = inga.bpmetrics.core.BpmPalette.GRID,
         val backgroundOpacity: Int = 100,
         val timeZoneId: String = ZoneId.systemDefault().id,
         /** See [ExportPreset.showWordmark]. Off by default; the preset carries the choice. */
@@ -95,7 +95,7 @@ object TimelineImageExporter {
         val bgAlpha = (spec.backgroundOpacity * 255 / 100).coerceIn(0, 255)
         if (bgAlpha > 0) {
             paint.resetForExport()
-            paint.color = inga.bpmetrics.ui.theme.BpmPalette.SURFACE
+            paint.color = inga.bpmetrics.core.BpmPalette.SURFACE
             paint.alpha = bgAlpha
             canvas.drawRoundRect(
                 RectF(0f, 0f, spec.width.toFloat(), spec.height.toFloat()),
@@ -540,7 +540,7 @@ object TimelineImageExporter {
 
     /** The midpoint of the ramp between two colours — the third copy of a walk that is now shared. */
     private fun blend(from: Int, to: Int): Int =
-        inga.bpmetrics.ui.theme.BpmRamp.blend(from, to, 0.5f)
+        inga.bpmetrics.core.BpmRamp.blend(from, to, 0.5f)
 
     /** The vertical scale, padded so the curve does not touch the frame. */
     private class BpmRange(val min: Double, val max: Double) {

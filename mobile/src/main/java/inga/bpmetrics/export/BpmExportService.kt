@@ -26,7 +26,9 @@ import java.io.IOException
 
 class BpmExportService : Service() {
 
-    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    // Through [backgroundScope]: a render that throws in a way nothing anticipated should fail the
+    // job and leave the queue running, not take the app down mid-export.
+    private val serviceScope = inga.bpmetrics.util.backgroundScope("BpmExportService", Dispatchers.Default)
     private var queueJob: Job? = null
     private var exportJob: Job? = null
     private var currentRunningJobId: String? = null

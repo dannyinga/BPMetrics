@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import inga.bpmetrics.library.Cover
 import inga.bpmetrics.library.CoverStore
-import inga.bpmetrics.ui.theme.BpmPalette
+import inga.bpmetrics.core.BpmPalette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 

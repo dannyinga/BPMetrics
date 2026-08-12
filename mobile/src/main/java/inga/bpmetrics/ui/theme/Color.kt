@@ -1,5 +1,8 @@
 package inga.bpmetrics.ui.theme
 
+import inga.bpmetrics.core.BpmPalette
+import inga.bpmetrics.core.BpmRamp
+
 import androidx.compose.ui.graphics.Color
 
 /**
@@ -15,7 +18,7 @@ import androidx.compose.ui.graphics.Color
  */
 
 /** The seed. Kept as the brand mark and the splash background; not used raw as a surface. */
-val BpmTeal = Color(0xFF00DCC2)
+val BpmTeal = Color(BpmPalette.TEAL)
 
 // --- Primary: the teal, at the tones Material wants for a dark scheme ---
 
@@ -43,8 +46,11 @@ val TealOnTertiaryContainer = Color(0xFFCBE6FF)
 
 // --- Neutrals, tinted very slightly teal so surfaces belong to the palette ---
 
-val Surface = Color(0xFF0E1513)
-val OnSurface = Color(0xFFDDE4E1)
+// Surface and its ink come from the shared palette rather than being typed again here: the export
+// renderers draw a panel meant to match the app's own, and two literals of the same colour is how
+// the picture and the screen come to differ by a shade nobody can name.
+val Surface = Color(BpmPalette.SURFACE)
+val OnSurface = Color(BpmPalette.ON_SURFACE)
 val SurfaceVariant = Color(0xFF3F4945)
 val OnSurfaceVariant = Color(0xFFBEC9C4)
 val SurfaceInverse = Color(0xFFDDE4E1)
@@ -81,28 +87,6 @@ val BpmAvg = Color(BpmPalette.AVG)
 val BpmHigh = Color(BpmPalette.HIGH)
 
 /**
- * The same colours as plain ARGB, for the renderers.
- *
- * `ImageExporter`, `TimelineImageExporter` and `ExportPreset` all draw with `android.graphics` and
- * take `Int`s, and each of them used to carry its own copy of these values. Three copies of one
- * palette is three chances for the picture and the screen to disagree — which is the failure this
- * whole document is about, and the same shape of bug that put the video and its preview a
- * clip-length apart earlier.
- *
- * One definition; the Compose colours above are derived from it.
- */
-object BpmPalette {
-    const val LOW = 0xFF6FC3FF.toInt()
-    const val AVG = 0xFFFFC46B.toInt()
-    const val HIGH = 0xFFFF6B6B.toInt()
-
-    /** The panel an export is drawn on, matching the app's surface. */
-    const val SURFACE = 0xFF0E1513.toInt()
-    const val ON_SURFACE = 0xFFDDE4E1.toInt()
-    const val GRID = 0x1FBEC9C4
-}
-
-/**
  * The accent for a primary action.
  *
  * The same teal as the theme's primary, named for what it is used for. One accent per screen: a
@@ -113,5 +97,14 @@ val BpmAccent = TealPrimary
 /** Something finished, and went well. Distinct from the ramp, which describes heart rates. */
 val BpmSuccess = Color(0xFF5FD68A)
 
-/** Chart gridlines: present enough to read a value against, quiet enough to ignore. */
-val ChartGrid = Color(0x1FBEC9C4)
+/**
+ * Chart gridlines: present enough to read a value against, quiet enough to ignore.
+ *
+ * Was `Color(0x1FBEC9C4)` — the same eight digits `BpmPalette.GRID` already held, typed a second
+ * time twelve lines below the comment warning against exactly that. The chart and the exported
+ * image of the same chart were reading two constants that happened to agree.
+ */
+val ChartGrid = Color(BpmPalette.GRID)
+
+/** A lane that is neither a person nor a rate. See [BpmPalette.NEUTRAL]. */
+fun neutralLaneColour(index: Int) = Color(BpmPalette.neutral(index))

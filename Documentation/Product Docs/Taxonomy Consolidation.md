@@ -611,16 +611,50 @@ a set, a festival and a collection, on one screen, with one control.
 
 ---
 
-### Sprint 6 — Colour discipline
+### Sprint 6 — Colour discipline, and a theme worth the name
 
 | Ticket | Work |
 |---|---|
 | **TX-6.1** | Audit every palette in the analysis tabs against §5. |
 | **TX-6.2** | Zones defined in `BpmPalette` as the deliberate third scheme. |
 | **TX-6.3** | Split-by-tag lanes take a defined neutral series, not an invented one. |
+| **TX-6.4** | `BpmPalette` and `BpmRamp` move to `:core`, so the watch and the phone cannot hold different answers. |
+| **TX-6.5** | The watch gets a theme. It had none — colours, type scale, the lot. |
+| **TX-6.6** | `MaterialTheme.shapes` declared, and the inline radii converted to it. |
 
 **Verify:** one person across the library, a comparison, a zone breakdown and an export — one colour
 throughout.
+
+#### What the audit found
+
+The three schemes of §5 were in better shape than expected — `PersonColors` was already the single
+answer for identity, and `BpmRamp` for quantity, both reached by the renderers as well as the
+screens. What it found instead was that **the boundary of the theme was in the wrong place**.
+
+| | What was wrong |
+|---|---|
+| **`BpmPalette` lived in `mobile`** | Which put it out of reach of the watch, and the watch had kept its own copy from before the ramp was fixed: `BpmAvg = 0xFF4CAF50`, the green middle the phone deliberately moved away from, plus a different red and blue. Nothing on the watch drew with them — they were declared and unused — so nothing was visibly wrong. They were the wrong answer sitting exactly where the next person to colour a heart rate on the wrist would have reached for it. Both are in `:core` now, which both modules already depend on; there is nowhere for a second copy to live. |
+| **The watch had no theme at all** | `BPMetricsTheme` on Wear was the Compose template verbatim, *"Empty theme to customize for your app"*, passing neither colours nor typography — so every screen on the wrist rendered in Wear Material's stock blues while the phone rendered in teal. The same thing had happened to the phone and was fixed there; the watch was never looked at again. It now takes a `Colors` seeded from the shared teal and a type scale that mirrors the phone's decisions: semibold for anything titular, and **tabular figures on the live reading**, which matters more on the wrist than anywhere else — at 38sp, a `1` narrower than an `8` is a wobble you cannot stop noticing. |
+| **Zones were matched on a string** | `zoneColour(name)` was a `when` over four literals, with `BpmHigh` at 70% alpha standing in for the third band and an `else` catching anything unrecognised. Rename a band and its colour silently changed; add a fifth and it was invisible. `BpmPalette.zone(index, count)` keys on **where a band sits**. A subtler bug went with it: bands were coloured *after* the empty ones were filtered out, so Peak came out a different colour on an evening where nobody entered the Light band. |
+| **…and the first replacement drew them violet** | Keying on position was right; *deriving* the colours was not. The first version sampled the continuous ramp, reasoning that a fourth set of hexes would be a fourth thing to keep in step. But the ramp interpolates **hue**, and the wheel between blue and red passes through neither amber nor orange — the bar came out blue, violet, pink, red. Going by way of the middle only moved the problem: blue to amber, taken the short way, runs through green, the one colour this palette has explicitly rejected. The scheme is a written-down list now — **blue, amber, orange, red** — three of the four being the ramp's own, which is what §5 meant by *the deliberate third scheme* in the first place. |
+| **`BpmRamp.blend` never took the short way** | Found underneath the above. The comment said *"round the short way, or a hue that wraps past 360 runs backwards through every other colour on the wheel"*; the code said `if (endHue < from[0]) endHue += 360f`, which is **always upward**. It was right for the ramp's own ends by luck — blue to red is genuinely shorter going up through violet — so nothing exercised it until the zone bands blended amber to red, which is 38° down and 322° up. It takes the shorter arc in either direction now, which leaves every existing caller unchanged. |
+| **Tag lanes carried `null`** | Which fell back at the drawing site to the metric's own colour, so a comparison split six ways drew six identical dots. There is a defined `NEUTRAL` series now — deliberately not the person palette, which would imply a tag was somebody, and deliberately not the ramp, which would imply the third lane was the fastest. Assigned over the keys in sorted order rather than the lanes in ranked order, so a lane keeps its colour when you switch metric. The residual "no tag" lane gets `RESIDUAL`, dimmer than any real lane: it was the only one left to the fallback, which made *uncategorised* the brightest row on the screen. A test named `a tag lane carries no colour` was pinning this defect and has been replaced by three pinning the rule. |
+| **The theme file duplicated its own values** | `ChartGrid = Color(0x1FBEC9C4)` and `BpmPalette.GRID = 0x1FBEC9C4` — the same eight digits, typed twelve lines apart, under a comment warning against exactly that. The chart and the exported image of the same chart were reading two constants that happened to agree. |
+| **Half the app typed its own corner radius** | `RoundedCornerShape(14.dp)` on one card, `16.dp` on the panel behind it, `4.dp` and `8.dp` on two thumbnails in the same column — none of them decisions, and the queue screen ended up visibly rounder than every other screen. The theme declares `Shapes` now. The values *are* the Material baseline; making them explicit is the point, since a default nobody can see is a default nobody can be asked to follow. Two things stay outside it on purpose: circles, which are a different kind of thing rather than the extreme of a rounded rectangle, and the 3dp clip on bars a few pixels tall, which is the largest radius that still leaves a bar looking like a bar. |
+
+#### The typeface: a deliberate non-goal
+
+Considered and declined. The open-licensed candidates cost nothing but still ship a licence file to
+carry, and the system face already has everything this app leans on — real tabular figures, five
+usable weights, and legibility at 11sp over a photograph. The cost is named in `Type.kt` so nobody
+rediscovers it: `FontFamily.Default` means a Samsung renders the app in One UI Sans and a Pixel in
+Roboto, so it has no typographic identity of its own across devices. Bundling a face is the only fix,
+and the scale, the weights and the numerals are doing the work a custom face would mostly decorate.
+
+**Light theme** stays out of scope, unchanged from §7.4 of the UI and UX Cleanup document: the
+charts, the export panel and the whole ramp are designed against dark, and supporting light properly
+means a second set of contrast decisions on every surface — including the exported images, which are
+the one output that leaves the app.
 
 ---
 
@@ -1355,6 +1389,56 @@ covered these two. Date uses Material's own range picker with the end pushed to 
 rate is a slider over the **average**, said on the dialog because "over 180" means something very
 different applied to peaks.
 
+### 10.2.3 Stability: nothing fails silently, nothing fails fatally
+
+A sweep of both modules for the two ways this app can hurt someone: dying while holding a recording,
+and *pretending* to hold one.
+
+**The pattern that ran through all of it.** Four scopes were built as
+`CoroutineScope(Dispatchers.IO + SupervisorJob())`, which looks like failure handling and is not.
+`SupervisorJob` decides only that one child's failure will not cancel its siblings; an exception
+that escapes a `launch` still travels to the scope's `CoroutineExceptionHandler`, and with none
+installed it reaches the thread's default handler, which kills the process. `LibraryRepository` had
+already worked this out and written the handler. The other four never got it — including **both
+halves of the watch→phone receive path**, which fail while holding the only copy of a recording the
+phone has not saved yet. They share one `backgroundScope` now.
+
+| | What was wrong |
+|---|---|
+| **113 `viewModelScope.launch` sites, none guarded** | `viewModelScope` carries no exception handler either. What these blocks do is call the repository, which means Room, which throws on a constraint violation or a full disk — so renaming a person could take the app down. All 113 go through `launchGuarded`, which passes a handler to the launch itself and keeps `viewModelScope`'s cancellation on `onCleared`. |
+| **The receive loops abandoned their backlog** | `itemsToProcess.forEach { processor.processDataItem(it) }` — an unguarded loop that throws on the third of ten drops the remaining seven with no record they arrived, and on this path those seven are recordings the watch is about to be told the phone has. Guarded per item. |
+| **The watch's initial `startForeground` was unguarded** | `updateNotification` already wrapped the identical call in a `try`/`catch`, so this was known to throw — but the call in `onCreate`, which runs first and matters more, did not. It throws where the health permission is not held at that instant, and where the system refuses a background start; both are ordinary states. It stops the service now rather than crashing, because a service that continues without foreground status is one the system may kill mid-recording. |
+| **The capability check reported the wrong thing** | `getExerciseTypeCapabilities(WORKOUT)` was called before `WORKOUT in supportedExerciseTypes` was tested. It throws for an unsupported type — so a watch that genuinely cannot do workouts fell into the catch and showed a raw exception message, while the screen already had a proper "not supported" state to offer. |
+| **Send now gave no answer to the press most needing one** | The chip lived inside `if (pendingRecordCount > 0)`. Press it on a recording the phone already has: the reconcile confirms it, the count drops to zero, and the chip — along with the "Phone has everything" it was about to display — is removed from the composition mid-press. The row simply vanished. |
+
+#### The watch had no answer for a database that will not open
+
+The phone got a recovery screen after the crash-loop (§10.5). The watch's equivalent was worse than
+missing — it was *invisible*. Room opens lazily, so a broken store fails on the first **query**, and
+that query happens inside the repository's scope, which does have an exception handler. The failure
+was caught, logged and dropped. The app then started perfectly normally, showed no pending
+recordings, and would have gone through the entire motion of recording a set while storing none of
+it. The wearer finds out hours later, with nothing to recover.
+
+- `RecordingDB.probe()` opens and touches the store so the failure surfaces at a moment someone can
+  be told about it, and distinguishes **`NewerThanApp`** from **`Unreadable`** exactly as the phone
+  does. The two want opposite things: a downgrade needs the newer build reinstalled and the data is
+  fine, damage needs the store cleared. Collapsing them is how a working set of recordings gets
+  thrown away by somebody who only needed the right APK — so "Clear and start over" is offered for
+  damage only, behind a confirmation naming what is lost.
+- The probe runs before the nav host will show anything, and **again in `HealthService.onCreate`**,
+  because that service is `START_STICKY`: the system restarts it with no activity involved and no
+  screen the wearer has seen. It stops itself rather than sensing into a store it cannot write.
+- Still never `fallbackToDestructiveMigration`, and the reason is sharper here than on the phone:
+  this file is the *only* copy of a recording between finalising it and the phone acknowledging it.
+
+Two latent faults turned up on the way. `RecordingDB.getInstance` was broken double-checked
+locking — no re-check of `INSTANCE` inside the `synchronized` block — so two threads could each
+build a Room instance over the same file. And the first draft of the probe wiring used
+`result.getOrNull() ?: fallback` on a `Result<DbFailure?>`, which answers null both when the probe
+throws *and* when it succeeds with nothing wrong; it would have shown the recovery screen on every
+healthy launch.
+
 ### 10.3 Unlovely
 
 | | Why it matters |
@@ -1362,7 +1446,7 @@ different applied to peaks.
 | **Empty states across the new pages are untested.** A recording with no readings, an event with nothing in it, a collection whose rule matches nothing. | The three states most likely to be someone's first experience of a page. |
 | **The subject header's height varies a lot by subject.** An event with a trail, a place and six tags is much taller than a bare recording. | The chart's position on screen moves between pages, which makes flicking between them feel unsteady. |
 | **`RecordingSubject.kt` is 591 lines.** Lifted wholesale so the fold's diff stayed honest about what changed. | Now that it has landed, the split dialog and the insights section each want their own file. |
-| **Sprint 6 — colour discipline** is polish of exactly this kind and is already written. | Worth doing as part of this rather than after it. |
+| ~~**Sprint 6 — colour discipline** is polish of exactly this kind and is already written.~~ | Done. It grew on contact with the code — see §6, Sprint 6: the three schemes were largely right, and what was wrong was that the theme stopped at the phone. |
 
 ### 10.4 Not on this list
 

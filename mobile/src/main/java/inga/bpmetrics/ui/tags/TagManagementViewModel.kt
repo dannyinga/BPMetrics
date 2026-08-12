@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.tags
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -49,13 +51,13 @@ class TagManagementViewModel(private val repository: LibraryRepository) : ViewMo
      * @param name The name of the new category.
      */
     fun createCategory(name: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.createCategory(name)
         }
     }
 
     fun renameCategory(category: CategoryEntity, newName: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateCategory(category.copy(name = newName))
         }
     }
@@ -66,7 +68,7 @@ class TagManagementViewModel(private val repository: LibraryRepository) : ViewMo
      * @param category The category to delete.
      */
     fun deleteCategory(category: CategoryEntity) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.deleteCategory(category)
         }
     }
@@ -78,13 +80,13 @@ class TagManagementViewModel(private val repository: LibraryRepository) : ViewMo
      * @param categoryId The ID of the parent category.
      */
     fun createTag(name: String, categoryId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.createTag(name, categoryId)
         }
     }
 
     fun renameTag(tag: TagEntity, newName: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateTag(tag.copy(name = newName))
         }
     }
@@ -95,7 +97,7 @@ class TagManagementViewModel(private val repository: LibraryRepository) : ViewMo
      * @param tag The tag to delete.
      */
     fun deleteTag(tag: TagEntity) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.deleteTag(tag)
         }
     }

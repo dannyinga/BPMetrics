@@ -45,11 +45,11 @@ object ImageExporter {
         val endTimeMs: Long = 0L,
         val backgroundOpacity: Int = 100,
         val showLabels: Boolean = true,
-        val labelsColor: Int = inga.bpmetrics.ui.theme.BpmPalette.ON_SURFACE,
+        val labelsColor: Int = inga.bpmetrics.core.BpmPalette.ON_SURFACE,
         val showGrid: Boolean = true,
-        val gridColor: Int = inga.bpmetrics.ui.theme.BpmPalette.GRID,
-        val lowBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.LOW,
-        val highBpmColor: Int = inga.bpmetrics.ui.theme.BpmPalette.HIGH,
+        val gridColor: Int = inga.bpmetrics.core.BpmPalette.GRID,
+        val lowBpmColor: Int = inga.bpmetrics.core.BpmPalette.LOW,
+        val highBpmColor: Int = inga.bpmetrics.core.BpmPalette.HIGH,
         val showTitle: Boolean = true,
         val showCurrentStats: Boolean = true,
         val headerXPercent: Float = 0.85f,
@@ -397,11 +397,11 @@ object ImageExporter {
         // transparent and keeps the footage — but where it does show, a still exported from
         // BPMetrics should be the same near-black the app itself is, rather than a flat #000 that
         // belongs to no palette.
-        if (canvas.isOpaque) canvas.drawColor(inga.bpmetrics.ui.theme.BpmPalette.SURFACE)
+        if (canvas.isOpaque) canvas.drawColor(inga.bpmetrics.core.BpmPalette.SURFACE)
         val bgAlpha = (config.backgroundOpacity * 255 / 100).coerceIn(0, 255)
         if (bgAlpha > 0) {
             paint.resetForExport()
-            paint.color = inga.bpmetrics.ui.theme.BpmPalette.SURFACE
+            paint.color = inga.bpmetrics.core.BpmPalette.SURFACE
             paint.alpha = bgAlpha
             canvas.drawRect(dims.outerRect, paint)
         }
@@ -1039,7 +1039,7 @@ object ImageExporter {
         val fraction = ((bpm - ranges.uiMin) / ranges.uiRange).coerceIn(0.0, 1.0).toFloat()
         // The same walk the on-screen chart uses, against this preset's endpoints — which default
         // to the app's own low and high.
-        return inga.bpmetrics.ui.theme.BpmRamp.blend(
+        return inga.bpmetrics.core.BpmRamp.blend(
             config.lowBpmColor,
             config.highBpmColor,
             fraction

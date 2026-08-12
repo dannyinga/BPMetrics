@@ -7,6 +7,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -25,7 +30,11 @@ import inga.bpmetrics.ui.RecordingViewModel
 import inga.bpmetrics.ui.Screens
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import inga.bpmetrics.ui.LoadingScreen
+import inga.bpmetrics.ui.WatchRecoveryScreen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The main [ComponentActivity] for the watch app.
@@ -123,6 +132,57 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun BpmNavHost() {
         val navController = rememberNavController()
+
+        // Before anything else can be reached. Room opens lazily, so a store that will not open
+        // fails on the first *query* — inside a coroutine scope with an exception handler, where it
+        // was logged and swallowed. The app came up looking healthy, listed no pending recordings,
+        // and would have run a whole session storing none of it. Checked here, off the main thread,
+        // and the recording screen is simply not reachable while it is broken.
+        var probe by remember {
+            mutableStateOf<Result<inga.bpmetrics.db.DbFailure?>?>(null)
+        }
+        LaunchedEffect(Unit) {
+            probe = runCatching {
+                withContext(Dispatchers.IO) {
+                    inga.bpmetrics.db.RecordingDB.probe(applicationContext)
+                }
+            }
+        }
+
+        val outcome = probe
+        if (outcome == null) {
+            LoadingScreen(label = "Checking recordings...")
+            return
+        }
+
+        // A probe that itself blew up is treated as a broken store rather than waved through: the
+        // point of the check is that nothing downstream should assume the store works.
+        //
+        // `fold`, not `getOrNull() ?: ...` — this is a `Result<DbFailure?>`, so `getOrNull()`
+        // answers null both when the probe threw *and* when it succeeded with nothing wrong, and
+        // an elvis on it would have shown this screen on every healthy launch.
+        val failure = outcome.fold(
+            onSuccess = { it },
+            onFailure = {
+                inga.bpmetrics.db.DbFailure.Unreadable(
+                    it.message ?: "The recording store could not be checked"
+                )
+            }
+        )
+        if (failure != null) {
+            WatchRecoveryScreen(
+                failure = failure,
+                onClearStore = {
+                    // Deleted, then the process ends. Room holds an instance pointing at a file
+                    // that no longer exists, and there is no supported way to make it forget —
+                    // restarting is the honest way to come back with a clean one.
+                    applicationContext.deleteDatabase(inga.bpmetrics.db.RecordingDB.DB_NAME)
+                    finishAffinity()
+                    Runtime.getRuntime().exit(0)
+                }
+            )
+            return
+        }
 
         NavHost(
             navController = navController,

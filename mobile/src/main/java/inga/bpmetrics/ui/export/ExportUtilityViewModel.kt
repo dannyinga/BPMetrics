@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.export
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -704,14 +706,14 @@ class ExportUtilityViewModel(
     fun restorePreset() {
         if (presetRestored) return
         presetRestored = true
-        viewModelScope.launch {
+        launchGuarded {
             val default = repository.getDefaultExportPreset()
             if (default != null) {
                 ExportPreset.fromJson(default.configJson)?.let {
                     _preset.value = it
                     _selectedPresetId.value = default.presetId
                 }
-                return@launch
+                return@launchGuarded
             }
             settingsRepository.lastUsedExportPreset()
                 ?.let { ExportPreset.fromJson(it) }
@@ -751,7 +753,7 @@ class ExportUtilityViewModel(
      * when they save.
      */
     fun savePresetAs(name: String, framing: GraphPlacement) {
-        viewModelScope.launch {
+        launchGuarded {
             val toSave = framing.into(_preset.value).copy(name = name)
             _preset.value = toSave
             _selectedPresetId.value = repository.saveExportPreset(name, toSave.toJson())
@@ -759,7 +761,7 @@ class ExportUtilityViewModel(
     }
 
     fun updatePreset(entity: ExportPresetEntity, framing: GraphPlacement) {
-        viewModelScope.launch {
+        launchGuarded {
             val toSave = framing.into(_preset.value).copy(name = entity.name)
             _preset.value = toSave
             repository.updateExportPreset(entity.presetId, entity.name, toSave.toJson())
@@ -767,11 +769,11 @@ class ExportUtilityViewModel(
     }
 
     fun setDefaultPreset(entity: ExportPresetEntity) {
-        viewModelScope.launch { repository.setDefaultExportPreset(entity.presetId) }
+        launchGuarded { repository.setDefaultExportPreset(entity.presetId) }
     }
 
     fun deletePreset(entity: ExportPresetEntity) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.deleteExportPreset(entity.presetId)
             if (_selectedPresetId.value == entity.presetId) _selectedPresetId.value = null
         }
@@ -779,7 +781,7 @@ class ExportUtilityViewModel(
 
     /** Remembers where the user left off, for the next export that has no default to fall back on. */
     fun rememberLastUsed() {
-        viewModelScope.launch {
+        launchGuarded {
             settingsRepository.setLastUsedExportPreset(_preset.value.toJson())
         }
     }
@@ -797,7 +799,7 @@ class ExportUtilityViewModel(
             onDone(false)
             return
         }
-        viewModelScope.launch {
+        launchGuarded {
             val name = imported.name.ifBlank { "Imported preset" }
             val id = repository.saveExportPreset(name, imported.copy(name = name).toJson())
             _preset.value = imported
@@ -1204,7 +1206,7 @@ class ExportUtilityViewModel(
         }
         _loadingClips.value = false
 
-        viewModelScope.launch {
+        launchGuarded {
             val people = repository.getAllPeople().first()
             val watches = repository.getAllWatches().first()
             val withSparks = withContext(Dispatchers.Default) {
@@ -1458,7 +1460,7 @@ class ExportUtilityViewModel(
 
 
     private fun loadSavedAnalysis(analysisId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             val loaded = repository.loadSavedAnalysis(analysisId)
             savedAnalysisRecordIds.value = loaded?.records?.map { it.recordId }?.toSet().orEmpty()
             savedAnalysisName.value = loaded?.metadata?.name.orEmpty()

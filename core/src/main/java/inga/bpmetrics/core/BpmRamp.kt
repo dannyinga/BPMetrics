@@ -1,4 +1,4 @@
-package inga.bpmetrics.ui.theme
+package inga.bpmetrics.core
 
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -31,13 +31,19 @@ object BpmRamp {
         val from = toHsv(fromArgb)
         val to = toHsv(toArgb)
 
-        // Round the short way, or a hue that wraps past 360 runs backwards through every other
-        // colour on the wheel — blue to red would go by way of green.
-        var endHue = to[0]
-        if (endHue < from[0]) endHue += 360f
+        // The short way round the wheel, in whichever direction that is.
+        //
+        // This used to read `if (endHue < from[0]) endHue += 360f`, which is not "the short way" —
+        // it is *always upward*. It happens to be correct for the ramp's own ends, where blue to
+        // red is shorter going up through violet than down through green, so nothing exercised it.
+        // Amber to red is 38 degrees downward and 322 upward, and the old rule took the 322: the
+        // zone bands sampled between them and came out pink.
+        var delta = to[0] - from[0]
+        if (delta > 180f) delta -= 360f
+        if (delta < -180f) delta += 360f
 
         return fromHsv(
-            hue = (from[0] + (endHue - from[0]) * f) % 360f,
+            hue = (from[0] + delta * f + 360f) % 360f,
             saturation = from[1] + (to[1] - from[1]) * f,
             value = from[2] + (to[2] - from[2]) * f,
             alpha = (fromArgb ushr 24) and 0xFF
@@ -46,6 +52,28 @@ object BpmRamp {
 
     /** The heart rate ramp's own endpoints, for anything drawing in the app's colours. */
     fun forFraction(fraction: Float): Int = blend(BpmPalette.LOW, BpmPalette.HIGH, fraction)
+
+    /**
+     * A straight RGB mix, for stops that are already the colours somebody chose.
+     *
+     * [blend] walks the hue wheel, which is right when the two ends are far apart and the colours
+     * between them are being *invented* — a straight RGB blend from blue to red passes through a
+     * muddy grey. It is wrong when the stops were picked deliberately and sit close together:
+     * blue to amber, taken the short way round, goes by way of green, which is the one colour this
+     * palette has explicitly rejected.
+     *
+     * So: hue walks for a continuous ramp, plain mixing between named stops.
+     */
+    fun mix(fromArgb: Int, toArgb: Int, fraction: Float): Int {
+        val f = fraction.coerceIn(0f, 1f)
+        fun channel(shift: Int): Int {
+            val a = (fromArgb shr shift) and 0xFF
+            val b = (toArgb shr shift) and 0xFF
+            return (a + (b - a) * f).roundToInt().coerceIn(0, 255)
+        }
+        return ((fromArgb ushr 24) and 0xFF shl 24) or
+            (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
+    }
 
     /** Hue in degrees, saturation and value 0..1 — the same convention as `Color.colorToHSV`. */
     private fun toHsv(argb: Int): FloatArray {

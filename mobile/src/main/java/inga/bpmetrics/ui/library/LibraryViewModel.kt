@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.library
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -257,7 +259,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * instead is "Save analysis" — the same object with its numbers copied.
      */
     fun saveCurrentAsView(name: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.saveSelection(name, FilterCodec.toJson(_filterState.value))
         }
     }
@@ -277,13 +279,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Replaces what a smart selection asks with whatever is applied now. */
     fun updateViewToCurrent(collectionId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setCollectionRule(collectionId, FilterCodec.toJson(_filterState.value))
         }
     }
 
     fun renameView(collectionId: Long, name: String) {
-        viewModelScope.launch { repository.renameCollection(collectionId, name) }
+        launchGuarded { repository.renameCollection(collectionId, name) }
     }
 
     /**
@@ -294,14 +296,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * sitting there beside a one-line rule.
      */
     fun unpinView(collectionId: Long) {
-        viewModelScope.launch { repository.setCollectionPinned(collectionId, false) }
+        launchGuarded { repository.setCollectionPinned(collectionId, false) }
     }
 
 
     // --- Events and groups ---
 
     init {
-        viewModelScope.launch {
+        launchGuarded {
             // Read once rather than collected: this is where the user left off, not a live value.
             // Collecting it would re-sort the list under their hands every time the preference
             // emitted. An unrecognised name falls back to [SortOption.DATE], which is also the one
@@ -435,7 +437,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * @param onDone true when the dialog can close.
      */
     fun createEvent(edit: EventEdit, recordIds: Set<Long> = emptySet(), onDone: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
+        launchGuarded {
             val id = repository.createEvent(edit.name)
             repository.setEventType(id, edit.type)
             edit.parentId?.let { repository.setEventParent(id, it) }
@@ -465,7 +467,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     fun renameEvent(eventId: Long, name: String) {
-        viewModelScope.launch { repository.renameEvent(eventId, name) }
+        launchGuarded { repository.renameEvent(eventId, name) }
     }
 
     /** Types already used, offered by the editor so a vocabulary forms instead of scattering. */
@@ -492,7 +494,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * @param onDone true when the dialog can close. False leaves it open showing [windowError].
      */
     fun applyEventEdit(eventId: Long, edit: EventEdit, onDone: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.renameEvent(eventId, edit.name)
             repository.setEventType(eventId, edit.type)
             repository.setEventLocation(eventId, edit.locationId)
@@ -595,7 +597,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Pins a set to the library bar, or takes it off. */
     fun setCollectionPinned(collectionId: Long, pinned: Boolean) {
-        viewModelScope.launch { repository.setCollectionPinned(collectionId, pinned) }
+        launchGuarded { repository.setCollectionPinned(collectionId, pinned) }
     }
 
     /**
@@ -605,7 +607,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * throw away members the rule never found.
      */
     fun clearCollectionRule(collectionId: Long) {
-        viewModelScope.launch { repository.setCollectionRule(collectionId, null) }
+        launchGuarded { repository.setCollectionRule(collectionId, null) }
     }
 
     /**
@@ -616,14 +618,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * collection's own page could not answer "what does this ask?", let alone change it.
      */
     fun setCollectionRule(collectionId: Long, filter: FilterState) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setCollectionRule(collectionId, FilterCodec.toJson(filter))
         }
     }
 
     /** Living → static, keeping what the rule found. See [LibraryRepository.materialiseCollection]. */
     fun materialiseCollection(collectionId: Long, onResult: (String) -> Unit = {}) {
-        viewModelScope.launch {
+        launchGuarded {
             val kept = repository.materialiseCollection(collectionId)
             onResult("Kept $kept recording${if (kept == 1) "" else "s"}. It no longer updates.")
         }
@@ -631,7 +633,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Frozen → live. See [LibraryRepository.thawCollection]. */
     fun thawCollection(collectionId: Long, onResult: (String) -> Unit = {}) {
-        viewModelScope.launch {
+        launchGuarded {
             val alive = repository.thawCollection(collectionId)
             onResult("Unfrozen with $alive recording${if (alive == 1) "" else "s"}.")
         }
@@ -653,7 +655,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         rule: FilterState? = null,
         pinned: Boolean = false
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             val id = repository.createCollection(name)
             if (withRecords.isNotEmpty()) repository.addRecordsToCollection(id, withRecords)
             rule?.let { repository.setCollectionRule(id, FilterCodec.toJson(it)) }
@@ -663,15 +665,15 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     fun renameCollection(collectionId: Long, name: String) {
-        viewModelScope.launch { repository.renameCollection(collectionId, name) }
+        launchGuarded { repository.renameCollection(collectionId, name) }
     }
 
     fun deleteCollection(collectionId: Long) {
-        viewModelScope.launch { repository.deleteCollection(collectionId) }
+        launchGuarded { repository.deleteCollection(collectionId) }
     }
 
     fun addSelectionToCollection(collectionId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.addRecordsToCollection(collectionId, _selectedRecordIds.value)
             clearSelection()
         }
@@ -679,7 +681,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Puts an event in a set, or takes it out. The timeline is unaffected either way. */
     fun toggleEventInCollection(collectionId: Long, eventId: Long, member: Boolean) {
-        viewModelScope.launch {
+        launchGuarded {
             if (member) repository.addEventToCollection(collectionId, eventId)
             else repository.removeEventFromCollection(collectionId, eventId)
         }
@@ -797,7 +799,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * @param onDone how many moved, and how many were refused as cycles.
      */
     fun moveSelectedEventsInto(parentId: Long?, onDone: (moved: Int, refused: Int) -> Unit = { _, _ -> }) {
-        viewModelScope.launch {
+        launchGuarded {
             var moved = 0
             var refused = 0
             _selectedEventIds.value.forEach { eventId ->
@@ -816,7 +818,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Puts every selected event in a set. */
     fun addSelectedEventsToCollection(collectionId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             _selectedEventIds.value.forEach { repository.addEventToCollection(collectionId, it) }
             clearEventSelection()
         }
@@ -918,11 +920,11 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun deleteEvent(eventId: Long) {
-        viewModelScope.launch { repository.deleteEvent(eventId) }
+        launchGuarded { repository.deleteEvent(eventId) }
     }
 
     fun setEventGroup(eventId: Long, groupId: Long?) {
-        viewModelScope.launch { repository.setEventGroup(eventId, groupId) }
+        launchGuarded { repository.setEventGroup(eventId, groupId) }
     }
 
     /**
@@ -941,7 +943,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         // recordings, and the action should not care which was tapped.
         val ids = selectedRecordIdsEffective.value
         if (ids.isEmpty()) return
-        viewModelScope.launch {
+        launchGuarded {
             repository.assignRecordsToEvent(ids, eventId)
             clearWholeSelection()
         }
@@ -986,7 +988,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         // one that swallows the back button and then acts on rows nobody remembers picking.
         // Expansion is left alone deliberately: that survives a round trip through another sort.
         if (!option.isGrouped) _selectedEventIds.value = emptySet()
-        viewModelScope.launch { repository.setDefaultSort(option.name) }
+        launchGuarded { repository.setDefaultSort(option.name) }
     }
 
     /**
@@ -1012,7 +1014,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * Imports a record from a watch record object (e.g., from a CSV).
      */
     fun importRecord(watchRecord: BpmWatchRecord) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.saveWatchRecordToLibrary(watchRecord)
         }
     }
@@ -1029,7 +1031,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         context: android.content.Context,
         onDone: (RestoreResult) -> Unit
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             onDone(restoreBackup(backup, repository, context))
         }
     }
@@ -1048,7 +1050,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         context: android.content.Context,
         onReady: (String) -> Unit
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             onReady(
                 JsonExporter.toBackupJson(
                     // Loaded here, not passed in. A backup is the one thing that genuinely wants
@@ -1116,18 +1118,18 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     fun clearCoverForSelection(context: android.content.Context, onResult: (String) -> Unit) {
         val ids = _selectedRecordIds.value.toList()
-        viewModelScope.launch {
+        launchGuarded {
             val eventId = repository.sharedEventOf(ids)
             if (eventId == null) {
                 onResult("These recordings are not all in the same event.")
-                return@launch
+                return@launchGuarded
             }
             val event = repository.getEvent(eventId)
             if (event?.coverPath == null) {
                 // Its recordings may still show a picture — the collection's — and removing that
                 // is a decision about the collection, made where the collection is.
                 onResult("${event?.displayName ?: "That event"} has no cover of its own.")
-                return@launch
+                return@launchGuarded
             }
             repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
             onResult("Cover removed from ${event.displayName}")
@@ -1148,7 +1150,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         source: android.net.Uri,
         onResult: (Boolean) -> Unit
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             val hint = repository.getEvent(eventId)?.displayName ?: "event"
             onResult(
                 repository.setCover(
@@ -1163,13 +1165,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Re-frames the picture an event already has, leaving the file alone. */
     fun setEventCoverCrop(eventId: Long, cover: inga.bpmetrics.library.Cover) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setCoverCrop(LibraryRepository.CoverOwner.Event(eventId), cover)
         }
     }
 
     fun clearEventCover(context: android.content.Context, eventId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
         }
     }
@@ -1187,7 +1189,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         source: android.net.Uri,
         onResult: (Boolean) -> Unit
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             val hint = repository.getEventGroup(groupId)?.displayName ?: "collection"
             onResult(
                 repository.setCover(
@@ -1202,13 +1204,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     /** Re-frames the picture a collection already has, leaving the file alone. */
     fun setCollectionCoverCrop(groupId: Long, cover: inga.bpmetrics.library.Cover) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setCoverCrop(LibraryRepository.CoverOwner.Collection(groupId), cover)
         }
     }
 
     fun clearCollectionCover(context: android.content.Context, groupId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.clearCover(context, LibraryRepository.CoverOwner.Collection(groupId))
         }
     }
@@ -1230,14 +1232,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         onResult: (String) -> Unit
     ) {
         val ids = _selectedRecordIds.value.toList()
-        viewModelScope.launch {
+        launchGuarded {
             val eventId = repository.sharedEventOf(ids)
             if (eventId == null) {
                 onResult(
                     "These recordings are not all in the same event. File them into one first, " +
                         "and its cover will apply to every recording in it."
                 )
-                return@launch
+                return@launchGuarded
             }
 
             val name = repository.getEvent(eventId)?.displayName ?: "cover"
@@ -1285,7 +1287,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             onDone(refusal)
             return
         }
-        viewModelScope.launch {
+        launchGuarded {
             val merged = repository.mergeRecords(chosen, deleteOriginals)
             clearSelection()
             onDone(
@@ -1316,7 +1318,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun deleteSelection() {
         val records = _selectedRecordIds.value
         val events = _selectedEventIds.value
-        viewModelScope.launch {
+        launchGuarded {
             records.forEach { repository.deleteRecordWithId(it) }
             events.forEach { repository.deleteEvent(it) }
             clearWholeSelection()
@@ -1333,7 +1335,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * rather than making a second one with the same name.
      */
     fun createTag(categoryName: String, tagName: String, onMade: (Long) -> Unit) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.findOrCreateTag(categoryName, tagName)?.let(onMade)
         }
     }
@@ -1360,7 +1362,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * dialog people open to add one tag, and the same call on the event's page does it this way.
      */
     fun setEventTags(eventId: Long, tagIds: List<Long>) {
-        viewModelScope.launch {
+        launchGuarded {
             val current = repository.getTagsForEvent(eventId).first().map { it.tagId }
             current.filterNot { it in tagIds }.forEach { repository.removeTagFromEvent(eventId, it) }
             tagIds.filterNot { it in current }.forEach { repository.addTagToEvent(eventId, it) }
@@ -1369,7 +1371,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
 
     fun addTagsToSelectedRecords(tagIds: List<Long>) {
         val idsToTag = _selectedRecordIds.value
-        viewModelScope.launch {
+        launchGuarded {
             idsToTag.forEach { recordId ->
                 tagIds.forEach { tagId ->
                     repository.addTagToRecord(recordId, tagId)
@@ -1389,7 +1391,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun assignPersonToSelectedRecords(personId: Long?) {
         val ids = _selectedRecordIds.value
         if (ids.isEmpty()) return
-        viewModelScope.launch {
+        launchGuarded {
             repository.assignPersonToRecords(ids, personId)
             clearSelection()
         }

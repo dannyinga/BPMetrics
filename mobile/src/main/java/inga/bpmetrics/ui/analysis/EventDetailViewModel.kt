@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -154,15 +156,15 @@ class EventDetailViewModel(
      * an unused copy is the answer somebody reaches for next.
      */
     fun removeTag(tagId: Long) {
-        viewModelScope.launch { repository.removeTagFromEvent(eventId, tagId) }
+        launchGuarded { repository.removeTagFromEvent(eventId, tagId) }
     }
 
     fun rename(name: String) {
-        viewModelScope.launch { repository.renameEvent(eventId, name) }
+        launchGuarded { repository.renameEvent(eventId, name) }
     }
 
     fun setNotes(notes: String) {
-        viewModelScope.launch { repository.setEventNotes(eventId, notes) }
+        launchGuarded { repository.setEventNotes(eventId, notes) }
     }
 
     /**
@@ -176,7 +178,7 @@ class EventDetailViewModel(
         source: android.net.Uri,
         onResult: (Boolean) -> Unit
     ) {
-        viewModelScope.launch {
+        launchGuarded {
             val hint = repository.getEvent(eventId)?.displayName ?: "event"
             onResult(
                 repository.setCover(
@@ -191,7 +193,7 @@ class EventDetailViewModel(
 
     /** Re-frames the picture this event already has, leaving the file alone. */
     fun setCoverCrop(cover: inga.bpmetrics.library.Cover) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setCoverCrop(LibraryRepository.CoverOwner.Event(eventId), cover)
         }
     }
@@ -203,7 +205,7 @@ class EventDetailViewModel(
      * column stores null rather than an empty string.
      */
     fun clearCover(context: android.content.Context) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
         }
     }

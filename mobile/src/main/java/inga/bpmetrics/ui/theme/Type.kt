@@ -12,6 +12,20 @@ import androidx.compose.ui.unit.sp
  * Replaces the template, which overrode two styles and set both to their existing defaults. What
  * was missing was anything for the numbers — heart rates are this app's signature content and were
  * being rendered with whatever heading style happened to be nearby.
+ *
+ * ## The face is the system's, on purpose
+ *
+ * `FontFamily.Default` throughout, which resolves to Roboto on a Pixel and to the manufacturer's
+ * own sans elsewhere. Bundling a face was considered and declined: the open-licensed candidates are
+ * free of charge but still ship a licence file to carry, and Roboto is a genuinely good UI face
+ * that already has everything this app leans on — real tabular figures, five usable weights, and
+ * legibility at 11sp over a photograph.
+ *
+ * The cost is worth naming so nobody has to rediscover it: the app has no typographic identity of
+ * its own across devices. A Samsung renders it in One UI Sans and a Pixel in Roboto, and they are
+ * not the same shape. Bundling a face is the only fix for that, and it is a deliberate non-goal
+ * rather than an oversight — the scale below, the weights, and the tabular numerals are doing the
+ * work a custom face would mostly be decorating.
  */
 val Typography = Typography(
     displayLarge = TextStyle(

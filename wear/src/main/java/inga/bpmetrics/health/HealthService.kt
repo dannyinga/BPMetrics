@@ -20,9 +20,11 @@ import inga.bpmetrics.MainActivity
 import inga.bpmetrics.R
 import inga.bpmetrics.recording.RecordingRepository
 import inga.bpmetrics.recording.RecordingState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Duration
 
 /**
@@ -89,6 +91,23 @@ class HealthService : LifecycleService() {
         startForegroundWithNotification()
 
         lifecycleScope.launch {
+            // 0. Is there anywhere to put the readings?
+            //
+            // The activity checks this before it will show the recording screen, but this service
+            // is START_STICKY: the system restarts it on its own, with no activity involved and no
+            // screen for the wearer to have seen. Sensing into a store that cannot be written is
+            // the worst outcome the watch has — the notification says "recording", the wearer
+            // believes it, and there is nothing there afterwards. Better to stop and be visibly
+            // absent.
+            val storeFailure = withContext(Dispatchers.IO) {
+                inga.bpmetrics.db.RecordingDB.probe(applicationContext)
+            }
+            if (storeFailure != null) {
+                Log.e(tag, "Recording store unusable ($storeFailure); refusing to sense")
+                stopSelf()
+                return@launch
+            }
+
             // 1. Recover session if system says an exercise is already tracked by us
             checkAndRecoverSession()
 
@@ -202,11 +221,27 @@ class HealthService : LifecycleService() {
             NotificationChannel(CHANNEL_ID, "Heart Rate Monitoring", NotificationManager.IMPORTANCE_LOW)
         )
 
-        startForeground(
-            NOTIFICATION_ID,
-            buildNotification(contentText),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
-        )
+        // Guarded, exactly as [updateNotification] already is — and this is the call that matters
+        // more of the two. `startForeground` with a HEALTH type throws where the health permission
+        // is not held at that instant, and `ForegroundServiceStartNotAllowedException` where the
+        // system will not allow a background start. Both are ordinary states: a permission the
+        // wearer revoked from the watch's settings, or Play Services restarting the service while
+        // the app is not in front.
+        //
+        // This one ran in `onCreate`, unguarded, so either of those took the whole watch app down
+        // before it had drawn anything. Failing here means the service cannot do its job, so it
+        // stops itself — a service that quietly continues without foreground status is one the
+        // system may kill mid-recording, which is how long recordings used to disappear.
+        try {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(contentText),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
+            )
+        } catch (e: Exception) {
+            Log.e(tag, "Could not start in the foreground; stopping rather than running demoted", e)
+            stopSelf()
+        }
     }
 
     /**

@@ -1,4 +1,4 @@
-package inga.bpmetrics.ui.theme
+package inga.bpmetrics.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals

@@ -148,8 +148,8 @@ fun ColorPicker(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .background(color, RoundedCornerShape(8.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                    .background(color, MaterialTheme.shapes.small)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {

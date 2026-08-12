@@ -172,7 +172,7 @@ object VideoExporter {
             // black, so an export with nothing filmed looks like it came from this app instead of
             // from a default.
             val backdrop = createBitmap(128, 128, Bitmap.Config.ARGB_8888).apply {
-                eraseColor(inga.bpmetrics.ui.theme.BpmPalette.SURFACE)
+                eraseColor(inga.bpmetrics.core.BpmPalette.SURFACE)
             }
             val tempImageFile = File(context.cacheDir, "export_backdrop.png")
             FileOutputStream(tempImageFile).use { backdrop.compress(Bitmap.CompressFormat.PNG, 100, it) }

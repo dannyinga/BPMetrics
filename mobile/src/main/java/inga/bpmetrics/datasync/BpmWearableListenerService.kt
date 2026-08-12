@@ -6,9 +6,8 @@ import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import inga.bpmetrics.BPMetricsApp
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import inga.bpmetrics.util.backgroundScope
+import inga.bpmetrics.util.guarded
 import kotlinx.coroutines.launch
 
 /**
@@ -19,7 +18,15 @@ import kotlinx.coroutines.launch
 class BpmWearableListenerService : WearableListenerService() {
 
     private val tag = "BpmWearableListenerService"
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * Through [backgroundScope], so an unreadable item is logged rather than fatal.
+     *
+     * This one matters more than most: Play Services starts this service with the app otherwise
+     * not running, to receive recordings the watch is still holding. A crash here is a crash the
+     * wearer never sees, on the path that decides whether their evening survives.
+     */
+    private val scope = backgroundScope(tag)
 
     /**
      * Sweeps the data layer whenever Play Services brings this service up.
@@ -56,7 +63,8 @@ class BpmWearableListenerService : WearableListenerService() {
             Log.d(tag, "Received ${itemsToProcess.size} record data items in background service")
             scope.launch {
                 itemsToProcess.forEach { item ->
-                    processor.processDataItem(item)
+                    // Per item: one unreadable record must not abandon the rest of the backlog.
+                    guarded(tag, "processing ${item.uri}") { processor.processDataItem(item) }
                 }
             }
         }

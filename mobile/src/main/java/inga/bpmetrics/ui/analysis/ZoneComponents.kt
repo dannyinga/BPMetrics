@@ -19,11 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import inga.bpmetrics.core.BpmPalette
 import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.ui.components.FlowRow
-import inga.bpmetrics.ui.theme.BpmAvg
-import inga.bpmetrics.ui.theme.BpmHigh
-import inga.bpmetrics.ui.theme.BpmLow
 import kotlin.math.roundToInt
 
 /**
@@ -44,7 +42,14 @@ fun ZoneBreakdown(
     alpha: Float = 1f,
     modifier: Modifier = Modifier
 ) {
-    val zones = zoneTimes.filter { it.durationMs > 0L }
+    // Coloured *before* filtering, and by position in the scheme rather than by name. A band's
+    // colour is a property of the band — the fourth of four is the hot end whatever else happened —
+    // and colouring the filtered list would have made Peak a different colour on an evening where
+    // nobody entered the Light band. Position also means a custom set of bands simply works, where
+    // the previous `when` on the name matched four literals and sent anything else to a default.
+    val zones = zoneTimes
+        .mapIndexed { index, time -> time to Color(BpmPalette.zone(index, zoneTimes.size)) }
+        .filter { (time, _) -> time.durationMs > 0L }
     if (zones.isEmpty()) return
 
     androidx.compose.foundation.layout.Column(modifier) {
@@ -54,14 +59,14 @@ fun ZoneBreakdown(
                 .height(if (showDurations) 14.dp else 8.dp)
                 .clip(MaterialTheme.shapes.extraSmall)
         ) {
-            zones.forEach { zone ->
+            zones.forEach { (zone, colour) ->
                 Box(
                     Modifier
                         // A band with a sliver of time still has to be visible, or the bar implies
                         // it was never entered at all.
                         .weight(zone.share.coerceAtLeast(0.001f))
                         .fillMaxHeight()
-                        .background(zoneColour(zone.zone.name).copy(alpha = alpha))
+                        .background(colour.copy(alpha = alpha))
                 )
             }
         }
@@ -71,13 +76,13 @@ fun ZoneBreakdown(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            zones.forEach { zone ->
+            zones.forEach { (zone, colour) ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier
                             .size(8.dp)
                             .clip(CircleShape)
-                            .background(zoneColour(zone.zone.name).copy(alpha = alpha))
+                            .background(colour.copy(alpha = alpha))
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
@@ -97,16 +102,8 @@ fun ZoneBreakdown(
     }
 }
 
-/**
- * Bands drawn in the app's existing low / average / high palette.
- *
- * Reusing those colours rather than inventing a fourth scheme: they already mean "calm" through
- * "going hard" everywhere else in the app, so the bands read without a key.
- */
-@Composable
-fun zoneColour(name: String): Color = when (name) {
-    "Resting" -> BpmLow
-    "Light" -> BpmAvg
-    "Elevated" -> BpmHigh.copy(alpha = 0.7f)
-    else -> BpmHigh
-}
+// `zoneColour(name)` lived here: a `when` over four string literals, with `BpmHigh` at 70% alpha
+// standing in for the third band and an `else` quietly catching anything it did not recognise. The
+// scheme is defined in [inga.bpmetrics.core.BpmPalette.zone] now, keyed on where a band sits rather
+// than on what it is called — §5 asks for zones to be deliberate, and a name match is the opposite:
+// rename a band, or add a fifth, and the colours silently stop meaning anything.

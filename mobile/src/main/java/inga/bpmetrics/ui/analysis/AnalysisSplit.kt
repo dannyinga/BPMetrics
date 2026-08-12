@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.core.BpmPalette
+
 /**
  * A way of cutting an analysis into lanes to compare.
  *
@@ -323,16 +325,36 @@ object AnalysisSplit {
             .filter { it.personColorArgb != null }
             .associate { it.wearerName to it.personColorArgb }
 
+        // A lane that is not a person still has to be told apart from the one below it. These used
+        // to be handed `null`, which fell back at the drawing site to the metric's own colour — so
+        // a comparison split six ways by tag drew six identical dots and the colour column said
+        // nothing whatsoever. The neutral series exists for exactly this: distinct, and deliberately
+        // not the person palette, which would imply a tag was somebody.
+        //
+        // Indexed by key in sorted order rather than by the lane's position, because lanes are
+        // about to be re-sorted by value: a dot that changed from sage to clay when you switched
+        // from average to peak would read as a different lane rather than the same one re-ranked.
+        val neutralIndex = labelled.keys.sorted().withIndex().associate { (i, key) -> key to i }
+
         val lanes = labelled.map { (key, inLane) ->
             SplitLane(
                 key = key,
                 value = labels(key, inLane),
                 records = inLane,
-                colorArgb = if (axis is SplitAxis.Person) colours[key] else null
+                colorArgb = if (axis is SplitAxis.Person) colours[key]
+                else BpmPalette.neutral(neutralIndex[key] ?: 0)
             )
         }.sortedByDescending { orderBy(it) ?: Double.NEGATIVE_INFINITY }
 
         return if (unlabelled.isEmpty()) lanes
-        else lanes + SplitLane("unlabelled", axis.residualLabel, unlabelled, isUnlabelled = true)
+        else lanes + SplitLane(
+            key = "unlabelled",
+            value = axis.residualLabel,
+            records = unlabelled,
+            // Dimmer than any real lane. "No tag" is the absence of a category rather than one more
+            // of them, and leaving it to the fallback made it the brightest row on the screen.
+            colorArgb = BpmPalette.RESIDUAL,
+            isUnlabelled = true
+        )
     }
 }

@@ -6,9 +6,8 @@ import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataItem
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import inga.bpmetrics.util.backgroundScope
+import inga.bpmetrics.util.guarded
 import kotlinx.coroutines.launch
 
 /**
@@ -26,8 +25,13 @@ class DataClientListener(
     private val processor: DataClientProcessor
 ) : DataClient.OnDataChangedListener, DefaultLifecycleObserver {
 
-    /** Coroutine scope for handling background synchronization tasks. */
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    /**
+     * Coroutine scope for handling background synchronization tasks.
+     *
+     * Through [backgroundScope], which is the difference between a bad data item from the watch
+     * being logged and it killing the phone app while holding the only copy of a recording.
+     */
+    private val scope = backgroundScope(TAG)
 
     /**
      * Called when the associated lifecycle starts.
@@ -77,10 +81,16 @@ class DataClientListener(
         if (itemsToProcess.isNotEmpty()) {
             scope.launch {
                 itemsToProcess.forEach { item ->
-                    processor.processDataItem(item)
+                    // Guarded per item. An unguarded `forEach` that throws on the third of ten
+                    // abandons the remaining seven with no record they arrived — and on this path
+                    // those seven are recordings the watch is about to be told the phone has.
+                    guarded(TAG, "processing ${item.uri}") { processor.processDataItem(item) }
                 }
             }
         }
     }
 
+    private companion object {
+        const val TAG = "DataClientListener"
+    }
 }

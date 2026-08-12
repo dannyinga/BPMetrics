@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.record
 
+import inga.bpmetrics.util.launchGuarded
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -129,7 +131,7 @@ class BpmRecordViewModel(
      * wrong clock. Null puts it back to whatever its event says, which is right far more often.
      */
     fun setLocation(locationId: Long?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setRecordLocation(recordId, locationId)
             loadRecord()
         }
@@ -200,7 +202,7 @@ class BpmRecordViewModel(
      * Fetches the record from the repository and updates the UI state.
      */
     private fun loadRecord() {
-        viewModelScope.launch {
+        launchGuarded {
             val fetchedRecord = repository.getRecordWithId(recordId)
             _record.value = fetchedRecord
         }
@@ -218,7 +220,7 @@ class BpmRecordViewModel(
      * the way to give one recording in a set its own picture.
      */
     fun setOwnCover(context: android.content.Context, source: android.net.Uri, onResult: (Boolean) -> Unit) {
-        viewModelScope.launch {
+        launchGuarded {
             val hint = _record.value?.metadata?.title?.takeIf { it.isNotBlank() } ?: "recording"
             val stored = repository.setCover(
                 context = context,
@@ -233,7 +235,7 @@ class BpmRecordViewModel(
 
     /** Re-frames this recording's own cover. */
     fun setOwnCoverCrop(cover: inga.bpmetrics.library.Cover) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.setCoverCrop(LibraryRepository.CoverOwner.Recording(recordId), cover)
             loadRecord()
         }
@@ -246,7 +248,7 @@ class BpmRecordViewModel(
      * stores null rather than an empty string.
      */
     fun clearOwnCover(context: android.content.Context) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.clearCover(context, LibraryRepository.CoverOwner.Recording(recordId))
             loadRecord()
         }
@@ -256,7 +258,7 @@ class BpmRecordViewModel(
      * Deletes the current record from the database.
      */
     fun deleteRecord() {
-        viewModelScope.launch {
+        launchGuarded {
             repository.deleteRecordWithId(recordId)
         }
     }
@@ -267,7 +269,7 @@ class BpmRecordViewModel(
      * @param newTitle The new string title to assign to the record.
      */
     fun updateTitle(newTitle: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateRecordTitle(recordId, newTitle)
             loadRecord()
         }
@@ -279,7 +281,7 @@ class BpmRecordViewModel(
      * @param newDescription The new description to assign to the record.
      */
     fun updateDescription(newDescription: String) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateRecordDescription(recordId, newDescription)
             loadRecord()
         }
@@ -291,7 +293,7 @@ class BpmRecordViewModel(
      * A per-record override, for the recording that arrived before its watch had anyone assigned.
      */
     fun updateDeviceAndWearer(deviceId: String, personId: Long?) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.updateRecordDeviceAndWearer(recordId, deviceId, personId)
             loadRecord()
         }
@@ -303,7 +305,7 @@ class BpmRecordViewModel(
      * @param tagId The ID of the tag to assign.
      */
     fun addTag(tagId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.addTagToRecord(recordId, tagId)
             loadRecord()
         }
@@ -315,7 +317,7 @@ class BpmRecordViewModel(
      * @param tagId The ID of the tag to remove.
      */
     fun removeTag(tagId: Long) {
-        viewModelScope.launch {
+        launchGuarded {
             repository.removeTagFromRecord(recordId, tagId)
             loadRecord()
         }
@@ -326,7 +328,7 @@ class BpmRecordViewModel(
      * Inherits tags from the original record.
      */
     fun splitRecord(newRecord: BpmWatchRecord, title: String) {
-        viewModelScope.launch {
+        launchGuarded {
             val tagsToCopy = _record.value?.tags ?: emptyList()
             val newRecordId = repository.saveWatchRecordToLibrary(newRecord, title)
             
@@ -351,7 +353,7 @@ class BpmRecordViewModel(
 
     /** Makes a tag where it is applied, creating its axis if new. */
     fun createTag(categoryName: String, tagName: String, onMade: (Long) -> Unit) {
-        viewModelScope.launch { repository.findOrCreateTag(categoryName, tagName)?.let(onMade) }
+        launchGuarded { repository.findOrCreateTag(categoryName, tagName)?.let(onMade) }
     }
 
     /**
