@@ -51,8 +51,10 @@ import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.clock
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import inga.bpmetrics.BPMetricsApp
 import inga.bpmetrics.export.BpmExportService
@@ -93,6 +95,7 @@ fun ExportUtilityScreen(
     val clips by viewModel.clips.collectAsStateWithLifecycle()
     val loadingClips by viewModel.loadingClips.collectAsStateWithLifecycle()
     val hasNoClips by viewModel.hasNoClips.collectAsStateWithLifecycle()
+    val mediaAccessRefused by viewModel.mediaAccessRefused.collectAsStateWithLifecycle()
     val pendingJobs by viewModel.pendingJobs.collectAsStateWithLifecycle()
     val oldestFirst by viewModel.clipsOldestFirst.collectAsStateWithLifecycle()
     val presets by viewModel.presets.collectAsStateWithLifecycle()
@@ -256,11 +259,60 @@ fun ExportUtilityScreen(
     // than on every visit to step 3, which would undo edits made on the way back from step 4.
     LaunchedEffect(Unit) { viewModel.restorePreset() }
 
+    // Whether the gallery can be read at all. Held in the composition rather than asked for inline
+    // because it changes while this screen is open — from the prompt below, and from Settings.
+    var canReadVideos by remember { mutableStateOf(VideoExporter.hasVideoPermissions(context)) }
+    // Asked at most once per visit. Android stops showing the dialog after a refusal, so retrying
+    // on every recomposition would be an invisible no-op; the refused state offers Settings instead.
+    var permissionAsked by rememberSaveable { mutableStateOf(false) }
+
+    val askForVideos = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        canReadVideos = granted
+        viewModel.setMediaAccessRefused(!granted)
+    }
+
+    // Granting happens in Settings, which means leaving the app and coming back — so the answer has
+    // to be re-read on resume. Without this the reader returns having just allowed it and still
+    // sees the refusal, which reads as the grant not having worked.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                val allowed = VideoExporter.hasVideoPermissions(context)
+                canReadVideos = allowed
+                if (allowed) viewModel.setMediaAccessRefused(false)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // Clips are looked up when step 2 is reached, not when the source changes. This hits the
     // MediaStore, and querying on every tap in step 1 would search for sources the user is only
     // browsing past.
-    LaunchedEffect(step, records) {
+    LaunchedEffect(step, records, canReadVideos) {
         if (step != ExportStep.CONTENTS || records.isEmpty()) return@LaunchedEffect
+
+        // Ask before querying. A MediaStore query without permission returns an empty cursor rather
+        // than failing, so going straight to it reports a phone full of footage as having none —
+        // which is what a fresh install did, every install, with nothing anywhere asking.
+        if (!canReadVideos) {
+            if (!permissionAsked) {
+                permissionAsked = true
+                // Marked as looking *before* the prompt goes up. The step's default empty state is
+                // "no video from this time", and showing that behind the dialog would be the app
+                // answering the question while it is still asking it.
+                viewModel.setLoadingClips()
+                askForVideos.launch(VideoExporter.getVideoPermissionString())
+            } else {
+                viewModel.setMediaAccessRefused(true)
+            }
+            return@LaunchedEffect
+        }
+
+        viewModel.setMediaAccessRefused(false)
         viewModel.setLoadingClips()
         val found = withContext(Dispatchers.IO) {
             VideoExporter.getOverlappingClips(context, records)
@@ -394,6 +446,20 @@ fun ExportUtilityScreen(
                                 peopleById = peopleById,
                                 loading = loadingClips,
                                 hasNoClips = hasNoClips,
+                                mediaAccessRefused = mediaAccessRefused,
+                                onOpenSettings = {
+                                    context.startActivity(
+                                        android.content.Intent(
+                                            android.provider.Settings
+                                                .ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            android.net.Uri.fromParts(
+                                                "package",
+                                                context.packageName,
+                                                null
+                                            )
+                                        )
+                                    )
+                                },
                                 oldestFirst = oldestFirst,
                                 onToggleOrder = { viewModel.toggleClipOrder() },
                                 onSelectAll = { viewModel.setAllClipsSelected(it) },

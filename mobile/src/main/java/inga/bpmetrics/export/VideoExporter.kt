@@ -642,9 +642,33 @@ object VideoExporter {
             .sortedBy { it.startedAtMs }
     }
 
-    fun hasVideoPermissions(context: Context): Boolean {
-        return androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_MEDIA_VIDEO) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    }
+    /**
+     * The permission that lets [getOverlappingClips] see anything at all.
+     *
+     * **Version-dependent, because the permission itself is.** `READ_MEDIA_VIDEO` only exists from
+     * Android 13; below that the media store is behind `READ_EXTERNAL_STORAGE`. `minSdk` is 31, so
+     * naming only the newer one meant asking Android 12 for a permission it has never heard of —
+     * which is refused, permanently and without a dialog, leaving video overlay impossible on
+     * those devices however many times anyone tried.
+     */
+    fun getVideoPermissionString(): String =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            android.Manifest.permission.READ_MEDIA_VIDEO
+        } else {
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        }
 
-    fun getVideoPermissionString(): String = android.Manifest.permission.READ_MEDIA_VIDEO
+    /**
+     * Whether the gallery can be read.
+     *
+     * Worth asking *before* querying rather than inferring afterwards: a query made without this
+     * comes back empty rather than failing, so "not allowed to look" and "nothing to find" are the
+     * same answer unless someone checks. That is exactly how a fresh install — which has no runtime
+     * grants, whatever the manifest says — came to report a library full of footage as having none.
+     */
+    fun hasVideoPermissions(context: Context): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            getVideoPermissionString()
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 }

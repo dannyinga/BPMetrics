@@ -397,6 +397,10 @@ fun ContentsStep(
     peopleById: Map<Long, PersonEntity>,
     loading: Boolean,
     hasNoClips: Boolean,
+    /** The gallery cannot be read. See [ExportUtilityViewModel.mediaAccessRefused]. */
+    mediaAccessRefused: Boolean = false,
+    /** Takes the reader to the one place a refused permission can be undone. */
+    onOpenSettings: () -> Unit = {},
     oldestFirst: Boolean,
     onToggleOrder: () -> Unit,
     onSelectAll: (Boolean) -> Unit,
@@ -408,6 +412,47 @@ fun ContentsStep(
     if (loading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
+        }
+        return
+    }
+
+    // Before the "nothing filmed" state, because it is the answer to a different question and the
+    // reassuring one must not be given when nobody has actually looked.
+    if (mediaAccessRefused) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                "Can't see your videos",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "BPMetrics needs access to your videos to find the ones filmed while these " +
+                    "recordings were running. Nothing is uploaded — the search happens on this " +
+                    "phone, and only clips overlapping a recording are ever listed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+            Spacer(Modifier.height(16.dp))
+            // Settings rather than another prompt: Android stops showing the dialog once it has
+            // been refused, so a button that asked again would do nothing visible and read as
+            // broken. This is the one route that always works.
+            androidx.compose.material3.Button(onClick = onOpenSettings) {
+                Text("Open settings")
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "You can carry on without it — the export will draw the curves on a plain " +
+                    "background instead.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
         }
         return
     }

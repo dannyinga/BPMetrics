@@ -6,7 +6,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!--
+      Reading the gallery, to find footage filmed while a recording was running. The permission
+      changed name in Android 13: below that the media store sits behind READ_EXTERNAL_STORAGE, so
+      both are declared and `maxSdkVersion` keeps the old one off newer installs, where it would be
+      a broader grant than this needs. minSdk is 31, so the older half is not dead weight.
+    -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <!--
       Optional, and never required. Fills in a venue's coordinates from the device so nobody has to

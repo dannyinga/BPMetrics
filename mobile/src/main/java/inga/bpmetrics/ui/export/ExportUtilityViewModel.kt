@@ -1330,15 +1330,42 @@ class ExportUtilityViewModel(
         .map { list -> list.filter { it.selected && it.recordIds.isNotEmpty() } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    private val _mediaAccessRefused = MutableStateFlow(false)
+
+    /**
+     * True when the gallery cannot be read, as opposed to holding nothing.
+     *
+     * The distinction the contents step could not previously draw. A MediaStore query made without
+     * permission returns an empty cursor rather than failing, so a refused grant and an evening
+     * nobody filmed produced identical screens — and the screen said the reassuring one. A fresh
+     * install has no runtime grants whatever the manifest declares, so this is the state every
+     * reinstall lands in until someone is asked.
+     */
+    val mediaAccessRefused: StateFlow<Boolean> = _mediaAccessRefused.asStateFlow()
+
+    /** @param refused true once the request has been answered with a no. */
+    fun setMediaAccessRefused(refused: Boolean) {
+        _mediaAccessRefused.value = refused
+        // Nothing is loading any more either way — a refusal ends the lookup as surely as a result
+        // does, and leaving the spinner up would make a decision look like a hang.
+        if (refused) _loadingClips.value = false
+    }
+
     /**
      * True when the source has no video behind it at all.
      *
      * Not an error. `VideoExporter` renders against a solid background when no overlay is given,
      * which is the right output for a session nobody filmed — so the step says so and moves on
-     * rather than blocking.
+     * rather than blocking. Distinct from [mediaAccessRefused], which *is* worth acting on: it
+     * takes precedence in the step, because "you have no footage" is a false statement to make to
+     * someone whose gallery has simply not been looked at.
      */
-    val hasNoClips: StateFlow<Boolean> = combine(_clips, _loadingClips) { clips, loading ->
-        !loading && clips.isEmpty()
+    val hasNoClips: StateFlow<Boolean> = combine(
+        _clips,
+        _loadingClips,
+        _mediaAccessRefused
+    ) { clips, loading, refused ->
+        !loading && !refused && clips.isEmpty()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /** Whether the current step's question has been answered well enough to move on. */
