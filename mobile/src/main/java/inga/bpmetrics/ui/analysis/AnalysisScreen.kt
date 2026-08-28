@@ -151,9 +151,14 @@ fun AnalysisScreen(
      */
     subjectEditor: (@Composable (openRefineScope: () -> Unit) -> Unit)? = null,
     /**
-     * Cuts a new recording out of the stretch the chart is showing.
+     * Asks to split the stretch the chart is showing.
      *
-     * Only a recording can be split, so this is null everywhere else. Times arrive as wall-clock
+     * A *request*, not the split itself: the chart says which stretch, and the subject opens its
+     * one split dialog on it. The chart used to carry a second dialog of its own, which is how the
+     * two ways of splitting came to word their refusals differently and bound their ranges
+     * differently.
+     *
+     * Only a recording can be split, so this is null everywhere else. Times leave as wall-clock
      * instants — the chart works in those — and the subject rebases them.
      */
     onSplitFromTimeline: ((startMs: Long, endMs: Long) -> Unit)? = null
@@ -1081,99 +1086,6 @@ private fun ScopeCurves(
 }
 
 /**
- * Cutting a new recording out of the stretch the chart is showing.
- *
- * The visual half and the typed half of the same act, which is the thing that was missing. Splitting
- * lived behind a menu item on a dialog with two text fields and no picture: you could say the range
- * you meant precisely, and you could not *see* it. The chart could show you exactly the stretch you
- * wanted and had no way to act on it.
- *
- * So the window is the selection. Pinch and pan until the chart is showing the set — that is the
- * fine-tuning, done against the curve — and the fields open holding those two instants, to the
- * second, for when you know the set began at 21:00 exactly.
- *
- * Typed in the clock the recording was made in, not the reader's, so a set at the Gorge is entered
- * in the times it happened at.
- */
-@Composable
-private fun SplitFromWindowDialog(
-    startMs: Long,
-    endMs: Long,
-    clock: java.time.ZoneId,
-    onDismiss: () -> Unit,
-    onConfirm: (Long, Long) -> Unit
-) {
-    fun format(ms: Long) = getTimeString(ms, clock, withSeconds = true)
-    fun parse(text: String, sameDayAs: Long): Long? =
-        inga.bpmetrics.ui.graph.TimeUtils.parseClockTimeToRelativeMs(text.trim(), sameDayAs, clock)
-            ?.let { sameDayAs + it }
-
-    var fromText by remember(startMs) { mutableStateOf(format(startMs)) }
-    var toText by remember(endMs) { mutableStateOf(format(endMs)) }
-
-    // Anchored to the day the window starts on, so a set running past midnight still parses.
-    val from = parse(fromText, startMs)
-    val to = parse(toText, startMs)
-    val valid = from != null && to != null && to > from
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Split this stretch") },
-        text = {
-            Column {
-                Text(
-                    "Makes a new recording from the part of this one the chart is showing. The " +
-                        "original is left alone.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "Pinch and drag the chart to change it, or type the times.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(Modifier.height(14.dp))
-                OutlinedTextField(
-                    value = fromText,
-                    onValueChange = { fromText = it },
-                    label = { Text("From") },
-                    singleLine = true,
-                    isError = from == null,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = toText,
-                    onValueChange = { toText = it },
-                    label = { Text("To") },
-                    singleLine = true,
-                    isError = to == null || (from != null && to <= from),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    if (valid) shortDuration(to!! - from!!) + " long"
-                    else "Give an end after the start.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (valid) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    }
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = valid, onClick = { onConfirm(from!!, to!!) }) { Text("Split") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-/**
  * Who is on the chart, as faces, and which one is being singled out.
  *
  * Isolating a curve existed already — by tapping the curve. On a plot with six lanes that is a
@@ -1272,18 +1184,6 @@ private fun ViewWindowControls(
     clock: java.time.ZoneId,
     onSplit: ((startMs: Long, endMs: Long) -> Unit)?
 ) {
-    var splitting by remember { mutableStateOf(false) }
-
-    if (splitting && onSplit != null) {
-        SplitFromWindowDialog(
-            startMs = window.startMs,
-            endMs = window.endMs,
-            clock = clock,
-            onDismiss = { splitting = false },
-            onConfirm = { from, to -> onSplit(from, to); splitting = false }
-        )
-    }
-
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -1325,9 +1225,13 @@ private fun ViewWindowControls(
             )
         }
 
-        onSplit?.let {
+        onSplit?.let { requestSplit ->
             OutlinedButton(
-                onClick = { splitting = true },
+                // Hands the window over and stops there. This used to open a split dialog of its
+                // own — a second one, which knew the window but not the recording it was a window
+                // *onto*, so it could not bound the range or count what was in it. The window is
+                // the coarse selection; the one dialog is where it gets said precisely.
+                onClick = { requestSplit(window.startMs, window.endMs) },
                 modifier = Modifier.padding(top = 4.dp)
             ) {
                 Icon(

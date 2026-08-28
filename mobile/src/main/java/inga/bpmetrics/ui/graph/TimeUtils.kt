@@ -3,6 +3,7 @@ package inga.bpmetrics.ui.graph
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -110,29 +111,82 @@ object TimeUtils {
     }
 
     /**
-     * Parses a clock time string and converts it to milliseconds relative to a base start time.
-     * Supports "hh:mm:ss a" (e.g., 10:30:00 AM) or "HH:mm:ss" (e.g., 22:30:00).
+     * Every shape a clock time is written in around here, widest net first.
+     *
+     * **One pattern per shape, with single-letter hours.** A count of two — `hh` — is a *fixed
+     * width* field when parsing, so a formatter built from "hh:mm:ss a" rejects "9:04:00 PM"
+     * outright. That is what it was, and what [inga.bpmetrics.ui.util.StringFormatHelpers] prints
+     * on a 12-hour clock is "h:mm:ss a" — so nine times out of twelve the app could not read back
+     * the time it had just written into the field, and the dialog called it invalid. Single-letter
+     * accepts both widths.
+     *
+     * Seconds are optional because a time someone types by hand rarely has them, and the 12-hour
+     * forms come first: they need the AM/PM marker to match at all, so they cannot swallow a
+     * 24-hour time by accident.
      */
-    fun parseClockTimeToRelativeMs(input: String, baseEpochMs: Long, zoneId: ZoneId = ZoneId.systemDefault()): Long? {
-        return try {
-            val localTime = try {
-                LocalTime.parse(input.trim().uppercase(), clockFormatter)
-            } catch (e: Exception) {
-                LocalTime.parse(input.trim(), clockFormatter24)
-            }
-            
-            val baseDateTime = Instant.ofEpochMilli(baseEpochMs)
-                .atZone(zoneId)
-                .toLocalDateTime()
-            
-            val targetDateTime = baseDateTime.with(localTime)
-            
-            // If the record spans across midnight, this might need more complex logic,
-            // but for now, we assume it's on the same day as the start or very close.
-            val targetEpochMs = targetDateTime.atZone(zoneId).toInstant().toEpochMilli()
-            targetEpochMs - baseEpochMs
-        } catch (e: Exception) {
-            null
+    private val clockPatterns: List<DateTimeFormatter> = buildList {
+        val locales = listOf(Locale.US, Locale.getDefault()).distinct()
+        listOf("h:mm:ss a", "h:mm a").forEach { pattern ->
+            locales.forEach { add(DateTimeFormatter.ofPattern(pattern, it)) }
         }
+        add(DateTimeFormatter.ofPattern("H:mm:ss", Locale.US))
+        add(DateTimeFormatter.ofPattern("H:mm", Locale.US))
+    }
+
+    /**
+     * A time of day, however it was written.
+     *
+     * Case and spacing are normalised before anything is tried. CLDR puts a narrow no-break space
+     * in front of "PM" on some platforms and an ordinary one on others, and a field someone typed
+     * into has neither reliably — none of which is a reason to call a time invalid.
+     */
+    fun parseClockTime(input: String): LocalTime? {
+        val cleaned = input.trim()
+            // Every flavour of space CLDR and a soft keyboard between them can produce.
+            .replace('\u00A0', ' ')
+            .replace('\u202F', ' ')
+            .replace(Regex("\\s+"), " ")
+            .uppercase(Locale.US)
+        if (cleaned.isEmpty()) return null
+
+        clockPatterns.forEach { formatter ->
+            try {
+                return LocalTime.parse(cleaned, formatter)
+            } catch (_: Exception) {
+                // Next shape.
+            }
+        }
+        return null
+    }
+
+    /**
+     * A clock time, as an offset from an instant.
+     *
+     * **The occurrence nearest the anchor, not the one on the anchor's date.** A time of day names
+     * a moment on every day there has ever been, and the recordings this reads times for are
+     * evening ones: a set that begins at 23:40 and ends at 00:20 had its end read as *twenty-three
+     * hours and twenty minutes before it started*, which every caller then refused as a range
+     * running backwards. Anything after midnight was unsplittable.
+     *
+     * Nearest rather than "roll forward when negative", because the anchor is not always the thing
+     * being extended — asking for a start a few minutes earlier than the anchor is an ordinary
+     * thing to do, and rolling forward would answer it with tomorrow.
+     *
+     * Built through [ZonedDateTime] rather than by adding milliseconds, so an hour that a daylight
+     * saving change deleted or repeated resolves the way the rest of `java.time` resolves it.
+     */
+    fun parseClockTimeToRelativeMs(
+        input: String,
+        baseEpochMs: Long,
+        zoneId: ZoneId = ZoneId.systemDefault()
+    ): Long? {
+        val localTime = parseClockTime(input) ?: return null
+
+        val base = Instant.ofEpochMilli(baseEpochMs).atZone(zoneId)
+        val onBaseDay = base.toLocalDate().atTime(localTime).atZone(zoneId)
+
+        return listOf(onBaseDay.minusDays(1), onBaseDay, onBaseDay.plusDays(1))
+            .map { it.toInstant().toEpochMilli() - baseEpochMs }
+            .minByOrNull { kotlin.math.abs(it) }
     }
 }

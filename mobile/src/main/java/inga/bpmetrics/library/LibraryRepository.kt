@@ -1376,6 +1376,92 @@ class LibraryRepository(
         eventDao.updateNotes(groupId, notes)
 
     /**
+     * Cuts a shorter recording out of a longer one.
+     *
+     * The counterpart to [mergeRecords], and written here for the same reason: what a split
+     * *produces* is a library question, not a screen one. It had been assembled in the detail
+     * screen out of a bare [inga.bpmetrics.core.BpmWatchRecord], which meant the new recording
+     * arrived with no watch, nobody wearing it, and — because a record with no watch id falls back
+     * to its device name — a phantom watch called "Watch" appearing in the registry. A split is a
+     * *part of* a recording; it was made by the same watch on the same wrist, and saying otherwise
+     * loses the one attribution nothing downstream can reconstruct.
+     *
+     * So the row is written directly rather than through [saveWatchRecordToLibrary]: that path
+     * exists to work out provenance for a recording arriving from a watch, and here provenance is
+     * already known. Copying it also keeps the watch registry still — ingest is what marks a watch
+     * as seen, and cutting up a recording from last summer is not a sighting.
+     *
+     * Carried across: the watch, the wearer, the clock, the venue, the event and the tags. Not the
+     * cover — a picture of the whole night is not a picture of ten minutes of it, and the new
+     * recording inherits its event's anyway.
+     *
+     * @param fromMs offset from the recording's start; see [RecordSplit].
+     * @param toMs offset from the recording's start.
+     * @return the new record's id, or null when the range holds no readings.
+     */
+    suspend fun splitRecord(recordId: Long, fromMs: Long, toMs: Long, title: String): Long? {
+        val source = getRecordWithId(recordId) ?: run {
+            Log.w(tag, "Refused to split $recordId: no such recording")
+            return null
+        }
+        val slice = RecordSplit.slice(source, fromMs, toMs) ?: run {
+            Log.w(tag, "Refused to split $recordId: nothing recorded in ${fromMs}..${toMs}")
+            return null
+        }
+        val from = source.metadata
+
+        val newId = recordDao.insertBpmRecordGetId(
+            BpmRecordEntity(
+                title = title,
+                description = from.description,
+                date = slice.startTime,
+                startTime = slice.startTime,
+                endTime = slice.endTime,
+                durationMs = slice.durationMs,
+                // Provenance, verbatim. The wearer is the link *and* the stamped name, the pairing
+                // used everywhere else, so the new recording stays readable if that profile goes.
+                deviceId = from.deviceId,
+                wearerName = from.wearerName,
+                watchId = from.watchId,
+                personId = from.personId,
+                // Where it sits and what clock it reads in. Both are reconciled below anyway, and
+                // starting from the right answer means the recording is never briefly filed
+                // nowhere and read in the wrong zone.
+                eventId = from.eventId,
+                timeZoneId = from.timeZoneId,
+                locationId = from.locationId
+            )
+        )
+
+        // One implementation of the analysis, the same one ingest uses, so a split recording's
+        // figures cannot disagree with an arriving one's.
+        performAnalysisAndSaveDataPoints(
+            inga.bpmetrics.core.BpmWatchRecord(
+                date = java.sql.Date(slice.startTime),
+                dataPoints = slice.points.map {
+                    inga.bpmetrics.core.BpmDataPoint(it.timestampMs, it.bpm)
+                },
+                startTime = slice.startTime,
+                endTime = slice.endTime
+            ),
+            newId
+        )
+
+        // Written straight, not through [addTagToRecord]. That path enforces one tag per category
+        // and auto-renames from the naming category, both of which are for a tag being *chosen*;
+        // this is a copy of a set that already obeys the rule, onto a recording that has just been
+        // given the name the split asked for.
+        source.tags.forEach { tagDao.insertRecordTagCrossRef(RecordTagCrossRef(newId, it.tagId)) }
+
+        // The new recording may land inside a window the original was not in — an event added since
+        // — so where it lives is the resolver's answer rather than the copy above.
+        reconcileMembership()
+
+        Log.i(tag, "Split $recordId into $newId (${slice.points.size} readings)")
+        return newId
+    }
+
+    /**
      * Joins several recordings of one person into a single one.
      *
      * The merged recording is written *before* anything is deleted. The other order means a

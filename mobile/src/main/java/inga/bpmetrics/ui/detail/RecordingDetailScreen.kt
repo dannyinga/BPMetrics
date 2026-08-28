@@ -120,8 +120,12 @@ fun RecordingDetailScreen(
     var editing by remember { mutableStateOf(false) }
     var tagging by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
-    var splitting by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+
+    // What the split dialog opens on, or null when it is closed. The chart opens it on the stretch
+    // it is showing; the menu opens it on nothing in particular, which the dialog reads as the
+    // whole recording. One dialog, two ways of arriving at it — see [SplitRecordDialog].
+    var splitting by remember { mutableStateOf<Pair<Long?, Long?>?>(null) }
 
     val r = record
     val wearer = r?.metadata?.personId?.let { id -> people.firstOrNull { it.personId == id } }
@@ -134,10 +138,14 @@ fun RecordingDetailScreen(
         // No title: the header below carries the name over the cover. It used to be in both.
         title = null,
         onExport = onExport,
-        // Splitting, driven by the chart. The dialog it used to open had two text fields and no
-        // picture; the chart could show the exact stretch and had no way to act on it.
+        // Splitting, driven by the chart. It used to cut immediately, through a dialog of its own
+        // that knew nothing about the recording's bounds; now it opens the same dialog the menu
+        // does, holding the window as its opening range.
         onSplitFromTimeline = r?.let { rec ->
-            { fromMs: Long, toMs: Long -> splitBetween(context, subject, rec, fromMs, toMs) }
+            { fromMs: Long, toMs: Long ->
+                val base = rec.metadata.startTime
+                splitting = (fromMs - base) to (toMs - base)
+            }
         },
         subjectHeader = {
             if (r != null) {
@@ -201,7 +209,7 @@ fun RecordingDetailScreen(
                     DropdownMenuItem(
                         text = { Text("Split…") },
                         leadingIcon = { Icon(Icons.Default.CallSplit, contentDescription = null) },
-                        onClick = { menuOpen = false; splitting = true }
+                        onClick = { menuOpen = false; splitting = null to null }
                     )
                     DropdownMenuItem(
                         text = { Text("Delete recording") },
@@ -279,22 +287,26 @@ fun RecordingDetailScreen(
         )
     }
 
-    if (splitting && r != null) {
-        SplitRecordDialog(
-            record = r,
-            onDismiss = { splitting = false },
-            // Offsets from the dialog, instants from the chart — one implementation either way.
-            onSplit = { startMs, endMs ->
-                splitBetween(
-                    context,
-                    subject,
-                    r,
-                    r.metadata.startTime + startMs,
-                    r.metadata.startTime + endMs
-                )
-                splitting = false
-            }
-        )
+    splitting?.let { (openFrom, openTo) ->
+        if (r != null) {
+            SplitRecordDialog(
+                record = r,
+                initialFromMs = openFrom,
+                initialToMs = openTo,
+                onDismiss = { splitting = null },
+                onSplit = { fromMs, toMs ->
+                    splitting = null
+                    subject.splitRecord(fromMs, toMs, "${r.metadata.title} (Split)") { newId ->
+                        Toast.makeText(
+                            context,
+                            if (newId == null) "Nothing recorded in that range"
+                            else "New recording created from the split",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            )
+        }
     }
 
     if (deleting && r != null) {
@@ -309,45 +321,4 @@ fun RecordingDetailScreen(
             }
         )
     }
-}
-
-/**
- * Cuts the readings between two wall-clock instants into a new recording.
- *
- * Shared by the two ways in — the chart's own Split, and the older typed dialog in the overflow —
- * so the two cannot disagree about what a split produces. Timestamps are rebased to the new
- * recording's own start, so it reads as a recording rather than as a fragment that begins forty
- * minutes in.
- */
-private fun splitBetween(
-    context: android.content.Context,
-    subject: BpmRecordViewModel,
-    record: inga.bpmetrics.library.BpmRecordWithPoints,
-    fromMs: Long,
-    toMs: Long
-) {
-    val base = record.metadata.startTime
-    // The chart works in wall-clock instants and the readings are stored relative to the start.
-    val fromOffset = fromMs - base
-    val toOffset = toMs - base
-
-    val points = record.dataPoints
-        .filter { it.timestamp in fromOffset..toOffset }
-        .map { it.copy(timestamp = it.timestamp - fromOffset) }
-
-    if (points.isEmpty()) {
-        Toast.makeText(context, "Nothing recorded in that range", Toast.LENGTH_SHORT).show()
-        return
-    }
-
-    subject.splitRecord(
-        inga.bpmetrics.core.BpmWatchRecord(
-            date = java.sql.Date(base + fromOffset),
-            dataPoints = points.map { inga.bpmetrics.core.BpmDataPoint(it.timestamp, it.bpm) },
-            startTime = base + fromOffset,
-            endTime = base + toOffset
-        ),
-        "${record.metadata.title} (Split)"
-    )
-    Toast.makeText(context, "New record created from split", Toast.LENGTH_SHORT).show()
 }

@@ -288,39 +288,82 @@ internal fun ordinal(n: Int): String {
 /**
  * Cutting a shorter recording out of a longer one.
  *
- * A dialog rather than the screen this used to live on: that screen existed to hold an interactive
- * graph, and the recording page already has one.
+ * **The one split dialog.** There were two: this, reached from the overflow menu, and a second one
+ * on the chart that opened with the visible window in it. They looked different, worded their
+ * refusals differently, and disagreed about what a valid range was — the chart's would not bound
+ * the range to the recording and could not be typed in elapsed time; this one could not be seeded
+ * from what the chart was showing. Two dialogs for one act is two things to keep in step, and they
+ * had already drifted.
+ *
+ * So it is one dialog with an opening range. The chart hands it the stretch on screen — pinch and
+ * pan *is* the coarse selection, done against the curve — and the menu hands it the whole
+ * recording. Everything after that is the same either way.
  *
  * Laid out down the page with full-size fields. The first version reused the graph screen's zoom
  * controls, which put two fields side by side with 10sp labels inside an already-narrow dialog —
  * legible on a wide screen with a mouse, and unusable on a phone with a thumb.
  *
- * The range is typed rather than dragged. Dragging is how you find roughly the right span; typing
- * is how you say the one you meant, and the reason to split is almost always that you know when
- * the set began.
+ * Times are read and written in **the recording's own clock**, not the reader's, so a set watched
+ * at the Gorge is entered in the times it happened at — the same clock the header above it prints.
+ *
+ * @param initialFromMs offset from the recording's start, or null for the whole thing.
+ * @param initialToMs offset from the recording's start, or null for the whole thing.
+ * @param onSplit offsets from the recording's start; see [inga.bpmetrics.library.RecordSplit].
  */
 @Composable
 internal fun SplitRecordDialog(
     record: inga.bpmetrics.library.BpmRecordWithPoints,
+    initialFromMs: Long? = null,
+    initialToMs: Long? = null,
     onDismiss: () -> Unit,
-    onSplit: (startMs: Long, endMs: Long) -> Unit
+    onSplit: (fromMs: Long, toMs: Long) -> Unit
 ) {
     val durationMs = record.metadata.durationMs
-    var startText by remember { mutableStateOf(TimeUtils.formatMs(0L)) }
-    var endText by remember { mutableStateOf(TimeUtils.formatMs(durationMs)) }
-    var useClock by remember { mutableStateOf(false) }
+    val clock = record.clock
+    // Clamped, because the chart's window is free to show air either side of a short recording and
+    // a dialog that opens already refusing itself reads as broken.
+    val openFrom = (initialFromMs ?: 0L).coerceIn(0L, durationMs)
+    val openTo = (initialToMs ?: durationMs).coerceIn(openFrom, durationMs)
+
+    // Clock when the caller had instants in mind — the chart — and elapsed otherwise. Someone who
+    // just pinched to a stretch is thinking "that bit, there", which is a wall-clock thought.
+    var useClock by remember { mutableStateOf(initialFromMs != null) }
+
+    fun render(offsetMs: Long): String = if (useClock) {
+        TimeUtils.formatClockTime(record.metadata.startTime + offsetMs, clock)
+    } else {
+        TimeUtils.formatMs(offsetMs)
+    }
+
+    var startText by remember { mutableStateOf(render(openFrom)) }
+    var endText by remember { mutableStateOf(render(openTo)) }
 
     fun parse(text: String): Long? = if (useClock) {
-        TimeUtils.parseClockTimeToRelativeMs(text, record.metadata.startTime)
+        // Anchored on the recording's start, so a time after midnight resolves to the small hours
+        // of the night the recording was made rather than to that morning.
+        TimeUtils.parseClockTimeToRelativeMs(text, record.metadata.startTime, clock)
     } else {
         TimeUtils.parseToMs(text)
     }
 
     val startMs = parse(startText)
     val endMs = parse(endText)
-    val valid = startMs != null && endMs != null && endMs > startMs &&
-        startMs >= 0L && endMs <= durationMs
-    val kept = if (valid) record.dataPoints.count { it.timestamp in startMs!!..endMs!! } else 0
+    // The example is this recording's own start, not a made-up time: someone whose times are being
+    // refused needs to see the shape the field wants, and the shape depends on the clock the
+    // library is set to read in.
+    val example = if (useClock) {
+        TimeUtils.formatClockTime(record.metadata.startTime, clock)
+    } else {
+        TimeUtils.formatMs(durationMs)
+    }
+    val refusal = if (startMs == null || endMs == null) {
+        "Times read like $example."
+    } else {
+        inga.bpmetrics.library.RecordSplit.refusal(record, startMs, endMs)
+    }
+    val kept = if (startMs != null && endMs != null) {
+        inga.bpmetrics.library.RecordSplit.readingsIn(record, startMs, endMs)
+    } else 0
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -329,7 +372,7 @@ internal fun SplitRecordDialog(
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     "Makes a new recording from part of this one. The original is left alone, and " +
-                        "the copy keeps its tags.",
+                        "the copy keeps its watch, its wearer and its tags.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -339,15 +382,19 @@ internal fun SplitRecordDialog(
                     Text("Enter times as", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.width(8.dp))
                     // Two ways to say the same instant. Elapsed is what the graph shows; clock is
-                    // what someone remembers about when a set started.
+                    // what someone remembers about when a set started. Switching rewrites both
+                    // fields from the offsets they currently mean, so nothing is lost in the swap —
+                    // and falls back to the ends of the recording where a field is unreadable.
                     androidx.compose.material3.FilterChip(
                         selected = !useClock,
                         onClick = {
                             if (useClock) {
-                                startText = TimeUtils.formatMs(startMs ?: 0L)
-                                endText = TimeUtils.formatMs(endMs ?: durationMs)
+                                val from = startMs ?: 0L
+                                val to = endMs ?: durationMs
+                                useClock = false
+                                startText = TimeUtils.formatMs(from)
+                                endText = TimeUtils.formatMs(to)
                             }
-                            useClock = false
                         },
                         label = { Text("Elapsed") }
                     )
@@ -357,10 +404,12 @@ internal fun SplitRecordDialog(
                         onClick = {
                             if (!useClock) {
                                 val base = record.metadata.startTime
-                                startText = TimeUtils.formatClockTime(base + (startMs ?: 0L))
-                                endText = TimeUtils.formatClockTime(base + (endMs ?: durationMs))
+                                val from = startMs ?: 0L
+                                val to = endMs ?: durationMs
+                                useClock = true
+                                startText = TimeUtils.formatClockTime(base + from, clock)
+                                endText = TimeUtils.formatClockTime(base + to, clock)
                             }
-                            useClock = true
                         },
                         label = { Text("Clock") }
                     )
@@ -389,16 +438,10 @@ internal fun SplitRecordDialog(
                 Text(
                     // Says what the split will actually contain before it happens, rather than
                     // leaving someone to find out from the library that they cut an empty range.
-                    when {
-                        startMs == null || endMs == null ->
-                            "Times read like ${if (useClock) "21:04:00" else "00:12:30"}."
-                        !valid -> "The end has to come after the start, and within this recording."
-                        kept == 0 -> "Nothing was recorded in that range."
-                        else -> "$kept reading${if (kept == 1) "" else "s"}, " +
-                            shortDuration(endMs - startMs)
-                    },
+                    refusal ?: "$kept reading${if (kept == 1) "" else "s"}, " +
+                        shortDuration(endMs!! - startMs!!),
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (valid && kept > 0) {
+                    color = if (refusal == null) {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     } else {
                         MaterialTheme.colorScheme.error
@@ -409,7 +452,7 @@ internal fun SplitRecordDialog(
         confirmButton = {
             TextButton(
                 onClick = { onSplit(startMs!!, endMs!!) },
-                enabled = valid && kept > 0
+                enabled = refusal == null
             ) { Text("Create recording") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }

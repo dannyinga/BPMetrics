@@ -5,7 +5,6 @@ import inga.bpmetrics.util.launchGuarded
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EffectiveTag
@@ -324,18 +323,20 @@ class BpmRecordViewModel(
     }
 
     /**
-     * Saves a split portion of a record as a new entry.
-     * Inherits tags from the original record.
+     * Cuts a shorter recording out of this one.
+     *
+     * The slicing, the provenance and the tags all live in
+     * [LibraryRepository.splitRecord] — this had assembled a bare watch record and copied tags
+     * over it by hand, which is how the two ways into splitting came to disagree about what a
+     * split produced, and how the new recording came to arrive with no watch and nobody wearing it.
+     *
+     * @param fromMs offset from this recording's start.
+     * @param toMs offset from this recording's start.
+     * @param onDone the new record's id, or null when the range held no readings.
      */
-    fun splitRecord(newRecord: BpmWatchRecord, title: String) {
+    fun splitRecord(fromMs: Long, toMs: Long, title: String, onDone: (Long?) -> Unit = {}) {
         launchGuarded {
-            val tagsToCopy = _record.value?.tags ?: emptyList()
-            val newRecordId = repository.saveWatchRecordToLibrary(newRecord, title)
-            
-            // Copy tags to the new record
-            tagsToCopy.forEach { tag ->
-                repository.addTagToRecord(newRecordId, tag.tagId)
-            }
+            onDone(repository.splitRecord(recordId, fromMs, toMs, title))
         }
     }
 
