@@ -220,7 +220,15 @@ data class ConcurrentAnalysis(
                 )
             }
 
-            return of(series, window, records.clock.id)
+            // The first recording *with* a venue, then the reader's clock — the rule the export and
+            // `EventAnalysis` use, so no chart can disagree with the video made from it because a
+            // single unfiled recording happened to sort first.
+            return of(
+                series,
+                window,
+                inga.bpmetrics.library.resolvedZoneOf(records.map { it.metadata })
+                    ?: records.clock.id
+            )
         }
 
         /**

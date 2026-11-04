@@ -240,7 +240,21 @@ object EventTree {
         /** Reverses each level. The order within a level is chronological either way. */
         newestFirst: Boolean = false,
         /** When each event happened. See [startsOf] and [childrenOf]. */
-        startBy: Map<Long, Long> = emptyMap()
+        startBy: Map<Long, Long> = emptyMap(),
+        /**
+         * Where the walk starts, or null for the true roots.
+         *
+         * For listing what is inside one event — the Events tab on an event's own page. Handing
+         * this a subtree and letting it walk from null does not work and fails *quietly*: every
+         * event in a subtree has a non-null parent, so `childrenOf(all, null)` finds nothing, the
+         * walk emits nothing, and the cycle-recovery pass below dumps the lot at depth zero with no
+         * children marked. The result is a flat list that looks almost right, which is worse than
+         * an empty one.
+         *
+         * The events passed in should still be restricted to that subtree, so the recovery pass
+         * stays a guard against cycles rather than a way for the rest of the library to arrive.
+         */
+        rootParentId: Long? = null
     ): List<Node> {
         val result = mutableListOf<Node>()
         val seen = mutableSetOf<Long>()
@@ -254,7 +268,7 @@ object EventTree {
             childrenOf(all, parentId, startBy)
                 .forEach { if (reachable.add(it.eventId)) mark(it.eventId) }
         }
-        mark(null)
+        mark(rootParentId)
 
         fun walk(parentId: Long?, depth: Int) {
             val children = childrenOf(all, parentId, startBy)
@@ -266,7 +280,7 @@ object EventTree {
             }
         }
 
-        walk(null, 0)
+        walk(rootParentId, 0)
 
         // Anything a cycle kept out of the walk still has to appear, or it becomes unreachable in
         // the UI and cannot be repaired by the person looking at it.

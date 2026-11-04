@@ -597,10 +597,15 @@ private fun edgeText(atMs: Long, zone: java.util.TimeZone): String {
  *
  * Material offers no combined picker, and the alternative — two buttons the user has to know to
  * press in order — leaves half-set windows lying around. Cancelling either step cancels both.
+ *
+ * Shared rather than private: the export step uses it to say when a clip was really filmed, which
+ * needs exactly what an event window does — a date, a time *with seconds*, and both read in the
+ * event's own clock. A second picker for that would be a second answer to the zone arithmetic below,
+ * and that arithmetic is the part most worth having once.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DateTimePicker(
+fun DateTimePicker(
     initial: Long,
     /** The event's clock. Both the readout and the instant built from it use this. */
     zone: java.util.TimeZone,

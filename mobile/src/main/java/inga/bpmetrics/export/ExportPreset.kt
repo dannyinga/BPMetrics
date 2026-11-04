@@ -16,6 +16,61 @@ import inga.bpmetrics.core.BpmGson
  *
  * @property version What wrote it. A file from a newer build says so rather than half-applying.
  */
+/**
+ * A graph rectangle, as fractions of the canvas.
+ *
+ * Its own type so a preset can hold several of them without four more fields per entry, and
+ * fractions rather than pixels so a frame survives a change of canvas size — the same reason the
+ * preset's own `graphLeft`..`graphBottom` are fractions.
+ *
+ * Every field has a default because Gson does not run constructors: it only calls the synthetic
+ * no-arg constructor Kotlin emits when *all* parameters have one. Without that, a frame missing a
+ * field in the JSON would deserialise with zeroes and draw nothing.
+ */
+data class GraphFrame(
+    val left: Float = 0.25f,
+    val top: Float = 0.58f,
+    val right: Float = 0.75f,
+    val bottom: Float = 0.91f
+) {
+    val width: Float get() = right - left
+    val height: Float get() = bottom - top
+
+    /** True where this rectangle has enough area to draw a graph in. */
+    val isUsable: Boolean get() = width >= MIN_SIDE && height >= MIN_SIDE
+
+    /** Clamped into the canvas, and refused if it has collapsed. */
+    fun sanitised(): GraphFrame? = GraphFrame(
+        left = left.coerceIn(0f, 1f),
+        top = top.coerceIn(0f, 1f),
+        right = right.coerceIn(0f, 1f),
+        bottom = bottom.coerceIn(0f, 1f)
+    ).takeIf { it.isUsable }
+
+    companion object {
+        /** Below this a frame is not a graph, it is a line. Matches `GraphPlacement.MIN_SIZE`. */
+        const val MIN_SIDE = 0.1f
+
+        /**
+         * [fraction] of the way from [a] to [b], edge by edge.
+         *
+         * Interpolating the edges rather than the size keeps a frame anchored where it was put: a
+         * frame pinned to the bottom of the shot at two people and to the bottom at four stays
+         * against the bottom at three, instead of drifting up as it grows.
+         */
+        fun between(a: GraphFrame, b: GraphFrame, fraction: Float): GraphFrame {
+            val f = fraction.coerceIn(0f, 1f)
+            fun mix(x: Float, y: Float) = x + (y - x) * f
+            return GraphFrame(
+                left = mix(a.left, b.left),
+                top = mix(a.top, b.top),
+                right = mix(a.right, b.right),
+                bottom = mix(a.bottom, b.bottom)
+            )
+        }
+    }
+}
+
 data class ExportPreset(
     val version: Int = CURRENT_VERSION,
     val name: String = "",
@@ -59,6 +114,32 @@ data class ExportPreset(
     val graphTop: Float = 0.58f,
     val graphRight: Float = 0.75f,
     val graphBottom: Float = 0.91f,
+
+    /**
+     * The frame to use when a clip has a particular number of people on it.
+     *
+     * A look does not change with the cast; a *frame* does. The renderer already divides the
+     * readout column by the number of wearers — see `drawMultiStatsHUD` — so four people in a
+     * frame drawn for two squeeze to the minimum pill height and crowd the curves, and one person
+     * in that same frame leaves half of it empty. The four fractions above are the only part of a
+     * preset that has ever needed to know how many people are in shot.
+     *
+     * Which is why this is a map on one preset rather than a preset per count. A 1-, 2- and
+     * 4-person preset would be identical in colour, canvas, bitrate, window and title, differing
+     * in four floats — four copies of one look, and changing the ramp means changing it four times
+     * or letting them drift. Bulk export is exactly where that drift is invisible: six videos
+     * render and two of them carry a stale look.
+     *
+     * Empty by default, and an empty map means the behaviour this had before: the frame above is
+     * used for everything. See [frameFor] for how a count nobody pinned is answered.
+     *
+     * Deliberately **without** a version bump. The guard exists so a preset from a newer build
+     * refuses to half-apply, and this field cannot half-apply: an older build's Gson drops a field
+     * it does not know, leaving a preset that renders exactly as it did before. Bumping would make
+     * an older build reject a preset it can read perfectly well, which is a worse answer than
+     * ignoring one map.
+     */
+    val framesByLaneCount: Map<Int, GraphFrame> = emptyMap(),
 
     // Video
     val windowSizeMs: Long = 30_000L,
@@ -189,6 +270,59 @@ data class ExportPreset(
      * existed since the first version, so absent is not a case that occurs.
      */
     @Suppress("USELESS_ELVIS")
+    /** The frame this preset was drawn with before any of this existed. */
+    val baseFrame: GraphFrame
+        get() = GraphFrame(graphLeft, graphTop, graphRight, graphBottom)
+
+    /**
+     * The frame to draw a clip with [laneCount] people on it.
+     *
+     * The rule, in order:
+     *
+     * 1. **A frame pinned for exactly this many people** wins. That is the whole point — you looked
+     *    at four people in a frame and said "this one".
+     * 2. **Between two pins, interpolate.** Three people, with two and four pinned, lands halfway.
+     *    A frame that grew between the counts you cared about is far likelier to be right than the
+     *    two-person one applied whole.
+     * 3. **Outside the pins, hold the nearest.** Deliberately *not* extrapolated. Growing a frame
+     *    past the last pin means inventing a rate of growth, and a made-up rate applied to seven
+     *    people produces a rectangle nobody has ever looked at. Holding the nearest pin gives the
+     *    frame you approved for the closest cast you have actually framed.
+     * 4. **No pins at all** gives [baseFrame] — exactly what every preset did before this existed,
+     *    which is what keeps existing presets rendering identically.
+     *
+     * [laneCount] is how many curves go on the clip, which is what the readout column is divided
+     * by. **Zero means "no clip in hand"** and answers [baseFrame] — that is the preset editor in
+     * Settings, which is framing the look itself rather than any particular shot. Without that, the
+     * editor would display the frame pinned nearest to one person while dragging wrote to the base,
+     * which is two different rectangles wearing one control.
+     */
+    fun frameFor(laneCount: Int): GraphFrame {
+        if (laneCount <= 0) return baseFrame
+
+        val pins = framesByLaneCount.mapNotNull { (count, frame) ->
+            frame.sanitised()?.let { count to it }
+        }.toMap()
+        if (pins.isEmpty()) return baseFrame
+
+        val n = laneCount
+        pins[n]?.let { return it }
+
+        val below = pins.keys.filter { it < n }.maxOrNull()
+        val above = pins.keys.filter { it > n }.minOrNull()
+
+        return when {
+            below != null && above != null -> GraphFrame.between(
+                pins.getValue(below),
+                pins.getValue(above),
+                (n - below).toFloat() / (above - below)
+            )
+            below != null -> pins.getValue(below)
+            above != null -> pins.getValue(above)
+            else -> baseFrame
+        }
+    }
+
     fun sanitised(): ExportPreset {
         val shipped = ExportPreset()
         // A rectangle with no area draws nothing, which is how an older preset with no framing
@@ -211,6 +345,13 @@ data class ExportPreset(
             graphTop = if (degenerate) shipped.graphTop else graphTop.coerceIn(0f, 1f),
             graphRight = if (degenerate) shipped.graphRight else graphRight.coerceIn(0f, 1f),
             graphBottom = if (degenerate) shipped.graphBottom else graphBottom.coerceIn(0f, 1f),
+            // A collapsed pin is dropped rather than repaired. There is no sensible repair — the
+            // frame is whatever somebody dragged — and a pin that draws nothing is worse than an
+            // absent one, which at least falls back to a frame that works.
+            framesByLaneCount = framesByLaneCount
+                .filterKeys { it >= 1 }
+                .mapNotNull { (count, frame) -> frame.sanitised()?.let { count to it } }
+                .toMap(),
             // Gson leaves an absent enum as null, and the type says it cannot be — every preset
             // written before the wordmark existed arrives that way.
             wordmarkCorner = wordmarkCorner ?: shipped.wordmarkCorner,

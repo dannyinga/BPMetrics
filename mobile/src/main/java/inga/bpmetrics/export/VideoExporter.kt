@@ -407,6 +407,52 @@ object VideoExporter {
     }
 
     /**
+     * A video handed over by a picker, as a clip.
+     *
+     * So that a video chosen by hand goes through exactly what a found one does — the Contents step,
+     * who was recording during it, the preview, per-clip framing, and a render of the right stretch.
+     * It used to be a bare uri laid over the whole recording from the start, which is why a picked
+     * video could not be lined up with anything.
+     *
+     * The length is the file's and is required: a clip is a start and a length, and without the
+     * length there is no telling which stretch of a recording belongs over it. The start is the
+     * file's best guess and may well be wrong — a screen recording is stamped when it was captured,
+     * not when the footage inside it was filmed — which is what [ClipRetiming] exists to correct.
+     *
+     * @return null for something that is not a playable video.
+     */
+    fun clipFromUri(context: Context, uri: Uri): VideoClip? {
+        val durationMs = MediaMetadataRetriever().let { retriever ->
+            try {
+                retriever.setDataSource(context, uri)
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not read the length of $uri", e)
+                null
+            } finally {
+                retriever.release()
+            }
+        }?.takeIf { it > 0L } ?: return null
+
+        val name = runCatching {
+            context.contentResolver.query(
+                uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+            )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        }.getOrNull() ?: uri.lastPathSegment.orEmpty()
+
+        // No stamp at all is not a reason to refuse the file. It still has a length, and its start
+        // is about to be set by hand anyway — so it starts where it ends, now.
+        val stamp = resolveStamp(context, uri)
+        return VideoClip(
+            uri = uri,
+            startedAtMs = stamp?.startedAtMs ?: (System.currentTimeMillis() - durationMs),
+            durationMs = durationMs,
+            displayName = name,
+            basis = stamp?.basis ?: VideoTiming.Basis.ASSUMED
+        )
+    }
+
+    /**
      * Extracts the raw capture time from the video metadata.
      */
     fun getVideoCaptureTime(context: Context, uri: Uri): Long? {

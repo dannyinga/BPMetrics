@@ -485,14 +485,18 @@ internal fun RecordEditDialog(
         description: String,
         deviceId: String,
         personId: Long?,
-        locationId: Long?
+        locationId: Long?,
+        startTime: Long
     ) -> Unit
 ) {
     var title by remember { mutableStateOf(record.metadata.title) }
     var description by remember { mutableStateOf(record.metadata.description) }
     var personId by remember { mutableStateOf(record.metadata.personId) }
     var locationId by remember { mutableStateOf(record.metadata.locationId) }
+    var startTime by remember { mutableStateOf(record.metadata.startTime) }
+    var pickingStart by remember { mutableStateOf(false) }
     val deviceId = record.metadata.deviceId
+    val clock = record.metadata.clock
 
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
@@ -541,6 +545,27 @@ internal fun RecordEditDialog(
                     onSelect = { locationId = it }
                 )
 
+                Spacer(Modifier.height(16.dp))
+                Text("When it started", style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.height(6.dp))
+                // For a watch whose clock was wrong — one left flat for weeks boots on a stale
+                // date and stamps everything with it. Moving the start moves the whole recording;
+                // the readings are relative to it and keep their shape.
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { pickingStart = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(inga.bpmetrics.ui.library.startText(startTime, clock))
+                }
+                val shift = startTime - record.metadata.startTime
+                if (shift != 0L) {
+                    Text(
+                        inga.bpmetrics.ui.library.describeShift(shift),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
                 coverEditor?.let { editor ->
                     Spacer(Modifier.height(16.dp))
                     Text("Photo", style = MaterialTheme.typography.labelLarge)
@@ -567,13 +592,22 @@ internal fun RecordEditDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                onConfirm(title, description, deviceId, personId, locationId)
+                onConfirm(title, description, deviceId, personId, locationId, startTime)
             }) {
                 Text("Save")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+
+    if (pickingStart) {
+        inga.bpmetrics.ui.library.DateTimePicker(
+            initial = startTime,
+            zone = java.util.TimeZone.getTimeZone(clock),
+            onDismiss = { pickingStart = false },
+            onPicked = { startTime = it; pickingStart = false }
+        )
+    }
 }
 
 /**

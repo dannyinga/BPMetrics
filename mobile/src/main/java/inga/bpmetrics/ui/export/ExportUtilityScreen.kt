@@ -126,6 +126,7 @@ fun ExportUtilityScreen(
     val imageCrop by viewModel.imageCrop.collectAsStateWithLifecycle()
     val imageTitle by viewModel.imageTitle.collectAsStateWithLifecycle()
     val imageNaturalSpan by viewModel.imageNaturalSpan.collectAsStateWithLifecycle()
+    val pickFailed by viewModel.pickFailed.collectAsStateWithLifecycle()
 
     // Names and event labels have to be resolved here, where the repository is: the renderer draws
     // them and must not hold a copy that goes stale when someone is renamed.
@@ -139,14 +140,22 @@ fun ExportUtilityScreen(
     // Which clip step 3 is framing. Held here rather than in the ViewModel because it is a
     // position on one screen, not part of what will be exported.
     var previewingUri by remember { mutableStateOf<Uri?>(null) }
-    val previewingClip = pendingJobs.firstOrNull { it.clip.uri == previewingUri }
+    // Looked up among every clip, not only the ticked ones, once a clip has been chosen to preview.
+    // Correcting a filming time to a moment nobody was recording unticks the clip — and when this
+    // looked only at ticked clips, the preview jumped to a different one mid-correction and took the
+    // "Filmed at" control with it, leaving no way to put the time right.
+    val previewingClip = clips.firstOrNull { it.clip.uri == previewingUri }
         // Falls back to the first ticked clip, so arriving at step 3 shows something rather than
         // waiting for a selection the strip has not been scrolled to yet.
         ?: pendingJobs.firstOrNull()
 
     // The framing on screen: the previewed clip's override if it has one, else the preset's own.
     // Saving a preset captures this, so a preset carries the framing it was saved looking at.
-    val currentFraming = previewingClip?.graph ?: GraphPlacement.of(preset)
+    val currentFraming = previewingClip?.graph
+        // Framed for however many people are on the clip being previewed, so what step 3 shows is
+        // what step 4 will render — the preview reading a count-blind frame would put the two a
+        // rectangle apart on exactly the clips this feature exists for.
+        ?: GraphPlacement.of(preset, previewingClip?.recordIds?.size ?: 0)
 
     // Colour comes from the person, never chosen per export — one answer, set in People, so the
     // same person is the same colour on screen and in the video of the same session.
@@ -198,7 +207,12 @@ fun ExportUtilityScreen(
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             }
-            viewModel.setManualOverlay(it)
+            // A clip, not a bare overlay. The bare overlay was laid over the whole recording from
+            // its first second with no way to say where it belonged; as a clip it goes through the
+            // Contents step, the preview and the render like any found one, and its filming time
+            // can be corrected. Previewed at once, since correcting that time is usually why a
+            // video was picked by hand at all.
+            viewModel.addPickedVideo(context, it) { added -> previewingUri = added }
         }
     }
 
@@ -435,7 +449,12 @@ fun ExportUtilityScreen(
                                 crop = imageCrop,
                                 onCropChange = { viewModel.setImageCrop(it) },
                                 naturalSpan = imageNaturalSpan,
-                                timeZoneId = preset.timeZoneId,
+                                // The crop fields are typed in this zone and read back in it, so
+                                // they have to match the picture: "from 21:00" means 21:00 where
+                                // the set was, and the image is now drawn in that clock.
+                                timeZoneId = inga.bpmetrics.library.resolvedZoneOf(
+                                    records.map { it.metadata }
+                                ) ?: preset.timeZoneId,
                                 title = imageTitle,
                                 onTitleChange = { viewModel.setImageTitle(it) }
                             )
@@ -467,7 +486,11 @@ fun ExportUtilityScreen(
                                 onToggleRecord = { uri, id ->
                                     viewModel.toggleRecordOnClip(uri, id)
                                 },
-                                titles = clipTitles
+                                titles = clipTitles,
+                                // The same picker the Look step uses, so a chosen video lands in
+                                // one list whichever step it was picked from.
+                                onAddVideo = { pickOverlayLauncher.launch(arrayOf("video/*")) },
+                                pickFailed = pickFailed
                             )
                         }
                     }
@@ -511,6 +534,9 @@ fun ExportUtilityScreen(
                     onPlacementChange = { uri, placement -> viewModel.setClipGraph(uri, placement) },
                     onScrubClip = { uri, at -> viewModel.scrubClip(uri, at) },
                     onApplyToAll = { viewModel.applyGraphToAll(it) },
+                    onPinForCast = { viewModel.pinGraphForCast(it) },
+                    onSetFilmedAt = { uri, at -> viewModel.setClipFilmedAt(uri, at) },
+                    onResetFilmedAt = { viewModel.resetClipFilmedAt(it) },
                     overlay = manualOverlay,
                     onPickOverlay = { pickOverlayLauncher.launch(arrayOf("video/*")) },
                     onClearOverlay = { viewModel.setManualOverlay(null) },
@@ -789,6 +815,11 @@ private fun LookStep(
     onPlacementChange: (Uri, GraphPlacement) -> Unit,
     onScrubClip: (Uri, Float) -> Unit,
     onApplyToAll: (Uri) -> Unit,
+    /** Pins this clip's framing on the preset, for every clip with the same number of people. */
+    onPinForCast: (Uri) -> Unit,
+    /** Says when a clip was really filmed. See [ClipRetiming]. */
+    onSetFilmedAt: (Uri, Long) -> Unit,
+    onResetFilmedAt: (Uri) -> Unit,
     overlay: Uri?,
     onPickOverlay: () -> Unit,
     onClearOverlay: () -> Unit,
@@ -871,10 +902,41 @@ private fun LookStep(
                     onSelect = onSelectClip
                 )
                 if (previewing != null) {
-                    TextButton(onClick = { onApplyToAll(previewing.clip.uri) }) {
-                        Text("Apply this framing to all ${ticked.size} clips")
+                    val cast = previewing.recordIds.size
+                    val sameCast = ticked.count { it.recordIds.size == cast }
+
+                    // Two buttons, because they are two different intentions and the old single one
+                    // silently did the wrong one. "Apply to all" copied this rectangle onto every
+                    // clip whatever its cast — which is how a frame drawn around two readouts ended
+                    // up squeezing four and stranding one.
+                    TextButton(onClick = { onPinForCast(previewing.clip.uri) }) {
+                        Text(
+                            "Use this framing for " +
+                                (if (cast == 1) "1-person clips" else "$cast-person clips") +
+                                " ($sameCast here)"
+                        )
+                    }
+                    if (sameCast < ticked.size) {
+                        TextButton(onClick = { onApplyToAll(previewing.clip.uri) }) {
+                            Text("Apply to all ${ticked.size} clips regardless of cast")
+                        }
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (!isImage && previewing != null && records.isNotEmpty()) {
+                FilmedAtControl(
+                    clip = previewing,
+                    // The venue's clock, by the same rule the chart and the render use.
+                    zone = remember(records) {
+                        (inga.bpmetrics.library.resolvedZoneOf(records.map { it.metadata })
+                            ?: records.clock.id).let { java.time.ZoneId.of(it) }
+                    },
+                    recordingStartMs = records.minOfOrNull { it.metadata.startTime },
+                    onSet = { onSetFilmedAt(previewing.clip.uri, it) },
+                    onReset = { onResetFilmedAt(previewing.clip.uri) }
+                )
                 Spacer(Modifier.height(12.dp))
             }
 

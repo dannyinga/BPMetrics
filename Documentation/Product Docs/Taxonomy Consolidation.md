@@ -1439,6 +1439,235 @@ build a Room instance over the same file. And the first draft of the probe wirin
 throws *and* when it succeeds with nothing wrong; it would have shown the recovery screen on every
 healthy launch.
 
+### 10.2.4 The backup finally means "everything"
+
+| | What was wrong |
+|---|---|
+| **Two events with one name became one event** | Reported from a real library: a Bass Canyon *Day 2* and a Griztronics *Day 2* merged on restore, and both evenings' recordings landed in the survivor. The restore keyed events by **name** — `eventIdsByName` — and the code comment defended it as *"a fair reading of what the user meant by naming them the same thing"*. That holds for a flat list and collapses the moment events nest, which is the entire point of the taxonomy work: a name is unique among siblings and nowhere else. Format 6 carries each event's **id**, and everything that referenced an event by name now references it by id too — a record's event, a collection's members, and an event's own parent. Names are still written, for older readers and for reading the file by eye. |
+| **Export presets were left out on purpose** | The reasoning was that a preset describes how an export *looks* rather than what the library *holds*, and that presets are shareable as their own files. Both true; neither is a reason for "back up everything" to quietly mean "everything except the half-dozen looks you built up". Carried now, matched by name so a restore does not double them, and version-checked **per preset** — a look written by a newer build is skipped and counted rather than failing the whole restore. |
+| **The venue registry was never written** | `locations` had been a parameter of the backup writer since format 4 and no call site ever passed it. So every backup carried events naming venues the file did not contain, and a restore dropped every venue — and every clock that depended on one — without a word. The fourth failure of this exact shape recorded in this document, which is why the coverage test now has something to say about the writer's arguments and not only the format's fields. |
+| **There was no way to back up the library** | The only door was **Save backup** in the library's *selection* menu, so it could not be reached without first selecting recordings — and it then ignored the selection and wrote the whole library regardless. It is a **Backup** section in Settings now, with a plain list of what the file contains, and the result of the last restore kept on screen rather than flashed past in a toast. A restore that reports success while quietly bringing back less than the file held is the failure this whole area keeps having. |
+
+### 10.2.5 A frame that knows how many people are in shot
+
+Bulk export applied one rectangle to every clip in a batch. A frame drawn around two readouts
+squeezed four to the minimum pill height and left one sitting in a box half empty — and the gesture
+that caused it was called **Apply this framing to all N clips**, which did exactly what it said.
+
+The useful finding was how *little* actually varies. `drawMultiStatsHUD` already divides the readout
+column by the number of wearers, and `pillScale` is a multiplier over that, with the renderer's own
+comment noting that "the preset scales what the renderer works out rather than replacing it". So the
+only part of a preset that has ever needed to know the cast is the graph rectangle: four floats.
+
+That ruled out the obvious answer of a preset per person count. A 1-, 2- and 4-person preset would
+be identical in colour, canvas, bitrate, window, sync offset and title, differing in four floats —
+three copies of one look, and changing the ramp means changing it three times or letting them drift.
+Bulk export is precisely where that drift is invisible: six videos render and two carry a stale look.
+It also leaves five and seven undefined.
+
+So a preset carries a **map of cast to frame**. One look; the rectangle it uses is a function of who
+is in shot.
+
+| | |
+|---|---|
+| **An exact pin wins** | You looked at four people in a frame and said "this one". |
+| **Between two pins, interpolate** | Three, with two and four pinned, lands halfway. A frame grown between the counts you cared about beats the two-person one applied whole. |
+| **Outside the pins, hold the nearest** | Not extrapolated, on purpose. Growing past the last pin means inventing a rate, and a made-up rate at seven people draws a rectangle nobody has looked at. |
+| **No pins** | The preset's own frame, for everything — byte-identical behaviour to before, which is what keeps existing presets rendering the same. |
+| **No clip in hand** | The base frame. That is the preset editor in Settings, which frames the look rather than a shot; resolving it to a pin would show one rectangle while dragging wrote to another. |
+
+**Apply this framing to all N clips** is now **Use this framing for N-person clips**, which writes
+the pin onto the preset — so it holds for this batch and every batch after it. The old
+cast-blind version survives as a second button, offered only when the batch actually has mixed
+casts, because occasionally that is what someone means.
+
+No preset version bump. The guard exists so a preset from a newer build refuses to half-apply, and
+this cannot half-apply: an older build's Gson drops the field and renders as it always did. Bumping
+would make an older build reject a preset it can read perfectly well.
+
+### 10.2.6 A way down the tree
+
+The event page has carried a breadcrumb *up* to its parents since Sprint 5 and had no matching route
+inward. Standing on a festival, reaching a set two levels inside it meant going back to the library
+and finding it there — on the one screen that already knew the whole subtree, because its analysis
+covers it.
+
+**Events** is a fourth tab, after Timeline, listing what is nested inside. Last on purpose: the other
+three are ways of reading this scope, and this one is a way *out* of it into a narrower one.
+
+Drawn with the library's own `EventCard` — covers, faces, counts, peaks, indented by depth — rather
+than a second, plainer list of events that would then be a second thing to keep looking like the
+first. It carries **no overflow**: renaming and deleting belong on the page you land on, not in a
+list you are passing through. `EventCard`'s actions became nullable to allow that, and it draws no
+menu when given none, which is the difference between omitting the controls and rendering them dead.
+
+Offered only where there is something inside, through the same slot mechanism as the header and the
+editor: only the subject knows what "inside" means, and a recording has nothing nested in it. A tab
+opening onto an empty list reads as a bug rather than as an absence.
+
+**The first cut had no nesting**, and failed in the worst available way. `flatten` starts its walk at
+the true roots, and every event in a subtree has a non-null parent — so `childrenOf(all, null)` found
+nothing, the walk emitted nothing, and the **cycle-recovery pass** at the bottom of `flatten` dumped
+the whole subtree at depth zero with `hasChildren` false. A flat, chronological, entirely plausible
+list, with no indentation and no chevrons: right enough to ship and wrong in the one way the tab
+existed for. `flatten` takes a `rootParentId` now, and the three cases — start point, collapse, and
+order — are pinned by tests, because nothing about the broken version would have failed one.
+
+Oldest first, unlike the library's timeline. A history opens on last night; a festival's days are a
+programme, and reading Day 3 to Day 0 is nobody's idea of one.
+
+### 10.2.7 An event term means the subtree
+
+The seventh instance of one mistake, and the first to reach a *rule*. Filtering by event compared a
+recording's `eventId` against the chosen one — the event it is filed **directly** on. A recording
+hangs off the deepest thing that claims it, so a festival almost never holds any itself: its days do,
+or its sets do.
+
+Reported as a smart collection that came back empty. Choosing a person and a festival, to gather what
+they did across it, matched only the recordings filed on the festival itself — usually none of them.
+Every earlier instance of this produced a plausible wrong *number*; this one produced a plausible
+empty *collection*, which is the same failure with nothing left to notice it by.
+
+`FilterContext` now carries `ancestorsByEvent`, built from the same cycle-guarded `EventTree`
+ancestry walk as everything else, and the term asks whether **any** event above the recording was
+chosen. Where no tree was supplied the direct comparison stands — some callers filter a snapshot with
+no registry behind them, and answering "no ancestry known" with "matches nothing" is exactly how
+three other terms silently emptied a collection once already.
+
+Pinned by five tests, three of which were confirmed to fail against the old comparison before the fix
+was restored — including the reported case of a person and an event together.
+
+### 10.2.8 An export's clock is where it happened
+
+Reported as a Chicago set exporting in Pacific time, with its venue set and inherited from its
+event. **Two faults, stacked**, and either alone produced exactly that symptom — which is why fixing
+the obvious one would not have fixed it.
+
+**1. The render read its zone off the preset.** `ExportPreset.timeZoneId` defaults to
+`ZoneId.systemDefault()` and is saved into the preset's JSON, so it is the phone's zone *as of the
+moment the look was created*, frozen. `applyTo` copied it into the render config and the clock was
+formatted in it. Checked against the reporting device's actual database rather than inferred: all
+eight presets, the shipped ones included, carried `America/Los_Angeles`. Every export was captioned in
+Pacific time wherever it happened.
+
+A zone is a fact about where a recording happened, not about how an export looks — the same category
+error the preset's own documentation warns against for record ids. It is now stamped at the two
+public render entry points, `renderOnCanvas` and `renderAlignedRecordsOnCanvas`, because they are the
+one moment the recordings are guaranteed to be in hand. Deriving it inside `applyTo` would have missed
+the render queue, which rebuilds a job's config after a restart *before* its recordings are loaded.
+The still-image spec and its crop fields take the same answer, so a typed "from 21:00" means 21:00
+where the set was.
+
+Precedence: **the venue's zone → the Settings time zone → the phone's**. That keeps the Settings
+control meaningful as the fallback for unfiled recordings. It predates venues, and its own hint
+describes the job a venue now does per recording; it was also broken on its own terms, seeding only
+*new* presets and so never reaching any existing one.
+
+**2. The recording's frozen zone went stale.** `reconcileTimeZones` ran only inside
+`if (moved.isNotEmpty())` — beneath a comment reading *"the two answers move together"*. But a clock
+changes without anything moving in two of the most ordinary operations. `assignRecordsToEvent` writes
+the new event *before* reconciling, so the rows are already where they were put and nothing is left to
+move; and moving an event beneath a venue changes what its recordings **inherit** without changing
+which event any of them is in. Both left the column stale, and an export reads the column. With only
+fault 1 fixed, those recordings would have fallen straight back to the phone's zone.
+
+It runs unconditionally now — one pass over rows already read, writing only those that differ — and
+once per launch through `reconcileTimeZonesOnce`, so a library left stale by the old behaviour heals on
+the next start instead of only for whatever is touched afterwards.
+
+Pinned by `ExportClockZoneTest`. The two reconcile cases were confirmed to **fail** against the gated
+call before the fix was restored.
+
+### 10.2.9 The event page's own clock, and narrowing it to some of the people
+
+**The timeline was drawn in the phone's zone.** A third, separate cause from the two in §10.2.8, and a
+simpler one: `EventAnalysis.from` built its curves and handed `ConcurrentAnalysis.of(series, window)`
+**no zone at all**. `ConcurrentAnalysis.clock` falls back to the reader's zone when given none, so the
+event page's axis, scrubber readout and view-window span all read Pacific for a Chicago set —
+regardless of the venue, and regardless of how current the recordings' stored zones were. Fixing the
+export and the stale column had no way to reach it. `ConcurrentAnalysis.from`, beside it, had always
+passed one, which is why only the *event* page showed it.
+
+Both now use the rule the export uses — the first recording with a venue zone, then the reader's —
+so the chart on a page and the video made from it cannot disagree about one occasion.
+
+**Narrowing to some of the people.** "Bass Canyon, just me" was not a question the page could ask.
+Isolating a lane on the Timeline brought one curve forward, but every figure around it — totals,
+Highlights, rankings, zones — still described everyone, so the number you wanted about yourself was
+never on screen.
+
+A people button in the toolbar, beside Export, offered wherever more than one person is in scope. It
+applies at `analysisRecords`, the single choke point exclusions already used, so the Summary, Compare,
+Highlights *and* the Timeline's curves move together and a header cannot describe four people over a
+chart showing one.
+
+- **A lens, not a refinement.** Kept apart from exclusions: leaving a set out says something about
+  what the event *was*; looking at only yourself says nothing about the event at all.
+- **Said on every tab.** A notice above the tabs — "Showing Danny of 4 · Show everyone" — because a
+  badge is easy to miss and a page quietly showing one person's stats is the misreading to avoid. It
+  also survives the empty state, since narrowing to someone whose recordings are all excluded empties
+  the page, and an empty page that did not say so would read as an event with nothing in it.
+- **Not gated on the page having content**, for the same reason: hiding the button when the filter
+  emptied the page would leave no way back out.
+- **Unattributed recordings are dropped under a filter.** They are not any of the people chosen.
+- **Everyone ticked is stored as no filter**, or the badge would claim a narrowing that is not there,
+  and a fifth person's later recording would be silently excluded.
+
+`PersonFilterRule` holds both rules with nothing Compose about them. The two timeline tests were
+confirmed to fail with the zone removed before the fix was restored.
+
+### 10.2.10 Telling a clip when it was really filmed
+
+**The regression.** The v1.0 export dialog had start and end fields for a chosen video — which stretch
+of the recording to lay over it. The stepped export utility that replaced that dialog never carried
+them, and a video picked by hand has since been a bare uri laid over the whole recording from its first
+second. Screen recordings surfaced it: one made today, of a set filmed a month ago, is stamped today,
+so it overlapped no recording and lined up with nothing — and the only alignment control left was a
+**±30 second** sync offset, which cannot bridge a month.
+
+Three shapes were on the table: correct the video's start and let sync do the rest; choose a graph
+range by hand; or video start, graph start and duration as three fields in the Time section.
+
+**One number, not three.** A clip is two facts — when it started, and how long it runs — and the length
+is the file's. So the only thing that can be wrong is the start, and once it is right,
+`VideoClip.windowOn` already works out exactly which stretch of the recording belongs over the footage.
+A graph start and a duration would ask for those facts a second and third time and let them disagree:
+a five-minute graph over a three-minute video, cut off or running out early.
+
+**Per clip, not in the preset.** The Time section is the preset — a look, reused across a batch. When
+something was filmed is a fact about one video. Storing it there would stamp one clip's time onto every
+clip and save it into a look meant to be reused: the category error §10.2.8 had just removed, where a
+preset's frozen zone captioned every export.
+
+What changed:
+
+- **A picked video is a clip.** `VideoExporter.clipFromUri` reads its length from the file, so it goes
+  through the Contents step, who-was-recording, the preview, per-clip framing and the render like any
+  found clip, instead of the whole-timeline path.
+- **Filmed at**, beside the preview, for whichever clip is being framed — including a lone clip, which
+  has no selector strip. Date and time *with seconds*, in the venue's clock, through the event editor's
+  own `DateTimePicker` (shared rather than copied, because its zone arithmetic is the part worth having
+  once). "Start of the recording" to line a clip up, "Use the file's time" to undo. The length is shown
+  and not editable.
+- **Choose a video from Contents**, the step that chooses clips — in the empty state and as an icon in
+  the header row. It had only been reachable from the Look step's background settings, and only when no
+  clip had been found at all.
+- **The render honours it.** `calculateVideoAlignment` takes `knownStartMs ?: the file's stamp`, and the
+  known start is the corrected clip time — so the preview, the render, and a queued job restored after a
+  restart (`RenderJobStore` persists it) all agree.
+
+Two traps avoided on the way. A clip retimed to a moment nobody recorded cannot stay ticked, and the
+Look step previewed only ticked clips — so the preview would have jumped to another clip mid-correction
+and taken the control with it, leaving no way to put the time right. The previewed clip is now looked up
+among all clips once one has been chosen. And a correction clears the clip's sparkline, which otherwise
+sat under the new time drawing the previous stretch until something redrew it; the redraw that replaces
+it only writes back if the clip is still at the time it was drawn for, so two quick corrections cannot
+land out of order.
+
+`ClipRetiming` holds the rules, pure, pinned by ten tests including the reported case end to end: a
+screen recording a month out, set to 3:19:08 PM, lands on both people and covers exactly its three
+minutes of the recording.
+
 ### 10.3 Unlovely
 
 | | Why it matters |

@@ -4,6 +4,7 @@ import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
+import inga.bpmetrics.library.clock
 
 /**
  * An event's recordings laid out as one lane per person.
@@ -100,7 +101,16 @@ object EventAnalysis {
                 )
             }
 
-        return ConcurrentAnalysis.of(series, window)
+        // With a zone. This passed none, so `ConcurrentAnalysis.clock` fell back to the phone's own
+        // and the event page's timeline — the axis, the scrubber readout, the view-window span —
+        // drew a Chicago set in Pacific time. Not stale data and not a missing venue: the answer
+        // was simply never handed over, while `ConcurrentAnalysis.from` beside it always has.
+        //
+        // The same rule as an export, so the chart on the page and the video made from it agree:
+        // the venue's zone where any recording has one, and the reader's clock only where none do.
+        val zone = inga.bpmetrics.library.resolvedZoneOf(records.map { it.metadata })
+            ?: records.clock.id
+        return ConcurrentAnalysis.of(series, window, zone)
     }
 
     /**

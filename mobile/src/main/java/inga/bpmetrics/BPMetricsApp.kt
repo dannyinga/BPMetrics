@@ -107,6 +107,11 @@ class BPMetricsApp : Application() {
         // later arrives without them.
         libraryRepository.backfillDerivedFiguresOnce()
 
+        // Every recording's clock, recomputed from where it now sits. Filing by hand and moving an
+        // event beneath a venue both used to leave this stale, and a stale clock is what an export
+        // draws. Heals a library that was left that way, and writes nothing on one that was not.
+        libraryRepository.reconcileTimeZonesOnce()
+
         // The export presets the app ships with. Seeded from Kotlin rather than the migration so
         // a fresh install and an upgrade take the same path and there is one definition of what
         // ships rather than two.

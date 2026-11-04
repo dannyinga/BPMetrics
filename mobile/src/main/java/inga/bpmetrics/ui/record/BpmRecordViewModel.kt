@@ -299,6 +299,21 @@ class BpmRecordViewModel(
     }
 
     /**
+     * Moves the recording so it starts at [newStart], keeping its length and readings.
+     *
+     * For a recording stamped by a watch whose clock was wrong. See
+     * [LibraryRepository.shiftRecordTimes].
+     */
+    fun moveStartTo(newStart: Long) {
+        val current = _record.value?.metadata?.startTime ?: return
+        if (newStart == current) return
+        launchGuarded {
+            repository.shiftRecordTimes(listOf(recordId), newStart - current)
+            loadRecord()
+        }
+    }
+
+    /**
      * Assigns a tag to the current record.
      *
      * @param tagId The ID of the tag to assign.

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
@@ -322,6 +323,115 @@ class SettingsViewModel(
                 _message.emit(failure)
             } else {
                 _restarting.value = true
+            }
+        }
+    }
+
+    // --- Backup file: everything this app holds, in one document ---
+
+    private val _backupBusy = MutableStateFlow(false)
+    /** True while a file is being written or read, so the buttons can say so and refuse a second. */
+    val backupBusy: StateFlow<Boolean> = _backupBusy.asStateFlow()
+
+    private val _lastRestore = MutableStateFlow<inga.bpmetrics.export.RestoreResult?>(null)
+    /** What the last restore actually did. Kept on screen rather than flashed past in a toast. */
+    val lastRestore: StateFlow<inga.bpmetrics.export.RestoreResult?> = _lastRestore.asStateFlow()
+
+    /**
+     * Writes the whole library — every recording, and everything organising them — to [uri].
+     *
+     * Everything means everything: readings, people and their photographs, watches, venues, the
+     * event tree, collections and their rules, tags, covers, saved export looks, and the settings
+     * on this screen. The one previous door to this sat in the library's *selection* menu, which
+     * meant it could not be reached without first selecting recordings — and then ignored the
+     * selection and wrote the whole library anyway.
+     */
+    fun writeBackup(context: Context, uri: android.net.Uri) {
+        if (_backupBusy.value) return
+        launchGuarded {
+            _backupBusy.value = true
+            try {
+                val backup = withContext(Dispatchers.IO) {
+                    inga.bpmetrics.export.JsonExporter.buildBackup(
+                        records = repository.recordsWithPoints(
+                            repository.records.value.map { it.metadata.recordId }
+                        ),
+                        people = repository.getAllPeople().first(),
+                        watches = repository.getAllWatches().first(),
+                        categories = repository.getAllCategories().first(),
+                        settings = repository.getSettingsForBackup(),
+                        events = repository.allEventsInTree.first(),
+                        collections = repository.getCollectionsForBackup(),
+                        eventTags = repository.getEventTagsForBackup(),
+                        locations = repository.getAllLocations().first(),
+                        presets = repository.getPresetsForBackup(),
+                        readImage = { name ->
+                            runCatching {
+                                inga.bpmetrics.library.CoverStore.fileFor(context, name)
+                                    .takeIf { it.isFile }
+                                    ?.readBytes()
+                            }.getOrNull()
+                        }
+                    )
+                }
+                // Streamed to the file rather than built as one string first — see
+                // [inga.bpmetrics.export.JsonExporter.writeBackup]. The size is read back from the
+                // file for the message, since nothing holds it in memory any more.
+                val written = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.use {
+                            inga.bpmetrics.export.JsonExporter.writeBackup(it, backup)
+                        } != null
+                    }.onFailure { android.util.Log.e("SettingsViewModel", "Backup failed", it) }
+                        .getOrDefault(false)
+                }
+                val size = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+                    }.getOrNull()?.takeIf { it > 0 }
+                }
+                _message.emit(
+                    when {
+                        !written -> "Could not write that file"
+                        size != null -> "Backed up ${StorageInspector.formatSize(size)}"
+                        else -> "Backed up"
+                    }
+                )
+            } finally {
+                _backupBusy.value = false
+            }
+        }
+    }
+
+    /**
+     * Reads a backup file and merges it into this library.
+     *
+     * A merge, not a replacement. Nothing is deleted: people, venues and presets already here are
+     * matched by name rather than duplicated, and recordings are added. Restoring the same file
+     * twice is the case that decides whether this is safe to offer, which is why the round trip is
+     * asserted by a test rather than trusted.
+     */
+    fun readBackup(context: Context, uri: android.net.Uri) {
+        if (_backupBusy.value) return
+        launchGuarded {
+            _backupBusy.value = true
+            try {
+                val opened = withContext(Dispatchers.IO) {
+                    inga.bpmetrics.export.JsonExporter.openBackup(context, uri)
+                }
+                val backup = when (opened) {
+                    is inga.bpmetrics.export.BackupFile.Read -> opened.backup
+                    is inga.bpmetrics.export.BackupFile.Unreadable -> {
+                        _message.emit(opened.reason)
+                        return@launchGuarded
+                    }
+                }
+                val result = inga.bpmetrics.export.restoreBackup(backup, repository, context)
+                _lastRestore.value = result
+                _message.emit(result.summary())
+                refreshStorage(context)
+            } finally {
+                _backupBusy.value = false
             }
         }
     }

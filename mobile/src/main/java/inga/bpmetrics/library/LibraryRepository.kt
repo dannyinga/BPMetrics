@@ -111,6 +111,31 @@ class LibraryRepository(
      * reading it can find, and doing it in a batch would put the whole library in memory to avoid
      * exactly that — which is the problem being solved.
      */
+    /**
+     * Brings every recording's frozen clock up to date, once per launch, off the main thread.
+     *
+     * Self-healing for a library that was left stale by the bug fixed in [reconcileMembership]:
+     * recordings filed by hand, or sitting under an event that was since moved beneath a venue, kept
+     * the zone they had before — and they stay that way until something happens to recompute, which
+     * for a finished festival may be never. Without this the fix would only apply to what is touched
+     * *after* installing it, and the same set would still export in the wrong zone.
+     *
+     * Cheap enough to run every launch: one read of rows the app reads anyway, and a write only for
+     * a recording whose zone genuinely differs. On a library already correct it writes nothing.
+     */
+    fun reconcileTimeZonesOnce() {
+        scope.launch {
+            try {
+                val fixed = reconcileTimeZones()
+                if (fixed > 0) Log.i(tag, "Corrected the clock on $fixed recording(s) at startup")
+            } catch (e: Exception) {
+                // Retried next launch. Until then an affected recording reads in its old zone,
+                // which is the state it was already in.
+                Log.e(tag, "Could not reconcile time zones", e)
+            }
+        }
+    }
+
     fun backfillDerivedFiguresOnce() {
         scope.launch {
             try {
@@ -324,6 +349,17 @@ class LibraryRepository(
      * @param record The BpmWatchRecord to save.
      * @return The ID of the newly created record.
      */
+    /**
+     * Every recording's id, keyed by what identifies it independently of this library's numbering.
+     *
+     * For a restore to tell "a recording I already have" from a new one. Start, end and device
+     * together: two different recordings from one watch cannot share a start and an end to the
+     * millisecond, and the id it had elsewhere means nothing here.
+     */
+    suspend fun recordIdsByIdentity(): Map<Triple<Long, Long, String>, Long> =
+        recordDao.getAllRecordEntities()
+            .associate { Triple(it.startTime, it.endTime, it.deviceId) to it.recordId }
+
     suspend fun saveWatchRecordToLibrary(
         record: BpmWatchRecord,
         customTitle: String? = null,
@@ -572,7 +608,7 @@ class LibraryRepository(
      *
      * | Invalidates | Does not |
      * |---|---|
-     * | A recording arriving, deleted, split or merged | A title or note |
+     * | A recording arriving, deleted, split, merged or moved in time | A title or note |
      * | A window created, moved or cleared | A tag, cover or type |
      * | An event created, deleted or reparented | Anything on a person or watch |
      * | The people qualifying a window | |
@@ -610,10 +646,25 @@ class LibraryRepository(
 
         if (moved.isNotEmpty()) {
             Log.i(tag, "Reconciled membership: ${moved.size} recordings moved")
-            // Where a recording lives decides which clock it inherits, so the two answers move
-            // together. Leaving this to the caller is how one of them ends up stale.
-            reconcileTimeZones()
         }
+
+        // Every time, not only when membership moved something.
+        //
+        // This was inside the `if` above, which reads as correct — where a recording lives decides
+        // its clock — and misses that a clock can change while *nothing moves*. Two of the most
+        // ordinary operations do exactly that:
+        //
+        //  - Filing by hand. `assignRecordsToEvent` writes the new event before calling this, so by
+        //    the time this reads the recordings they are already where they were put; nothing is
+        //    left to move, and the zone was never recomputed. Filing a set into a Chicago event
+        //    left it reading in whatever zone it had before.
+        //  - Moving an event. Putting Day 2 under a festival with a venue changes what Day 2
+        //    *inherits*, but not one recording changes event, so again nothing moved.
+        //
+        // Both left the frozen column stale, and an export reads the frozen column. Cheap to run
+        // unconditionally: it is one pass over rows already being read above, and it writes only
+        // the rows whose zone actually differs.
+        reconcileTimeZones()
         return moved.size
     }
 
@@ -727,6 +778,35 @@ class LibraryRepository(
     suspend fun setEventLocation(eventId: Long, locationId: Long?) {
         eventDao.updateLocation(eventId, locationId)
         reconcileTimeZones()
+    }
+
+    /**
+     * Moves recordings in time by the same amount, for a watch whose clock was wrong.
+     *
+     * A watch that has been flat for a while can boot with a stale clock and no phone or Wi-Fi to
+     * correct it, and every recording it makes until then is stamped weeks out. One amount for the
+     * whole set, because that is the shape of the fault: the clock was off by a constant, so the
+     * recordings stay in step with each other and only need moving together.
+     *
+     * Reconciles afterwards — where a recording lives is decided by when it started, so a
+     * recording moved from August into last night's window belongs to last night's event.
+     *
+     * @return how many recordings moved, or 0 if the move would put one before 1970.
+     */
+    suspend fun shiftRecordTimes(recordIds: Collection<Long>, deltaMs: Long): Int {
+        if (recordIds.isEmpty() || deltaMs == 0L) return 0
+        val ids = recordIds.toList()
+        val earliest = recordDao.getAllRecordEntities()
+            .filter { it.recordId in recordIds }
+            .minOfOrNull { it.startTime } ?: return 0
+        if (earliest + deltaMs < 0) {
+            Log.w(tag, "Refused to move ${ids.size} recording(s) by $deltaMs ms: before the epoch")
+            return 0
+        }
+        ids.chunked(SQL_VARIABLE_LIMIT).forEach { recordDao.shiftTimes(it, deltaMs) }
+        Log.i(tag, "Moved ${ids.size} recording(s) by $deltaMs ms")
+        reconcileMembership()
+        return ids.size
     }
 
     /** A venue chosen for one recording, overriding what it would inherit. */
@@ -1565,10 +1645,13 @@ class LibraryRepository(
         return collectionDao.getAll().map { set ->
             CollectionBackup(
                 collection = set,
-                // By name, as everything else in a backup is: ids are reassigned on import, so a
-                // reference by id would come back pointing at whatever now holds that number.
+                // Both. The id is what a restore follows — ids *are* reassigned on import, but the
+                // restore builds a map from the old id to the new one precisely so that references
+                // survive, which a name cannot do when two events share one. The name rides along
+                // for files read by older builds and for reading the JSON by eye.
                 eventNames = eventLinks[set.collectionId].orEmpty()
                     .mapNotNull { eventNames[it.eventId] },
+                eventIds = eventLinks[set.collectionId].orEmpty().map { it.eventId },
                 recordIds = recordLinks[set.collectionId].orEmpty().map { it.recordId },
                 frozenRecords = if (!set.isFrozen) emptyList() else
                     collectionDao.getWithFrozenRecords(set.collectionId)?.records.orEmpty()
@@ -1587,6 +1670,14 @@ class LibraryRepository(
         dto: inga.bpmetrics.export.CollectionDto,
         eventIdsByName: Map<String, Long>,
         recordIdByOldId: Map<Long, Long>,
+        /**
+         * Where each event landed, keyed by its id in the source library.
+         *
+         * Preferred over the by-name map wherever the file carries ids, because a set naming
+         * "Day 2" cannot say which one — and a collection spanning two festivals is exactly the
+         * case where a set has both.
+         */
+        eventIdsBySourceId: Map<Long, Long> = emptyMap(),
     ): Long {
         val collectionId = collectionDao.insert(
             CollectionEntity(
@@ -1602,7 +1693,13 @@ class LibraryRepository(
             )
         )
 
-        dto.eventNames.mapNotNull { eventIdsByName[it] }.forEach {
+        // Ids where the file has them, names only for a file written before format 6. Not both:
+        // a file carrying both would otherwise link every event twice, and the second insert is
+        // the one that would surface as a constraint failure halfway through a restore.
+        val memberEvents =
+            if (dto.eventIds.isNotEmpty()) dto.eventIds.mapNotNull { eventIdsBySourceId[it] }
+            else dto.eventNames.mapNotNull { eventIdsByName[it] }
+        memberEvents.distinct().forEach {
             collectionDao.addEvent(CollectionEventCrossRef(collectionId, it))
         }
         dto.recordIds.mapNotNull { recordIdByOldId[it] }.forEach {
@@ -1614,10 +1711,10 @@ class LibraryRepository(
                 dto.frozenRecords.map { row ->
                     SavedAnalysisRecordEntity(
                         collectionId = collectionId,
-                        // Remapped where the recording came across, kept as-is where it did not: a
-                        // frozen row stands on its own numbers, and dropping it because its
-                        // recording had already been deleted would defeat the point of freezing.
-                        recordId = recordIdByOldId[row.recordId] ?: row.recordId,
+                        // Remapped where the recording came across. Where it did not, the row is
+                        // kept — it stands on its own numbers — but pointed at nothing: the old id
+                        // as-is named whichever unrelated recording held that number here.
+                        recordId = recordIdByOldId[row.recordId] ?: -1L,
                         title = row.title,
                         date = row.date,
                         minBpm = row.minBpm,
@@ -1705,6 +1802,49 @@ class LibraryRepository(
     // --- Export presets ---
 
     fun getExportPresets(): Flow<List<ExportPresetEntity>> = presetDao.getAllFlow()
+
+    /** Every stored preset, for a backup to carry. */
+    suspend fun getPresetsForBackup(): List<ExportPresetEntity> = presetDao.getAll()
+
+    /**
+     * Writes a preset back from a backup, matched by name rather than duplicated.
+     *
+     * A restore into a library that already has "Festival wide" should leave one of them, not two.
+     * The incoming one wins, because a restore is the user saying they want what the file holds.
+     *
+     * @return true if it was written, false if the configuration could not be read — a preset from
+     *   a newer build, which is skipped and counted rather than failing the whole restore.
+     */
+    suspend fun restorePreset(
+        name: String,
+        configJson: String,
+        isDefault: Boolean,
+        isBuiltIn: Boolean,
+        createdAt: Long
+    ): Boolean {
+        // Parsed before it is written. A look nothing can read is worse than an absent one: it
+        // would sit in the picker and fail at the moment somebody applied it.
+        if (inga.bpmetrics.export.ExportPreset.fromJson(configJson) == null) return false
+
+        val existing = presetDao.getAll().firstOrNull { it.name.equals(name, ignoreCase = true) }
+        val id = presetDao.insert(
+            ExportPresetEntity(
+                presetId = existing?.presetId ?: 0L,
+                name = name,
+                configJson = configJson,
+                // A built-in on the source device is an ordinary preset here if this build has no
+                // such built-in — the flag only ever protected it from deletion.
+                isBuiltIn = existing?.isBuiltIn ?: isBuiltIn,
+                isDefault = false,
+                createdAt = createdAt
+            )
+        )
+        if (isDefault) {
+            presetDao.clearDefault()
+            presetDao.markDefault(if (existing != null) existing.presetId else id)
+        }
+        return true
+    }
 
     suspend fun getExportPreset(presetId: Long): ExportPresetEntity? = presetDao.getPreset(presetId)
 

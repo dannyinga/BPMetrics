@@ -107,6 +107,11 @@ fun EventDetailScreen(
         }
     }
 
+    // Whether anything is nested in here at all, which decides whether the Events tab exists.
+    val hasChildEvents = remember(event, tree) {
+        event != null && tree.any { it.parentId == event.eventId }
+    }
+
     val resolved = remember(event, tree, places) {
         event?.let {
             inga.bpmetrics.library.LocationResolver.forEvent(
@@ -182,6 +187,19 @@ fun EventDetailScreen(
             }
             IconButton(onClick = { editing = true }) {
                 Icon(Icons.Default.Edit, contentDescription = "Edit event")
+            }
+        },
+        // What is inside this event, as its own tab — but only when something is. An event holding
+        // nothing but recordings has no sub-structure to show, and the tab is not offered.
+        subjectChildren = if (event == null || !hasChildEvents) null else {
+            {
+                EventChildren(
+                    parentId = event.eventId,
+                    libraryViewModel = libraryViewModel,
+                    onOpen = { id ->
+                        navController.navigate("${inga.bpmetrics.ui.Routes.EVENT_DETAIL}/$id")
+                    }
+                )
             }
         },
         // The editor, rendered by the analysis so it can offer "What's included" — see the slot's

@@ -84,6 +84,53 @@ class EventTreeTest {
         assertEquals(listOf(0, 1, 2, 2, 1), flat.map { it.depth })
     }
 
+    /**
+     * Listing what is inside one event, which is what the Events tab does.
+     *
+     * The walk starts at the true roots unless told otherwise, so handing it a subtree and letting
+     * it default failed in the worst available way: every event in a subtree has a non-null parent,
+     * so nothing matched `parentId == null`, the walk emitted nothing, and the cycle-recovery pass
+     * dumped the lot at depth zero with no children marked. A flat list that looks nearly right.
+     */
+    @Test
+    fun `a walk can start below the roots`() {
+        val subtree = festival().filter { it.eventId in EventTree.descendantsOf(festival(), 1) - 1L }
+
+        val flat = EventTree.flatten(all = subtree, rootParentId = 1L)
+
+        // The festival's days come back as the top level, with its sets beneath them.
+        assertEquals(listOf("Day 1", "Subtronics", "Excision", "Day 2"), flat.map { it.event.name })
+        assertEquals(listOf(0, 1, 1, 0), flat.map { it.depth })
+
+        // And a day knows it can be opened, which is what draws the chevron. Without the start
+        // point this was false on every row.
+        assertTrue(flat.first { it.event.name == "Day 1" }.hasChildren)
+        assertFalse(flat.first { it.event.name == "Day 2" }.hasChildren)
+    }
+
+    /** Collapsed, a subtree walk shows the top level only — the same rule as anywhere else. */
+    @Test
+    fun `a walk below the roots still respects what is expanded`() {
+        val subtree = festival().filter { it.eventId in EventTree.descendantsOf(festival(), 1) - 1L }
+
+        val collapsed = EventTree.flatten(subtree, expanded = emptySet(), rootParentId = 1L)
+        assertEquals(listOf("Day 1", "Day 2"), collapsed.map { it.event.name })
+
+        val opened = EventTree.flatten(subtree, expanded = setOf(2L), rootParentId = 1L)
+        assertEquals(listOf("Day 1", "Subtronics", "Excision", "Day 2"), opened.map { it.event.name })
+    }
+
+    /** Oldest first inside an event: a festival's days are a programme, not a history. */
+    @Test
+    fun `a subtree walk reads in the order it happened`() {
+        val subtree = festival().filter { it.eventId in EventTree.descendantsOf(festival(), 1) - 1L }
+
+        val order = EventTree.flatten(subtree, expanded = emptySet(), rootParentId = 1L)
+            .map { it.event.name }
+
+        assertEquals(listOf("Day 1", "Day 2"), order)
+    }
+
     @Test
     fun `flatten covers every event exactly once`() {
         val flat = EventTree.flatten(festival())

@@ -48,7 +48,7 @@ class BackupCoverageTest {
                 "Recomputed at ingest from the readings, which the backup does carry.",
             "zonesEncoded" to "As activeDurationMs.",
             "personId" to "Carried as wearerName; people are renumbered on import.",
-            "eventId" to "Carried as eventName.",
+            "eventId" to "Carried as eventId and eventName since format 6.",
             "locationId" to "Carried as locationName.",
             "timeZoneId" to "Reconciled from the restored location tree.",
             "coverPath" to "A name inside this install's storage. The image travels as bytes.",
@@ -60,9 +60,9 @@ class BackupCoverageTest {
             "coverDim" to "Carried inside cover."
         ),
         EventEntity::class.java to mapOf(
-            "eventId" to "Reassigned on insert; the backup keys events by name.",
+            "eventId" to "Reassigned on insert, and carried so references survive it.",
             "groupId" to "Carried as groupName; ids are reassigned.",
-            "parentId" to "Carried as parentName.",
+            "parentId" to "Carried as parentEventId and parentName.",
             "locationId" to "Carried as locationName; venues are renumbered on import.",
             "coverPath" to "A name inside this install's storage. The image travels as bytes.",
             "coverCropLeft" to "Carried inside cover.",
@@ -197,7 +197,73 @@ class BackupCoverageTest {
         val read = gson.fromJson(gson.toJson(backup), LibraryBackup::class.java)
 
         assertEquals(backup, read)
-        assertEquals(5, read.formatVersion)
+        assertEquals(6, read.formatVersion)
+    }
+
+    /**
+     * The bug this format version exists for.
+     *
+     * A festival with days in it produces sibling events called "Day 2" under different parents.
+     * The restore keyed events by name, so both collapsed into one and every recording from both
+     * evenings landed in it — reported from a real library holding a Bass Canyon Day 2 and a
+     * Griztronics Day 2.
+     *
+     * Asserted on the *file* rather than through a restore, because a restore needs a database: the
+     * property that matters is that the file distinguishes them at all, which by name it cannot.
+     */
+    @Test
+    fun `two events with one name are two different events`() {
+        val bassCanyon = EventDto(eventId = 1, name = "Bass Canyon")
+        val griz = EventDto(eventId = 2, name = "Griztronics")
+        val bassDay2 = EventDto(eventId = 3, name = "Day 2", parentEventId = 1, parentName = "Bass Canyon")
+        val grizDay2 = EventDto(eventId = 4, name = "Day 2", parentEventId = 2, parentName = "Griztronics")
+
+        val events = listOf(bassCanyon, griz, bassDay2, grizDay2)
+
+        // By name there are three events and the two Day 2s are indistinguishable.
+        assertEquals(3, events.map { it.name }.distinct().size)
+        // By id there are four, and each Day 2 knows which festival it belongs to.
+        assertEquals(4, events.map { it.eventId }.distinct().size)
+        assertEquals(1L, bassDay2.parentEventId)
+        assertEquals(2L, grizDay2.parentEventId)
+
+        // And a recording can say which of them it was at, which by name it could not.
+        val atBassDay2 = BpmRecordJsonDto(recordId = 10, eventId = 3, eventName = "Day 2")
+        val atGrizDay2 = BpmRecordJsonDto(recordId = 11, eventId = 4, eventName = "Day 2")
+        assertEquals(atBassDay2.eventName, atGrizDay2.eventName)
+        assertTrue(atBassDay2.eventId != atGrizDay2.eventId)
+    }
+
+    /**
+     * Everything the user built up, in one file.
+     *
+     * Presets and the venue registry are the two most recent things a backup was silently not
+     * carrying — presets by an explicit decision that no longer holds, venues by an argument the
+     * writer simply never passed.
+     */
+    @Test
+    fun `presets and venues survive a round trip`() {
+        val gson = Gson()
+        val backup = LibraryBackup(
+            locations = listOf(
+                LocationDto(name = "The Gorge", timeZoneId = "America/Los_Angeles")
+            ),
+            presets = listOf(
+                ExportPresetDto(
+                    name = "Festival wide",
+                    configJson = "{\"version\":1}",
+                    isDefault = true,
+                    createdAt = 1_700_000_000_000L
+                )
+            )
+        )
+
+        val read = gson.fromJson(gson.toJson(backup), LibraryBackup::class.java)
+
+        assertEquals(backup, read)
+        assertEquals("The Gorge", read.locations.single().name)
+        assertEquals("Festival wide", read.presets.single().name)
+        assertTrue(read.presets.single().isDefault)
     }
 
     @Test

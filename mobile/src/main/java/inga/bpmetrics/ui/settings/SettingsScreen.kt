@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -107,6 +108,7 @@ fun SettingsScreen(
             LibrarySection(viewModel)
             HeartRateSection(viewModel)
             ExportSection(viewModel)
+            BackupSection(viewModel)
             StorageSection(viewModel)
             SyncSection(viewModel)
             // No About section here: the app already has one, and two places claiming to be the
@@ -440,6 +442,105 @@ private fun relaunch(context: Context) {
 }
 
 // --- Shared pieces ---
+
+/**
+ * One file holding everything the app knows.
+ *
+ * Here rather than in the library's selection menu, which is where the only door to this used to
+ * be: it could not be reached without first selecting recordings, and then ignored the selection
+ * and wrote the whole library regardless. A backup is not an operation on a selection.
+ *
+ * Deliberately two plain buttons and a sentence saying what is in the file. The value of a backup
+ * is entirely in whether someone believes it enough to rely on it, and a list of what it contains
+ * does more for that than any amount of styling.
+ */
+@Composable
+private fun BackupSection(viewModel: SettingsViewModel) {
+    val context = LocalContext.current
+    val busy by viewModel.backupBusy.collectAsStateWithLifecycle()
+    val lastRestore by viewModel.lastRestore.collectAsStateWithLifecycle()
+
+    val saveLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> uri?.let { viewModel.writeBackup(context, it) } }
+
+    // Every type, not "application/json". A .bpmjson written by this app is often reported by the
+    // system as octet-stream, and filtering on the JSON type greys out the file the user is
+    // looking straight at.
+    val openLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.readBackup(context, it) } }
+
+    SettingsGroup("Backup", "One file with everything in it") {
+        Hint(
+            "A backup holds every recording and its readings, the people and their photographs, " +
+                "watches, venues, your events and how they nest, collections and their rules, " +
+                "tags, cover images, saved export looks, and these settings."
+        )
+        Spacer(Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                enabled = !busy,
+                onClick = {
+                    saveLauncher.launch("BPMetrics_Backup_" + System.currentTimeMillis() + ".bpmjson")
+                },
+                modifier = Modifier.weight(1f)
+            ) { Text(if (busy) "Working..." else "Back up") }
+
+            OutlinedButton(
+                enabled = !busy,
+                onClick = { openLauncher.launch(arrayOf("*/*")) },
+                modifier = Modifier.weight(1f)
+            ) { Text("Restore") }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Hint(
+            "Restoring adds to this library rather than replacing it. People, venues and presets " +
+                "already here are matched by name rather than duplicated."
+        )
+
+        // What the last restore actually did, kept on screen. A toast says "restored" and is gone
+        // before anyone can check it against what they expected — and the failure this is here to
+        // make visible is a restore that reports success while quietly bringing back less than the
+        // file held.
+        lastRestore?.let { result ->
+            Spacer(Modifier.height(12.dp))
+            Label("Last restore")
+            Spacer(Modifier.height(4.dp))
+            if (!result.succeeded) {
+                Text(
+                    result.failure ?: "Failed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else {
+                Hint(
+                    buildString {
+                        append("${result.recordsImported} recordings")
+                        if (result.recordsAlreadyHere > 0) {
+                            append(" (${result.recordsAlreadyHere} more were already here)")
+                        }
+                        append(", ${result.eventsCreated} events")
+                        append(", ${result.analysesRestored} collections")
+                        append(", ${result.peopleCreated} people")
+                        append(", ${result.presetsRestored} presets")
+                        append(", ${result.settingsRestored} settings")
+                        if (result.presetsSkipped > 0) {
+                            append(" — ${result.presetsSkipped} preset")
+                            if (result.presetsSkipped != 1) append("s")
+                            append(" came from a newer version and were skipped")
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun SettingsGroup(

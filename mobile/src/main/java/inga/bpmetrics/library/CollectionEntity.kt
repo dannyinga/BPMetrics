@@ -160,6 +160,13 @@ data class CollectionRecordCrossRef(
 data class CollectionBackup(
     val collection: CollectionEntity,
     val eventNames: List<String> = emptyList(),
+    /**
+     * The events it names, by id.
+     *
+     * Alongside the names rather than instead of them: a set naming "Day 2" cannot say which one,
+     * and a collection spanning two festivals is exactly the case where that matters.
+     */
+    val eventIds: List<Long> = emptyList(),
     val recordIds: List<Long> = emptyList(),
     val frozenRecords: List<SavedAnalysisRecordEntity> = emptyList()
 )

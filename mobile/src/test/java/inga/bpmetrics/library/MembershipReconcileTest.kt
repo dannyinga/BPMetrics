@@ -235,6 +235,26 @@ class MembershipReconcileTest {
     }
 
     @Test
+    fun `a recording moved in time by a clock correction lands in the window it really started in`() {
+        // A watch that booted on a stale clock stamped a Subtronics recording seventy-odd days
+        // early. Moving it the way shiftRecordTimes does — all three absolute columns by one
+        // amount — has to put it under Subtronics, not leave it unfiled where August put it.
+        val early = at(21, 15) - 74 * 24 * 3_600_000L
+        val stale = reconcile(festival(), emptyMap(), listOf(recording(10, early))).single()
+        assertNull(stale.eventId)
+
+        val delta = at(21, 15) - early
+        val moved = stale.copy(
+            date = stale.date + delta,
+            startTime = stale.startTime + delta,
+            endTime = stale.endTime + delta
+        )
+
+        assertEquals(3L, reconcile(festival(), emptyMap(), listOf(moved)).single().eventId)
+        assertEquals(stale.durationMs, moved.endTime - moved.startTime)
+    }
+
+    @Test
     fun `an empty library reconciles to an empty library`() {
         assertEquals(emptyList<BpmRecordEntity>(), reconcile(festival(), emptyMap(), emptyList()))
     }

@@ -193,6 +193,18 @@ object ImageExporter {
         currentTimeMs: Double? = null,
         windowSizeMs: Long? = null,
         graphRect: RectF = RectF(0f, 0f, 1f, 1f)
+    ) = renderOnCanvasInZone(
+        canvas, record, config.inZoneOf(listOf(record.metadata)),
+        currentTimeMs, windowSizeMs, graphRect
+    )
+
+    private fun renderOnCanvasInZone(
+        canvas: Canvas,
+        record: BpmRecordWithPoints,
+        config: ImageExportConfig,
+        currentTimeMs: Double?,
+        windowSizeMs: Long?,
+        graphRect: RectF
     ) {
         if (record.dataPoints.isEmpty()) return
 
@@ -579,6 +591,28 @@ object ImageExporter {
             }
         }
     }
+
+    /**
+     * This config, with its clock in the zone the recordings actually happened in.
+     *
+     * The clock used to read `timeZoneId` straight off the config, which came straight off the
+     * **preset** — and a preset's zone is `ZoneId.systemDefault()` as of the moment it was created,
+     * frozen into its JSON. So every look anyone had ever saved on a phone in Pacific time captioned
+     * every export in Pacific time, including a set in Chicago whose venue said so plainly. A zone is
+     * a fact about where a recording happened, not about how an export looks; it was on the preset
+     * for the same category error the preset's own documentation warns against with record ids.
+     *
+     * Applied at the two public entry points, because they are the one moment the recordings are
+     * guaranteed to be in hand. Deriving it earlier — in `ExportPreset.applyTo`, say — misses the
+     * render queue, which rebuilds a job's config after a restart with its recordings not loaded
+     * yet, and it would have to be remembered again at every future call site.
+     *
+     * The config's own zone survives as the fallback, for recordings no venue covers.
+     */
+    private fun ImageExportConfig.inZoneOf(records: List<inga.bpmetrics.library.BpmRecordEntity>) =
+        inga.bpmetrics.library.resolvedZoneOf(records)
+            ?.let { copy(timeZoneId = it) }
+            ?: this
 
     /** What the clock says, or null when it is switched off. */
     private fun clockTextFor(
@@ -1167,6 +1201,18 @@ object ImageExporter {
         currentTimeMs: Double? = null,
         windowSizeMs: Long? = null,
         graphRect: RectF = RectF(0f, 0f, 1f, 1f)
+    ) = renderAlignedRecordsOnCanvasInZone(
+        canvas, aligned, config.inZoneOf(aligned.records.map { it.metadata }),
+        currentTimeMs, windowSizeMs, graphRect
+    )
+
+    private fun renderAlignedRecordsOnCanvasInZone(
+        canvas: Canvas,
+        aligned: AlignedRecords,
+        config: ImageExportConfig,
+        currentTimeMs: Double?,
+        windowSizeMs: Long?,
+        graphRect: RectF
     ) {
         val processedRecords = aligned.records
         if (processedRecords.isEmpty()) return

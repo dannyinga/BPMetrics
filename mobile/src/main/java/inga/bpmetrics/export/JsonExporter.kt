@@ -64,7 +64,9 @@ data class LibraryBackup(
     val locations: List<LocationDto> = emptyList(),
     val events: List<EventDto> = emptyList(),
     /** Collections, views and frozen analyses — one kind of thing since format 5. */
-    val collections: List<CollectionDto> = emptyList()
+    val collections: List<CollectionDto> = emptyList(),
+    /** How exports look. Carried since format 6 — see the note on [FORMAT_VERSION]. */
+    val presets: List<ExportPresetDto> = emptyList()
 ) {
     companion object {
         /**
@@ -92,12 +94,31 @@ data class LibraryBackup(
          *    in use. `savedAnalyses` stays *readable* so a format 4 file still restores its frozen
          *    numbers, but nothing writes it any more: a frozen analysis is a collection now.
          *
-         * Export presets are still absent, deliberately: they describe how an export looks rather
-         * than what the library contains, they are shareable as their own files, and a preset from
-         * a newer build refuses to load on an older one — which a whole-library restore should
-         * never do.
+         * 6: events carry their **id**, and everything that referenced an event by name now
+         *    references it by id as well — records, collections, and an event's own parent.
+         *
+         *    Name was never an identity. Two events called "Day 2", one inside Bass Canyon and one
+         *    inside Griztronics, merged into a single event on restore and both evenings' recordings
+         *    landed in it. The old comment called that "a fair reading of what the user meant by
+         *    naming them the same thing", which reads plausibly right up until you have a festival
+         *    with days in it — a name is only unique among its siblings, and nesting exists because
+         *    of that. Names are still written, for older readers and for reading the file by eye.
+         *
+         *    Export presets arrive here too. They were left out on the grounds that they describe
+         *    how an export looks rather than what the library holds, and are shareable as their own
+         *    files. Both true, and neither is a reason for "back up everything" to quietly mean
+         *    "everything except the half-dozen looks you built up". The version guard that made a
+         *    preset from a newer build refuse to load is applied per preset, so one unreadable
+         *    preset is skipped and reported rather than failing the restore.
+         *
+         *    And the venue registry is finally *written*. `locations` had been in the format since
+         *    format 4 and the exporter never passed it, so every backup carried events naming
+         *    venues that were not in the file — and a restore silently dropped every venue and
+         *    every clock that depended on one. This is the fourth entry in this list of the same
+         *    shape, which is why the coverage test now asserts the writer's arguments rather than
+         *    only the format's fields.
          */
-        const val FORMAT_VERSION = 5
+        const val FORMAT_VERSION = 6
     }
 }
 
@@ -131,6 +152,18 @@ data class CoverDto(
 )
 
 data class EventDto(
+    /**
+     * Its id in the library this backup came from.
+     *
+     * The event's *identity*, as distinct from its name. Restores before format 6 keyed events by
+     * name, so two events called "Day 2" — one inside Bass Canyon, one inside Griztronics — merged
+     * into a single event and every recording from both evenings landed in it. That is not a fair
+     * reading of naming two things the same: a name is only ever unique among its siblings, which
+     * is most of the point of nesting them.
+     *
+     * Zero in files written before format 6, where the name is all there is to go on.
+     */
+    val eventId: Long = 0L,
     val name: String = "",
     val groupName: String? = null,
     val notes: String = "",
@@ -138,8 +171,16 @@ data class EventDto(
     /** Tags applied to the event itself, in "Category:Tag" form. Absent entirely before format 4. */
     val tags: List<String> = emptyList(),
     val type: String? = null,
-    /** The event above this one, by name. Events nest as of the taxonomy work. */
+    /**
+     * The event above this one, by name.
+     *
+     * Kept so a pre-format-6 file still restores, and because it makes the JSON readable by eye.
+     * [parentEventId] is what a restore follows now — a parent named "Day 2" is exactly as
+     * ambiguous as a child named "Day 2".
+     */
     val parentName: String? = null,
+    /** The event above this one, by id. Authoritative since format 6. */
+    val parentEventId: Long? = null,
     val windowStart: Long? = null,
     val windowEnd: Long? = null,
     val excludedFromParentAnalysis: Boolean = false,
@@ -190,12 +231,31 @@ data class CollectionDto(
     /** Set when its numbers are frozen — what a saved analysis was before the fold. */
     val frozenAt: Long? = null,
     val cover: CoverDto? = null,
-    /** Events it names, by name. Ids are reassigned on import. */
+    /** Events it names, by name. Superseded by [eventIds] since format 6. */
     val eventNames: List<String> = emptyList(),
+    /** Events it names, by their id in the source library. Authoritative since format 6. */
+    val eventIds: List<Long> = emptyList(),
     /** Recordings it names, by their id in the library this backup came from. */
     val recordIds: List<Long> = emptyList(),
     /** The frozen rows, when [frozenAt] is set. */
     val frozenRecords: List<SavedAnalysisRecordDto> = emptyList()
+)
+
+/**
+ * An export preset: a saved look, by name.
+ *
+ * The configuration travels as the JSON the app already stores, so this carries whatever a preset
+ * meant on the device it came from without this format having to know the shape of a look. A preset
+ * written by a newer build may not parse here — that is checked per preset on restore, so it is
+ * skipped and counted rather than taking the whole library down with it.
+ */
+data class ExportPresetDto(
+    val name: String = "",
+    val configJson: String = "",
+    val isDefault: Boolean = false,
+    /** Shipped with the app. Restored as an ordinary preset if the target build lacks it. */
+    val isBuiltIn: Boolean = false,
+    val createdAt: Long = 0L
 )
 
 data class SavedAnalysisDto(
@@ -280,8 +340,14 @@ data class BpmRecordJsonDto(
     val wearerName: String? = null,
     /** Which watch, by its stable identifier rather than its current name. */
     val watchId: String? = null,
-    /** Which event this was part of, by name — events are renumbered on import. */
+    /** Which event this was part of, by name. Superseded by [eventId] since format 6. */
     val eventName: String? = null,
+    /**
+     * Which event this was part of, by its id in the source library.
+     *
+     * A name cannot say *which* "Day 2" a recording belonged to. This can.
+     */
+    val eventId: Long? = null,
     val date: Long = 0L,
     val startTime: Long = 0L,
     val endTime: Long = 0L,
@@ -299,25 +365,76 @@ data class BpmRecordJsonDto(
 )
 
 data class BpmDataPointDto(
-    val timestamp: Long,
-    val bpm: Double
+    val timestamp: Long = 0L,
+    val bpm: Double = 0.0
 )
+
+/**
+ * What came of opening a file as a backup.
+ *
+ * A reason rather than a null, because "that file could not be imported" is what a friend was told
+ * about a perfectly good backup, and it gave nobody anything to go on.
+ */
+sealed interface BackupFile {
+    data class Read(val backup: LibraryBackup) : BackupFile
+    data class Unreadable(val reason: String) : BackupFile
+}
 
 /**
  * Handles JSON batch export and import for single or multiple BPM records.
  */
 object JsonExporter {
 
-    private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
+    /**
+     * Compact, not pretty-printed.
+     *
+     * Readings are nearly all of a backup, and indenting each one onto four lines of its own more
+     * than doubled the file — a library's worth of readings came out large enough that sending it
+     * by text was a gamble and reading it back could exhaust a phone's memory.
+     */
+    private val gson: Gson = GsonBuilder().create()
+
+    /** See [buildBackup]. Kept for tests and small payloads; files are written by [writeBackup]. */
+    fun toBackupJson(
+        records: List<BpmRecordWithPoints>,
+        people: List<PersonEntity> = emptyList(),
+        watches: List<WatchEntity> = emptyList(),
+        categories: List<CategoryEntity> = emptyList(),
+        settings: List<PreferenceSnapshot> = emptyList(),
+        events: List<EventEntity> = emptyList(),
+        collections: List<inga.bpmetrics.library.CollectionBackup> = emptyList(),
+        eventTags: Map<Long, List<TagEntity>> = emptyMap(),
+        readImage: (String) -> ByteArray? = { null },
+        locations: List<inga.bpmetrics.library.LocationEntity> = emptyList(),
+        presets: List<inga.bpmetrics.library.ExportPresetEntity> = emptyList()
+    ): String = gson.toJson(
+        buildBackup(
+            records, people, watches, categories, settings, events, collections, eventTags,
+            readImage, locations, presets
+        )
+    )
 
     /**
-     * Serializes records together with the people and watches they refer to.
+     * Writes a backup to [out] as it is serialised, rather than building it as one string first.
+     *
+     * A whole library as a single `String` is two bytes per character held at once, and then
+     * copied again into a byte array to write it.
+     */
+    fun writeBackup(out: java.io.OutputStream, backup: LibraryBackup) {
+        java.io.BufferedWriter(java.io.OutputStreamWriter(out, Charsets.UTF_8)).let { writer ->
+            gson.toJson(backup, LibraryBackup::class.java, writer)
+            writer.flush()
+        }
+    }
+
+    /**
+     * Assembles records together with the people and watches they refer to.
      *
      * Only the people and watches actually referenced are included, so exporting three recordings
      * does not carry the whole registry with them — but restoring those three still reproduces
      * everyone involved, with their colours.
      */
-    fun toBackupJson(
+    fun buildBackup(
         // With readings: a backup carries every one of them, which is the whole point of it.
         records: List<BpmRecordWithPoints>,
         people: List<PersonEntity> = emptyList(),
@@ -342,8 +459,10 @@ object JsonExporter {
          */
         readImage: (String) -> ByteArray? = { null },
         /** The venue registry, so events can name where they were. */
-        locations: List<inga.bpmetrics.library.LocationEntity> = emptyList()
-    ): String {
+        locations: List<inga.bpmetrics.library.LocationEntity> = emptyList(),
+        /** Saved export looks. Carried since format 6. */
+        presets: List<inga.bpmetrics.library.ExportPresetEntity> = emptyList()
+    ): LibraryBackup {
         val locationNames = locations.associate { it.locationId to it.name }
         val categoryNames = categories.associate { it.categoryId to it.name }
         val peopleById = people.associateBy { it.personId }
@@ -363,6 +482,7 @@ object JsonExporter {
         val eventNames = events.associate { it.eventId to it.name }
         val usedEventDtos = usedEvents.map { event ->
             EventDto(
+                eventId = event.eventId,
                 name = event.name,
                 // Always null now. An event says where it sits with `parentName`, which reaches any
                 // depth; `groupName` only ever named a collection and stays in the format so a
@@ -373,6 +493,7 @@ object JsonExporter {
                 tags = eventTags[event.eventId].orEmpty().map { it.qualified(categoryNames) },
                 type = event.type,
                 parentName = event.parentId?.let { eventNames[it] },
+                parentEventId = event.parentId,
                 windowStart = event.windowStart,
                 windowEnd = event.windowEnd,
                 excludedFromParentAnalysis = event.excludedFromParentAnalysis,
@@ -413,6 +534,7 @@ object JsonExporter {
                     ?: record.metadata.wearerName.takeIf { it.isNotBlank() },
                 watchId = record.metadata.watchId,
                 eventName = record.metadata.eventId?.let { eventsById[it]?.name },
+                eventId = record.metadata.eventId,
                 date = record.metadata.date,
                 startTime = record.metadata.startTime,
                 endTime = record.metadata.endTime,
@@ -437,57 +559,68 @@ object JsonExporter {
             )
         }
 
-        return gson.toJson(
-            LibraryBackup(
-                exportedAt = System.currentTimeMillis(),
-                locations = locations.map { place ->
-                    LocationDto(
-                        name = place.name,
-                        timeZoneId = place.timeZoneId,
-                        latitude = place.latitude,
-                        longitude = place.longitude,
-                        photoBase64 = place.photoPath?.let(readImage)?.toBase64()
-                    )
-                },
-                people = usedPeople,
-                watches = usedWatches,
-                records = dtos,
-                settings = settings,
-                events = usedEventDtos,
-                // `savedAnalyses` and `eventGroups` are left empty on purpose. Nothing writes
-                // either since the folds — a frozen analysis is a collection, and a collection
-                // travels below rather than as a tier. Both stay in the format so a file written
-                // before then still restores.
-                collections = collections.map { backup ->
-                    val set = backup.collection
-                    CollectionDto(
-                        name = set.name,
-                        notes = set.notes,
-                        createdAt = set.createdAt,
-                        filterJson = set.filterJson,
-                        excludedRecordJson = set.excludedRecordJson,
-                        isPinned = set.isPinned,
-                        frozenAt = set.frozenAt,
-                        cover = set.ownCover?.toDto(readImage),
-                        eventNames = backup.eventNames,
-                        recordIds = backup.recordIds,
-                        frozenRecords = backup.frozenRecords.map { row ->
-                            SavedAnalysisRecordDto(
-                                recordId = row.recordId,
-                                title = row.title,
-                                date = row.date,
-                                minBpm = row.minBpm,
-                                avgBpm = row.avgBpm,
-                                maxBpm = row.maxBpm,
-                                activeDurationMs = row.activeDurationMs,
-                                tagsEncoded = row.tagsEncoded,
-                                wearerName = row.wearerName,
-                                watchName = row.watchName
-                            )
-                        }
-                    )
-                }
-            )
+        return LibraryBackup(
+            exportedAt = System.currentTimeMillis(),
+            locations = locations.map { place ->
+                LocationDto(
+                    name = place.name,
+                    timeZoneId = place.timeZoneId,
+                    latitude = place.latitude,
+                    longitude = place.longitude,
+                    photoBase64 = place.photoPath?.let(readImage)?.toBase64()
+                )
+            },
+            people = usedPeople,
+            watches = usedWatches,
+            records = dtos,
+            settings = settings,
+            events = usedEventDtos,
+            // `savedAnalyses` and `eventGroups` are left empty on purpose. Nothing writes
+            // either since the folds — a frozen analysis is a collection, and a collection
+            // travels below rather than as a tier. Both stay in the format so a file written
+            // before then still restores.
+            // Every saved look. Left out of the format until 6 on the reasoning that a preset
+            // describes how an export looks rather than what the library holds — true, and not
+            // a reason for "back up everything" to mean "everything except the looks you built".
+            presets = presets.map { preset ->
+                ExportPresetDto(
+                    name = preset.name,
+                    configJson = preset.configJson,
+                    isDefault = preset.isDefault,
+                    isBuiltIn = preset.isBuiltIn,
+                    createdAt = preset.createdAt
+                )
+            },
+            collections = collections.map { backup ->
+                val set = backup.collection
+                CollectionDto(
+                    name = set.name,
+                    notes = set.notes,
+                    createdAt = set.createdAt,
+                    filterJson = set.filterJson,
+                    excludedRecordJson = set.excludedRecordJson,
+                    isPinned = set.isPinned,
+                    frozenAt = set.frozenAt,
+                    cover = set.ownCover?.toDto(readImage),
+                    eventNames = backup.eventNames,
+                    eventIds = backup.eventIds,
+                    recordIds = backup.recordIds,
+                    frozenRecords = backup.frozenRecords.map { row ->
+                        SavedAnalysisRecordDto(
+                            recordId = row.recordId,
+                            title = row.title,
+                            date = row.date,
+                            minBpm = row.minBpm,
+                            avgBpm = row.avgBpm,
+                            maxBpm = row.maxBpm,
+                            activeDurationMs = row.activeDurationMs,
+                            tagsEncoded = row.tagsEncoded,
+                            wearerName = row.wearerName,
+                            watchName = row.watchName
+                        )
+                    }
+                )
+            }
         )
     }
 
@@ -501,40 +634,105 @@ object JsonExporter {
      * with a `records` field. Both are still read, because a backup that cannot be restored by a
      * later build is not a backup.
      */
-    fun readBackup(context: Context, uri: Uri): LibraryBackup? {
+    fun readBackup(context: Context, uri: Uri): LibraryBackup? =
+        (openBackup(context, uri) as? BackupFile.Read)?.backup
+
+    /**
+     * Reads a backup straight off the stream, and says why when it cannot.
+     *
+     * Streamed rather than read into a string: the old path held the whole file as text, then as a
+     * parse tree, then as objects — three copies of a library at once, enough to run a phone out of
+     * memory on a large one. Running out of memory is an `Error`, not an `Exception`, so it went
+     * straight past the catch and took the app down with it.
+     */
+    fun openBackup(context: Context, uri: Uri): BackupFile {
+        fun reader() = context.contentResolver.openInputStream(uri)
+            ?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)) }
         return try {
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                val jsonString = BufferedReader(InputStreamReader(inputStream)).readText()
-                parseBackup(jsonString)
-            }
+            reader()?.use { parseBackup(it) { reader() } }
+                ?: BackupFile.Unreadable("That file could not be opened")
+        } catch (e: OutOfMemoryError) {
+            BackupFile.Unreadable("That backup is too large for this phone to read")
         } catch (e: Exception) {
-            e.printStackTrace()
-            null
+            android.util.Log.e("JsonExporter", "Could not read backup", e)
+            BackupFile.Unreadable("That file is not a BPMetrics backup")
         }
     }
 
     /** Split out from [readBackup] so the parsing is testable without a content URI. */
-    fun parseBackup(jsonString: String): LibraryBackup? {
-        return try {
-            when (val root = JsonParser.parseString(jsonString)) {
-                // Current shape: { formatVersion, people, watches, records }
-                else -> if (root.isJsonObject && root.asJsonObject.has("records")) {
-                    gson.fromJson(jsonString, LibraryBackup::class.java)
-                } else if (root.isJsonArray) {
-                    // Legacy: a bare array of records.
-                    val listType = object : TypeToken<List<BpmRecordJsonDto>>() {}.type
-                    LibraryBackup(records = gson.fromJson(jsonString, listType))
+    fun parseBackup(jsonString: String): LibraryBackup? = try {
+        (parseBackup(java.io.StringReader(jsonString)) { java.io.StringReader(jsonString) }
+            as? BackupFile.Read)?.backup
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
+     * Reads any of the three shapes a backup has had, deciding from the first token.
+     *
+     * - An object with `records`: the current format.
+     * - A bare array of records: the first format.
+     * - A single record on its own, which older exports also produced.
+     *
+     * Anything else is refused with a reason rather than returned empty.
+     *
+     * @param reopen A fresh reader over the same content. Needed only for the single-record shape:
+     * an object is read as a backup first, because that is what every large file is, and only if
+     * that finds nothing is it read again as one record — which is small by definition.
+     */
+    fun parseBackup(input: java.io.Reader, reopen: () -> java.io.Reader?): BackupFile {
+        val reader = com.google.gson.stream.JsonReader(input)
+        return when (reader.peek()) {
+            com.google.gson.stream.JsonToken.BEGIN_ARRAY -> {
+                val listType = object : TypeToken<List<BpmRecordJsonDto>>() {}.type
+                val records: List<BpmRecordJsonDto>? = gson.fromJson(reader, listType)
+                BackupFile.Read(LibraryBackup(records = records.orEmpty()))
+            }
+            com.google.gson.stream.JsonToken.BEGIN_OBJECT -> {
+                val backup: LibraryBackup? = gson.fromJson(reader, LibraryBackup::class.java)
+                if (backup != null && !backup.isEmpty()) return BackupFile.Read(backup)
+
+                val single = reopen()?.use { gson.fromJson(it, BpmRecordJsonDto::class.java) }
+                if (single != null && single.dataPoints.isNotEmpty()) {
+                    BackupFile.Read(LibraryBackup(records = listOf(single)))
                 } else {
-                    // A single record on its own, which older exports also produced.
-                    val single = gson.fromJson(jsonString, BpmRecordJsonDto::class.java)
-                    if (single != null) LibraryBackup(records = listOf(single)) else null
+                    BackupFile.Unreadable("That file is not a BPMetrics backup")
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
+            else -> BackupFile.Unreadable("That file is not a BPMetrics backup")
         }
     }
+
+    /** Holds nothing a restore could add. A JSON object that is not a backup reads as this. */
+    private fun LibraryBackup.isEmpty(): Boolean =
+        records.isEmpty() && people.isEmpty() && watches.isEmpty() && events.isEmpty() &&
+            eventGroups.isEmpty() && locations.isEmpty() && collections.isEmpty() &&
+            savedAnalyses.isEmpty() && settings.isEmpty() && presets.isEmpty()
+
+    /**
+     * Whether a file's content starts like JSON, ignoring its name and type.
+     *
+     * A backup that has been texted, emailed or downloaded loses both: messaging apps hand it over
+     * as `application/octet-stream`, under a content URI with no extension in it. Deciding from
+     * those sent a perfectly good backup down the CSV importer, which said only that it failed.
+     */
+    fun looksLikeJson(context: Context, uri: Uri): Boolean = try {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            val head = ByteArray(64)
+            val n = stream.read(head)
+            startsLikeJson(head.copyOf(maxOf(n, 0)))
+        } ?: false
+    } catch (e: Exception) {
+        false
+    }
+
+    /** The decision behind [looksLikeJson], on the first bytes of a file. */
+    internal fun startsLikeJson(head: ByteArray): Boolean =
+        // Skips a UTF-8 byte order mark and leading whitespace.
+        head.dropWhile { it == 0xEF.toByte() || it == 0xBB.toByte() || it == 0xBF.toByte() }
+            .firstOrNull { !it.toInt().toChar().isWhitespace() }
+            ?.let { it == '{'.code.toByte() || it == '['.code.toByte() }
+            ?: false
 
     /**
      * Imports a list of [BpmWatchRecord]s from a JSON URI.

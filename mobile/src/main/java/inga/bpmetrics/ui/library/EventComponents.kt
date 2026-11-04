@@ -245,11 +245,19 @@ fun EventCard(
     expanded: Boolean,
     onOpen: () -> Unit,
     onToggleExpand: () -> Unit,
-    onRename: () -> Unit,
+    /**
+     * The overflow's actions, all optional.
+     *
+     * Nullable so this card can be shown somewhere that only wants to *read* the tree — the Events
+     * tab on an event's own page lists what is inside it to navigate into, and editing those
+     * belongs on the page you land on rather than in a list you are passing through. With none of
+     * them given the menu is not drawn at all, rather than drawn with dead entries.
+     */
+    onRename: (() -> Unit)? = null,
     /** Makes a new event inside this one. See [EventOverflow]. */
     onAddInside: (() -> Unit)? = null,
-    onMoveToGroup: () -> Unit,
-    onDelete: () -> Unit,
+    onMoveToGroup: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
     /** Its own picture or the one it inherits, resolved by the caller. */
     cover: inga.bpmetrics.library.Cover? = null,
     /**
@@ -371,15 +379,19 @@ fun EventCard(
                         )
                     }
                 }
-                EventOverflow(
-                    renameLabel = "Edit",
-                    onRename = onRename,
-                    onAddInside = onAddInside,
-                    onMoveToGroup = onMoveToGroup,
-                    onAddToCollection = onAddToCollection,
-                    onDelete = onDelete,
-                    deleteLabel = "Delete event"
-                )
+                if (onRename != null || onDelete != null || onMoveToGroup != null ||
+                    onAddInside != null || onAddToCollection != null
+                ) {
+                    EventOverflow(
+                        renameLabel = "Edit",
+                        onRename = onRename,
+                        onAddInside = onAddInside,
+                        onMoveToGroup = onMoveToGroup,
+                        onAddToCollection = onAddToCollection,
+                        onDelete = onDelete,
+                        deleteLabel = "Delete event"
+                    )
+                }
             }
             }
 
@@ -409,7 +421,7 @@ fun EventCard(
 private fun EventOverflow(
     /** "Rename" for a collection, "Edit" for an event — the event dialog does rather more. */
     renameLabel: String = "Rename",
-    onRename: () -> Unit,
+    onRename: (() -> Unit)? = null,
     /**
      * Makes a new event inside this one.
      *
@@ -422,7 +434,7 @@ private fun EventOverflow(
     onMoveToGroup: (() -> Unit)?,
     /** Puts it in an arbitrary set, which is a different thing from where it lives. */
     onAddToCollection: (() -> Unit)? = null,
-    onDelete: () -> Unit,
+    onDelete: (() -> Unit)? = null,
     deleteLabel: String,
     /**
      * Sets the picture for this event or collection, and so for everything under it.
@@ -441,10 +453,12 @@ private fun EventOverflow(
             Icon(Icons.Default.MoreVert, contentDescription = "More actions")
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(renameLabel) },
-                onClick = { open = false; onRename() }
-            )
+            onRename?.let { rename ->
+                DropdownMenuItem(
+                    text = { Text(renameLabel) },
+                    onClick = { open = false; rename() }
+                )
+            }
             onAddInside?.let { add ->
                 DropdownMenuItem(
                     text = { Text("New event inside…") },
@@ -484,11 +498,13 @@ private fun EventOverflow(
                     )
                 }
             }
-            HorizontalDivider()
-            DropdownMenuItem(
-                text = { Text(deleteLabel, color = MaterialTheme.colorScheme.error) },
-                onClick = { open = false; onDelete() }
-            )
+            onDelete?.let { delete ->
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(deleteLabel, color = MaterialTheme.colorScheme.error) },
+                    onClick = { open = false; delete() }
+                )
+            }
         }
     }
 }

@@ -147,11 +147,8 @@ fun LibraryScreen(
     val coversByRecord by viewModel.coversByRecord.collectAsStateWithLifecycle()
     val coversByEvent by viewModel.coversByEvent.collectAsStateWithLifecycle()
 
-    // Collected here rather than at the share call so a backup carries the profiles and category
-    // names its records point at. Without them the file restores recordings attributed to nobody.
-    val availablePeopleForBackup by viewModel.availablePeople.collectAsStateWithLifecycle()
-    val categoriesForBackup by remember { viewModel.repository.getAllCategories() }
-        .collectAsStateWithLifecycle(initialValue = emptyList())
+    // Everyone a new event's window can be narrowed to, for the event editor.
+    val peopleForEditor by viewModel.availablePeople.collectAsStateWithLifecycle()
 
     // Selection used to be reachable only by pressing and holding a tile, which is a gesture with
     // nothing on screen to suggest it exists — the app was telling people about it in a hint card,
@@ -205,6 +202,7 @@ fun LibraryScreen(
     // never describe a selection that has since changed.
     val selectedRecordsForBulk = uiState.records.filter { it.metadata.recordId in selectedRecordIds }
     var showBulkWearerDialog by remember { mutableStateOf(false) }
+    var showShiftTimeDialog by remember { mutableStateOf(false) }
 
 
     // --- Events and groups ---
@@ -255,45 +253,39 @@ fun LibraryScreen(
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
-        if (uris.isNotEmpty()) {
-            var successCount = 0
-            uris.forEach { uri ->
-                val mimeType = context.contentResolver.getType(uri)
-                val isJson = mimeType?.contains("json") == true || uri.path?.lowercase()?.let { it.endsWith(".json") || it.endsWith(".bpmjson") } == true
-                if (isJson) {
-                    // Restored as a whole backup rather than record by record, so the people and
-                    // watches come back before the recordings that refer to them. Importing one
-                    // record at a time cannot recreate a person, and every recording would land
-                    // attributed to nobody.
-                    val backup = JsonExporter.readBackup(context, uri)
-                    if (backup != null) {
-                        successCount += backup.records.size
-                        viewModel.restoreFromBackup(backup, context) { result ->
-                            Toast.makeText(
-                                context,
-                                if (result.succeeded) {
-                                    "Restored ${result.recordsImported} recordings, " +
-                                        "${result.peopleCreated} people, ${result.watchesCreated} watches"
-                                } else {
-                                    "Restore failed: ${result.failure}"
-                                },
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    }
-                } else {
-                    val watchRecord = CsvExporter.importFromCsv(context, uri)
-                    if (watchRecord != null) {
-                        viewModel.importRecord(watchRecord)
-                        successCount++
-                    }
+        // Backups are told apart from CSVs by what is in them, not by their name or type: a file
+        // that has been texted or downloaded usually arrives as octet-stream under a URI with no
+        // extension, and deciding from those sent good backups to the CSV importer.
+        val (backups, csvs) = uris.partition { JsonExporter.looksLikeJson(context, it) }
+
+        // Restored as a whole backup rather than record by record, so the people and watches come
+        // back before the recordings that refer to them. Each reports its own outcome once it is
+        // known — this used to announce success from the file's record count before the restore
+        // had run, and then report the failure after it.
+        backups.forEach { uri ->
+            viewModel.importBackupFile(context, uri) { message ->
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            }
+        }
+
+        if (csvs.isNotEmpty()) {
+            var imported = 0
+            csvs.forEach { uri ->
+                CsvExporter.importFromCsv(context, uri)?.let {
+                    viewModel.importRecord(it)
+                    imported++
                 }
             }
-            if (successCount > 0) {
-                Toast.makeText(context, "Successfully imported $successCount record(s)!", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, "Failed to import record(s).", Toast.LENGTH_SHORT).show()
-            }
+            Toast.makeText(
+                context,
+                when {
+                    imported == csvs.size -> "Imported $imported recording${if (imported == 1) "" else "s"}"
+                    imported > 0 -> "Imported $imported of ${csvs.size} files; the rest could not be read"
+                    else -> "Could not read ${if (csvs.size == 1) "that file" else "those files"} " +
+                        "as a BPMetrics backup or CSV"
+                },
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -333,26 +325,16 @@ fun LibraryScreen(
         recordsToBackUp = emptyList()
         if (uri == null || toWrite.isEmpty()) return@rememberLauncherForActivityResult
 
-        viewModel.buildBackupJson(
-            people = availablePeopleForBackup,
-            watches = watches,
-            categories = categoriesForBackup,
-            context = context
-        ) { json ->
-            val ok = try {
-                context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) } != null
-            } catch (e: Exception) {
-                e.printStackTrace()
-                false
-            }
+        // The selection, and only the selection. See [LibraryViewModel.writeSelectionBackup].
+        viewModel.writeSelectionBackup(
+            recordIds = toWrite.map { it.metadata.recordId },
+            context = context,
+            uri = uri
+        ) { ok ->
             Toast.makeText(
                 context,
-                if (ok) {
-                    "Backed up ${toWrite.size} recording${if (toWrite.size == 1) "" else "s"}, " +
-                        "plus saved analyses and settings"
-                } else {
-                    "Could not write the backup"
-                },
+                if (ok) "Saved ${toWrite.size} recording${if (toWrite.size == 1) "" else "s"}"
+                else "Could not write the file",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -507,7 +489,7 @@ fun LibraryScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Save backup (.bpmjson)") },
+                                    text = { Text("Save as file (.bpmjson)") },
                                     leadingIcon = {
                                         Icon(Icons.Default.Save, contentDescription = null)
                                     },
@@ -942,6 +924,7 @@ fun LibraryScreen(
             onAttribute = { showBulkEdit = false; showBulkWearerDialog = true },
             onFileIntoEvent = { showBulkEdit = false; showAddToEventDialog = true },
             onAddToCollection = { showBulkEdit = false; addingSelectionToCollection = true },
+            onCorrectTime = { showBulkEdit = false; showShiftTimeDialog = true },
             onSetCover = { showBulkEdit = false; pickCoverForSelection() },
             onRemoveCover = {
                 showBulkEdit = false
@@ -965,6 +948,17 @@ fun LibraryScreen(
             getTagsByCategoryFlow = { viewModel.repository.getTagsByCategory(it) },
             onCreateTag = { axis, name, onMade -> viewModel.createTag(axis, name, onMade) },
             initialSelectedTagIds = emptyList()
+        )
+    }
+
+    if (showShiftTimeDialog) {
+        ShiftTimeDialog(
+            records = selectedRecordsForBulk.map { it.metadata },
+            onDismiss = { showShiftTimeDialog = false },
+            onShift = { delta ->
+                viewModel.shiftSelectedRecords(delta)
+                showShiftTimeDialog = false
+            }
         )
     }
 
@@ -1028,7 +1022,7 @@ fun LibraryScreen(
             initialName = "",
             initialParentId = creatingInside,
             knownTypes = knownTypes,
-            people = availablePeopleForBackup,
+            people = peopleForEditor,
             // From the recordings being filed into it, where there are any — the same rule as
             // editing, applied to what the event is about to contain rather than what it holds.
             suggestedStart = chosen.minOfOrNull { it.metadata.startTime }?.takeIf { forSelection },

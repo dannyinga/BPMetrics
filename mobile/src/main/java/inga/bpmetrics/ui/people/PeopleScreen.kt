@@ -3,7 +3,12 @@ package inga.bpmetrics.ui.people
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -225,14 +230,33 @@ private fun EmptyPeople(modifier: Modifier = Modifier) {
 
 @Composable
 private fun PersonCard(row: PersonRow, onClick: () -> Unit) {
+    val colour = Color(row.person.colorArgb)
+
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+        // A row of grey cards, on the one screen whose whole subject is who is who. Their colour is
+        // the thing that tells their recordings apart in every chart, comparison and video in the
+        // app, and the page where it is *chosen* was the one place it did not appear.
+        //
+        // Down the left edge, at the same 6dp as a recording tile — the same mark meaning the same
+        // thing, so it reads as "this is Colin's" here for the reason it already does there.
         Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // The avatar rather than a bare swatch: it is the same circle in the same colour when
-            // there is no photograph, and their face when there is.
-            PersonAvatar(person = row.person, size = 40.dp)
+            Box(
+                modifier = Modifier
+                    .width(6.dp)
+                    .fillMaxHeight()
+                    .background(colour)
+            )
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+            // Ringed, which the stripe alone does not cover: with a photograph the circle is their
+            // face and their colour is nowhere on it, so on this screen the two people with
+            // pictures would be the two with no visible colour.
+            PersonAvatar(person = row.person, size = 40.dp, ring = colour)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -249,6 +273,7 @@ private fun PersonCard(row: PersonRow, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
             }
         }
     }

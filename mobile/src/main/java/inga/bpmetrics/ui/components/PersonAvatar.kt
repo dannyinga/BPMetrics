@@ -1,8 +1,10 @@
 package inga.bpmetrics.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -34,7 +36,43 @@ import kotlin.math.roundToInt
 fun PersonAvatar(
     person: PersonEntity?,
     modifier: Modifier = Modifier,
-    size: Dp = 32.dp
+    size: Dp = 32.dp,
+    /**
+     * A ring around the outside, in the colour given.
+     *
+     * The one thing a photograph costs: with a picture, the circle is their face and their colour
+     * is nowhere on it — so anywhere the colour is part of what the row is *saying*, the ring is
+     * how it survives someone adding a photo.
+     *
+     * Takes a colour rather than a flag because the caller decides the alpha: the timeline dims
+     * every lane but the isolated one, and the ring has to dim with it.
+     */
+    ring: Color? = null,
+    ringWidth: Dp = 2.dp
+) {
+    if (ring == null) {
+        AvatarCircle(person, modifier, size)
+        return
+    }
+    // The ring is drawn outside the face, so [size] still means the size of the picture and a
+    // ringed avatar lines up with an unringed one of the same size in the row above it.
+    Box(
+        modifier = modifier
+            .size(size + ringWidth * 2)
+            .clip(CircleShape)
+            .border(ringWidth, ring, CircleShape)
+            .padding(ringWidth),
+        contentAlignment = Alignment.Center
+    ) {
+        AvatarCircle(person, Modifier, size)
+    }
+}
+
+@Composable
+private fun AvatarCircle(
+    person: PersonEntity?,
+    modifier: Modifier,
+    size: Dp
 ) {
     val tint = person?.let { Color(it.colorArgb) } ?: MaterialTheme.colorScheme.surfaceVariant
     val photo = person?.ownPhoto

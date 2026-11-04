@@ -25,6 +25,7 @@ import inga.bpmetrics.library.RecordMerge
 import inga.bpmetrics.library.WatchEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * ViewModel for the [inga.bpmetrics.ui.LibraryScreen], now supporting advanced sorting and filtering.
@@ -1037,57 +1038,89 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /**
-     * Builds the backup JSON off the main thread and hands it back to be written.
+     * Reads a backup file and restores it, then says in one message what happened.
      *
-     * Saved analyses and settings are read here rather than collected into screen state: they are
-     * needed once, at the moment of export, and holding them live for a button nobody has pressed
-     * would keep two more queries running for the life of the screen.
+     * The file is read off the main thread. A whole library read on it held the screen frozen long
+     * enough for Android to offer to close the app before the restore had begun.
      */
-    fun buildBackupJson(
-        people: List<PersonEntity>,
-        watches: List<WatchEntity>,
-        categories: List<CategoryEntity>,
+    fun importBackupFile(
         context: android.content.Context,
-        onReady: (String) -> Unit
+        uri: android.net.Uri,
+        onDone: (String) -> Unit
     ) {
         launchGuarded {
-            onReady(
-                JsonExporter.toBackupJson(
-                    // Loaded here, not passed in. A backup is the one thing that genuinely wants
-                    // every reading in the library, and it wants them for a few seconds at the
-                    // moment of writing the file — not resident for the life of the screen.
-                    records = repository.recordsWithPoints(
-                        repository.records.value.map { it.metadata.recordId }
-                    ),
-                    people = people,
-                    watches = watches,
-                    categories = categories,
-                    settings = repository.getSettingsForBackup(),
-                    // Collections, smart collections and frozen analyses — all one thing since
-                    // the fold, and none of them had ever been carried at all. `savedAnalyses` is
-                    // left empty: nothing writes it now, and it survives in the format only so a
-                    // file taken before format 5 still restores its frozen numbers.
-                    collections = repository.getCollectionsForBackup(),
-                    // The whole tree, collections included — they are events carrying
-                    // `type: "Collection"`, so they restore through the same path as everything
-                    // else. `eventGroups` stays in the format only to read files written before
-                    // the fold; nothing writes it any more.
-                    events = repository.allEventsInTree.first(),
-                    // Tags on events, which since the fold includes tags on collections. These were
-                    // never exported, so a restored library came back with every recording and none
-                    // of the organisation above it.
-                    eventTags = repository.getEventTagsForBackup(),
-                    // Cover and photograph bytes, inlined. A stored file name means nothing on the
-                    // device a backup is restored onto.
-                    readImage = { name ->
-                        runCatching {
-                            inga.bpmetrics.library.CoverStore.fileFor(context, name)
-                                .takeIf { it.isFile }
-                                ?.readBytes()
-                        }.getOrNull()
-                    }
-                )
-            )
+            val opened = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                JsonExporter.openBackup(context, uri)
+            }
+            when (opened) {
+                is inga.bpmetrics.export.BackupFile.Unreadable -> onDone(opened.reason)
+                is inga.bpmetrics.export.BackupFile.Read ->
+                    onDone(restoreBackup(opened.backup, repository, context).summary())
+            }
+        }
+    }
+
+    /**
+     * Writes the chosen recordings to [uri], with what they need and nothing else.
+     *
+     * This used to ignore the selection and write the whole library — every recording, the
+     * settings, every saved look, every collection — under a menu item reached by selecting
+     * recordings. Highlighting a few and sending them to a friend sent everything, and restoring it
+     * there would have replaced their settings with yours.
+     *
+     * What a selection carries is what makes those recordings read the same on another phone: who
+     * wore them, which watch, the events they sit in and everything above those, the venues those
+     * name, tags and covers. The whole-library backup is in Settings.
+     */
+    fun writeSelectionBackup(
+        recordIds: Collection<Long>,
+        context: android.content.Context,
+        uri: android.net.Uri,
+        onDone: (Boolean) -> Unit
+    ) {
+        launchGuarded {
+            val ok = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val records = repository.recordsWithPoints(recordIds)
+                    val events = repository.allEventsInTree.first()
+
+                    // Only the venues something in the file names. The writer includes every
+                    // location it is given, which is right for a whole library and leaks the
+                    // rest of yours into a file meant for someone else.
+                    val eventLocationIds = records.mapNotNull { it.metadata.eventId }
+                        .flatMap { inga.bpmetrics.library.EventTree.ancestryOf(events, it) }
+                        .map { it.locationId }
+                    val usedLocationIds = (eventLocationIds + records.map { it.metadata.locationId })
+                        .filterNotNull().toSet()
+
+                    val backup = JsonExporter.buildBackup(
+                        records = records,
+                        people = repository.getAllPeople().first(),
+                        watches = repository.getAllWatches().first(),
+                        categories = repository.getAllCategories().first(),
+                        events = events,
+                        eventTags = repository.getEventTagsForBackup(),
+                        locations = repository.getAllLocations().first()
+                            .filter { it.locationId in usedLocationIds },
+                        // Cover and photograph bytes, inlined. A stored file name means nothing on
+                        // the device a backup is restored onto.
+                        readImage = { name ->
+                            runCatching {
+                                inga.bpmetrics.library.CoverStore.fileFor(context, name)
+                                    .takeIf { it.isFile }
+                                    ?.readBytes()
+                            }.getOrNull()
+                        }
+                        // No settings, presets or collections: those describe this library and
+                        // this phone, not the recordings being sent.
+                    )
+                    context.contentResolver.openOutputStream(uri)?.use {
+                        JsonExporter.writeBackup(it, backup)
+                    } != null
+                }.onFailure { android.util.Log.e("LibraryViewModel", "Backup failed", it) }
+                    .getOrDefault(false)
+            }
+            onDone(ok)
         }
     }
 
@@ -1393,6 +1426,20 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         if (ids.isEmpty()) return
         launchGuarded {
             repository.assignPersonToRecords(ids, personId)
+            clearSelection()
+        }
+    }
+
+    /**
+     * Moves every selected recording in time by the same amount.
+     *
+     * For a watch whose clock was wrong: see [LibraryRepository.shiftRecordTimes].
+     */
+    fun shiftSelectedRecords(deltaMs: Long) {
+        val ids = _selectedRecordIds.value
+        if (ids.isEmpty() || deltaMs == 0L) return
+        launchGuarded {
+            repository.shiftRecordTimes(ids, deltaMs)
             clearSelection()
         }
     }

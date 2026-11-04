@@ -131,7 +131,7 @@ class AnalysisViewModel(
      * the live scope. That is the honest behaviour for a frozen snapshot — the alternative is a
      * saved analysis whose contents change when you tick a box, which is not frozen at all.
      */
-    private val analysisRecords: Flow<List<AnalysisRecord>> = combine(
+    private val refinedRecords: Flow<List<AnalysisRecord>> = combine(
         allInScope, tree, _exclusions
     ) { records, events, excluded ->
         if (excluded.isEmpty) records else {
@@ -151,6 +151,50 @@ class AnalysisViewModel(
             }
         }
     }
+
+    // --- Whose recordings this analysis is looking at ---
+
+    private val _personFilter = MutableStateFlow<Set<Long>>(emptySet())
+
+    /**
+     * The people this analysis is narrowed to. Empty means everyone.
+     *
+     * A lens rather than a refinement, and kept apart from [exclusions] for that reason. Leaving a
+     * set out says something about what the *event* was; looking at only yourself says nothing about
+     * the event at all — "Bass Canyon, just me" is still all of Bass Canyon, read for one person.
+     * Transient for the same reason exclusions are: an unsaved analysis is not a thing facts can be
+     * about, and a saved one captures whoever was showing, by capturing `uiState.records`.
+     */
+    val personFilter: StateFlow<Set<Long>> = _personFilter.asStateFlow()
+
+    fun setPersonFilter(personIds: Set<Long>) { _personFilter.value = personIds }
+
+    fun clearPersonFilter() { _personFilter.value = emptySet() }
+
+    /**
+     * Everyone with a recording in scope, before the person filter — the people it can narrow to.
+     *
+     * Taken *before* filtering, and that is the point: derived after, unticking someone would remove
+     * them from the list of people you can tick back on.
+     */
+    val peopleInScope: StateFlow<List<Long>> = refinedRecords
+        .map { rows -> rows.mapNotNull { it.personId }.distinct() }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * The scope after exclusions and the person filter — what every figure below analyses.
+     *
+     * The single choke point, as exclusions already were: the totals, the lanes, the rankings, the
+     * Highlights *and* the Timeline's curves all read this, so narrowing to one person cannot leave
+     * a header describing four people over a chart showing one.
+     *
+     * A recording with nobody attached is not shown under a filter. It is not any of the people
+     * chosen, and quietly counting it for them would be putting a stranger's evening in their stats.
+     */
+    private val analysisRecords: Flow<List<AnalysisRecord>> = combine(
+        refinedRecords, _personFilter
+    ) { records, people -> PersonFilterRule.apply(records, people) }
 
     // --- Comparing along an axis (TX-3.3 to 3.5) ---
 

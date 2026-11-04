@@ -143,6 +143,18 @@ interface BpmRecordDao {
     @Query("UPDATE bpm_records SET locationId = :locationId WHERE recordId = :id")
     suspend fun updateRecordLocation(id: Long, locationId: Long?)
 
+    /**
+     * Moves recordings in time by [deltaMs], keeping their length.
+     *
+     * The readings need no rewrite: [BpmDataPointEntity.timestamp] is relative to the start, so
+     * moving the three absolute columns moves the whole recording.
+     */
+    @Query(
+        "UPDATE bpm_records SET date = date + :deltaMs, startTime = startTime + :deltaMs, " +
+            "endTime = endTime + :deltaMs WHERE recordId IN (:ids)"
+    )
+    suspend fun shiftTimes(ids: List<Long>, deltaMs: Long)
+
     /** Forgets a location that has been deleted. See [EventDao.forgetLocation]. */
     @Query("UPDATE bpm_records SET locationId = NULL WHERE locationId = :locationId")
     suspend fun forgetLocation(locationId: Long)

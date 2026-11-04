@@ -258,11 +258,12 @@ fun RecordingDetailScreen(
             tagCount = r.tags.size,
             onEditTags = { tagging = true },
             onDismiss = { editing = false },
-            onConfirm = { title, description, deviceId, personId, locationId ->
+            onConfirm = { title, description, deviceId, personId, locationId, startTime ->
                 subject.updateTitle(title)
                 subject.updateDescription(description)
                 subject.updateDeviceAndWearer(deviceId, personId)
                 subject.setLocation(locationId)
+                subject.moveStartTo(startTime)
                 editing = false
             }
         )

@@ -103,4 +103,77 @@ class JsonExporterTest {
         assertEquals(1, parsed!!.records.size)
         assertEquals("Old One", parsed.records.first().title)
     }
+
+    private fun recordWithPoints(id: Long, points: Int) = BpmRecordWithPoints(
+        metadata = BpmRecordEntity(
+            recordId = id,
+            title = "Set $id",
+            date = 1_000_000L,
+            startTime = 1_000_000L,
+            endTime = 1_000_000L + points * 1000L,
+            durationMs = points * 1000L
+        ),
+        dataPoints = (0 until points).map {
+            BpmDataPointEntity(dataPointId = it.toLong(), recordOwnerId = id, timestamp = it * 1000L, bpm = 120.0)
+        },
+        minDataPoint = null,
+        maxDataPoint = null
+    )
+
+    @Test
+    fun `a backup written to a stream reads back the same as one built as a string`() {
+        val records = listOf(recordWithPoints(1, 300), recordWithPoints(2, 5))
+        val out = java.io.ByteArrayOutputStream()
+
+        JsonExporter.writeBackup(out, JsonExporter.buildBackup(records))
+        val streamed = JsonExporter.parseBackup(out.toString(Charsets.UTF_8.name()))
+
+        assertNotNull(streamed)
+        assertEquals(listOf(300, 5), streamed!!.records.map { it.dataPoints.size })
+        assertEquals(
+            JsonExporter.parseBackup(JsonExporter.toBackupJson(records))!!.records,
+            streamed.records
+        )
+    }
+
+    @Test
+    fun `readings are written compactly, one line rather than four each`() {
+        val json = JsonExporter.toBackupJson(listOf(recordWithPoints(1, 100)))
+
+        // Pretty-printing put every reading on four indented lines, more than doubling a file
+        // that is nearly all readings.
+        assertEquals(false, json.contains('\n'))
+        assert(json.contains("""{"timestamp":1000,"bpm":120.0}""")) { json.take(400) }
+    }
+
+    @Test
+    fun `a single record on its own still reads`() {
+        val single = """{"title":"Lone","startTime":1000,"endTime":2000,"dataPoints":[{"timestamp":0,"bpm":70.0}]}"""
+
+        val parsed = JsonExporter.parseBackup(single)
+
+        assertNotNull(parsed)
+        assertEquals(listOf("Lone"), parsed!!.records.map { it.title })
+    }
+
+    @Test
+    fun `json that is not a backup is refused rather than read as an empty one`() {
+        val reason = JsonExporter.parseBackup(java.io.StringReader("""{"hello":"world"}""")) {
+            java.io.StringReader("""{"hello":"world"}""")
+        }
+
+        assertEquals(BackupFile.Unreadable("That file is not a BPMetrics backup"), reason)
+    }
+
+    @Test
+    fun `a backup is recognised by its content whatever it is called`() {
+        // A texted or downloaded file arrives as octet-stream with no extension, so the importer
+        // decides from the first bytes. A byte order mark and leading whitespace must not hide it.
+        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+        assertEquals(true, JsonExporter.startsLikeJson("""{"formatVersion":6""".toByteArray()))
+        assertEquals(true, JsonExporter.startsLikeJson("  \n [{".toByteArray()))
+        assertEquals(true, JsonExporter.startsLikeJson(bom + "{".toByteArray()))
+        assertEquals(false, JsonExporter.startsLikeJson("Timestamp,BPM\n0,70".toByteArray()))
+        assertEquals(false, JsonExporter.startsLikeJson(ByteArray(0)))
+    }
 }

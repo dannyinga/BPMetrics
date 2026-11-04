@@ -103,6 +103,19 @@ data class FilterContext(
     /** What kind each event is, for the event-type term. Absent means untyped. */
     val eventTypeByEvent: Map<Long?, String?> = emptyMap(),
     /**
+     * Each event, and every event it sits inside — itself first.
+     *
+     * What makes an event term mean *the subtree*. A recording hangs off the deepest thing that
+     * claims it, so a festival almost never holds any directly: choosing "Bass Canyon" and matching
+     * `eventId == BassCanyon` finds the handful filed on the festival itself and none of the
+     * hundreds filed on its days and sets. The term is read as "was this recorded at Bass Canyon",
+     * and the honest answer walks up.
+     *
+     * Empty is workable and means the old behaviour — a direct match only — which is right for the
+     * callers filtering a snapshot with no tree behind it.
+     */
+    val ancestorsByEvent: Map<Long, Set<Long>> = emptyMap(),
+    /**
      * Which category each tag belongs to, from the registry.
      *
      * A fact about the *tag*, which is why it comes from the registry rather than from whichever
@@ -150,6 +163,10 @@ fun filterContextOf(
             .toMap(),
         locationIdByEvent = resolved.mapValues { it.value?.locationId },
         eventTypeByEvent = events.associate { it.eventId to it.type },
+        // One walk, cycle-guarded, shared with every other question about containment.
+        ancestorsByEvent = events.associate { event ->
+            event.eventId to EventTree.ancestryOf(events, event.eventId).map { it.eventId }.toSet()
+        },
         categoryByTag = tags.associate { it.tagId to it.parentCategoryId }
     )
 }
@@ -229,8 +246,17 @@ object LibraryFilter {
             val watchMatch = filter.selectedWatchIds.isEmpty() ||
                 meta.watchId in filter.selectedWatchIds
 
-            val eventMatch = filter.selectedEventIds.isEmpty() ||
-                meta.eventId in filter.selectedEventIds
+            // The subtree, not the event a recording is filed directly on. Picking a festival and
+            // getting only what was filed on the festival itself — rather than on its days, where
+            // recordings actually live — is the same mistake this codebase has now made in a count,
+            // an export scope, a picker, and here.
+            //
+            // Falls back to the direct comparison where no tree was supplied, which is what the
+            // snapshot callers pass.
+            val eventMatch = filter.selectedEventIds.isEmpty() || meta.eventId?.let { id ->
+                context.ancestorsByEvent[id]?.any { it in filter.selectedEventIds }
+                    ?: (id in filter.selectedEventIds)
+            } == true
 
             // Resolved by Scope, not derived here. This used to compare a *collection* id against
             // the event's *parent event* id — two different id spaces — so the term narrowed the

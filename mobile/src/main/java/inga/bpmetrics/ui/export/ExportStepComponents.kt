@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
@@ -407,7 +408,17 @@ fun ContentsStep(
     onToggleClip: (android.net.Uri) -> Unit,
     onToggleRecord: (android.net.Uri, Long) -> Unit,
     /** What each clip's video will be called, keyed by uri. See `ExportUtilityViewModel`. */
-    titles: Map<String, String> = emptyMap()
+    titles: Map<String, String> = emptyMap(),
+    /**
+     * Picks a video from anywhere, for footage the gallery search could not match by time.
+     *
+     * A screen recording of old footage, or a clip that came through a messaging app, is stamped
+     * when *that* file was made — so the search for "filmed while these recordings ran" cannot find
+     * it, and until this there was no way to reach one from the step that chooses clips.
+     */
+    onAddVideo: (() -> Unit)? = null,
+    /** A picked file that turned out not to be a playable video. */
+    pickFailed: Boolean = false
 ) {
     if (loading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -477,6 +488,30 @@ fun ContentsStep(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // The way out of "no video" that did not exist: the footage is often on the phone, just
+            // stamped with the wrong time. Choose it here and set when it was really filmed.
+            onAddVideo?.let { add ->
+                Spacer(Modifier.height(16.dp))
+                androidx.compose.material3.OutlinedButton(onClick = add) {
+                    Text("Choose a video")
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "For a screen recording or a clip whose time is wrong. You can set when it was " +
+                        "filmed on the next step.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+            if (pickFailed) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "That file could not be read as a video.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
         }
         return
     }
@@ -534,6 +569,24 @@ fun ContentsStep(
                     Spacer(Modifier.width(4.dp))
                     Text(if (oldestFirst) "Oldest first" else "Newest first")
                 }
+                // An icon rather than a fourth labelled button, so the row stays one line. For
+                // footage the time search missed — a screen recording made today of a set from
+                // last month is still on the phone, just stamped with the wrong day.
+                onAddVideo?.let { add ->
+                    IconButton(onClick = add) {
+                        Icon(
+                            Icons.Default.VideoLibrary,
+                            contentDescription = "Choose a video"
+                        )
+                    }
+                }
+            }
+            if (pickFailed) {
+                Text(
+                    "That file could not be read as a video.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
         HorizontalDivider()

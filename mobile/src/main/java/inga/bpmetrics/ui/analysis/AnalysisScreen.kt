@@ -151,6 +151,16 @@ fun AnalysisScreen(
      */
     subjectEditor: (@Composable (openRefineScope: () -> Unit) -> Unit)? = null,
     /**
+     * What is nested inside this subject, as its own tab.
+     *
+     * A slot rather than something this screen derives, for the same reason the header is one: only
+     * the subject knows what "inside" means. An event has sub-events; a recording has nothing; a
+     * collection holds things it does not own. Supplied only when there is something to show, which
+     * is what decides whether the tab is offered at all — a tab opening onto an empty list reads as
+     * a bug rather than as an absence.
+     */
+    subjectChildren: (@Composable () -> Unit)? = null,
+    /**
      * Asks to split the stretch the chart is showing.
      *
      * A *request*, not the split itself: the chart says which stretch, and the subject opens its
@@ -191,6 +201,9 @@ fun AnalysisScreen(
     val selectedMetric by viewModel.selectedMetric.collectAsStateWithLifecycle()
     val selectedCategoryId by viewModel.selectedCategoryTabId.collectAsStateWithLifecycle()
     val isolatedPersonId by viewModel.isolatedPersonId.collectAsStateWithLifecycle()
+    val personFilter by viewModel.personFilter.collectAsStateWithLifecycle()
+    val peopleInScope by viewModel.peopleInScope.collectAsStateWithLifecycle()
+    var choosingPeople by remember { mutableStateOf(false) }
 
     /**
      * Opens a recording, or null when there is nowhere to go.
@@ -208,8 +221,10 @@ fun AnalysisScreen(
 
     // Sections with nothing in them are not offered. A Compare tab on a scope with one wearer and
     // no tags would open onto an empty card, which reads as a bug rather than as an absence.
-    val sections = remember(uiState.records, availableAxes) {
-        AnalysisSection.entries.filter { it.isAvailable(uiState, availableAxes) }
+    val sections = remember(uiState.records, availableAxes, subjectChildren) {
+        AnalysisSection.entries.filter {
+            it.isAvailable(uiState, availableAxes, hasChildren = subjectChildren != null)
+        }
     }
     // Whatever was selected can stop existing — filing the last recording out of a group empties
     // People, and the screen would otherwise keep rendering a section that is no longer listed.
@@ -265,6 +280,17 @@ fun AnalysisScreen(
                         // where an overflow lives on every other Android screen.
                         subjectActions?.invoke(this)
 
+                        // Whose recordings to read. Beside Export because it changes what an
+                        // export would contain, and not gated on the analysis having anything in
+                        // it: a filter that narrows to nobody empties the page, and hiding the
+                        // button then would leave no way back out.
+                        if (peopleInScope.size > 1) {
+                            PersonFilterButton(
+                                selectedCount = personFilter.size,
+                                onClick = { choosingPeople = true }
+                            )
+                        }
+
                         if (onExport != null && !uiState.isEmpty) {
                             IconButton(onClick = onExport) {
                                 Icon(
@@ -291,8 +317,26 @@ fun AnalysisScreen(
             }
         }
     ) { paddingValues ->
+        // Shown on every tab and in the empty state alike. Filtering to someone whose recordings
+        // are all left out empties the page, and an empty page that does not say it is filtered
+        // reads as an event with nothing in it.
+        val filterNotice: @Composable () -> Unit = {
+            if (personFilter.isNotEmpty()) {
+                PersonFilterNotice(
+                    chosen = personFilter.mapNotNull { peopleById[it] }
+                        .sortedBy { it.displayName.lowercase() },
+                    ofTotal = peopleInScope.size,
+                    onEdit = { choosingPeople = true },
+                    onClear = { viewModel.clearPersonFilter() }
+                )
+            }
+        }
+
         if (uiState.isEmpty) {
-            EmptyAnalysis(uiState, Modifier.padding(paddingValues))
+            Column(Modifier.padding(paddingValues).fillMaxSize()) {
+                filterNotice()
+                EmptyAnalysis(uiState, Modifier.fillMaxSize())
+            }
             return@Scaffold
         }
 
@@ -301,6 +345,9 @@ fun AnalysisScreen(
             // subject is what is being analysed. Switching from Summary to Compare must not
             // change which thing you are looking at, so the subject sits outside the switch.
             subjectHeader?.invoke()
+
+            // Beneath the subject and above the tabs: it qualifies every tab, not one of them.
+            filterNotice()
 
             SectionBar(
                 sections = sections,
@@ -331,6 +378,8 @@ fun AnalysisScreen(
                     peopleById = peopleById,
                     onSplit = onSplitFromTimeline
                 )
+
+                AnalysisSection.EVENTS -> subjectChildren?.invoke()
 
                 AnalysisSection.COMPARE -> CompareSection(
                     axes = availableAxes,
@@ -386,6 +435,21 @@ fun AnalysisScreen(
     }
 
     subjectEditor?.invoke { showScopeRefinement = true }
+
+    if (choosingPeople) {
+        PersonFilterDialog(
+            people = peopleInScope.mapNotNull { peopleById[it] }
+                .sortedBy { it.displayName.lowercase() },
+            selected = personFilter,
+            onApply = { chosen ->
+                // Everyone ticked is the same as no filter, and stored as no filter: otherwise the
+                // badge would claim the page is narrowed when it shows exactly what it always did.
+                viewModel.setPersonFilter(PersonFilterRule.normalise(chosen, peopleInScope))
+                choosingPeople = false
+            },
+            onDismiss = { choosingPeople = false }
+        )
+    }
 }
 
 /**
@@ -416,18 +480,36 @@ fun AnalysisScreen(
 private enum class AnalysisSection(val label: String) {
     SUMMARY("Summary"),
     COMPARE("Compare"),
-    TIMELINE("Timeline");
+    TIMELINE("Timeline"),
+
+    /**
+     * What is inside this one.
+     *
+     * Last, because it is the only section that is not a reading of the scope — the other three all
+     * answer something about these recordings, and this one is a way *out* of them, into a narrower
+     * scope. An event nested three deep had no route down: the breadcrumb walked up, and getting to
+     * a set inside a day meant going back to the library and finding it again.
+     */
+    EVENTS("Events");
 
     /**
      * @param axes What the scope can be compared along, which is the only honest test for whether
      *   Compare has anything to show — it used to be asked of the tag categories alone, so a
      *   festival with no tags hid a tab that would have compared its nights.
      */
-    fun isAvailable(state: AnalysisUiState, axes: List<SplitAxis>): Boolean = when (this) {
+    fun isAvailable(
+        state: AnalysisUiState,
+        axes: List<SplitAxis>,
+        /** Whether the subject has anything nested inside it. See [AnalysisScreen]'s slot. */
+        hasChildren: Boolean
+    ): Boolean = when (this) {
         SUMMARY -> true
         COMPARE -> axes.isNotEmpty()
         // Offered whenever there is anything to draw, including the offer to draw it.
         TIMELINE -> state.records.isNotEmpty()
+        // Only where there is something inside. A recording has nothing nested in it, and an event
+        // holding only recordings has nothing this tab could list that the Summary does not.
+        EVENTS -> hasChildren
     }
 
 }
@@ -876,15 +958,11 @@ private fun PersonTotalsRow(
                 // the app identifies them everywhere — on a chart lane, on a tile, in an export —
                 // so keeping the ring keeps the row tied to those, while the photograph does what
                 // a twelve-pixel dot never could and says *who*.
-                Box(
-                    Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .border(2.dp, colour.copy(alpha = alpha), CircleShape)
-                        .padding(2.dp)
-                ) {
-                    inga.bpmetrics.ui.components.PersonAvatar(profile, size = 28.dp)
-                }
+                inga.bpmetrics.ui.components.PersonAvatar(
+                    person = profile,
+                    size = 28.dp,
+                    ring = colour.copy(alpha = alpha)
+                )
                 Spacer(Modifier.width(10.dp))
                 Text(
                     person.name,

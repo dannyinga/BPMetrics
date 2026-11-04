@@ -62,7 +62,16 @@ object VideoTiming {
         FINISHED,
 
         /** Nothing corroborated it, and it was taken at face value. */
-        ASSUMED
+        ASSUMED,
+
+        /**
+         * Somebody said when it was filmed, and that is the only answer that counts.
+         *
+         * For footage whose stamp is not the moment it was filmed at all — a screen recording made
+         * today of a set from a month ago, a clip sent through a messaging app that rewrote it. No
+         * amount of corroborating the file against itself can recover a time the file never held.
+         */
+        SET_BY_HAND
     }
 
     /**

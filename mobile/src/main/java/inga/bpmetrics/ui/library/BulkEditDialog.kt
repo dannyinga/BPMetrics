@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
@@ -45,6 +46,7 @@ fun BulkEditDialog(
     onAttribute: () -> Unit,
     onFileIntoEvent: () -> Unit,
     onAddToCollection: () -> Unit,
+    onCorrectTime: () -> Unit,
     onSetCover: () -> Unit,
     onRemoveCover: () -> Unit,
     onDismiss: () -> Unit
@@ -58,6 +60,7 @@ fun BulkEditDialog(
                 Row("Attribute to…", Icons.Default.People, onAttribute)
                 Row("File into an event…", Icons.Default.Folder, onFileIntoEvent)
                 Row("Add to a collection…", Icons.Default.Bookmarks, onAddToCollection)
+                Row("Correct the time…", Icons.Default.Schedule, onCorrectTime)
 
                 // A cover set from a multi-selection goes on the *event* those recordings share,
                 // not on each one — see LibraryViewModel.setCoverForSelection. It refuses rather

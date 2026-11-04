@@ -209,7 +209,15 @@ data class ClipSelection(
      */
     val graph: GraphPlacement? = null,
     /** Where this clip's preview is scrubbed to, 0..1. Its own, because each clip is its own shot. */
-    val scrubAt: Float = 0f
+    val scrubAt: Float = 0f,
+    /**
+     * The clip as the file described it, kept while its filming time has been corrected by hand.
+     *
+     * [clip] carries the corrected time, so every consumer — the window on the timeline, who was
+     * recording during it, the preview, the render — follows it without knowing a correction
+     * happened. This is what lets "use the file's time" undo that. Null while nothing is corrected.
+     */
+    val originalClip: VideoExporter.VideoClip? = null
 ) {
     /** The highest anyone reached during the clip. Null when nobody was recording. */
     val peakBpm: Int? get() = sparks.maxOfOrNull { it.peakBpm }
@@ -364,13 +372,13 @@ data class GraphPlacement(
          * the untouched default of a config, meaning "nobody set this" rather than "full frame".
          * A frame the user really did drag to the edges differs from that sentinel on some side.
          */
-        fun of(preset: ExportPreset): GraphPlacement {
-            val stored = GraphPlacement(
-                preset.graphLeft,
-                preset.graphTop,
-                preset.graphRight,
-                preset.graphBottom
-            )
+        fun of(preset: ExportPreset, laneCount: Int = 0): GraphPlacement {
+            // The frame for this many people where the preset pins one, and the preset's own frame
+            // where it does not — see [ExportPreset.frameFor]. `laneCount` defaults to zero for
+            // the call sites that genuinely have no clip in hand, such as the preset editor, which
+            // is framing the look rather than any particular shot.
+            val frame = preset.frameFor(laneCount)
+            val stored = GraphPlacement(frame.left, frame.top, frame.right, frame.bottom)
             val degenerate = stored.width < MIN_SIZE || stored.height < MIN_SIZE
             val unset = stored.left == 0f && stored.top == 0f &&
                 stored.right == 1f && stored.bottom == 1f
@@ -881,7 +889,11 @@ class ExportUtilityViewModel(
             applied.copy(
                 // The clip's own framing when it has been given one, otherwise whatever the
                 // preset carries — framing is part of a look, so a preset has to bring its own.
-                graphRect = (placement ?: GraphPlacement.of(_preset.value)).toRectF()
+                // The count is `forRecords.size`: one curve and one readout per record, which is
+                // exactly what the frame has to make room for. A clip framed by hand still wins —
+                // `placement` is that override, and a pin is only ever a better default.
+                graphRect = (placement ?: GraphPlacement.of(_preset.value, forRecords.size))
+                    .toRectF()
             )
         }
     }
@@ -1012,7 +1024,12 @@ class ExportUtilityViewModel(
             labelsColor = preset.labelsColor,
             gridColor = preset.gridColor,
             backgroundOpacity = preset.backgroundOpacity,
-            timeZoneId = preset.timeZoneId,
+            // Where these recordings happened, not whatever zone the preset was saved in. See
+            // `ImageExporter.inZoneOf`, which fixes the same thing for video — an image's time axis
+            // and its date line are read in this zone, so the preset's frozen Pacific put a
+            // Chicago set's hours and, near midnight, its *date* in the wrong place.
+            timeZoneId = inga.bpmetrics.library.resolvedZoneOf(records.map { it.metadata })
+                ?: preset.timeZoneId,
             showWordmark = preset.showWordmark,
             wordmarkCorner = preset.wordmarkCorner,
             wordmarkOpacity = preset.wordmarkOpacity
@@ -1055,6 +1072,95 @@ class ExportUtilityViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /**
+     * Says when a clip was really filmed.
+     *
+     * One number, and everything else follows — see [ClipRetiming] for why it is not three.
+     */
+    fun setClipFilmedAt(uri: android.net.Uri, startedAtMs: Long) {
+        _clips.value = _clips.value.map {
+            if (it.clip.uri == uri) ClipRetiming.retime(it, startedAtMs, records.value) else it
+        }
+        refreshSparks(uri)
+    }
+
+    /** Back to the time the file gave. */
+    fun resetClipFilmedAt(uri: android.net.Uri) {
+        _clips.value = _clips.value.map {
+            if (it.clip.uri == uri) ClipRetiming.reset(it, records.value) else it
+        }
+        refreshSparks(uri)
+    }
+
+    private val _pickFailed = MutableStateFlow(false)
+
+    /** True after a picked file turned out not to be a playable video, until the next pick. */
+    val pickFailed: StateFlow<Boolean> = _pickFailed.asStateFlow()
+
+    /**
+     * Adds a video chosen by hand, as a clip like any other.
+     *
+     * Ticked, because it was chosen on purpose — unlike found clips, which start unticked so a
+     * stray Next does not queue renders nobody asked for. Placed on the first recording where its
+     * own time lands on nothing, so there is a graph to preview while the time is corrected.
+     *
+     * Picking a video already in the list does nothing but select it: two copies of one clip would
+     * be two renders of the same footage.
+     */
+    fun addPickedVideo(context: android.content.Context, uri: android.net.Uri, onAdded: (android.net.Uri) -> Unit = {}) {
+        launchGuarded {
+            _pickFailed.value = false
+            if (_clips.value.any { it.clip.uri == uri }) {
+                onAdded(uri)
+                return@launchGuarded
+            }
+            val fileClip = withContext(Dispatchers.IO) {
+                VideoExporter.clipFromUri(context, uri)
+            }
+            if (fileClip == null) {
+                _pickFailed.value = true
+                return@launchGuarded
+            }
+
+            val inScope = records.value
+            val start = ClipRetiming.startingPoint(fileClip, inScope)
+            val found = ClipSelection(
+                clip = fileClip,
+                recordIds = ClipRetiming.castFor(fileClip, inScope, emptySet()),
+                selected = false
+            )
+            val placed = if (start == fileClip.startedAtMs) found
+                else ClipRetiming.retime(found, start, inScope)
+
+            _clips.value = _clips.value + placed.copy(selected = placed.recordIds.isNotEmpty())
+            onAdded(uri)
+            refreshSparks(uri)
+        }
+    }
+
+    /**
+     * Redraws one clip's sparkline for wherever it now sits.
+     *
+     * The result is written back only if the clip is still at the time it was drawn for. Correcting
+     * a time twice in quick succession starts two of these, and the slower first one would otherwise
+     * land last and put the previous stretch of the recording back under the new time.
+     */
+    private fun refreshSparks(uri: android.net.Uri) {
+        launchGuarded {
+            val target = _clips.value.firstOrNull { it.clip.uri == uri } ?: return@launchGuarded
+            val people = repository.getAllPeople().first()
+            val watches = repository.getAllWatches().first()
+            val curves = withContext(Dispatchers.Default) {
+                sparkFor(target, records.value, watches, people)
+            }
+            _clips.value = _clips.value.map { current ->
+                if (current.clip.uri == uri && current.clip.startedAtMs == target.clip.startedAtMs) {
+                    current.copy(sparks = curves.sparks, bpmScale = curves.scale)
+                } else current
+            }
+        }
+    }
+
     /** Moves or resizes the graph on one clip. */
     fun setClipGraph(uri: android.net.Uri, placement: GraphPlacement) {
         _clips.value = _clips.value.map {
@@ -1077,6 +1183,43 @@ class ExportUtilityViewModel(
     fun applyGraphToAll(from: android.net.Uri) {
         val source = _clips.value.firstOrNull { it.clip.uri == from }?.graph ?: return
         _clips.value = _clips.value.map { it.copy(graph = source) }
+    }
+
+    /**
+     * Remembers this framing as the one for clips with this many people on them.
+     *
+     * The gesture bulk export actually wanted. A frame drawn around two readouts is not the frame
+     * for four — the renderer divides the readout column by the cast, so four in a two-person frame
+     * squeeze to the minimum and one leaves it half empty. Pinning writes it onto the *preset*, so
+     * it applies to every clip with that cast in this batch **and** in every batch after it.
+     *
+     * The clips with that cast have their own overrides cleared rather than set, so they fall
+     * through to the pin. Otherwise the pin would be shadowed by copies of itself, and editing it
+     * later would appear to do nothing.
+     */
+    fun pinGraphForCast(from: android.net.Uri) {
+        val source = _clips.value.firstOrNull { it.clip.uri == from } ?: return
+        val framing = source.graph ?: GraphPlacement.of(_preset.value, source.recordIds.size)
+        val cast = source.recordIds.size.coerceAtLeast(1)
+
+        _preset.value = _preset.value.copy(
+            framesByLaneCount = _preset.value.framesByLaneCount + (
+                cast to inga.bpmetrics.export.GraphFrame(
+                    left = framing.left,
+                    top = framing.top,
+                    right = framing.right,
+                    bottom = framing.bottom
+                )
+            )
+        )
+        // Editing the look drops the "this is preset X" link, as every other look change does —
+        // otherwise "Update to current settings" would offer to absorb a change nobody associated
+        // with that preset.
+        _selectedPresetId.value = null
+
+        _clips.value = _clips.value.map {
+            if (it.recordIds.size.coerceAtLeast(1) == cast) it.copy(graph = null) else it
+        }
     }
 
     /**

@@ -102,6 +102,24 @@ object LocationResolver {
 }
 
 /**
+ * The zone these recordings were resolved to from a venue, or null where none of them has one.
+ *
+ * Distinct from [clock], which always answers *something* — it falls back to the reader's own zone,
+ * which is right for a screen and wrong for a caller that has a better fallback of its own. An
+ * export does: the zone set in Settings for exactly the recordings no venue covers. Collapsing "no
+ * venue" into "this phone's zone" is how a Chicago set came to be captioned in Pacific time — the
+ * answer arrived looking like a real zone, and nothing downstream could tell it had been guessed.
+ *
+ * The first recording *with* a zone rather than the first recording. One export is one occasion in
+ * one place, and a single unfiled wearer at the front of the list should not decide the clock for
+ * everyone else who was plainly at the venue.
+ */
+fun resolvedZoneOf(records: List<BpmRecordEntity>): String? =
+    records.firstNotNullOfOrNull { record ->
+        record.timeZoneId?.takeIf { it in java.util.TimeZone.getAvailableIDs() }
+    }
+
+/**
  * The clock this recording is read in.
  *
  * Straight off the stored column, with no tree walk — which is the entire reason
