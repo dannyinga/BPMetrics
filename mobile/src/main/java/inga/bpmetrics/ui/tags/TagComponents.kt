@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.automirrored.filled.CallReceived
@@ -260,6 +261,12 @@ private fun NewTagDialog(
  * where it can be removed.
  *
  * The distinction has to be visible, or the first thing anyone tries is the thing that cannot work.
+ *
+ * Tapping a chip never removes it. It used to, silently and with no way back, so a tap meant to
+ * ask "what is this?" quietly deleted the answer. Removal is the ✕ beside a direct tag: its own
+ * 48dp button, placed next to the chip rather than inside it, because a target that size inside a
+ * 32dp chip would make every chip taller. A chip already reserves 48dp of height for touch, so
+ * the button adds width but no height.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -291,10 +298,26 @@ fun EffectiveTagChip(
             border = AssistChipDefaults.assistChipBorder(enabled = true)
         )
     } else {
-        SuggestionChip(
-            onClick = { onRemove?.invoke() },
-            label = { Text(label) }
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SuggestionChip(
+                onClick = {
+                    onExplain?.invoke(
+                        if (onRemove != null) "$label is set here. Use ✕ to remove it."
+                        else "$label is set here."
+                    )
+                },
+                label = { Text(label) }
+            )
+            if (onRemove != null) {
+                IconButton(onClick = onRemove) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Remove $label",
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

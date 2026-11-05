@@ -156,7 +156,14 @@ class EventDetailViewModel(
      * an unused copy is the answer somebody reaches for next.
      */
     fun removeTag(tagId: Long) {
-        launchGuarded { repository.removeTagFromEvent(eventId, tagId) }
+        launchGuarded(failure = "Couldn't remove that tag.") {
+            val name = repository.getTag(tagId)?.name ?: "Tag"
+            repository.removeTagFromEvent(eventId, tagId)
+            // An event tag has no sibling rule or auto-naming, so adding it back is the undo.
+            inga.bpmetrics.ui.feedback.Feedback.undoable("Removed $name from this event.") {
+                repository.addTagToEvent(eventId, tagId)
+            }
+        }
     }
 
     fun rename(name: String) {

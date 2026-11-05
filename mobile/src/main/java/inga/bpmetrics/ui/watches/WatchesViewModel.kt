@@ -95,20 +95,39 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
     }
 
     /**
-     * Attributes recordings that already arrived from this watch to someone.
+     * What "Apply to past" would do, so it can be confirmed with a number before anything changes.
      *
-     * The recovery path for a watch that recorded before anyone was assigned to it.
+     * [fromPersonId] is who the watch belonged to before this edit. Only that person's recordings
+     * from it, and ones nobody was wearing, are offered to [toPersonId].
      */
-    fun reattribute(watchId: String, personId: Long, fromDate: Long, toDate: Long) {
-        launchGuarded {
-            val changed = repository.reattributeRecords(watchId, personId, fromDate, toDate)
-            val name = repository.getPerson(personId)?.name ?: "them"
+    fun previewApplyToPast(
+        watchId: String,
+        fromPersonId: Long?,
+        toPersonId: Long,
+        onReady: (ApplyToPast) -> Unit
+    ) {
+        launchGuarded(failure = "Couldn't count this watch's recordings.") {
+            onReady(
+                ApplyToPast(
+                    watchId = watchId,
+                    fromPersonId = fromPersonId,
+                    toPersonId = toPersonId,
+                    toName = repository.getPerson(toPersonId)?.displayName ?: "them",
+                    fromName = fromPersonId?.let { repository.getPerson(it)?.displayName },
+                    count = repository.countClaimablePastRecords(watchId, fromPersonId, toPersonId)
+                )
+            )
+        }
+    }
+
+    /** Carries out a confirmed [ApplyToPast]. */
+    fun applyToPast(plan: ApplyToPast) {
+        launchGuarded(failure = "Couldn't change who wore those recordings.") {
+            val changed = repository.claimPastRecords(plan.watchId, plan.fromPersonId, plan.toPersonId)
+            refreshCounts()
             Feedback.say(
-                when (changed) {
-                    0 -> "No recordings in that range."
-                    1 -> "1 recording re-attributed to $name."
-                    else -> "$changed recordings re-attributed to $name."
-                }
+                if (changed == 1) "1 earlier recording is now ${plan.toName}'s."
+                else "$changed earlier recordings are now ${plan.toName}'s."
             )
         }
     }
@@ -153,4 +172,19 @@ data class WatchesUiState(
     /** Everyone available to assign, for the pickers in this screen's dialogs. */
     val people: List<PersonEntity> = emptyList(),
     val isEmpty: Boolean = true
+)
+
+/**
+ * "Apply to past", worked out but not yet done: who gets which recordings, and how many.
+ *
+ * Counted first so the confirm can say exactly what will change. [fromName] is the previous
+ * wearer, whose recordings from this watch move along with the unattributed ones.
+ */
+data class ApplyToPast(
+    val watchId: String,
+    val fromPersonId: Long?,
+    val toPersonId: Long,
+    val toName: String,
+    val fromName: String?,
+    val count: Int
 )

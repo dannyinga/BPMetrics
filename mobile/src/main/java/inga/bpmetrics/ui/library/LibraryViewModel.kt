@@ -602,16 +602,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /**
-     * Turns a smart collection back into a hand-made one.
-     *
-     * Whatever it names by hand stays; it simply stops re-asking. Deleting and rebuilding would
-     * throw away members the rule never found.
-     */
-    fun clearCollectionRule(collectionId: Long) {
-        launchGuarded { repository.setCollectionRule(collectionId, null) }
-    }
-
-    /**
      * Gives a collection a rule, or replaces the one it has.
      *
      * The half that was missing. A rule could only be created by narrowing the library and pressing

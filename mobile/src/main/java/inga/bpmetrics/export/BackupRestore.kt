@@ -22,6 +22,12 @@ data class RestoreResult(
     val presetsSkipped: Int = 0,
     /** Recordings the library already had, so were linked to rather than added a second time. */
     val recordsAlreadyHere: Int = 0,
+    /**
+     * Smart collections whose rule named something this file couldn't identify, so the rule now
+     * matches less than it did (often nothing). Always the case for a rule from a file written
+     * before format 7, which didn't carry what its ids meant.
+     */
+    val rulesNeedingAttention: List<String> = emptyList(),
     val failure: String? = null
 ) {
     val succeeded: Boolean get() = failure == null
@@ -35,7 +41,13 @@ data class RestoreResult(
             if (recordsSkipped > 0) add("$recordsSkipped unreadable")
             if (peopleCreated > 0) add("$peopleCreated new ${if (peopleCreated == 1) "person" else "people"}")
         }
-        return parts.joinToString(", ")
+        val rules = when (rulesNeedingAttention.size) {
+            0 -> ""
+            1 -> ". Check the rule of ${rulesNeedingAttention.single()}: part of it couldn't be restored."
+            else -> ". Check the rules of ${rulesNeedingAttention.size} smart collections " +
+                "(${rulesNeedingAttention.joinToString()}): part of each couldn't be restored."
+        }
+        return parts.joinToString(", ") + rules
     }
 }
 
@@ -67,9 +79,14 @@ suspend fun restoreBackup(
       repository.inBulk {
         var peopleCreated = 0
         val existingPeople = repository.getAllPeople().first().associateBy { it.name.lowercase() }
+        // Everyone this library now has, by name: what a watch's wearer and a rule's people are
+        // matched against. Seeded with who was already here, so a rule naming someone the file
+        // didn't carry still finds them.
+        val personIdsByName = existingPeople.mapValues { it.value.personId }.toMutableMap()
         backup.people.forEach { person ->
             val personId = existingPeople[person.name.lowercase()]?.personId
                 ?: repository.addPerson(person.name, person.colorArgb).also { peopleCreated++ }
+            personIdsByName[person.name.lowercase()] = personId
 
             // Their own resting and maximum, which decide where every zone boundary sits on their
             // charts. Absent from the format until 4, so an older backup leaves them inherited.
@@ -112,10 +129,14 @@ suspend fun restoreBackup(
         val existingWatchIds = repository.getAllWatches().first().map { it.watchId }.toSet()
         backup.watches.forEach { watch ->
             if (watch.watchId !in existingWatchIds) {
-                repository.registerWatch(
+                repository.restoreWatch(
                     watchId = watch.watchId,
                     deviceName = watch.deviceName,
-                    model = watch.lastKnownModel
+                    model = watch.lastKnownModel,
+                    personId = watch.wearerName?.let { personIdsByName[it.lowercase()] },
+                    colorArgb = watch.colorArgb,
+                    firstSeen = watch.firstSeen,
+                    lastSeen = watch.lastSeen
                 )
                 watchesCreated++
             }
@@ -139,7 +160,10 @@ suspend fun restoreBackup(
             group.parentName?.let { parent ->
                 groupIdsByName[parent]?.let { repository.setEventGroupParent(groupId, it) }
             }
-            restoreCover(repository, context, LibraryRepository.CoverOwner.Collection(groupId),
+            // An event, because that is what a legacy group becomes (see createEventGroup). Writing
+            // it as a Collection put the picture in the collections table under an event's id, so
+            // it landed on whichever collection happened to share the number, or on nothing.
+            restoreCover(repository, context, LibraryRepository.CoverOwner.Event(groupId),
                 group.cover, group.name)
             group.tags.forEach { applyTag(repository, it) { id -> repository.addTagToGroup(groupId, id) } }
         }
@@ -254,13 +278,65 @@ suspend fun restoreBackup(
 
         // Selections: collections, smart collections and frozen analyses alike. Members are
         // re-linked through the maps built above, because ids are reassigned on import.
-        backup.collections.forEach { set ->
+        val collectionIdsBySourceId = mutableMapOf<Long, Long>()
+        val restoredSets = backup.collections.map { set ->
             val newId = repository.restoreCollection(set, eventIdsByName, idMap, eventIdsBySourceId)
+            if (set.sourceId != 0L) collectionIdsBySourceId[set.sourceId] = newId
             restoreCover(
                 repository, context,
                 LibraryRepository.CoverOwner.Collection(newId), set.cover, set.name
             )
             analysesRestored++
+            set to newId
+        }
+
+        // Rules second, once every collection exists, because a rule can name a collection that
+        // comes later in the file. Until now a rule was restored verbatim, its ids pointing at
+        // whatever held those numbers here. See [RuleRemap].
+        val venueIdsByName = existingLocations.mapValues { it.value.locationId } +
+            locationIdsByName.mapKeys { it.key.lowercase() }
+        val rulesNeedingAttention = mutableListOf<String>()
+        restoredSets.forEach { (set, newId) ->
+            val rule = set.filterJson?.let { inga.bpmetrics.library.FilterCodec.parseOrNull(it) }
+                ?: return@forEach
+            val names = set.ruleNames ?: RuleNames()
+            val maps = RuleRemap.Maps(
+                events = eventIdsBySourceId,
+                people = names.people.mapNotNull { ref ->
+                    personIdsByName[ref.name.lowercase()]?.let { ref.id to it }
+                }.toMap(),
+                tags = names.tags.mapNotNull { ref ->
+                    val category = ref.name.substringBefore(':', "Uncategorized")
+                        .ifBlank { "Uncategorized" }
+                    val tagName = ref.name.substringAfter(':', ref.name).trim()
+                    repository.findOrCreateTag(category, tagName)?.let { ref.id to it }
+                }.toMap(),
+                locations = names.locations.mapNotNull { ref ->
+                    venueIdsByName[ref.name.lowercase()]?.let { ref.id to it }
+                }.toMap(),
+                collections = collectionIdsBySourceId
+            )
+            val remapped = RuleRemap.remap(rule, maps)
+            val written = repository.setCollectionRule(
+                newId,
+                inga.bpmetrics.library.FilterCodec.toJson(remapped.rule)
+            )
+            if (!written) {
+                // Refused because it would contain itself. Never leave the verbatim rule in place:
+                // its ids name unrelated things here. Matching nothing is visible and fixable.
+                repository.setCollectionRule(
+                    newId,
+                    inga.bpmetrics.library.FilterCodec.toJson(
+                        inga.bpmetrics.library.FilterState(
+                            selectedEventIds = setOf(RuleRemap.NOTHING)
+                        )
+                    )
+                )
+            }
+            if (remapped.lost.isNotEmpty() || !written) {
+                Log.w(tag, "Rule of '${set.name}' lost: ${remapped.lost}, written=$written")
+                rulesNeedingAttention += set.name
+            }
         }
 
         // Pre-format-5 frozen analyses, restored as frozen collections. Nothing writes this any
@@ -306,7 +382,8 @@ suspend fun restoreBackup(
             analysesRestored = analysesRestored,
             settingsRestored = settingsRestored,
             presetsRestored = presetsRestored,
-            presetsSkipped = presetsSkipped
+            presetsSkipped = presetsSkipped,
+            rulesNeedingAttention = rulesNeedingAttention
         )
         Log.i(tag, "Restored $result")
         result

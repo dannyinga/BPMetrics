@@ -72,6 +72,7 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
 
     var editing by remember { mutableStateOf<WatchEntity?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var applying by remember { mutableStateOf<ApplyToPast?>(null) }
 
     LaunchedEffect(uiState.watches.size) { viewModel.refreshCounts() }
 
@@ -116,9 +117,13 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
                 viewModel.save(watch.watchId, deviceName, personId)
                 editing = null
             },
-            onReattributeAll = { personId ->
-                // Covers the common case directly: everything this watch ever sent.
-                viewModel.reattribute(watch.watchId, personId, Long.MIN_VALUE, Long.MAX_VALUE)
+            onApplyToPast = { deviceName, personId ->
+                // The wearer picked in the dialog is saved too: choosing someone and pressing
+                // "Apply to past" used to change the past and silently leave the future as it was.
+                // Who it belonged to *before* this edit decides which earlier recordings move.
+                val previous = watch.currentPersonId
+                viewModel.save(watch.watchId, deviceName, personId)
+                viewModel.previewApplyToPast(watch.watchId, previous, personId) { applying = it }
                 editing = null
             },
             onDelete = {
@@ -126,6 +131,47 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
                 editing = null
             }
         )
+    }
+
+    applying?.let { plan ->
+        if (plan.count == 0) {
+            // Nothing to confirm. Said once, and not as a dialog with nothing to agree to.
+            LaunchedEffect(plan) {
+                inga.bpmetrics.ui.feedback.Feedback.say(
+                    "No earlier recordings to give to ${plan.toName}. " +
+                        "Any from this watch already belong to someone."
+                )
+                applying = null
+            }
+        } else {
+            AlertDialog(
+                onDismissRequest = { applying = null },
+                title = {
+                    Text(
+                        "Give ${plan.count} earlier recording${if (plan.count == 1) "" else "s"} " +
+                            "to ${plan.toName}?"
+                    )
+                },
+                text = {
+                    Text(
+                        buildString {
+                            append("From this watch: those with no wearer")
+                            plan.fromName?.let { append(", and those worn by $it") }
+                            append(". Recordings attributed to anyone else stay as they are.")
+                        }
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.applyToPast(plan)
+                        applying = null
+                    }) { Text("Give to ${plan.toName}") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { applying = null }) { Text("Cancel") }
+                }
+            )
+        }
     }
 
     if (showAddDialog) {
@@ -220,7 +266,7 @@ private fun WatchEditDialog(
     people: List<PersonEntity>,
     onDismiss: () -> Unit,
     onSave: (deviceName: String, personId: Long?) -> Unit,
-    onReattributeAll: (Long) -> Unit,
+    onApplyToPast: (deviceName: String, personId: Long) -> Unit,
     onDelete: () -> Unit
 ) {
     var deviceName by remember(watch.watchId) { mutableStateOf(watch.deviceName) }
@@ -273,7 +319,7 @@ private fun WatchEditDialog(
             Row {
                 TextButton(
                     enabled = personId != null,
-                    onClick = { personId?.let(onReattributeAll) }
+                    onClick = { personId?.let { onApplyToPast(deviceName, it) } }
                 ) { Text("Apply to past") }
                 TextButton(onClick = { confirmingDelete = true }) {
                     Text("Remove", color = MaterialTheme.colorScheme.error)

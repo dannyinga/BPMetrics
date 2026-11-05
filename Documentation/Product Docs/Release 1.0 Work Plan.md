@@ -99,6 +99,16 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 | **S3.9** | The backup carries each watch's wearer (by person name), colour, and first/last-seen dates, and restore applies them. Restore never sets "last seen" to the restore time. Bump the backup format version, and keep old files readable. | #36 |
 
 **Verify:** add unit tests for S3.2 and S3.5, and do a manual round trip of a legacy backup on the emulator.
+
+**As built:**
+- **S3.1:** the ✕ is a 48dp button beside the chip, not inside it. Tapping the chip explains the tag. Removal offers Undo, which restores the tag exactly, without auto-naming or displacing a sibling.
+- **S3.2:** `AutoTitle` counts a title as generated only when it is blank or "<prefix> N", where the prefix is "Untitled" or a naming-category tag. "Ends in a number" would have caught hand-written titles in the real library ("Basket Case 1", "KC to PHX 2").
+- **S3.3:** the card's "Stop using a rule" is now "Stop updating…", which confirms with the count and then keeps the members.
+- **S3.4:** "Apply to past" also saves the wearer picked in the dialog; before, it changed the past and silently left the future.
+- **S3.6:** "Roll back" and "Restore from file". Fixing it turned up a data-loss bug: a roll back copied only the `.db` and dropped the backup's `-wal`, so it lost whatever the library last did. The pre-roll-back copy of the live database had the same problem. Both now copy the companions.
+- **S3.7:** `LibraryRepository.ensureOpen()`. The instrumented test `UnmigratableLibraryTest` builds a version-2 file and asserts that opening it fails; it passes on API 36.
+- **S3.8 + S3.9:** backup format **7**. Collections carry `sourceId` and `ruleNames`; watches carry their wearer, colour and dates; and people named by a watch or a rule travel too. Restore remaps through `RuleRemap`. An id it can't translate matches nothing rather than everything, and `RestoreResult.rulesNeedingAttention` names the affected collections. **Every rule from a format 6 file (Danny's current backups) is reported, because those files don't say what their people, tag and venue ids meant.** Events still resolve.
+- **Tests:** `AutoTitleTest`, `RuleRemapTest`, `BackupRestoreTest` (legacy cover, rule remap into a library that already has the person, old-file reporting, and watch details), plus `BackupCoverageTest`, which now also asserts every `WatchEntity` column.
 **Commit:** `fix: stop losing tags, titles, rules and covers without asking`
 
 ### S4 — Numbers that tell the truth

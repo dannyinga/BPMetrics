@@ -20,12 +20,20 @@ object StorageInspector {
     private const val TAG = "StorageInspector"
     private const val BACKUP_DIR = "db_backups"
     private const val DB_NAME = "bpmetrics_db"
+    private const val REPLACED_MARK = "_replaced_"
 
     /** One line of the breakdown. */
     data class Item(val label: String, val bytes: Long, val detail: String? = null)
 
     /** A database backup on disk, and when it was taken. */
-    data class Backup(val file: File, val takenAtMs: Long, val bytes: Long)
+    data class Backup(val file: File, val takenAtMs: Long, val bytes: Long) {
+        /**
+         * The library as it was just before an earlier roll back replaced it, as opposed to one
+         * taken before an upgrade. Said in the list, because otherwise a user who rolled back by
+         * mistake can't tell which copy undoes that.
+         */
+        val isFromBeforeRollBack: Boolean get() = REPLACED_MARK in file.name
+    }
 
     data class Report(
         val items: List<Item>,
@@ -122,20 +130,34 @@ object StorageInspector {
 
         return try {
             val supersededDir = File(context.filesDir, BACKUP_DIR).apply { mkdirs() }
-            val superseded = File(supersededDir, "${DB_NAME}_replaced_${System.currentTimeMillis()}.db")
-            if (live.exists()) live.copyTo(superseded, overwrite = true)
+            val superseded = File(supersededDir, "${DB_NAME}${REPLACED_MARK}${System.currentTimeMillis()}.db")
+            if (live.exists()) copyWithCompanions(live, superseded)
 
-            backup.file.copyTo(live, overwrite = true)
-            // The old write-ahead log describes the database that was just replaced. Left behind,
-            // SQLite would replay it over the restored file and undo most of the restore.
-            File(live.path + "-wal").delete()
-            File(live.path + "-shm").delete()
+            // With its own write-ahead log, if it has one. The upgrade backups are taken with
+            // theirs, and a database in WAL mode keeps recent writes there until a checkpoint, so
+            // copying the .db alone restored a library missing whatever it last did. The live WAL
+            // must not survive either: SQLite would replay it over the restored file.
+            copyWithCompanions(backup.file, live)
 
             Log.i(TAG, "Restored ${backup.file.name}; previous database kept as ${superseded.name}")
             null
         } catch (e: Exception) {
             Log.e(TAG, "Could not restore ${backup.file.name}", e)
             "Could not restore that backup: ${e.message}"
+        }
+    }
+
+    /**
+     * Copies a SQLite file together with its `-wal` and `-shm`, so the copy holds what the
+     * original does. A companion the source lacks is deleted at the destination, because a stale
+     * one would be replayed over the copy.
+     */
+    private fun copyWithCompanions(from: File, to: File) {
+        from.copyTo(to, overwrite = true)
+        for (suffix in listOf("-wal", "-shm")) {
+            val source = File(from.path + suffix)
+            val target = File(to.path + suffix)
+            if (source.isFile) source.copyTo(target, overwrite = true) else target.delete()
         }
     }
 

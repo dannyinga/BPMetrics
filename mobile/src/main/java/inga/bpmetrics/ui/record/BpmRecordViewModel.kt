@@ -331,9 +331,14 @@ class BpmRecordViewModel(
      * @param tagId The ID of the tag to remove.
      */
     fun removeTag(tagId: Long) {
-        launchGuarded {
+        launchGuarded(failure = "Couldn't remove that tag.") {
+            val name = repository.getTag(tagId)?.name ?: "Tag"
             repository.removeTagFromRecord(recordId, tagId)
             loadRecord()
+            inga.bpmetrics.ui.feedback.Feedback.undoable("Removed $name.") {
+                repository.restoreRecordTag(recordId, tagId)
+                loadRecord()
+            }
         }
     }
 

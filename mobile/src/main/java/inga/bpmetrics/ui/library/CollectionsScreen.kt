@@ -64,6 +64,7 @@ fun CollectionsScreen(
     var creating by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<CollectionSummary?>(null) }
     var deleting by remember { mutableStateOf<CollectionSummary?>(null) }
+    var stoppingRule by remember { mutableStateOf<CollectionSummary?>(null) }
 
     // Registered once for the screen rather than once per card: a launcher per collection would be
     // dozens of them on a library with dozens of sets. Which one it is for is held alongside it,
@@ -138,7 +139,7 @@ fun CollectionsScreen(
                         !it.collection.isPinned
                     )
                 },
-                onClearRule = { viewModel.clearCollectionRule(it.collection.collectionId) }
+                onStopUpdating = { stoppingRule = it }
             )
         }
     }
@@ -180,6 +181,33 @@ fun CollectionsScreen(
             onConfirm = {
                 viewModel.deleteCollection(summary.collection.collectionId)
                 deleting = null
+            }
+        )
+    }
+
+    stoppingRule?.let { summary ->
+        val count = summary.recordCount
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { stoppingRule = null },
+            title = { Text("Stop updating ${summary.collection.displayName}?") },
+            text = {
+                Text(
+                    "It keeps the $count recording${if (count == 1) "" else "s"} it has now. " +
+                        "New recordings that match its rule won't be added any more."
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    viewModel.materialiseCollection(summary.collection.collectionId) {
+                        Feedback.say(it)
+                    }
+                    stoppingRule = null
+                }) { Text("Keep these $count") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { stoppingRule = null }) {
+                    Text("Cancel")
+                }
             }
         )
     }

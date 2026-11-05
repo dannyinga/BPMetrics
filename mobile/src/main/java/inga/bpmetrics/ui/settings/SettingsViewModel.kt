@@ -360,6 +360,7 @@ class SettingsViewModel(
                         eventTags = repository.getEventTagsForBackup(),
                         locations = repository.getAllLocations().first(),
                         presets = repository.getPresetsForBackup(),
+                        tags = repository.allTags.first(),
                         readImage = { name ->
                             runCatching {
                                 inga.bpmetrics.library.CoverStore.fileFor(context, name)
@@ -421,7 +422,8 @@ class SettingsViewModel(
                 }
                 val result = inga.bpmetrics.export.restoreBackup(backup, repository, context)
                 _lastRestore.value = result
-                if (result.failure == null) Feedback.say(result.summary()) else Feedback.failed(result.summary())
+                if (result.failure == null && result.rulesNeedingAttention.isEmpty()) Feedback.say(result.summary())
+                else Feedback.failed(result.summary())
                 refreshStorage(context)
             } finally {
                 _backupBusy.value = false

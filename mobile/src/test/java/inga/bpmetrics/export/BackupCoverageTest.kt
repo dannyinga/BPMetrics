@@ -89,6 +89,11 @@ class BackupCoverageTest {
             "photoCropTop" to "Carried inside photoCrop.",
             "photoCropRight" to "Carried inside photoCrop.",
             "photoCropBottom" to "Carried inside photoCrop."
+        ),
+        inga.bpmetrics.library.WatchEntity::class.java to mapOf(
+            "currentPersonId" to "Carried as wearerName; people are renumbered on import.",
+            "currentWearerName" to "The legacy name column, rewritten from wearerName on restore.",
+            "lastKnownNodeId" to "This pairing's Data Layer node; learned again on the next sync."
         )
     )
 
@@ -145,6 +150,41 @@ class BackupCoverageTest {
     }
 
     @Test
+    fun `a watch's every column reaches the backup`() {
+        // Not asserted until format 7, and a restore duly dropped every watch's wearer.
+        assertCovered(inga.bpmetrics.library.WatchEntity::class.java, WatchDto::class.java)
+    }
+
+    @Test
+    fun `a rule's names and a watch's wearer survive a round trip`() {
+        val gson = Gson()
+        val backup = LibraryBackup(
+            watches = listOf(
+                WatchDto(
+                    watchId = "501af8fd", deviceName = "Blue", wearerName = "Danny",
+                    colorArgb = 7, firstSeen = 1_000L, lastSeen = 2_000L
+                )
+            ),
+            collections = listOf(
+                CollectionDto(
+                    name = "Danny BC",
+                    sourceId = 12,
+                    filterJson = "{\"selectedPersonIds\":[2]}",
+                    ruleNames = RuleNames(
+                        people = listOf(NamedRef(2, "Danny")),
+                        tags = listOf(NamedRef(7, "Character:Hulk")),
+                        locations = listOf(NamedRef(1, "The Gorge"))
+                    )
+                )
+            )
+        )
+
+        val read = gson.fromJson(gson.toJson(backup), LibraryBackup::class.java)
+
+        assertEquals(backup, read)
+    }
+
+    @Test
     fun `an excuse names a property that exists`() {
         // Otherwise a column renamed out from under an excuse leaves the excuse covering nothing,
         // and the new name is missing with nothing to catch it.
@@ -197,7 +237,7 @@ class BackupCoverageTest {
         val read = gson.fromJson(gson.toJson(backup), LibraryBackup::class.java)
 
         assertEquals(backup, read)
-        assertEquals(6, read.formatVersion)
+        assertEquals(7, read.formatVersion)
     }
 
     /**

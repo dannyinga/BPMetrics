@@ -72,7 +72,10 @@ class BPMetricsApp : Application() {
      */
     fun openLibrary(): Boolean {
         databaseFailure?.let { return false }
-        return runCatching { libraryRepository }
+        // Opened, not just constructed. Room opens the file on the first query, so constructing
+        // the repository succeeds even for a library with no migration path, and the crash then
+        // came from the first screen to read it, on the main thread, past this guard.
+        return runCatching { libraryRepository.ensureOpen() }
             .onFailure {
                 databaseFailure = it
                 Log.e("BPMetricsApp", "The library could not be opened", it)

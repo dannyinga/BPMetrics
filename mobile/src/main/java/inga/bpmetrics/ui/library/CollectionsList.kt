@@ -60,7 +60,7 @@ fun CollectionsList(
     /** Pins or unpins it on the library bar, which is where saved views used to live. */
     onTogglePin: (CollectionSummary) -> Unit = {},
     /** Turns a smart collection back into a hand-made one, keeping whatever it already names. */
-    onClearRule: (CollectionSummary) -> Unit = {}
+    onStopUpdating: (CollectionSummary) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -96,7 +96,7 @@ fun CollectionsList(
                 onRemoveCover = { onRemoveCover(summary) },
                 onDelete = { onDelete(summary) },
                 onTogglePin = { onTogglePin(summary) },
-                onClearRule = { onClearRule(summary) }
+                onStopUpdating = { onStopUpdating(summary) }
             )
         }
     }
@@ -119,7 +119,7 @@ private fun CollectionCard(
     onRemoveCover: () -> Unit,
     onDelete: () -> Unit,
     onTogglePin: () -> Unit,
-    onClearRule: () -> Unit
+    onStopUpdating: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         inga.bpmetrics.ui.components.CoverBackground(
@@ -217,10 +217,12 @@ private fun CollectionCard(
                     )
                     if (summary.collection.isSmart) {
                         DropdownMenuItem(
-                            // Keeps whatever it names by hand and stops re-asking. The alternative
-                            // — deleting and rebuilding — throws away members the rule never found.
-                            text = { Text("Stop using a rule") },
-                            onClick = { open = false; onClearRule() }
+                            // Asks first, then keeps what the rule currently finds, as the editor's
+                            // "Keep these N and stop updating" does. The old item dropped the rule
+                            // outright, which emptied the collection of everything nobody had
+                            // named by hand.
+                            text = { Text("Stop updating…") },
+                            onClick = { open = false; onStopUpdating() }
                         )
                     }
                     DropdownMenuItem(

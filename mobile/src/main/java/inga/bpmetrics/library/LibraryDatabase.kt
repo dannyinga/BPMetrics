@@ -1539,10 +1539,23 @@ abstract class LibraryDatabase : RoomDatabase() {
         fun getInstance(context: Context): LibraryDatabase {
             return INSTANCE ?: synchronized(this) {
                 performPreMigrationBackup(context)
+                build(context, DB_NAME).also { INSTANCE = it }
+            }
+        }
+
+        /**
+         * The database under [name], with every migration, not yet opened.
+         *
+         * Room opens the file lazily on the first query, so this returns successfully even for a
+         * file it can't migrate. Anything that needs to know whether the library is usable must
+         * force the open: see [LibraryRepository.ensureOpen]. Separate from [getInstance] so a
+         * test can build one against a file of its own.
+         */
+        internal fun build(context: Context, name: String): LibraryDatabase =
                 Room.databaseBuilder(
                     context.applicationContext,
                     LibraryDatabase::class.java,
-                    DB_NAME
+                    name
                 )
                     .addMigrations(
                         MIGRATION_4_5,
@@ -1575,8 +1588,5 @@ abstract class LibraryDatabase : RoomDatabase() {
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.
                     .build()
-                    .also { INSTANCE = it }
-            }
-        }
     }
 }

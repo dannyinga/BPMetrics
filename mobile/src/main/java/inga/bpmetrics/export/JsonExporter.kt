@@ -117,8 +117,16 @@ data class LibraryBackup(
          *    every clock that depended on one. This is the fourth entry in this list of the same
          *    shape, which is why the coverage test now asserts the writer's arguments rather than
          *    only the format's fields.
+         *
+         * 7: a smart collection's rule survives the trip. A rule names people, tags, venues and
+         *    other collections by id, and every one of those gets a new id on import, so a rule
+         *    restored verbatim pointed at whatever now held those numbers ("Danny BC" matched
+         *    nothing; "Colin BC" matched one unrelated recording). Each collection now carries its
+         *    own id and a [RuleNames] table, so restore can translate every id in the rule.
+         *    A watch carries its wearer, colour and dates, which a restore used to drop, leaving
+         *    every watch's next sync unattributed.
          */
-        const val FORMAT_VERSION = 6
+        const val FORMAT_VERSION = 7
     }
 }
 
@@ -213,6 +221,23 @@ data class EventGroupDto(
  * [SavedAnalysisRecordDto.recordId] is remapped during restore. The rest of each row is a snapshot
  * and travels as-is: that is the whole point of a frozen analysis.
  */
+/** An id from the source library and the name that identifies it in any library. */
+data class NamedRef(val id: Long = 0L, val name: String = "")
+
+/**
+ * The names behind the ids in a collection's rule.
+ *
+ * People, venues and tags are matched by name on restore (tags as "Category:Tag", as everywhere
+ * else in the format), so these are what let an id in the rule be translated. Events and other
+ * collections need no table: the file already carries their source ids. Watch ids are the
+ * watch's own id and survive as they are.
+ */
+data class RuleNames(
+    val people: List<NamedRef> = emptyList(),
+    val tags: List<NamedRef> = emptyList(),
+    val locations: List<NamedRef> = emptyList()
+)
+
 /**
  * A selection, as a backup carries it.
  *
@@ -224,8 +249,18 @@ data class CollectionDto(
     val name: String = "",
     val notes: String = "",
     val createdAt: Long = 0L,
+    /**
+     * Its id in the library this came from, so another collection's rule that names it can be
+     * pointed at it again. 0 before format 7.
+     */
+    val sourceId: Long = 0L,
     /** The rule, if it is a smart collection. Serialised `FilterState`. */
     val filterJson: String? = null,
+    /**
+     * What the ids in [filterJson] meant, for the ones that don't survive an import as-is.
+     * Absent before format 7, which is why a rule from an older file can't be fully restored.
+     */
+    val ruleNames: RuleNames? = null,
     val excludedRecordJson: String = "",
     val isPinned: Boolean = false,
     /** Set when its numbers are frozen — what a saved analysis was before the fold. */
@@ -319,7 +354,17 @@ data class LocationDto(
 data class WatchDto(
     val watchId: String = "",
     val deviceName: String = "",
-    val lastKnownModel: String = ""
+    val lastKnownModel: String = "",
+    /**
+     * Who wears it, by name, as people are matched everywhere else in the format. Since format 7:
+     * without it a restore left every watch with no wearer, so its next recordings arrived
+     * unattributed until someone noticed.
+     */
+    val wearerName: String? = null,
+    val colorArgb: Int? = null,
+    /** When it was first and last heard from. 0 when unknown, and never the time of the restore. */
+    val firstSeen: Long = 0L,
+    val lastSeen: Long = 0L
 )
 
 /**
@@ -461,12 +506,20 @@ object JsonExporter {
         /** The venue registry, so events can name where they were. */
         locations: List<inga.bpmetrics.library.LocationEntity> = emptyList(),
         /** Saved export looks. Carried since format 6. */
-        presets: List<inga.bpmetrics.library.ExportPresetEntity> = emptyList()
+        presets: List<inga.bpmetrics.library.ExportPresetEntity> = emptyList(),
+        /**
+         * Every tag, so a collection rule naming one that no exported recording or event carries
+         * can still say what it meant. See [RuleNames].
+         */
+        tags: List<TagEntity> = emptyList()
     ): LibraryBackup {
         val locationNames = locations.associate { it.locationId to it.name }
         val categoryNames = categories.associate { it.categoryId to it.name }
         val peopleById = people.associateBy { it.personId }
         val eventsById = events.associateBy { it.eventId }
+        // Every tag this call can see, for naming the ones a rule refers to.
+        val tagsById = (tags + records.flatMap { it.tags } + eventTags.values.flatten())
+            .associateBy { it.tagId }
 
         // The events these recordings belong to, **and everything above them**.
         //
@@ -502,9 +555,21 @@ object JsonExporter {
             )
         }
 
-        val usedPeople = records
-            .mapNotNull { it.metadata.personId }
-            .distinct()
+        // The rules, read once: their people must travel too, and their ids need names.
+        val rules = collections.associate { backup ->
+            backup.collection.collectionId to
+                backup.collection.filterJson?.let { inga.bpmetrics.library.FilterCodec.parseOrNull(it) }
+        }
+        val exportedWatchIds = records.mapNotNull { it.metadata.watchId }.toSet()
+
+        // Everyone the file refers to, not only whoever made a recording in it. A watch's wearer
+        // and a person a rule names are matched by name on restore, which only works if that
+        // person is in the file.
+        val usedPeople = buildSet {
+            records.mapNotNullTo(this) { it.metadata.personId }
+            watches.filter { it.watchId in exportedWatchIds }.mapNotNullTo(this) { it.currentPersonId }
+            rules.values.forEach { rule -> rule?.selectedPersonIds?.let(::addAll) }
+        }
             .mapNotNull { peopleById[it] }
             .map { person ->
                 PersonDto(
@@ -521,7 +586,17 @@ object JsonExporter {
         val usedWatchIds = records.mapNotNull { it.metadata.watchId }.toSet()
         val usedWatches = watches
             .filter { it.watchId in usedWatchIds }
-            .map { WatchDto(it.watchId, it.deviceName, it.lastKnownModel) }
+            .map { watch ->
+                WatchDto(
+                    watchId = watch.watchId,
+                    deviceName = watch.deviceName,
+                    lastKnownModel = watch.lastKnownModel,
+                    wearerName = watch.currentPersonId?.let { peopleById[it]?.name },
+                    colorArgb = watch.colorArgb,
+                    firstSeen = watch.firstSeen,
+                    lastSeen = watch.lastSeen
+                )
+            }
 
         val dtos = records.map { record ->
             BpmRecordJsonDto(
@@ -597,7 +672,21 @@ object JsonExporter {
                     name = set.name,
                     notes = set.notes,
                     createdAt = set.createdAt,
+                    sourceId = set.collectionId,
                     filterJson = set.filterJson,
+                    ruleNames = rules[set.collectionId]?.let { rule ->
+                        RuleNames(
+                            people = rule.selectedPersonIds.mapNotNull { id ->
+                                peopleById[id]?.let { NamedRef(id, it.name) }
+                            },
+                            tags = rule.selectedTagIds.mapNotNull { id ->
+                                tagsById[id]?.let { NamedRef(id, it.qualified(categoryNames)) }
+                            },
+                            locations = rule.selectedLocationIds.mapNotNull { id ->
+                                locationNames[id]?.let { NamedRef(id, it) }
+                            }
+                        )
+                    },
                     excludedRecordJson = set.excludedRecordJson,
                     isPinned = set.isPinned,
                     frozenAt = set.frozenAt,

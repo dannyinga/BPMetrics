@@ -245,6 +245,7 @@ private fun StorageSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val storage by viewModel.storage.collectAsStateWithLifecycle()
     var confirming by remember { mutableStateOf<StorageInspector.Backup?>(null) }
+    var deletingBackup by remember { mutableStateOf<StorageInspector.Backup?>(null) }
 
     SettingsGroup("Storage", "What this app is using, and the backups it keeps") {
         val report = storage
@@ -286,12 +287,16 @@ private fun StorageSection(viewModel: SettingsViewModel) {
         }
 
         Spacer(Modifier.height(16.dp))
-        Label("Database backups")
+        Label("Earlier copies of the library")
         Hint(
             // Why this is worth a section: they have always been taken, and until now the only way
             // to reach one was a cable and adb.
-            "Taken automatically before each upgrade. Restoring replaces everything in the app " +
-                "with what that backup held."
+            //
+            // Called "Roll back" rather than "Restore" because the Backup section has a Restore
+            // that does the opposite: that one adds a file to the library, this one replaces the
+            // library outright. Two buttons with one name and opposite effects is how data is lost.
+            "Taken automatically before each upgrade and before each roll back. Rolling back " +
+                "replaces everything in the app with what that copy held."
         )
         Spacer(Modifier.height(6.dp))
 
@@ -308,10 +313,14 @@ private fun StorageSection(viewModel: SettingsViewModel) {
                             getDateString(backup.takenAtMs, ReaderClock),
                             style = MaterialTheme.typography.bodyMedium
                         )
-                        Hint(StorageInspector.formatSize(backup.bytes))
+                        Hint(
+                            (if (backup.isFromBeforeRollBack) "Your library just before a roll back"
+                            else "Before an upgrade") +
+                                " · " + StorageInspector.formatSize(backup.bytes)
+                        )
                     }
-                    TextButton(onClick = { confirming = backup }) { Text("Restore") }
-                    TextButton(onClick = { viewModel.deleteBackup(context, backup) }) {
+                    TextButton(onClick = { confirming = backup }) { Text("Roll back") }
+                    TextButton(onClick = { deletingBackup = backup }) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
                     }
                 }
@@ -322,13 +331,13 @@ private fun StorageSection(viewModel: SettingsViewModel) {
     confirming?.let { backup ->
         AlertDialog(
             onDismissRequest = { confirming = null },
-            title = { Text("Restore this backup?") },
+            title = { Text("Roll back to ${getDateString(backup.takenAtMs, ReaderClock)}?") },
             text = {
                 Text(
-                    "Everything currently in the app will be replaced with what this backup held " +
-                        "on ${getDateString(backup.takenAtMs, ReaderClock)}. Your current database is kept " +
-                        "alongside the backups in case you want it back, and BPMetrics will close " +
-                        "so the change can take effect."
+                    "Everything currently in the app will be replaced with what this copy held. " +
+                        "Anything recorded or changed since then goes. Your current library is " +
+                        "kept in this list as \"Your library just before a roll back\", so this " +
+                        "can be undone, and BPMetrics will close so the change can take effect."
                 )
             },
             confirmButton = {
@@ -336,11 +345,34 @@ private fun StorageSection(viewModel: SettingsViewModel) {
                     confirming = null
                     viewModel.restoreBackup(context, backup)
                 }) {
-                    Text("Restore", color = MaterialTheme.colorScheme.error)
+                    Text("Roll back", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { confirming = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    deletingBackup?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { deletingBackup = null },
+            title = { Text("Delete this copy?") },
+            text = {
+                Text(
+                    "The copy from ${getDateString(backup.takenAtMs, ReaderClock)} will be gone " +
+                        "for good, and you won't be able to roll back to it. Your library as it " +
+                        "is now isn't affected."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    deletingBackup = null
+                    viewModel.deleteBackup(context, backup)
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingBackup = null }) { Text("Cancel") }
             }
         )
     }
@@ -430,7 +462,7 @@ fun shareDiagnostics(context: Context, version: String) {
 /** Closes the app so a restored database is picked up on the next launch. */
 private fun relaunch(context: Context) {
     // A Toast, not [Feedback]: the app closes a moment later, and a snackbar would go with it.
-    Toast.makeText(context, "Restored. Reopen BPMetrics.", Toast.LENGTH_LONG).show()
+    Toast.makeText(context, "Rolled back. Reopen BPMetrics.", Toast.LENGTH_LONG).show()
     (context as? android.app.Activity)?.finishAffinity()
     // The process is what holds the open database handle, so it has to go with the activity.
     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
@@ -493,7 +525,7 @@ private fun BackupSection(viewModel: SettingsViewModel) {
                 enabled = !busy,
                 onClick = { openLauncher.launch(arrayOf("*/*")) },
                 modifier = Modifier.weight(1f)
-            ) { Text("Restore") }
+            ) { Text("Restore from file") }
         }
 
         Spacer(Modifier.height(8.dp))

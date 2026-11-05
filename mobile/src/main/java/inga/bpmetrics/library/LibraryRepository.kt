@@ -417,7 +417,7 @@ class LibraryRepository(
 
         // Only auto-name if it's a fresh recording without a title (and not from CSV with a title)
         if (customTitle == null && record.title.isNullOrBlank()) {
-            autoNameRecord(recordId, "Untitled")
+            autoNameRecord(recordId, AutoTitle.UNTITLED)
         }
         
         // A recording arriving may land inside an existing window, so where it lives is not
@@ -924,6 +924,17 @@ class LibraryRepository(
 
     suspend fun setLocationCoordinates(locationId: Long, latitude: Double?, longitude: Double?) =
         locationDao.updateCoordinates(locationId, latitude, longitude)
+
+    /**
+     * Opens the database now, running any migrations, instead of on the first query.
+     *
+     * For the startup guard in [inga.bpmetrics.BPMetricsApp.openLibrary]: a library that can't be
+     * opened has to fail there, where it is caught and the Recovery screen shown, not later in
+     * whichever screen reads it first.
+     */
+    fun ensureOpen() {
+        database.openHelper.writableDatabase
+    }
 
     suspend fun countEventsAt(locationId: Long): Int = locationDao.countEventsAt(locationId)
 
@@ -2127,16 +2138,53 @@ class LibraryRepository(
     }
 
     /**
-     * Re-attributes records from one watch within a date range to a person.
+     * Adds a watch from a backup, as it was: its wearer, colour, and when it was first and last
+     * heard from.
      *
-     * The recovery path for recordings that arrived before anyone had been assigned to the watch.
+     * Not [registerWatch], which stamps both dates with now. On a restore that made every watch
+     * "last seen" on the day of the restore, and the wearer wasn't carried at all, so every
+     * watch's next sync arrived unattributed. A date the file doesn't have stays 0 ("not known"),
+     * which the Watches screen leaves out rather than showing a made-up date.
+     *
+     * Only for a watch the library doesn't have yet: one it already knows keeps what it has here.
+     */
+    suspend fun restoreWatch(
+        watchId: String,
+        deviceName: String,
+        model: String,
+        personId: Long?,
+        colorArgb: Int?,
+        firstSeen: Long,
+        lastSeen: Long
+    ) {
+        watchDao.insertWatch(
+            WatchEntity(
+                watchId = watchId,
+                deviceName = deviceName.trim(),
+                lastKnownModel = model,
+                colorArgb = colorArgb,
+                firstSeen = firstSeen,
+                lastSeen = lastSeen,
+                currentPersonId = personId,
+                currentWearerName = personId?.let { personDao.getPerson(it)?.name }.orEmpty()
+            )
+        )
+    }
+
+    /** How many recordings [claimPastRecords] would change. See [PersonDao.countClaimablePastRecords]. */
+    suspend fun countClaimablePastRecords(watchId: String, fromPersonId: Long?, toPersonId: Long): Int =
+        personDao.countClaimablePastRecords(watchId, fromPersonId, toPersonId)
+
+    /**
+     * Gives a watch's earlier recordings to [toPersonId]: those with no wearer, or worn by
+     * [fromPersonId] (the watch's wearer before this change). See [PersonDao.claimPastRecords].
      *
      * @return how many records were changed.
      */
-    suspend fun reattributeRecords(watchId: String, personId: Long, fromDate: Long, toDate: Long): Int {
-        val person = personDao.getPerson(personId) ?: return 0
-        val changed = personDao.reattributeRecords(watchId, personId, person.name, fromDate, toDate)
-        Log.d(tag, "Re-attributed $changed record(s) from watch $watchId to '${person.name}'")
+    suspend fun claimPastRecords(watchId: String, fromPersonId: Long?, toPersonId: Long): Int {
+        val person = personDao.getPerson(toPersonId) ?: return 0
+        val changed = personDao.claimPastRecords(watchId, fromPersonId, toPersonId, person.name)
+        Log.d(tag, "Gave $changed earlier record(s) from watch $watchId to '${person.name}'")
         return changed
     }
 
@@ -2532,10 +2580,13 @@ class LibraryRepository(
 
         tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
 
-        // Auto-Rename logic: Pull default naming category from settings
+        // Auto-naming, but only over a title the app made up. A title someone typed is theirs:
+        // tagging "Mom's birthday" with a character must not turn it into "Hulk 12". See [AutoTitle].
         val defaultNamingCatId = settingsRepository.defaultNamingCategoryId.first()
-        if (tag != null && tag.parentCategoryId == defaultNamingCatId) {
-            autoNameRecord(recordId, tag.name)
+        if (tag != null && defaultNamingCatId != null && tag.parentCategoryId == defaultNamingCatId) {
+            val current = runCatching { recordDao.getRecordEntity(recordId).title }.getOrNull()
+            val namers = tagDao.getTagsByCategoryFlow(defaultNamingCatId).first().map { it.name }
+            if (AutoTitle.isGenerated(current, namers)) autoNameRecord(recordId, tag.name)
         }
         return displaced
     }
@@ -2549,6 +2600,18 @@ class LibraryRepository(
     suspend fun removeTagFromRecord(recordId: Long, tagId: Long) {
         tagDao.untagRecord(recordId, tagId)
     }
+
+    /**
+     * Puts back a tag that was just removed, for Undo.
+     *
+     * Not [addTagToRecord]: that displaces a sibling in the same category and may auto-name the
+     * recording, and an Undo has to return things to exactly how they were, not apply the tag anew.
+     */
+    suspend fun restoreRecordTag(recordId: Long, tagId: Long) {
+        tagDao.insertRecordTagCrossRef(RecordTagCrossRef(recordId, tagId))
+    }
+
+    suspend fun getTag(tagId: Long): TagEntity? = tagDao.getTagById(tagId)
 
     // --- Tags on events and groups ---
     //

@@ -114,19 +114,41 @@ interface PersonDao {
     )
     suspend fun assignPersonToRecords(recordIds: List<Long>, personId: Long?, wearerName: String): Int
 
-    /** Re-attributes a watch's records within a date range, for correcting a late-named watch. */
+    /**
+     * How many of a watch's recordings [claimPastRecords] would change: those with no wearer, or
+     * worn by [fromPersonId], and not already [toPersonId]'s.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM bpm_records
+        WHERE watchId = :watchId
+          AND (personId IS NULL OR personId = :fromPersonId)
+          AND (personId IS NULL OR personId != :toPersonId)
+        """
+    )
+    suspend fun countClaimablePastRecords(watchId: String, fromPersonId: Long?, toPersonId: Long): Int
+
+    /**
+     * Gives a watch's earlier recordings to its new wearer, for a watch that was named late or
+     * handed on.
+     *
+     * Only recordings with no wearer, or worn by the watch's previous wearer ([fromPersonId]).
+     * A recording someone deliberately attributed to anybody else stays theirs. The old version
+     * of this took everything the watch had ever sent, so handing a watch from Danny to Colin and
+     * pressing "Apply to past" re-labelled Tyler's festival as Colin's too.
+     */
     @Query(
         """
         UPDATE bpm_records
-        SET personId = :personId, wearerName = :wearerName
-        WHERE watchId = :watchId AND date BETWEEN :fromDate AND :toDate
+        SET personId = :toPersonId, wearerName = :wearerName
+        WHERE watchId = :watchId
+          AND (personId IS NULL OR personId = :fromPersonId)
         """
     )
-    suspend fun reattributeRecords(
+    suspend fun claimPastRecords(
         watchId: String,
-        personId: Long,
-        wearerName: String,
-        fromDate: Long,
-        toDate: Long
+        fromPersonId: Long?,
+        toPersonId: Long,
+        wearerName: String
     ): Int
 }
