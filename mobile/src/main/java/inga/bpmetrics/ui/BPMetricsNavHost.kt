@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import inga.bpmetrics.library.FilterState
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -85,6 +86,10 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
 
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     val currentDestination = AppDestination.fromRoute(currentRoute)
+    // Export past step 1 gives the screen to the export: its own Back walks the steps, and the
+    // tab bar took room the Look step needs on a small phone (Audit §3 Export).
+    val exportStep by exportViewModel.step.collectAsStateWithLifecycle()
+    val inExport = currentRoute == Routes.EXPORT && exportStep != inga.bpmetrics.ui.export.ExportStep.SOURCE
 
     val selectedRecordIds by libraryViewModel.selectedRecordIds.collectAsState()
     val queue by RenderQueueManager.queue.collectAsState(initial = emptyList())
@@ -176,7 +181,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 // On every top-level section, not only the four in it. A management screen is a
                 // sibling of the others, not something pushed on top of one, so removing the
                 // way back would strand it. No item is selected there, which is honest.
-                if (currentDestination != null) {
+                if (currentDestination != null && !inExport) {
                     inga.bpmetrics.ui.navigation.AppNavigationBar(
                         currentRoute = currentRoute,
                         activeRenderCount = activeRenderCount,

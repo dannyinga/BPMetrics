@@ -164,6 +164,28 @@ class ClipRetimingTest {
         assertFalse(nowhere.selected)
     }
 
+    /** Moving it back undoes the untick it caused (Audit #19). */
+    @Test
+    fun `a clip moved back into range is ticked again`() {
+        val ticked = ClipRetiming.retime(picked(screenRecording()), setStart, set).copy(selected = true)
+        val nowhere = ClipRetiming.retime(ticked, setStart + 10 * 60 * minute, set)
+
+        val back = ClipRetiming.retime(nowhere, setStart, set)
+
+        assertTrue(back.selected)
+        assertFalse(back.untickedByTime)
+    }
+
+    /** One unticked by hand stays unticked wherever it's moved. */
+    @Test
+    fun `a clip unticked by hand isn't ticked by a correction`() {
+        val unticked = ClipRetiming.retime(picked(screenRecording()), setStart, set)
+
+        val moved = ClipRetiming.retime(unticked, setStart + 2_000L, set)
+
+        assertFalse(moved.selected)
+    }
+
     /** The old sparkline drew the old stretch, and must not sit under the new time. */
     @Test
     fun `a correction clears the sparkline so the wrong evening is not shown`() {

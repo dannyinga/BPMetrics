@@ -13,6 +13,13 @@
       a broader grant than this needs. minSdk is 31, so the older half is not dead weight.
     -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!--
+      Android 14's "Allow limited access": the videos someone chose to share, and only those.
+      Without declaring it, choosing limited access gives a one-time compatibility grant of
+      READ_MEDIA_VIDEO that looks like full access, and Export then said nothing was filmed when
+      the footage just hadn't been shared (Audit #37).
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />

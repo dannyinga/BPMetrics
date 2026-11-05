@@ -86,6 +86,7 @@ fun ExportUtilityScreen(
     val step by viewModel.step.collectAsStateWithLifecycle()
     val furthest by viewModel.furthestStep.collectAsStateWithLifecycle()
     val canAdvance by viewModel.canAdvance.collectAsStateWithLifecycle()
+    val nextBlockedReason by viewModel.nextBlockedReason.collectAsStateWithLifecycle()
     val sourceLabel by viewModel.sourceLabel.collectAsStateWithLifecycle()
     // What gets *drawn*, as opposed to what labels the step. The two differ on purpose: a step
     // header wants "Tape B" and a caption wants "Tape B | Levitape". See [ExportUtilityViewModel].
@@ -269,17 +270,23 @@ fun ExportUtilityScreen(
 
     // Whether the gallery can be read at all. Held in the composition rather than asked for inline
     // because it changes while this screen is open — from the prompt below, and from Settings.
-    var canReadVideos by remember { mutableStateOf(VideoExporter.hasVideoPermissions(context)) }
+    var mediaAccess by remember { mutableStateOf(VideoExporter.mediaAccess(context)) }
+    val canReadVideos = mediaAccess != VideoExporter.MediaAccess.NONE
+
+    // What can be seen changed (more shared, or all allowed): look again. The list merges, so
+    // nothing already chosen is lost.
+    fun accessChanged(now: VideoExporter.MediaAccess) {
+        if (now != mediaAccess && now != VideoExporter.MediaAccess.NONE) viewModel.forgetClips()
+        mediaAccess = now
+        viewModel.setMediaAccessRefused(now == VideoExporter.MediaAccess.NONE)
+    }
     // Asked at most once per visit. Android stops showing the dialog after a refusal, so retrying
     // on every recomposition would be an invisible no-op; the refused state offers Settings instead.
     var permissionAsked by rememberSaveable { mutableStateOf(false) }
 
     val askForVideos = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        canReadVideos = granted
-        viewModel.setMediaAccessRefused(!granted)
-    }
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { accessChanged(VideoExporter.mediaAccess(context)) }
 
     // Granting happens in Settings, which means leaving the app and coming back — so the answer has
     // to be re-read on resume. Without this the reader returns having just allowed it and still
@@ -288,9 +295,8 @@ fun ExportUtilityScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                val allowed = VideoExporter.hasVideoPermissions(context)
-                canReadVideos = allowed
-                if (allowed) viewModel.setMediaAccessRefused(false)
+                val now = VideoExporter.mediaAccess(context)
+                if (now != VideoExporter.MediaAccess.NONE) accessChanged(now)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -300,8 +306,10 @@ fun ExportUtilityScreen(
     // Clips are looked up when step 2 is reached, not when the source changes. This hits the
     // MediaStore, and querying on every tap in step 1 would search for sources the user is only
     // browsing past.
-    LaunchedEffect(step, records, canReadVideos) {
+    LaunchedEffect(step, records, mediaAccess) {
         if (step != ExportStep.CONTENTS || records.isEmpty()) return@LaunchedEffect
+        // Already found for these recordings: coming back to this step keeps what was chosen.
+        if (viewModel.hasClipsFor(records.map { it.metadata.recordId }.toSet())) return@LaunchedEffect
 
         // Ask before querying. A MediaStore query without permission returns an empty cursor rather
         // than failing, so going straight to it reports a phone full of footage as having none —
@@ -313,7 +321,7 @@ fun ExportUtilityScreen(
                 // "no video from this time", and showing that behind the dialog would be the app
                 // answering the question while it is still asking it.
                 viewModel.setLoadingClips()
-                askForVideos.launch(VideoExporter.getVideoPermissionString())
+                askForVideos.launch(VideoExporter.videoPermissionsToRequest())
             } else {
                 viewModel.setMediaAccessRefused(true)
             }
@@ -388,9 +396,11 @@ fun ExportUtilityScreen(
             }
         },
         bottomBar = {
-            // Step 4 has no "next" — the queue is the end of the flow, and its own actions live
-            // on the job cards.
-            if (step != ExportStep.MAKE) {
+            // Step 4 has Back and no Next: the queue is the end of the flow. It had neither, so the
+            // only way back to change something was the system back gesture.
+            // On a surface of its own, so the buttons read as a bar rather than floating over the
+            // list's last rows (Audit §6 Export).
+            androidx.compose.material3.Surface(tonalElevation = 3.dp) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -403,8 +413,21 @@ fun ExportUtilityScreen(
                     } else {
                         Spacer(Modifier.width(1.dp))
                     }
-                    Button(onClick = { viewModel.next() }, enabled = canAdvance) {
-                        Text("Next")
+                    // The reason beside a disabled Next, so it never just doesn't respond.
+                    if (step != ExportStep.MAKE) Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (step != ExportStep.SOURCE) {
+                            nextBlockedReason?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                            }
+                        }
+                        Button(onClick = { viewModel.next() }, enabled = canAdvance) {
+                            Text("Next")
+                        }
                     }
                 }
             }
@@ -460,6 +483,10 @@ fun ExportUtilityScreen(
                                 loading = loadingClips,
                                 hasNoClips = hasNoClips,
                                 mediaAccessRefused = mediaAccessRefused,
+                                partialAccess = mediaAccess == VideoExporter.MediaAccess.PARTIAL,
+                                onChooseMore = {
+                                    askForVideos.launch(VideoExporter.videoPermissionsToRequest())
+                                },
                                 onOpenSettings = {
                                     context.startActivity(
                                         android.content.Intent(
@@ -589,10 +616,26 @@ fun ExportUtilityScreen(
                         }
                     )
                 } else {
+                    // What identifies this batch: a change to any part of it is a new one to start.
+                    val batch = listOf(source, pendingJobs.map { it.clip.uri to it.recordIds }, preset, imageTitle)
+                    val queuedBatch by viewModel.queuedBatch.collectAsStateWithLifecycle()
+                    val label = imageTitle?.takeIf { it.isNotBlank() } ?: scopeTitle
                     MakeStep(
-                        estimate = viewModel.estimate(pendingJobs, fallbackDurationMs),
+                        estimate = viewModel.estimate(
+                            pendingJobs, fallbackDurationMs,
+                            titles = clipTitles,
+                            fallbackTitle = label,
+                            freeBytes = remember(pendingJobs) {
+                                runCatching { context.cacheDir.usableSpace }.getOrNull()
+                            }
+                        ),
+                        format = "MP4 · ${preset.width}×${preset.height} · " +
+                            if (preset.matchSourceFrameRate && pendingJobs.isNotEmpty()) "the clips' frame rate"
+                            else "${preset.frameRate} fps",
+                        queued = queuedBatch == batch,
                         onOpenQueue = onOpenQueue,
                         onQueue = {
+                            viewModel.markQueued(batch)
                             viewModel.rememberLastUsed()
                             queueBatch(
                                 context = context,
@@ -703,22 +746,94 @@ private fun queueBatch(
 @Composable
 private fun MakeStep(
     estimate: ExportEstimate,
+    /** "MP4 · 1920×1080 · 30 fps". */
+    format: String,
+    /** Whether this exact batch has already been queued. See [ExportUtilityViewModel.queuedBatch]. */
+    queued: Boolean,
     onQueue: () -> Unit,
     onOpenQueue: () -> Unit
 ) {
-    var queued by remember { mutableStateOf(false) }
+    if (!queued) {
+        // What's about to happen, before it does: each video, how long and how big, the format,
+        // and where it'll be. It used to be a count and a Start button, and a batch that couldn't
+        // fit was queued anyway and failed seconds in (Audit #38).
+        androidx.compose.foundation.lazy.LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            item {
+                Text(
+                    "${estimate.jobCount} video${if (estimate.jobCount == 1) "" else "s"}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "$format · saved to Movies/BPMetrics",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            items(estimate.items.size) { i ->
+                val item = estimate.items[i]
+                Row(Modifier.fillMaxWidth()) {
+                    Text(
+                        item.title.ifBlank { "Video ${i + 1}" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "${formatMinutes(item.durationMs)} · ${formatSize(item.bytes)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            item {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "About ${formatSize(estimate.approxBytes)} in all, roughly " +
+                        "${formatMinutes(estimate.approxRenderMs)} to render.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    "Needs ${formatSize(estimate.requiredFreeBytes)} free while it renders" +
+                        (estimate.freeBytes?.let { "; this phone has ${formatSize(it)}." } ?: "."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (estimate.fits) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error
+                )
+                if (!estimate.fits) {
+                    Text(
+                        "Not enough space. Free some up, or export fewer or shorter clips.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onQueue, enabled = estimate.fits) {
+                    Text("Start ${estimate.jobCount}")
+                }
+            }
+        }
+        return
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        if (queued) {
+        run {
             // The confirmation, and a way through to watch it — not the queue itself. Ending the
             // flow by listing every render ever made turned "your export has started" into "here
-            // is your backlog".
+            // is your backlog". Kept in the view model, so leaving and coming back says "Queued"
+            // rather than offering to start the same batch a second time.
             Text(
-                "Started",
+                "Queued",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
@@ -730,25 +845,7 @@ private fun MakeStep(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(20.dp))
-            Button(onClick = onOpenQueue) { Text("Watch the render queue") }
-        } else {
-            Text(
-                "${estimate.jobCount} export${if (estimate.jobCount == 1) "" else "s"}",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "About ${formatSize(estimate.approxBytes)}, roughly " +
-                    "${formatMinutes(estimate.approxRenderMs)} to render, for " +
-                    "${formatMinutes(estimate.totalDurationMs)} of video.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(20.dp))
-            Button(onClick = { onQueue(); queued = true }) {
-                Text("Start ${estimate.jobCount}")
-            }
+            Button(onClick = onOpenQueue) { Text("Open the render queue") }
         }
     }
 }
@@ -911,6 +1008,23 @@ private fun LookStep(
                     }
                 }
                 Spacer(Modifier.height(12.dp))
+            }
+
+            // The preview must not look like a render that won't happen. A clip whose corrected
+            // time lands where nobody was recording is still shown, so it can be corrected back,
+            // and says plainly that it is left out until then (Audit #19).
+            if (!isImage && previewing != null && !previewing.selected) {
+                Text(
+                    if (previewing.recordIds.isEmpty()) {
+                        "Not exported: nobody was recording at this clip's time. Correct the time " +
+                            "below and it's ticked again."
+                    } else {
+                        "Not exported: this clip isn't ticked."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+                Spacer(Modifier.height(8.dp))
             }
 
             if (!isImage && previewing != null && records.isNotEmpty()) {

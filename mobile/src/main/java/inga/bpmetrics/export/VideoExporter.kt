@@ -48,13 +48,57 @@ import kotlin.math.roundToInt
 object VideoExporter {
 
     /**
+     * The item Media3 renders, with what each kind of input needs.
+     *
+     * An image (the plain backdrop used when there is no footage) has no frame rate of its own, and
+     * Media3's image loader refuses one without it: `checkState(frameRate != RATE_UNSET_INT)`. The
+     * render-queue rewrite (135a468) dropped the call, and every video without footage failed
+     * with "There was an error encoding" (Audit #35). Here as a function so a test can hold it.
+     */
+    internal fun editedItem(
+        mediaItem: MediaItem,
+        effects: List<Effect>,
+        isInputImage: Boolean,
+        frameRate: Int
+    ): EditedMediaItem = EditedMediaItem.Builder(mediaItem)
+        .setEffects(Effects(emptyList(), effects))
+        .setRemoveAudio(isInputImage)
+        .apply { if (isInputImage) setFrameRate(frameRate) }
+        .build()
+
+    /**
      * Roughly how much room a render needs, as a multiple of its expected size.
      *
      * Generous, because the staged copy in the cache and the finished copy at its destination both
      * exist at once, and an encoder that runs out of room part way leaves a mess rather than an
      * error.
      */
-    private const val SPACE_SAFETY_FACTOR = 2.5
+    /** Room a render needs beyond the finished file: Media3 writes intermediates alongside it. */
+    const val SPACE_SAFETY_FACTOR = 2.5
+
+    /** What one render will weigh, and the free space it needs while it runs. */
+    data class Sizing(val bitrate: Int, val bytes: Long) {
+        val requiredFreeBytes: Long get() = (bytes * SPACE_SAFETY_FACTOR).toLong()
+    }
+
+    /**
+     * The bitrate a render uses and what the file will weigh.
+     *
+     * One sum for the render and for step 4. Step 4 used the preset's two flat bitrates, which the
+     * render never read, and showed the file's size where the render checked for 2.5 times it:
+     * "about 1.9 GB" promised, then 4,670 MB required, and the job failed in seconds (Audit #38).
+     *
+     * Footage gets about 0.13 bits per pixel per frame (about 8 Mbps at 1080p30), clamped to 2 to
+     * 50 Mbps; a plain background about 0.04 (about 2.5 Mbps), clamped to 1 to 15 Mbps.
+     */
+    fun sizing(width: Int, height: Int, fps: Int, hasOverlay: Boolean, durationMs: Long): Sizing {
+        val bitsPerPixel = if (hasOverlay) 0.13 else 0.04
+        val calculated = (width.toLong() * height.toLong() * fps.toLong() * bitsPerPixel).toLong()
+        val bitrate = if (hasOverlay) calculated.coerceIn(2_000_000L, 50_000_000L).toInt()
+            else calculated.coerceIn(1_000_000L, 15_000_000L).toInt()
+        val bytes = (bitrate.toLong() / 8) * (durationMs / 1000).coerceAtLeast(1)
+        return Sizing(bitrate, bytes)
+    }
     private const val TAG = "VideoExporter"
 
     /**
@@ -136,24 +180,13 @@ object VideoExporter {
             config.frameRate
         }
 
-        // Scale target bitrate dynamically based on total pixels and frame rate:
-        // Overlay video gets ~0.13 bits per pixel per frame (e.g. ~8 Mbps for 1080p @ 30fps)
-        // Solid black background gets ~0.04 bits per pixel per frame (e.g. ~2.5 Mbps for 1080p @ 30fps)
-        val bitsPerPixel = if (config.overlayVideoUri != null) 0.13 else 0.04
-        val calculatedBitrate = (width.toLong() * height.toLong() * fps.toLong() * bitsPerPixel).toLong()
-
-        // Clamp to sensible ranges (Overlay: 2 Mbps to 50 Mbps; Solid: 1 Mbps to 15 Mbps)
-        val targetBitrate = if (config.overlayVideoUri != null) {
-            calculatedBitrate.coerceIn(2_000_000L, 50_000_000L).toInt()
-        } else {
-            calculatedBitrate.coerceIn(1_000_000L, 15_000_000L).toInt()
-        }
+        // The bitrate and the size, by the same sum step 4 shows before anything is queued.
+        val sized = sizing(width, height, fps, hasOverlay = config.overlayVideoUri != null, durationMs = totalDataDurationMs)
+        val targetBitrate = sized.bitrate
 
         // Refuse a render there is plainly no room for, rather than discovering it part way and
-        // leaving the phone worse off than before it started. The bitrate and duration say what
-        // the finished video will weigh, which is all this needs to know.
-        val estimatedBytes = (targetBitrate.toLong() / 8) * (totalDataDurationMs / 1000).coerceAtLeast(1)
-        val requiredBytes = (estimatedBytes * SPACE_SAFETY_FACTOR).toLong()
+        // leaving the phone worse off than before it started.
+        val requiredBytes = sized.requiredFreeBytes
         val freeBytes = context.cacheDir.usableSpace
         if (freeBytes < requiredBytes) {
             throw IOException(
@@ -263,10 +296,7 @@ object VideoExporter {
         ))
         effectList.add(OverlayEffect(listOf(canvasOverlay)))
 
-        val editedMediaItem = EditedMediaItem.Builder(mediaItem)
-            .setEffects(Effects(emptyList(), effectList))
-            .setRemoveAudio(isInputImage)
-            .build()
+        val editedMediaItem = editedItem(mediaItem, effectList, isInputImage, fps)
 
         // 6. Start Export on Main Thread
         return@withContext withContext(Dispatchers.Main) {
@@ -680,9 +710,38 @@ object VideoExporter {
      * same answer unless someone checks. That is exactly how a fresh install — which has no runtime
      * grants, whatever the manifest says — came to report a library full of footage as having none.
      */
-    fun hasVideoPermissions(context: Context): Boolean =
-        androidx.core.content.ContextCompat.checkSelfPermission(
-            context,
-            getVideoPermissionString()
+    fun hasVideoPermissions(context: Context): Boolean = mediaAccess(context) != MediaAccess.NONE
+
+    /** How much of the gallery this app may read. */
+    enum class MediaAccess { FULL, PARTIAL, NONE }
+
+    /**
+     * Full, partial or none. Partial is Android 14's "Allow limited access": only the videos
+     * someone picked are visible, so finding nothing proves nothing about what was filmed.
+     */
+    fun mediaAccess(context: Context): MediaAccess {
+        fun granted(permission: String) = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, permission
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        return when {
+            granted(getVideoPermissionString()) -> MediaAccess.FULL
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                granted(android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) -> MediaAccess.PARTIAL
+            else -> MediaAccess.NONE
+        }
+    }
+
+    /**
+     * What to ask for. On Android 14 and later both, which is what makes the system offer "Select
+     * photos and videos" and, asked again with partial access, "Choose more".
+     */
+    fun videoPermissionsToRequest(): Array<String> =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            arrayOf(
+                android.Manifest.permission.READ_MEDIA_VIDEO,
+                android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            )
+        } else {
+            arrayOf(getVideoPermissionString())
+        }
 }

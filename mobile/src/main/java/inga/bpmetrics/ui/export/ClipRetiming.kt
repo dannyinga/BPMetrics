@@ -101,13 +101,16 @@ object ClipRetiming {
         records: List<BpmRecordWithPoints>
     ): ClipSelection {
         val cast = castFor(clip, records, selection.recordIds)
+        val wanted = selection.selected || selection.untickedByTime
         return selection.copy(
             clip = clip,
             originalClip = originalClip,
             recordIds = cast,
             // A clip nobody was recording during cannot be exported with a graph, so it cannot
-            // stay ticked — the same rule the Contents step already applies.
-            selected = selection.selected && cast.isNotEmpty(),
+            // stay ticked — the same rule the Contents step already applies. Remembered, so a
+            // correction back into range ticks it again.
+            selected = wanted && cast.isNotEmpty(),
+            untickedByTime = wanted && cast.isEmpty(),
             sparks = emptyList(),
             bpmScale = null
         )

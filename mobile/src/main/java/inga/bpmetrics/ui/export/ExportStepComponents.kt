@@ -348,6 +348,10 @@ private fun SourceRow(
                     // row is, which a cover says better and does not need repeating beside.
                     inga.bpmetrics.ui.components.CoverThumbnail(null, placeholder = placeholder)
                     Spacer(Modifier.width(12.dp))
+                } else if (placeholder != null) {
+                    // The slot kept empty over a cover, so every row's text starts at the same
+                    // inset. It started 46dp further left on rows with a picture.
+                    Spacer(Modifier.width(34.dp + 12.dp))
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -402,6 +406,13 @@ fun ContentsStep(
     mediaAccessRefused: Boolean = false,
     /** Takes the reader to the one place a refused permission can be undone. */
     onOpenSettings: () -> Unit = {},
+    /**
+     * Only the videos someone chose to share can be seen (Android 14's limited access). Finding
+     * nothing then proves nothing, and saying "nothing was filmed" would be false (Audit #37).
+     */
+    partialAccess: Boolean = false,
+    /** Asks again, which with limited access lets someone pick more videos to share. */
+    onChooseMore: () -> Unit = {},
     oldestFirst: Boolean,
     onToggleOrder: () -> Unit,
     onSelectAll: (Boolean) -> Unit,
@@ -477,17 +488,26 @@ fun ContentsStep(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                "No video from this time",
+                if (partialAccess) "None of the videos you've shared" else "No video from this time",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Nothing on this phone was filmed while these recordings were running. The export " +
-                    "will draw the curves on a plain background instead.",
+                if (partialAccess) {
+                    "You've shared only some videos with BPMetrics, and none of them were filmed " +
+                        "while these recordings were running. Share more to look through the rest."
+                } else {
+                    "Nothing on this phone was filmed while these recordings were running. The " +
+                        "export will draw the curves on a plain background instead."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (partialAccess) {
+                Spacer(Modifier.height(12.dp))
+                ShareMoreButtons(onChooseMore, onAllowAll = onOpenSettings)
+            }
             // The way out of "no video" that did not exist: the footage is often on the phone, just
             // stamped with the wrong time. Choose it here and set when it was really filmed.
             onAddVideo?.let { add ->
@@ -524,6 +544,18 @@ fun ContentsStep(
     val selectable = clips.count { it.recordIds.isNotEmpty() }
 
     Column(Modifier.fillMaxSize()) {
+        // With limited access, what's listed is only what was shared. Said above the list, so it
+        // doesn't read as everything that was filmed.
+        if (partialAccess) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Text(
+                    "You've shared only some videos, so clips you haven't shared aren't listed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ShareMoreButtons(onChooseMore, onAllowAll = onOpenSettings)
+            }
+        }
         // Outside the list rather than the first item in it. A day of filming is forty-odd clips,
         // and as an item this scrolled away after the first two — taking with it the running count
         // of what is ticked and the only way to clear the lot. Both are needed most at the bottom
@@ -869,5 +901,17 @@ private fun ClipSparkline(
 
             drawPath(path, colour, style = Stroke(width = 3f))
         }
+    }
+}
+
+/**
+ * The two ways out of limited media access: pick more videos to share, or allow them all in the
+ * app's settings, which is the only place full access can be given once limited was chosen.
+ */
+@Composable
+private fun ShareMoreButtons(onChooseMore: () -> Unit, onAllowAll: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.material3.OutlinedButton(onClick = onChooseMore) { Text("Choose more") }
+        androidx.compose.material3.TextButton(onClick = onAllowAll) { Text("Allow all") }
     }
 }

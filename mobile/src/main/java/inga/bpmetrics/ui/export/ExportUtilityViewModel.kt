@@ -184,6 +184,12 @@ data class ClipSelection(
     val recordIds: Set<Long>,
     val selected: Boolean,
     /**
+     * Unticked by a time correction that put it where nobody was recording, rather than by hand.
+     * Correcting it back ticks it again; it used to stay unticked while the preview still showed
+     * it, so the render quietly left out a clip that looked chosen (Audit #19).
+     */
+    val untickedByTime: Boolean = false,
+    /**
      * What everyone's heart rate did during this clip, for deciding whether it is worth overlaying.
      *
      * A filename and a timestamp say nothing about whether the moment was any good. A glance at the
@@ -427,8 +433,24 @@ data class ExportEstimate(
     val jobCount: Int,
     val totalDurationMs: Long,
     val approxBytes: Long,
-    val approxRenderMs: Long
-)
+    val approxRenderMs: Long,
+    /** Each video the batch makes, for the review list on step 4. */
+    val items: List<EstimateItem> = emptyList(),
+    /**
+     * Free space the batch needs: every finished file, plus room for the biggest render's working
+     * files. The same factor the render checks against, so a batch that passes here doesn't fail
+     * there.
+     */
+    val requiredFreeBytes: Long = 0L,
+    /** Free space now, or null when it couldn't be read. */
+    val freeBytes: Long? = null
+) {
+    /** Whether it fits. Unknown free space is let through: the render checks again. */
+    val fits: Boolean get() = freeBytes == null || freeBytes >= requiredFreeBytes
+}
+
+/** One video in a batch, as step 4 lists it. */
+data class EstimateItem(val title: String, val durationMs: Long, val bytes: Long)
 
 /**
  * Drives the export utility.
@@ -1229,25 +1251,62 @@ class ExportUtilityViewModel(
      * approximate and labelled as such — the alternative is finding out after twenty minutes of
      * rendering that there was no room, which this app has already done to someone once.
      */
-    fun estimate(jobs: List<ClipSelection>, fallbackDurationMs: Long): ExportEstimate {
+    fun estimate(
+        jobs: List<ClipSelection>,
+        fallbackDurationMs: Long,
+        /** What each clip will be called, by its uri; [fallbackTitle] for the plain-background one. */
+        titles: Map<String, String> = emptyMap(),
+        fallbackTitle: String = "",
+        freeBytes: Long? = null
+    ): ExportEstimate {
         val preset = _preset.value
-        val totalMs = if (jobs.isEmpty()) {
-            fallbackDurationMs
+        // Each video sized by the render's own sum. A clip that takes its frame rate from the
+        // footage is sized at 60, which no phone clip exceeds in practice: an estimate that's too
+        // high only asks for room it may not need, one that's too low fails a render.
+        fun sized(hasOverlay: Boolean, durationMs: Long) = inga.bpmetrics.export.VideoExporter.sizing(
+            preset.width, preset.height,
+            if (hasOverlay && preset.matchSourceFrameRate) 60 else preset.frameRate,
+            hasOverlay, durationMs
+        )
+        val items = if (jobs.isEmpty()) {
+            listOf(EstimateItem(fallbackTitle, fallbackDurationMs, sized(false, fallbackDurationMs).bytes))
         } else {
-            jobs.sumOf { it.clip.durationMs }
+            jobs.map {
+                EstimateItem(
+                    titles[it.clip.uri.toString()] ?: it.clip.displayName,
+                    it.clip.durationMs,
+                    sized(true, it.clip.durationMs).bytes
+                )
+            }
         }
-        val bitsPerSecond = if (jobs.isEmpty()) preset.regularBitRate else preset.overlayBitRate
-        val bytes = (totalMs / 1000.0) * (bitsPerSecond / 8.0)
+        val totalMs = items.sumOf { it.durationMs }
+        val totalBytes = items.sumOf { it.bytes }
+        val biggest = items.maxOfOrNull { it.bytes } ?: 0L
 
         return ExportEstimate(
-            jobCount = jobs.size.coerceAtLeast(1),
+            jobCount = items.size,
             totalDurationMs = totalMs,
-            approxBytes = bytes.toLong(),
+            approxBytes = totalBytes,
             // Encoding runs slower than real time on a phone, and more so with an overlay. A
             // deliberately pessimistic multiplier: an estimate that undershoots is the one that
             // makes people think it has hung.
-            approxRenderMs = (totalMs * if (jobs.isEmpty()) 1.5 else 3.0).toLong()
+            approxRenderMs = (totalMs * if (jobs.isEmpty()) 1.5 else 3.0).toLong(),
+            items = items,
+            requiredFreeBytes = totalBytes +
+                (biggest * (inga.bpmetrics.export.VideoExporter.SPACE_SAFETY_FACTOR - 1)).toLong(),
+            freeBytes = freeBytes
         )
+    }
+
+    /**
+     * What step 4 last queued, so coming back to it shows "Queued" instead of a second Start.
+     * Anything that changes the batch (the source, a clip, the look) makes it a new one.
+     */
+    private val _queuedBatch = MutableStateFlow<Any?>(null)
+    val queuedBatch: StateFlow<Any?> = _queuedBatch.asStateFlow()
+
+    fun markQueued(batch: Any) {
+        _queuedBatch.value = batch
     }
 
     // --- Step 2: which clips, and whose curves go on each ---
@@ -1318,6 +1377,17 @@ class ExportUtilityViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    /** The recordings the clip list was found for. Contents with the same ones keeps the list. */
+    private var clipsFoundFor: Set<Long>? = null
+
+    /** Whether the clips are already found for these recordings, so the step needn't look again. */
+    fun hasClipsFor(recordIds: Set<Long>): Boolean = clipsFoundFor == recordIds
+
+    /** Look again next time Contents is shown, keeping what's listed. For when more footage can be seen. */
+    fun forgetClips() {
+        clipsFoundFor = null
+    }
+
     private val _loadingClips = MutableStateFlow(false)
     val loadingClips: StateFlow<Boolean> = _loadingClips.asStateFlow()
 
@@ -1329,12 +1399,17 @@ class ExportUtilityViewModel(
      */
     fun loadClips(found: List<VideoExporter.VideoClip>) {
         val sourceRecords = records.value
+        clipsFoundFor = sourceRecords.map { it.metadata.recordId }.toSet()
+        // What's already listed wins over what was just found: its ticks, framing, "Filmed at"
+        // correction and anything added by hand. Every visit to this step used to rebuild the list
+        // unticked, so Back from Look, a step tap or a rotation wiped all of it (Audit #2).
+        val kept = _clips.value.associateBy { it.clip.uri }
 
         // The rows appear immediately with everything except the curves, which need every data
         // point in range walked. Waiting for that before showing anything would leave the step
         // blank for a second on a group with forty clips.
         _clips.value = found.map { clip ->
-            ClipSelection(
+            kept[clip.uri] ?: ClipSelection(
                 clip = clip,
                 // Whoever was recording while *this clip* was filming. Defaulting to the event's
                 // whole cast would offer a curve for someone whose watch had already stopped.
@@ -1346,7 +1421,7 @@ class ExportUtilityViewModel(
                 // asked for — expensive, and on a phone that has already been filled once.
                 selected = false
             )
-        }
+        } + kept.values.filter { kept -> found.none { it.uri == kept.clip.uri } }
         _loadingClips.value = false
 
         launchGuarded {
@@ -1435,13 +1510,13 @@ class ExportUtilityViewModel(
      */
     fun setAllClipsSelected(selected: Boolean) {
         _clips.value = _clips.value.map {
-            it.copy(selected = selected && it.recordIds.isNotEmpty())
+            it.copy(selected = selected && it.recordIds.isNotEmpty(), untickedByTime = false)
         }
     }
 
     fun toggleClip(uri: android.net.Uri) {
         _clips.value = _clips.value.map {
-            if (it.clip.uri == uri) it.copy(selected = !it.selected) else it
+            if (it.clip.uri == uri) it.copy(selected = !it.selected, untickedByTime = false) else it
         }
     }
 
@@ -1511,18 +1586,37 @@ class ExportUtilityViewModel(
         !loading && !refused && clips.isEmpty()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
-    /** Whether the current step's question has been answered well enough to move on. */
-    val canAdvance: StateFlow<Boolean> = combine(_step, records) { step, records ->
-        when (step) {
-            ExportStep.SOURCE -> records.isNotEmpty()
-            // Contents and Look both have workable defaults, so neither can block the flow.
-            else -> true
+    private val _kind = MutableStateFlow(ExportKind.VIDEO)
+    val kind: StateFlow<ExportKind> = _kind.asStateFlow()
+
+    /**
+     * Why Next can't be pressed yet, or null when it can.
+     *
+     * A video with footage found but none ticked used to go on to step 4 and offer the whole span
+     * over a plain background instead: hours of video, for a collection (Audit #20). With no
+     * footage at all, the plain background is the export, and nothing blocks it.
+     */
+    val nextBlockedReason: StateFlow<String?> = combine(_step, records, _kind, _clips) { step, records, kind, clips ->
+        when {
+            step == ExportStep.SOURCE && records.isEmpty() -> "Choose what to export."
+            step == ExportStep.CONTENTS && kind == ExportKind.VIDEO &&
+                clips.isNotEmpty() && clips.none { it.selected } ->
+                "Tick at least one clip to export."
+            else -> null
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Whether the current step's question has been answered well enough to move on. */
+    val canAdvance: StateFlow<Boolean> = nextBlockedReason.map { it == null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     fun goTo(step: ExportStep) {
         // Only backwards, or forwards into ground already covered. Jumping to step 3 without a
         // source would ask how something should look before knowing what it is.
+        // Forward only past a step that would let Next through, so the step bar isn't a way
+        // around "tick at least one clip".
+        val forward = step.ordinal > _step.value.ordinal
+        if (forward && nextBlockedReason.value != null) return
         if (step.ordinal <= _furthestStep.value.ordinal) _step.value = step
     }
 
@@ -1555,6 +1649,7 @@ class ExportUtilityViewModel(
             _imageCrop.value = ImageCrop()
             _manualOverlay.value = null
             _clips.value = emptyList()
+            clipsFoundFor = null
             _previewAt.value = 0f
             savedAnalysisRecordIds.value = emptySet()
             savedAnalysisName.value = ""
@@ -1562,9 +1657,6 @@ class ExportUtilityViewModel(
         _source.value = source
         if (source is ExportSource.SavedAnalysis) loadSavedAnalysis(source.analysisId)
     }
-
-    private val _kind = MutableStateFlow(ExportKind.VIDEO)
-    val kind: StateFlow<ExportKind> = _kind.asStateFlow()
 
     fun setKind(kind: ExportKind) {
         _kind.value = kind

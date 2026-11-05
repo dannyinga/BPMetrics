@@ -885,6 +885,30 @@ object ImageExporter {
      * The title is only used when it says something. A pill reading "Untitled 4" over someone's
      * heart rate is worse than one reading "Unknown", and it goes out in a video.
      */
+    /**
+     * Each record's label, told apart where two would read the same.
+     *
+     * Two recordings by one person (two watches on, or a split recording) got two identical
+     * pills, and nothing on screen said which curve was which (Audit §6 Export). A repeat adds
+     * what differs: the watch if it does, else the recording's own title, else a number.
+     */
+    internal fun distinctLabelsOf(records: List<BpmRecordWithPoints>): List<String> {
+        val base = records.map(::wearerLabelOf)
+        return records.mapIndexed { i, record ->
+            val same = base.indices.filter { base[it] == base[i] }
+            if (same.size < 2) return@mapIndexed base[i]
+            val device = record.metadata.deviceId.takeIf { it.isNotBlank() }
+            val title = record.metadata.title.takeIf { !RecordNameFormatter.isPlaceholder(it) }
+            val detail = when {
+                device != null && same.map { records[it].metadata.deviceId }.distinct().size == same.size &&
+                    device != base[i] -> device
+                title != null && same.map { records[it].metadata.title }.distinct().size == same.size -> title
+                else -> "${same.indexOf(i) + 1}"
+            }
+            "${base[i]} · $detail"
+        }
+    }
+
     private fun wearerLabelOf(record: BpmRecordWithPoints): String =
         record.metadata.wearerName.takeIf { it.isNotBlank() }
             ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
@@ -1369,7 +1393,7 @@ object ImageExporter {
 
         paint.isFakeBoldText = false
         paint.textSize = labelSize
-        val labels = records.map { wearerLabelOf(it) }
+        val labels = distinctLabelsOf(records)
         val fullNameWidth = if (config.pillShowName) {
             labels.maxOfOrNull { paint.measureText(it) } ?: 0f
         } else {
@@ -1465,7 +1489,7 @@ object ImageExporter {
         val pillWidth = m.pillWidth
         val shownLabels = m.shownLabels
         val stacked = m.stacked
-        val labels = records.map { wearerLabelOf(it) }
+        val labels = distinctLabelsOf(records)
 
         // Line metrics for the baselines. Recomputed from the sizes above rather than carried in
         // ReadoutMetrics: they depend on nothing but the paint and the size, so passing them would
@@ -1719,8 +1743,9 @@ object ImageExporter {
         var legendTop = dims.graphTop + 16f * dims.scaleFactor
         val itemHeight = 32f * dims.scaleFactor
 
+        val legendLabels = distinctLabelsOf(records)
         records.forEachIndexed { index, record ->
-            val wearerLabel = wearerLabelOf(record)
+            val wearerLabel = legendLabels[index]
             val color = colorForRecord(record, index, config)
 
             paint.resetForExport()

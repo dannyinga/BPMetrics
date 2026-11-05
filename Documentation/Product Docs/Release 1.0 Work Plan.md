@@ -197,6 +197,30 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 
 **Commit:** `fix(export): the wizard remembers what you did`
 
+**As built:**
+- **S6.1:** the clips were already held in the view model. The bug was the Contents step re-scanning on every visit and replacing the list. Now `hasClipsFor(recordIds)` skips a scan that's already been done, and a scan that does run merges by uri, keeping ticks, framing, "Filmed at" corrections and hand-added clips. The export view model lives at the shell level, so all of this also survives tab switches and rotation.
+- **S6.2:** `ClipSelection.untickedByTime` remembers a clip that a correction unticked, so moving it back into range ticks it again. Unticking by hand clears the flag. While the clip being previewed won't be exported, the Look step says so in red under the preview.
+- **S6.3:** `nextBlockedReason` ("Tick at least one clip to export.") shows beside a disabled Next, and the step bar can't jump forward past it either. With no footage at all, nothing is blocked: the plain background is the export.
+- **S6.4:** what was queued is held in the view model as a key (source, clips with their casts, preset, title). Step 4 shows "Queued" for that exact batch, however you come back to it.
+- **S6.5:**
+  - **Review list:** each video's title, length and size; the format; "saved to Movies/BPMetrics"; and the free space needed against what the phone has.
+  - **One size sum:** `VideoExporter.sizing()` is now used by both the render and step 4. The old estimate used the preset's two flat bitrates, which the render never read, and left out the render's 2.5× working space.
+  - **Space check:** a batch that can't fit is stopped at step 4 with the reason.
+  - **Back:** step 4 now has a Back button; it had none.
+- **S6.6:** the shell hides its tab bar on Export once past step 1, where the steps have their own Back.
+- **S6.7:**
+  - **Insets:** a row with a cover keeps the icon slot as empty space, so every row's text starts at the same inset.
+  - **Bottom bar:** step navigation sits on its own tonal surface instead of floating over the list.
+  - **Readouts:** `ImageExporter.distinctLabelsOf` tells repeated wearers apart by watch, then by title, then by number.
+- **S6.8:** `VideoExporter.editedItem()` sets the frame rate for an image input again, covered by `VideoExporterItemTest`. On the emulator a 3-minute video with no footage rendered: 32 MB, against 62 MB estimated.
+- **S6.9:** declares `READ_MEDIA_VISUAL_USER_SELECTED` and requests it alongside `READ_MEDIA_VIDEO`. `VideoExporter.mediaAccess()` tells full, partial and none apart. With partial access, Contents says only some videos were shared and offers "Choose more" and "Allow all"; when nothing is found it says so about the shared videos only. Gaining access re-scans and merges. **Not checked on a device:** partial access only exists on Android 14+, and the API 36 emulator was closed for this run.
+- **Verified on the emulator (API 33):**
+  - A hand-added clip, unticked, blocks Next with the reason, and the step bar won't jump past it.
+  - Ticked, it survives Look → Back.
+  - Step 4 shows the review, and stays "Queued" after Back → Next.
+  - Both renders (with footage, and the plain background) finished.
+  - The test videos were deleted afterwards.
+
 ### S7 — Presets and the render queue
 
 | Ticket | Work | Audit |
