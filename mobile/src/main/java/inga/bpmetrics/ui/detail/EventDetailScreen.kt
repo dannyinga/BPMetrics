@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.detail
 
-import android.widget.Toast
+import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -85,7 +85,7 @@ fun EventDetailScreen(
     val pickCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
         subject.setCover(context, uri) { ok ->
             if (ok) framingCover = true
-            else Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+            else Feedback.failed("That image couldn't be read.")
         }
     }
 
@@ -172,7 +172,7 @@ fun EventDetailScreen(
                     },
                     tags = tags,
                     onRemoveTag = { subject.removeTag(it) },
-                    onExplainTag = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() },
+                    onExplainTag = { Feedback.say(it) },
                     onEditCover = { framingCover = true }
                 )
             }

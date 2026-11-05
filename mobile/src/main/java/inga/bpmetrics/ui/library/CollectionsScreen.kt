@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.library
 
-import android.widget.Toast
+import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -73,7 +73,7 @@ fun CollectionsScreen(
         covering?.let { target ->
             viewModel.setCollectionCover(context, target.collection.collectionId, uri) { ok ->
                 if (!ok) {
-                    Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+                    Feedback.failed("That image couldn't be read.")
                 }
             }
         }

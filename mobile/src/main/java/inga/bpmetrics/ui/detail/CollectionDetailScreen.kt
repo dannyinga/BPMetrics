@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.detail
 
-import android.widget.Toast
+import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -72,7 +72,7 @@ fun CollectionDetailScreen(
         libraryViewModel.setCollectionCover(context, collectionId, uri) { ok ->
             // Straight into framing, while the choice is fresh.
             if (ok) framingCover = true
-            else Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+            else Feedback.failed("That image couldn't be read.")
         }
     }
 
@@ -174,13 +174,13 @@ fun CollectionDetailScreen(
             onSetRule = { libraryViewModel.setCollectionRule(collectionId, it) },
             onMakeStatic = {
                 libraryViewModel.materialiseCollection(collectionId) { message ->
-                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    Feedback.say(message)
                 }
             },
             onThaw = if (!summary.collection.isFrozen) null else {
                 {
                     libraryViewModel.thawCollection(collectionId) { message ->
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        Feedback.say(message)
                     }
                 }
             },

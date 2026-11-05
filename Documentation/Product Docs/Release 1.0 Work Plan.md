@@ -73,7 +73,11 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 | **S2.2** | `launchGuarded` (`util/BackgroundScope.kt:67-73`) reports failures through `Feedback`, so they no longer look like success. |
 | **S2.3** | Move the existing toasts on the library, detail pages and Locations over to `Feedback`. Locations' own snackbar becomes the shared one. |
 
-**Verify:** a failed rename (force one in a test) shows an error, and a delete shows Undo.
+**As built:** `ui/feedback/Feedback.kt` + `FeedbackHost.kt`, with `failed(text)` added alongside the three verbs. S2.3 went further than planned: People, Watches, Settings and Export moved too, because one shared host next to leftover toasts would have been the inconsistency this sprint exists to remove. The only remaining Toast is "Restored. Reopen BPMetrics.", shown as the app closes. `launchGuarded` takes a `failure` text (`null` for background refreshes). Deleting a location offers Undo, which restores the row, its photo, and the events and recordings that pointed at it. Split creates a recording with Open.
+
+**Known:** the shared snackbar sits over the add button on management screens while it shows. That's fixed in S18.1's scaffold.
+
+**Verify:** a failed rename (force one in a test) shows an error, and a delete shows Undo. *Done: `FeedbackTest` covers both; Undo was also checked on the emulator.*
 **Commit:** `feat(ui): one feedback channel, with undo, and failures that say so`
 
 ---
@@ -295,7 +299,7 @@ Ambient mode and a tile are post-1.0.
 
 | Ticket | Work | Audit |
 |---|---|---|
-| **S18.1** | A shared management-list scaffold for People, Watches, Locations and Tags. It provides FAB add, tap to edit, one destructive verb, `Feedback`, and `BpmEmptyState`. | §3 Settings table |
+| **S18.1** | A shared management-list scaffold for People, Watches, Locations and Tags. It provides FAB add, tap to edit, one destructive verb, `Feedback`, and `BpmEmptyState`. The FAB moves up while a snackbar is showing (since S2 the shared snackbar covers it). | §3 Settings table |
 | **S18.2** | Move the four screens onto it. Tags gets an empty state and drops the hidden edit mode. The scaffold leaves room so the FAB never covers the last row. Tags is titled "Tags" and its categories show counts. Watches: replace the red "will arrive unattributed" line repeated on every card with one banner ("N watches have no wearer"). The watch dialog gets Cancel, keeps Remove apart from Save, and hides "Model:" when the model is unknown. | §3 Settings, §6 |
 | **S18.3** | Remove "Register a watch" and the merge it promised (D2). Watches appear when they first sync. | #15 |
 | **S18.4** | "Use current" location explains a denied permission. | §3 Settings |

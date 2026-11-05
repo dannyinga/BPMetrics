@@ -1,6 +1,7 @@
 package inga.bpmetrics.ui.watches
 
 import inga.bpmetrics.util.launchGuarded
+import inga.bpmetrics.ui.feedback.Feedback
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -11,7 +12,6 @@ import inga.bpmetrics.library.WatchEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -25,10 +25,6 @@ import kotlinx.coroutines.launch
 class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() {
 
     private val _recordCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
-
-    private val _message = MutableStateFlow<String?>(null)
-    /** One-shot feedback for the UI to show and then clear. */
-    val message: StateFlow<String?> = _message.asStateFlow()
 
     val uiState: StateFlow<WatchesUiState> = combine(
         repository.getAllWatches(),
@@ -56,7 +52,7 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
 
     /** Record counts are a per-watch query, so they are refreshed rather than observed. */
     fun refreshCounts() {
-        launchGuarded {
+        launchGuarded(failure = null) {
             val watches = uiState.value.watches.map { it.watch.watchId }
             if (watches.isEmpty()) return@launchGuarded
             _recordCounts.value = watches.associateWith { repository.countRecordsForWatch(it) }
@@ -73,11 +69,13 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
             repository.renameWatch(watchId, deviceName)
             repository.setWatchPerson(watchId, personId)
             val name = personId?.let { repository.getPerson(it)?.name }
-            _message.value = if (name == null) {
-                "Wearer cleared. New recordings will arrive unattributed."
-            } else {
-                "Future recordings from this watch will be attributed to $name."
-            }
+            Feedback.say(
+                if (name == null) {
+                    "Wearer cleared. New recordings will arrive unattributed."
+                } else {
+                    "Future recordings from this watch will be attributed to $name."
+                }
+            )
         }
     }
 
@@ -92,7 +90,7 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
                 personId = personId
             )
             refreshCounts()
-            _message.value = "Watch registered."
+            Feedback.say("Watch registered.")
         }
     }
 
@@ -105,11 +103,13 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
         launchGuarded {
             val changed = repository.reattributeRecords(watchId, personId, fromDate, toDate)
             val name = repository.getPerson(personId)?.name ?: "them"
-            _message.value = when (changed) {
-                0 -> "No recordings in that range."
-                1 -> "1 recording re-attributed to $name."
-                else -> "$changed recordings re-attributed to $name."
-            }
+            Feedback.say(
+                when (changed) {
+                    0 -> "No recordings in that range."
+                    1 -> "1 recording re-attributed to $name."
+                    else -> "$changed recordings re-attributed to $name."
+                }
+            )
         }
     }
 
@@ -117,7 +117,7 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
         launchGuarded {
             repository.mergeWatches(fromWatchId, intoWatchId)
             refreshCounts()
-            _message.value = "Watches merged."
+            Feedback.say("Watches merged.")
         }
     }
 
@@ -125,11 +125,9 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
         launchGuarded {
             repository.deleteWatch(watchId)
             refreshCounts()
-            _message.value = "Watch removed. Existing recordings keep their names."
+            Feedback.say("Watch removed. Existing recordings keep their names.")
         }
     }
-
-    fun consumeMessage() { _message.value = null }
 
     class Factory(private val repository: LibraryRepository) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")

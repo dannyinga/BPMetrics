@@ -121,6 +121,13 @@ interface EventDao {
     @Query("UPDATE events SET locationId = NULL WHERE locationId = :locationId")
     suspend fun forgetLocation(locationId: Long)
 
+    /** The events at a venue, so a delete can be undone by pointing exactly these back at it. */
+    @Query("SELECT eventId FROM events WHERE locationId = :locationId")
+    suspend fun idsAtLocation(locationId: Long): List<Long>
+
+    @Query("UPDATE events SET locationId = :locationId WHERE eventId IN (:eventIds)")
+    suspend fun setLocation(eventIds: List<Long>, locationId: Long)
+
     @Query("SELECT coverPath FROM events WHERE eventId = :eventId")
     suspend fun coverPathOf(eventId: Long): String?
 

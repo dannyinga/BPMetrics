@@ -932,9 +932,24 @@ class LibraryRepository(
      *
      * Orphans rather than cascades, like every other reference in this model: an event whose venue
      * was deleted keeps its recordings and its times and simply stops saying where.
+     *
+     * Returns everything [restoreLocation] needs to undo it, or null if there was nothing to
+     * delete. The photo is carried as bytes, not left on disk until the undo window closes: if the
+     * process died in that window, a file kept for later would never be cleaned up.
      */
-    suspend fun deleteLocation(context: android.content.Context, locationId: Long) {
-        val photo = locationDao.photoPathOf(locationId)
+    suspend fun deleteLocation(context: android.content.Context, locationId: Long): DeletedLocation? {
+        val location = locationDao.get(locationId) ?: return null
+        val photo = location.photoPath
+        val deleted = DeletedLocation(
+            location = location,
+            photo = photo?.let { name ->
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    CoverStore.fileFor(context, name).takeIf { it.isFile }?.readBytes()
+                }
+            },
+            eventIds = eventDao.idsAtLocation(locationId),
+            recordIds = recordDao.idsAtLocation(locationId)
+        )
         eventDao.forgetLocation(locationId)
         recordDao.forgetLocation(locationId)
         locationDao.delete(locationId)
@@ -943,7 +958,38 @@ class LibraryRepository(
             inga.bpmetrics.ui.components.invalidateCover(it)
         }
         reconcileTimeZones()
+        return deleted
     }
+
+    /**
+     * Puts a deleted venue back as it was: the same id, so anything that remembered it still
+     * finds it; the same events and recordings pointing at it; and its photo.
+     *
+     * Only what pointed at it *when it was deleted*. Something filed elsewhere since is left where
+     * the user put it.
+     */
+    suspend fun restoreLocation(context: android.content.Context, deleted: DeletedLocation) {
+        val id = deleted.location.locationId
+        val photoPath = deleted.photo?.let { bytes ->
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                CoverStore.writeBytes(
+                    context, bytes, deleted.location.name, id, CoverStore.Kind.PERSON
+                )
+            }
+        }
+        locationDao.insert(deleted.location.copy(photoPath = photoPath))
+        if (deleted.eventIds.isNotEmpty()) eventDao.setLocation(deleted.eventIds, id)
+        if (deleted.recordIds.isNotEmpty()) recordDao.setLocation(deleted.recordIds, id)
+        reconcileTimeZones()
+    }
+
+    /** A venue as it was just before [deleteLocation], for [restoreLocation]. */
+    class DeletedLocation(
+        val location: LocationEntity,
+        val photo: ByteArray?,
+        val eventIds: List<Long>,
+        val recordIds: List<Long>
+    )
 
     /** A picture for a venue, stored the same way a person's photograph is. */
     suspend fun restoreLocationPhoto(

@@ -1,6 +1,7 @@
 package inga.bpmetrics.util
 
 import android.util.Log
+import inga.bpmetrics.ui.feedback.Feedback
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -59,18 +60,30 @@ fun backgroundScope(
  * work without replacing the scope the framework gives us — and it keeps `viewModelScope`'s
  * cancellation on `onCleared`, which is the whole reason to use it.
  *
- * This is a backstop, not an excuse. It cannot tell the user anything, so an operation whose
- * failure the user needs to hear about still has to catch it and say so. What it guarantees is
- * that the *unforeseen* failure degrades into a log line and a screen that does not update, rather
- * than a process death.
+ * It also says so. What it catches is logged and posted to [Feedback] as a failure, because a
+ * rename or delete that silently didn't happen looks exactly like one that did, and the user
+ * finds out later, if at all. [failure] is what the user reads. The default is deliberately
+ * modest, because this handler can't know how far the block got. Pass something specific where
+ * the caller knows what was being attempted ("Couldn't rename the event"), and pass `null` only
+ * for work the user didn't ask for and won't miss, like a background refresh.
+ *
+ * It is still a backstop. An operation that can fail in an *expected* way (a file that won't
+ * parse, a name already taken) should catch that itself and say something more useful.
  */
-fun ViewModel.launchGuarded(block: suspend CoroutineScope.() -> Unit): Job =
+fun ViewModel.launchGuarded(
+    failure: String? = GUARDED_FAILURE,
+    block: suspend CoroutineScope.() -> Unit
+): Job =
     viewModelScope.launch(
         CoroutineExceptionHandler { _, throwable ->
             Log.e(this::class.java.simpleName, "Unhandled failure", throwable)
+            failure?.let { Feedback.failed(it) }
         },
         block = block
     )
+
+/** What [launchGuarded] says when the caller didn't say anything more specific. */
+const val GUARDED_FAILURE = "Something went wrong, so that may not have been saved. Try again."
 
 /**
  * Runs [block], logging and swallowing anything it throws.

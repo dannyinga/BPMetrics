@@ -714,7 +714,7 @@ class ExportUtilityViewModel(
     fun restorePreset() {
         if (presetRestored) return
         presetRestored = true
-        launchGuarded {
+        launchGuarded(failure = null) {
             val default = repository.getDefaultExportPreset()
             if (default != null) {
                 ExportPreset.fromJson(default.configJson)?.let {
@@ -1146,7 +1146,7 @@ class ExportUtilityViewModel(
      * land last and put the previous stretch of the recording back under the new time.
      */
     private fun refreshSparks(uri: android.net.Uri) {
-        launchGuarded {
+        launchGuarded(failure = null) {
             val target = _clips.value.firstOrNull { it.clip.uri == uri } ?: return@launchGuarded
             val people = repository.getAllPeople().first()
             val watches = repository.getAllWatches().first()
@@ -1630,7 +1630,7 @@ class ExportUtilityViewModel(
 
 
     private fun loadSavedAnalysis(analysisId: Long) {
-        launchGuarded {
+        launchGuarded(failure = "Couldn't open that saved analysis.") {
             val loaded = repository.loadSavedAnalysis(analysisId)
             savedAnalysisRecordIds.value = loaded?.records?.map { it.recordId }?.toSet().orEmpty()
             savedAnalysisName.value = loaded?.metadata?.name.orEmpty()

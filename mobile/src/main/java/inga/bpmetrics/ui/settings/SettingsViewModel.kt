@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.settings
 
+import inga.bpmetrics.ui.feedback.Feedback
 import inga.bpmetrics.util.launchGuarded
 
 import android.content.Context
@@ -12,12 +13,9 @@ import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.LibraryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -197,7 +195,7 @@ class SettingsViewModel(
     fun createPreset(name: String, preset: inga.bpmetrics.export.ExportPreset) {
         launchGuarded {
             repository.saveExportPreset(name, preset.copy(name = name).toJson())
-            _message.emit("Saved $name")
+            Feedback.say("Saved $name")
         }
     }
 
@@ -214,7 +212,7 @@ class SettingsViewModel(
     ) {
         launchGuarded {
             repository.updateExportPreset(entity.presetId, name, preset.copy(name = name).toJson())
-            _message.emit("Saved $name")
+            Feedback.say("Saved $name")
         }
     }
 
@@ -241,7 +239,7 @@ class SettingsViewModel(
                     }
                 }.isSuccess
             }
-            _message.emit(if (ok) "Saved ${preset.name}" else "Could not write that file")
+            if (ok) Feedback.say("Saved ${preset.name}") else Feedback.failed("Couldn't write that file.")
         }
     }
 
@@ -261,12 +259,12 @@ class SettingsViewModel(
             }
             val preset = json?.let { inga.bpmetrics.export.ExportPreset.fromJson(it) }
             if (preset == null) {
-                _message.emit("That file is not a preset this version can read")
+                Feedback.failed("That file isn't a preset this version can read.")
                 return@launchGuarded
             }
             val name = preset.name.ifBlank { "Imported preset" }
             repository.saveExportPreset(name, preset.copy(name = name).toJson())
-            _message.emit("Imported $name")
+            Feedback.say("Imported $name")
         }
     }
 
@@ -275,15 +273,12 @@ class SettingsViewModel(
     private val _storage = MutableStateFlow<StorageInspector.Report?>(null)
     val storage: StateFlow<StorageInspector.Report?> = _storage.asStateFlow()
 
-    private val _message = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val message: SharedFlow<String> = _message.asSharedFlow()
-
     /** Whether a restore has completed and the app needs relaunching to pick it up. */
     private val _restarting = MutableStateFlow(false)
     val restarting: StateFlow<Boolean> = _restarting.asStateFlow()
 
     fun refreshStorage(context: Context) {
-        launchGuarded {
+        launchGuarded(failure = null) {
             // Walks directories, so never on the main thread.
             _storage.value = withContext(Dispatchers.IO) { StorageInspector.inspect(context) }
         }
@@ -297,7 +292,7 @@ class SettingsViewModel(
                 runCatching { inga.bpmetrics.export.ExportUtils.clearStagedExports(context) }
                 before
             }
-            _message.emit("Reclaimed ${StorageInspector.formatSize(freed)}")
+            Feedback.say("Reclaimed ${StorageInspector.formatSize(freed)}")
             refreshStorage(context)
         }
     }
@@ -320,7 +315,7 @@ class SettingsViewModel(
         launchGuarded {
             val failure = withContext(Dispatchers.IO) { StorageInspector.restore(context, backup) }
             if (failure != null) {
-                _message.emit(failure)
+                Feedback.failed(failure)
             } else {
                 _restarting.value = true
             }
@@ -390,13 +385,11 @@ class SettingsViewModel(
                         context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
                     }.getOrNull()?.takeIf { it > 0 }
                 }
-                _message.emit(
-                    when {
-                        !written -> "Could not write that file"
-                        size != null -> "Backed up ${StorageInspector.formatSize(size)}"
-                        else -> "Backed up"
-                    }
-                )
+                when {
+                    !written -> Feedback.failed("Couldn't write that file.")
+                    size != null -> Feedback.say("Backed up ${StorageInspector.formatSize(size)}.")
+                    else -> Feedback.say("Backed up.")
+                }
             } finally {
                 _backupBusy.value = false
             }
@@ -422,13 +415,13 @@ class SettingsViewModel(
                 val backup = when (opened) {
                     is inga.bpmetrics.export.BackupFile.Read -> opened.backup
                     is inga.bpmetrics.export.BackupFile.Unreadable -> {
-                        _message.emit(opened.reason)
+                        Feedback.failed(opened.reason)
                         return@launchGuarded
                     }
                 }
                 val result = inga.bpmetrics.export.restoreBackup(backup, repository, context)
                 _lastRestore.value = result
-                _message.emit(result.summary())
+                if (result.failure == null) Feedback.say(result.summary()) else Feedback.failed(result.summary())
                 refreshStorage(context)
             } finally {
                 _backupBusy.value = false

@@ -1,6 +1,7 @@
 package inga.bpmetrics.ui.people
 
 import inga.bpmetrics.util.launchGuarded
+import inga.bpmetrics.ui.feedback.Feedback
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -10,7 +11,6 @@ import inga.bpmetrics.library.PersonEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -25,10 +25,6 @@ import kotlinx.coroutines.launch
 class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
 
     private val _recordCounts = MutableStateFlow<Map<Long, Int>>(emptyMap())
-
-    private val _message = MutableStateFlow<String?>(null)
-    /** One-shot feedback for the UI to show and then clear. */
-    val message: StateFlow<String?> = _message.asStateFlow()
 
     val uiState: StateFlow<PeopleUiState> = combine(
         repository.getAllPeople(),
@@ -48,7 +44,7 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
 
     /** Record counts are a per-person query, so they are refreshed rather than observed. */
     fun refreshCounts() {
-        launchGuarded {
+        launchGuarded(failure = null) {
             val ids = uiState.value.people.map { it.person.personId }
             if (ids.isEmpty()) return@launchGuarded
             _recordCounts.value = ids.associateWith { repository.countRecordsForPerson(it) }
@@ -59,7 +55,7 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
         launchGuarded {
             repository.addPerson(name, colorArgb)
             refreshCounts()
-            _message.value = "${name.trim()} added."
+            Feedback.say("${name.trim()} added.")
         }
     }
 
@@ -96,7 +92,7 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
             repository.renamePerson(personId, name)
             repository.setPersonColor(personId, colorArgb)
             repository.setPersonZones(personId, restingBpm, maxBpm)
-            _message.value = "Saved."
+            Feedback.say("Saved.")
         }
     }
 
@@ -105,15 +101,15 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
             val count = repository.countRecordsForPerson(personId)
             repository.deletePerson(personId)
             refreshCounts()
-            _message.value = if (count > 0) {
-                "Removed. Their $count recording${if (count == 1) "" else "s"} keep their name."
-            } else {
-                "Removed."
-            }
+            Feedback.say(
+                if (count > 0) {
+                    "Removed. Their $count recording${if (count == 1) "" else "s"} keep their name."
+                } else {
+                    "Removed."
+                }
+            )
         }
     }
-
-    fun consumeMessage() { _message.value = null }
 
     class Factory(private val repository: LibraryRepository) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")

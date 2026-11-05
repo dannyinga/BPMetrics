@@ -159,6 +159,13 @@ interface BpmRecordDao {
     @Query("UPDATE bpm_records SET locationId = NULL WHERE locationId = :locationId")
     suspend fun forgetLocation(locationId: Long)
 
+    /** See [EventDao.idsAtLocation]. */
+    @Query("SELECT recordId FROM bpm_records WHERE locationId = :locationId")
+    suspend fun idsAtLocation(locationId: Long): List<Long>
+
+    @Query("UPDATE bpm_records SET locationId = :locationId WHERE recordId IN (:recordIds)")
+    suspend fun setLocation(recordIds: List<Long>, locationId: Long)
+
     /** The same as a flow, for anything that has to recompute when the library changes. */
     @Query("SELECT * FROM bpm_records")
     fun getAllRecordEntitiesFlow(): Flow<List<BpmRecordEntity>>

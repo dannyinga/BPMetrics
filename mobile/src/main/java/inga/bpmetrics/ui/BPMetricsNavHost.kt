@@ -81,6 +81,7 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     val currentDestination = AppDestination.fromRoute(currentRoute)
@@ -169,6 +170,8 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
         // re-enter on every navigation — and is absent on detail screens, which are pushed *on
         // top* of a section and should not offer a sideways move out of it.
         androidx.compose.material3.Scaffold(
+            // The app's only snackbar host. See [inga.bpmetrics.ui.feedback.Feedback].
+            snackbarHost = { inga.bpmetrics.ui.feedback.FeedbackHost(snackbarHostState) },
             bottomBar = {
                 // On every top-level section, not only the four in it. A management screen is a
                 // sibling of the others, not something pushed on top of one, so removing the

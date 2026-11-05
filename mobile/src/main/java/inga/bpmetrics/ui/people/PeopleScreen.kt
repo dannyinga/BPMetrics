@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.people
 
-import android.widget.Toast
+import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
@@ -78,7 +78,6 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
     )
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val message by viewModel.message.collectAsStateWithLifecycle()
 
     var editing by remember { mutableStateOf<PersonEntity?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -88,13 +87,6 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
     var framingPhoto by remember(editing?.personId) { mutableStateOf(false) }
 
     LaunchedEffect(uiState.people.size) { viewModel.refreshCounts() }
-
-    LaunchedEffect(message) {
-        message?.let {
-            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
-            viewModel.consumeMessage()
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -148,7 +140,7 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
                     // one extra step now. Already open when the pick came from inside the sheet.
                     framingPhoto = true
                 } else {
-                    Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+                    Feedback.failed("That image couldn't be read.")
                 }
             }
         }

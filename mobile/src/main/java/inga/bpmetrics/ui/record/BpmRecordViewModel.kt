@@ -201,7 +201,7 @@ class BpmRecordViewModel(
      * Fetches the record from the repository and updates the UI state.
      */
     private fun loadRecord() {
-        launchGuarded {
+        launchGuarded(failure = "Couldn't load this recording.") {
             val fetchedRecord = repository.getRecordWithId(recordId)
             _record.value = fetchedRecord
         }

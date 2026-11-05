@@ -75,9 +75,6 @@ fun SettingsScreen(
     val context = LocalContext.current
 
     LaunchedEffect(Unit) { viewModel.refreshStorage(context) }
-    LaunchedEffect(Unit) {
-        viewModel.message.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
-    }
 
     val restarting by viewModel.restarting.collectAsStateWithLifecycle()
     LaunchedEffect(restarting) {
@@ -379,7 +376,7 @@ private fun SyncSection(viewModel: SettingsViewModel) {
                 (context.applicationContext as inga.bpmetrics.BPMetricsApp)
                     .dataClientProcessor.sweepExistingRecords()
             }
-            Toast.makeText(context, "Checking the watch…", Toast.LENGTH_SHORT).show()
+            inga.bpmetrics.ui.feedback.Feedback.say("Checking the watch…")
         }) {
             Text("Check for recordings now")
         }
@@ -426,12 +423,13 @@ fun shareDiagnostics(context: Context, version: String) {
         file.writeText(text)
         inga.bpmetrics.export.ExportUtils.shareFile(context, file, "text/plain")
     }.onFailure {
-        Toast.makeText(context, "Could not gather diagnostics", Toast.LENGTH_SHORT).show()
+        inga.bpmetrics.ui.feedback.Feedback.failed("Couldn't gather diagnostics.")
     }
 }
 
 /** Closes the app so a restored database is picked up on the next launch. */
 private fun relaunch(context: Context) {
+    // A Toast, not [Feedback]: the app closes a moment later, and a snackbar would go with it.
     Toast.makeText(context, "Restored. Reopen BPMetrics.", Toast.LENGTH_LONG).show()
     (context as? android.app.Activity)?.finishAffinity()
     // The process is what holds the open database handle, so it has to go with the activity.

@@ -1,7 +1,7 @@
 package inga.bpmetrics.ui.export
 
 import android.net.Uri
-import android.widget.Toast
+import inga.bpmetrics.ui.feedback.Feedback
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -230,11 +230,7 @@ fun ExportUtilityScreen(
                 it.write(chosen.configJson.toByteArray())
             } != null
         }.getOrDefault(false)
-        Toast.makeText(
-            context,
-            if (ok) "Saved ${chosen.name}" else "Could not write the preset",
-            Toast.LENGTH_SHORT
-        ).show()
+        if (ok) Feedback.say("Saved ${chosen.name}.") else Feedback.failed("Couldn't write the preset.")
     }
 
     val importPresetLauncher = rememberLauncherForActivityResult(
@@ -245,21 +241,19 @@ fun ExportUtilityScreen(
             context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
         }.getOrNull()
         if (json == null) {
-            Toast.makeText(context, "Could not read that file", Toast.LENGTH_SHORT).show()
+            Feedback.failed("That file couldn't be read.")
             return@rememberLauncherForActivityResult
         }
         viewModel.importPreset(json) { accepted ->
-            Toast.makeText(
-                context,
-                if (accepted) {
-                    "Preset imported"
-                } else {
-                    // Refused rather than half-applied: a preset from a newer build would produce
-                    // an export looking nothing like the one it was shared from.
-                    "That preset was not readable, or was made by a newer version of the app"
-                },
-                Toast.LENGTH_LONG
-            ).show()
+            if (accepted) {
+                Feedback.say("Preset imported.")
+            } else {
+                // Refused rather than half-applied: a preset from a newer build would produce
+                // an export looking nothing like the one it was shared from.
+                Feedback.failed(
+                    "That preset couldn't be read, or was made by a newer version of the app."
+                )
+            }
         }
     }
 
@@ -573,15 +567,11 @@ fun ExportUtilityScreen(
                             }
                             imagesSaved = written == images.size && written > 0
                             viewModel.rememberLastUsed()
-                            Toast.makeText(
-                                context,
-                                if (imagesSaved) {
-                                    "Saved to Pictures/BPMetrics"
-                                } else {
-                                    "Saved $written of ${images.size}"
-                                },
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            if (imagesSaved) {
+                                Feedback.say("Saved to Pictures/BPMetrics.")
+                            } else {
+                                Feedback.failed("Saved $written of ${images.size}. The rest couldn't be written.")
+                            }
                         },
                         onShareAll = {
                             val files = rendered.orEmpty().mapNotNull { image ->
@@ -590,9 +580,7 @@ fun ExportUtilityScreen(
                                 )
                             }
                             when {
-                                files.isEmpty() -> Toast.makeText(
-                                    context, "Could not prepare the image", Toast.LENGTH_SHORT
-                                ).show()
+                                files.isEmpty() -> Feedback.failed("Couldn't prepare the image.")
                                 files.size == 1 -> inga.bpmetrics.export.ExportUtils
                                     .shareFile(context, files.first(), "image/png")
                                 else -> inga.bpmetrics.export.ExportUtils

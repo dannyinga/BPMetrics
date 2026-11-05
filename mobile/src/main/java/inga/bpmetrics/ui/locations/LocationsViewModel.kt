@@ -7,13 +7,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.LocationEntity
+import inga.bpmetrics.ui.feedback.Feedback
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 
 /**
  * The venue registry.
@@ -25,9 +24,6 @@ import kotlinx.coroutines.launch
 class LocationsViewModel(private val repository: LibraryRepository) : ViewModel() {
 
     private val _eventCounts = MutableStateFlow<Map<Long, Int>>(emptyMap())
-
-    private val _message = MutableStateFlow<String?>(null)
-    val message: StateFlow<String?> = _message.asStateFlow()
 
     val uiState: StateFlow<LocationsUiState> = combine(
         repository.getAllLocations(),
@@ -47,7 +43,7 @@ class LocationsViewModel(private val repository: LibraryRepository) : ViewModel(
 
     /** A per-location query, so refreshed rather than observed — as with People. */
     fun refreshCounts() {
-        launchGuarded {
+        launchGuarded(failure = null) {
             val ids = uiState.value.locations.map { it.location.locationId }
             if (ids.isEmpty()) return@launchGuarded
             _eventCounts.value = ids.associateWith { repository.countEventsAt(it) }
@@ -58,12 +54,14 @@ class LocationsViewModel(private val repository: LibraryRepository) : ViewModel(
         launchGuarded {
             repository.createLocation(name, timeZoneId)
             refreshCounts()
-            _message.value = "${name.trim()} added."
+            Feedback.say("${name.trim()} added.")
         }
     }
 
     fun rename(locationId: Long, name: String) {
-        launchGuarded { repository.renameLocation(locationId, name) }
+        launchGuarded(failure = "Couldn't rename that location.") {
+            repository.renameLocation(locationId, name)
+        }
     }
 
     /**
@@ -75,26 +73,35 @@ class LocationsViewModel(private val repository: LibraryRepository) : ViewModel(
     fun setZone(locationId: Long, timeZoneId: String?) {
         launchGuarded {
             repository.setLocationZone(locationId, timeZoneId)
-            _message.value = "Clock updated. Recordings there now read in it."
+            Feedback.say("Clock updated. Recordings there now read in it.")
         }
     }
 
     fun setCoordinates(locationId: Long, latitude: Double?, longitude: Double?) {
         launchGuarded {
             repository.setLocationCoordinates(locationId, latitude, longitude)
-            _message.value = if (latitude == null) "Coordinates cleared." else "Coordinates saved."
+            Feedback.say(if (latitude == null) "Coordinates cleared." else "Coordinates saved.")
         }
     }
 
+    /**
+     * Deletes a venue, offering Undo.
+     *
+     * The application context, not the screen's: the Undo can run after the screen has gone.
+     */
     fun delete(context: android.content.Context, locationId: Long) {
-        launchGuarded {
-            repository.deleteLocation(context, locationId)
+        val app = context.applicationContext
+        launchGuarded(failure = "Couldn't delete that location.") {
+            val deleted = repository.deleteLocation(app, locationId) ?: return@launchGuarded
             refreshCounts()
-            _message.value = "Deleted. The events that were there keep their recordings."
+            Feedback.undoable(
+                "${deleted.location.displayName} deleted. Its events keep their recordings."
+            ) {
+                repository.restoreLocation(app, deleted)
+                refreshCounts()
+            }
         }
     }
-
-    fun clearMessage() { _message.value = null }
 
     class Factory(private val repository: LibraryRepository) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")

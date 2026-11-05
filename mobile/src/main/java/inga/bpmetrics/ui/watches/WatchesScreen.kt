@@ -1,6 +1,5 @@
 package inga.bpmetrics.ui.watches
 
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -70,19 +69,11 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
     )
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val message by viewModel.message.collectAsStateWithLifecycle()
 
     var editing by remember { mutableStateOf<WatchEntity?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState.watches.size) { viewModel.refreshCounts() }
-
-    LaunchedEffect(message) {
-        message?.let {
-            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
-            viewModel.consumeMessage()
-        }
-    }
 
     Scaffold(
         topBar = {

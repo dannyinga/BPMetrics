@@ -304,7 +304,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     // --- Events and groups ---
 
     init {
-        launchGuarded {
+        launchGuarded(failure = null) {
             // Read once rather than collected: this is where the user left off, not a live value.
             // Collecting it would re-sort the list under their hands every time the preference
             // emitted. An unrecognised name falls back to [SortOption.DATE], which is also the one

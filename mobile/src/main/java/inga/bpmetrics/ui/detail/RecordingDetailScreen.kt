@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.detail
 
-import android.widget.Toast
+import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -99,7 +99,7 @@ fun RecordingDetailScreen(
         subject.setOwnCover(context, uri) { ok ->
             // Straight into framing, while the choice is fresh.
             if (ok) framingCover = true
-            else Toast.makeText(context, "That image could not be read", Toast.LENGTH_LONG).show()
+            else Feedback.failed("That image couldn't be read.")
         }
     }
 
@@ -179,7 +179,7 @@ fun RecordingDetailScreen(
                     onOpenAncestor = onOpenEvent,
                     tags = effectiveTags,
                     onRemoveTag = { subject.removeTag(it) },
-                    onExplainTag = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() },
+                    onExplainTag = { Feedback.say(it) },
                     onEditCover = { framingCover = true }
                 )
             }
@@ -298,12 +298,13 @@ fun RecordingDetailScreen(
                 onSplit = { fromMs, toMs ->
                     splitting = null
                     subject.splitRecord(fromMs, toMs, "${r.metadata.title} (Split)") { newId ->
-                        Toast.makeText(
-                            context,
-                            if (newId == null) "Nothing recorded in that range"
-                            else "New recording created from the split",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        if (newId == null) {
+                            Feedback.failed("Nothing was recorded in that range.")
+                        } else {
+                            Feedback.created("Split into a new recording.") {
+                                navController.navigate("${inga.bpmetrics.ui.Routes.DETAIL}/$newId")
+                            }
+                        }
                     }
                 }
             )

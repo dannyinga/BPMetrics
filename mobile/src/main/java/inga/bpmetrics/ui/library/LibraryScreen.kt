@@ -1,7 +1,7 @@
 package inga.bpmetrics.ui.library
 
 import android.net.Uri
-import android.widget.Toast
+import inga.bpmetrics.ui.feedback.Feedback
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -182,7 +182,7 @@ fun LibraryScreen(
     // silently doing something other than what was asked.
     val pickCoverForSelection = rememberCoverPicker { uri ->
         viewModel.setCoverForSelection(context, uri) { message ->
-            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            Feedback.say(message)
         }
     }
 
@@ -264,7 +264,7 @@ fun LibraryScreen(
         // had run, and then report the failure after it.
         backups.forEach { uri ->
             viewModel.importBackupFile(context, uri) { message ->
-                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                Feedback.say(message)
             }
         }
 
@@ -276,16 +276,17 @@ fun LibraryScreen(
                     imported++
                 }
             }
-            Toast.makeText(
-                context,
-                when {
-                    imported == csvs.size -> "Imported $imported recording${if (imported == 1) "" else "s"}"
-                    imported > 0 -> "Imported $imported of ${csvs.size} files; the rest could not be read"
-                    else -> "Could not read ${if (csvs.size == 1) "that file" else "those files"} " +
-                        "as a BPMetrics backup or CSV"
-                },
-                Toast.LENGTH_LONG
-            ).show()
+            when {
+                imported == csvs.size ->
+                    Feedback.say("Imported $imported recording${if (imported == 1) "" else "s"}.")
+                imported > 0 -> Feedback.failed(
+                    "Imported $imported of ${csvs.size} files. The rest couldn't be read."
+                )
+                else -> Feedback.failed(
+                    "${if (csvs.size == 1) "That file" else "Those files"} couldn't be read " +
+                        "as a BPMetrics backup or CSV."
+                )
+            }
         }
     }
 
@@ -302,11 +303,10 @@ fun LibraryScreen(
             if (recordIdsToExport.isNotEmpty()) exportScope.launch {
                 val chosen = viewModel.repository.recordsWithPoints(recordIdsToExport)
                 val success = CsvExporter.exportToFolder(context, chosen, folderUri)
-                if (success) {
-                    Toast.makeText(context, "Successfully exported  CSVs!", Toast.LENGTH_LONG).show()
-                } else {
-                    Toast.makeText(context, "Failed to export CSVs.", Toast.LENGTH_LONG).show()
-                }
+                val count = recordIdsToExport.size
+                val files = "$count CSV file${if (count == 1) "" else "s"}"
+                if (success) Feedback.say("Saved $files.")
+                else Feedback.failed("Couldn't save the $files. Try another folder.")
                 recordIdsToExport = emptyList()
             }
         }
@@ -331,12 +331,8 @@ fun LibraryScreen(
             context = context,
             uri = uri
         ) { ok ->
-            Toast.makeText(
-                context,
-                if (ok) "Saved ${toWrite.size} recording${if (toWrite.size == 1) "" else "s"}"
-                else "Could not write the file",
-                Toast.LENGTH_LONG
-            ).show()
+            if (ok) Feedback.say("Saved ${toWrite.size} recording${if (toWrite.size == 1) "" else "s"}.")
+            else Feedback.failed("Couldn't write the file.")
         }
     }
 
@@ -906,7 +902,7 @@ fun LibraryScreen(
             onDismiss = { showMergeDialog = false },
             onMerge = { deleteOriginals ->
                 viewModel.mergeSelectedRecords(deleteOriginals) { message ->
-                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    Feedback.say(message)
                 }
                 showMergeDialog = false
             }
@@ -929,7 +925,7 @@ fun LibraryScreen(
             onRemoveCover = {
                 showBulkEdit = false
                 viewModel.clearCoverForSelection(context) { message ->
-                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    Feedback.say(message)
                 }
             },
             onDismiss = { showBulkEdit = false }
@@ -1065,9 +1061,7 @@ fun LibraryScreen(
         renamingEvent?.let { summary ->
             viewModel.setEventCover(context, summary.event.eventId, uri) { ok ->
                 if (ok) framingRowCover = true
-                else Toast.makeText(
-                    context, "That image could not be read", Toast.LENGTH_LONG
-                ).show()
+                else Feedback.failed("That image couldn't be read.")
             }
         }
     }
@@ -1178,11 +1172,9 @@ fun LibraryScreen(
                 movingSelectedEvents = false
                 viewModel.moveSelectedEventsInto(parentId) { moved, refused ->
                     if (refused > 0) {
-                        Toast.makeText(
-                            context,
-                            "Moved $moved. $refused could not go there without nesting inside itself.",
-                            Toast.LENGTH_LONG
-                        ).show()
+                        Feedback.failed(
+                            "Moved $moved. $refused couldn't go there without nesting inside itself."
+                        )
                     }
                 }
             },
