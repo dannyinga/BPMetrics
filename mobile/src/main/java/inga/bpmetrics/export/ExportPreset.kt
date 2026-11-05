@@ -256,20 +256,6 @@ data class ExportPreset(
         withFraming(it.graphLeft, it.graphTop, it.graphRight, it.graphBottom)
     }
 
-    /**
-     * Repairs anything deserialization could have left impossible.
-     *
-     * Gson builds objects without running the constructor, so a field absent from the payload is
-     * left at the JVM's zero rather than at the Kotlin default. A preset saved before a field
-     * existed therefore comes back with `0`, `false`, or — worse — a `null` sitting in a `String`
-     * the type system swears cannot be null. Every caller downstream is entitled to trust the type,
-     * so the repair belongs here, at the one door values enter through.
-     *
-     * Only states nothing could have chosen are corrected. Fields where "absent" and "deliberately
-     * zero" look identical — the opacities, `headerXPercent` — are left as they arrive; they have
-     * existed since the first version, so absent is not a case that occurs.
-     */
-    @Suppress("USELESS_ELVIS")
     /** The frame this preset was drawn with before any of this existed. */
     val baseFrame: GraphFrame
         get() = GraphFrame(graphLeft, graphTop, graphRight, graphBottom)
@@ -323,6 +309,20 @@ data class ExportPreset(
         }
     }
 
+    /**
+     * Repairs anything deserialization could have left impossible.
+     *
+     * Gson builds objects without running the constructor, so a field absent from the payload is
+     * left at the JVM's zero rather than at the Kotlin default. A preset saved before a field
+     * existed therefore comes back with `0`, `false`, or — worse — a `null` sitting in a `String`
+     * the type system swears cannot be null. Every caller downstream is entitled to trust the type,
+     * so the repair belongs here, at the one door values enter through.
+     *
+     * Only states nothing could have chosen are corrected. Fields where "absent" and "deliberately
+     * zero" look identical — the opacities, `headerXPercent` — are left as they arrive; they have
+     * existed since the first version, so absent is not a case that occurs.
+     */
+    @Suppress("USELESS_ELVIS")
     fun sanitised(): ExportPreset {
         val shipped = ExportPreset()
         // A rectangle with no area draws nothing, which is how an older preset with no framing

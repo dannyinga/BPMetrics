@@ -1306,7 +1306,7 @@ private fun AddToCollectionDialog(
                             Column {
                                 Text(summary.collection.displayName)
                                 Text(
-                                    countLabelPublic(summary.recordCount, "recording"),
+                                    countLabel(summary.recordCount, "recording"),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

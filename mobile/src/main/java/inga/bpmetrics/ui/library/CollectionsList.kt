@@ -178,10 +178,10 @@ private fun CollectionCard(
                         Text(
                             buildString {
                                 if (summary.eventCount > 0) {
-                                    append(countLabelPublic(summary.eventCount, "event"))
+                                    append(countLabel(summary.eventCount, "event"))
                                     append("  ·  ")
                                 }
-                                append(countLabelPublic(summary.recordCount, "recording"))
+                                append(countLabel(summary.recordCount, "recording"))
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -245,5 +245,5 @@ private fun CollectionCard(
 }
 
 /** "3 events", "1 recording". Shared with the event cards so the phrasing does not drift. */
-internal fun countLabelPublic(count: Int, noun: String) =
+internal fun countLabel(count: Int, noun: String) =
     "$count $noun${if (count == 1) "" else "s"}"

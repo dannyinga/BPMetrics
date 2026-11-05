@@ -224,9 +224,6 @@ fun formatSpan(span: TimeSpan?, zone: java.time.ZoneId = ReaderClock): String {
     }
 }
 
-private fun countLabel(count: Int, noun: String) =
-    "$count $noun${if (count == 1) "" else "s"}"
-
 /**
  * An event in the events list.
  *

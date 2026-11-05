@@ -1,15 +1,9 @@
 package inga.bpmetrics.ui.detail
 
-import android.net.Uri
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -18,119 +12,36 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Place
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Watch
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Slider
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
-import inga.bpmetrics.export.CsvExporter
 import inga.bpmetrics.ui.graph.TimeUtils
 import inga.bpmetrics.library.clock
-import inga.bpmetrics.library.clockDiffersFromReader
 import inga.bpmetrics.library.displayName
-import inga.bpmetrics.ui.analysis.ConcurrentAnalysis
-import inga.bpmetrics.ui.analysis.ConcurrentChart
 import inga.bpmetrics.ui.analysis.RecordInsights
-import inga.bpmetrics.ui.analysis.rememberConcurrentViewWindow
 import inga.bpmetrics.ui.analysis.shortDuration
-import inga.bpmetrics.ui.util.StringFormatHelpers.getDateString
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
-import inga.bpmetrics.ui.tags.EffectiveTagChip
-import inga.bpmetrics.ui.tags.TagSelectionDialog
 import inga.bpmetrics.ui.components.FlowRow
-import inga.bpmetrics.ui.components.BpmCard
-import inga.bpmetrics.ui.components.BpmSectionHeader
-import inga.bpmetrics.ui.components.BpmSpacing
-import inga.bpmetrics.ui.components.DeleteConfirmDialog
 import inga.bpmetrics.ui.components.PersonPicker
-import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Share
-import inga.bpmetrics.ui.record.watchLabel
 import inga.bpmetrics.ui.record.RecordPlacement
-import inga.bpmetrics.ui.record.BpmRecordViewModel
-
-/**
- * The parts of a recording's page that are about the recording itself.
- *
- * Lifted wholesale out of `BpmRecordScreen` when Sprint 5 folded that screen into the shared detail
- * page. Nothing here changed: the breadcrumb, the venue row, the split dialog and the standing
- * against a person's other recordings were all correct, they were simply living inside a screen
- * that also reimplemented the analysis. They are the *subject* half.
- */
-@Composable
-internal fun Breadcrumb(
-    placement: RecordPlacement,
-    onOpenEvent: (Long) -> Unit,
-    onOpenGroup: (Long) -> Unit
-) {
-    if (placement.event == null) return
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        placement.group?.let { group ->
-            Text(
-                text = group.displayName,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .clickable { onOpenGroup(group.eventId) }
-                    .padding(vertical = 4.dp, horizontal = 2.dp)
-            )
-            Text(
-                " > ",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Text(
-            text = placement.event.displayName,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .clickable { onOpenEvent(placement.event.eventId) }
-                .padding(vertical = 4.dp, horizontal = 2.dp)
-        )
-    }
-}
 
 /**
  * Where this recording stands among that person's others.

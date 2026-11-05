@@ -19,9 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import java.io.File
 import java.io.IOException
 
 class BpmExportService : Service() {
@@ -39,9 +37,6 @@ class BpmExportService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "inga.bpmetrics.ACTION_STOP_EXPORT"
 
-        val isExporting = MutableStateFlow(false)
-        val exportProgress = MutableStateFlow(0f)
-        val finishedFile = MutableStateFlow<File?>(null)
 
         fun startExport(
             context: Context,
@@ -53,8 +48,6 @@ class BpmExportService : Service() {
             presetName: String? = null,
             sourceLabel: String? = null
         ) {
-            finishedFile.value = null
-
             RenderQueueManager.addJob(
                 recordId = recordId,
                 recordTitle = recordTitle,
@@ -106,7 +99,6 @@ class BpmExportService : Service() {
         
         // Ensure the queue processing loop is running
         if (queueJob == null || queueJob?.isCompleted == true) {
-            isExporting.value = true
             queueJob = serviceScope.launch {
                 processQueue()
             }
@@ -125,7 +117,6 @@ class BpmExportService : Service() {
                 currentRunningJobId = nextJob.id
             }
             RenderQueueManager.updateJobStatus(nextJob.id, RenderStatus.RENDERING)
-            exportProgress.value = 0f
 
             // Create a child coroutine for this specific export job
             val job = serviceScope.launch {
@@ -156,7 +147,6 @@ class BpmExportService : Service() {
                     var lastNotificationTime = System.currentTimeMillis()
                     val file = VideoExporter.exportVideo(this@BpmExportService, record, hydrated.config) { progress ->
                         RenderQueueManager.updateJobProgress(nextJob.id, progress)
-                        exportProgress.value = progress
                         
                         val currentTime = System.currentTimeMillis()
                         if (progress == 0f || progress >= 1f || currentTime - lastNotificationTime >= 1000L) {
@@ -212,8 +202,6 @@ class BpmExportService : Service() {
             }
         }
 
-        isExporting.value = false
-        exportProgress.value = 0f
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

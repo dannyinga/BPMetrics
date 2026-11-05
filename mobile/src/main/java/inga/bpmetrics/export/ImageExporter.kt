@@ -10,7 +10,6 @@ import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.RectF
 import android.graphics.Shader
-import androidx.core.graphics.createBitmap
 import inga.bpmetrics.library.BpmDataPointEntity
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordWithPoints
@@ -18,14 +17,11 @@ import inga.bpmetrics.library.RecordNameFormatter
 import inga.bpmetrics.library.PersonColors
 import inga.bpmetrics.ui.graph.TimeUtils
 import inga.bpmetrics.ui.util.StringFormatHelpers
-import java.io.File
-import java.io.FileOutputStream
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import androidx.core.graphics.withClip
-import inga.bpmetrics.export.ExportUtils.adjustAlpha
 import kotlin.math.abs
 
 /**
@@ -94,38 +90,6 @@ object ImageExporter {
         val wordmarkCorner: WordmarkCorner = WordmarkCorner.BOTTOM_RIGHT,
         val wordmarkOpacity: Int = 55
     )
-
-    /**
-     * Renders the BPM graph to a [Bitmap].
-     *
-     * @param record The BPM record to render.
-     * @param config The configuration for rendering.
-     * @return A [Bitmap] containing the rendered graph.
-     */
-    fun renderGraphToBitmap(record: BpmRecordWithPoints, config: ImageExportConfig): Bitmap {
-        val bitmap = createBitmap(config.width, config.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        renderOnCanvas(canvas, record, config)
-        return bitmap
-    }
-
-
-    /**
-     * Shares a [Bitmap] as a PNG file using an Intent.
-     *
-     * @param context Android context.
-     * @param bitmap The bitmap to share.
-     * @param title The title for the filename.
-     */
-    fun shareBitmap(context: android.content.Context, bitmap: Bitmap, title: String) {
-        val sanitizedTitle = title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
-        val fileName = "${sanitizedTitle}_graph.png"
-        val tempFile = File(context.cacheDir, fileName)
-        try {
-            FileOutputStream(tempFile).use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
-            ExportUtils.shareFile(context, tempFile, "image/png")
-        } catch (e: Exception) { e.printStackTrace() }
-    }
 
     /**
      * Interpolates the BPM value at a specific timestamp.
@@ -1009,8 +973,7 @@ object ImageExporter {
         fun getX(ts: Double, vp: Viewport): Float = graphLeft + ((ts - vp.start) / vp.duration * graphWidth).toFloat()
     }
 
-    private class BpmRanges(val snippetMin: Double, val snippetMax: Double, val uiMin: Double, val uiMax: Double, val title: String) {
-        val snippetRange = (snippetMax - snippetMin).coerceAtLeast(1.0)
+    private class BpmRanges(val uiMin: Double, val uiMax: Double, val title: String) {
         val uiRange = (uiMax - uiMin).coerceAtLeast(1.0)
     }
 
@@ -1041,7 +1004,7 @@ object ImageExporter {
             adjMax + (minSpread * 0.1)
         )
 
-        return BpmRanges(sMin, sMax, snapped.start, snapped.endInclusive, record.metadata.title)
+        return BpmRanges(snapped.start, snapped.endInclusive, record.metadata.title)
     }
 
     private fun calculateViewport(currentTime: Double?, windowSize: Long?, config: ImageExportConfig, record: BpmRecordWithPoints): Viewport {
@@ -1162,33 +1125,6 @@ object ImageExporter {
         record.dataPoints.lastOrNull()?.timestamp ?: record.metadata.durationMs
 
     /**
-     * Renders multiple BPM records on a single canvas with distinct multi-color curves and a legend.
-     */
-    fun renderMultiRecordsOnCanvas(
-        canvas: Canvas,
-        records: List<BpmRecordWithPoints>,
-        config: ImageExportConfig,
-        currentTimeMs: Double? = null,
-        windowSizeMs: Long? = null,
-        graphRect: RectF = RectF(0f, 0f, 1f, 1f)
-    ) {
-        if (records.isEmpty()) return
-        if (records.size == 1) {
-            renderOnCanvas(canvas, records.first(), config, currentTimeMs, windowSizeMs, graphRect)
-            return
-        }
-
-        renderAlignedRecordsOnCanvas(
-            canvas = canvas,
-            aligned = alignRecords(records, config.alignByElapsedTime),
-            config = config,
-            currentTimeMs = currentTimeMs,
-            windowSizeMs = windowSizeMs,
-            graphRect = graphRect
-        )
-    }
-
-    /**
      * Renders records that have already been placed on a shared timeline by [alignRecords].
      *
      * Video export aligns once and then calls this for every frame — re-aligning per frame would
@@ -1227,7 +1163,7 @@ object ImageExporter {
         val minBpm = (allPoints.minOf { it.bpm } - 5.0).coerceAtLeast(30.0)
         val maxBpm = (allPoints.maxOf { it.bpm } + 5.0).coerceAtMost(220.0)
         val ranges = BpmRanges(
-            minBpm, maxBpm, minBpm, maxBpm,
+            minBpm, maxBpm,
             config.graphTitle?.takeIf { it.isNotBlank() } ?: "Multi-Watch Session"
         )
 

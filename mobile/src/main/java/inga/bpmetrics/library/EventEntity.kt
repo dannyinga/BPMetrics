@@ -35,7 +35,7 @@ data class EventEntity(
      * those an event *is* depends only on what it happens to hold — see the Taxonomy Consolidation
      * doc, §2.1.
      *
-     * Not a foreign key, matching `EventGroupEntity.parentGroupId`: deleting a parent must orphan
+     * Not a foreign key, like every other reference in this model: deleting a parent must orphan
      * its children to the top rather than cascade, because deleting "Coachella" should not
      * silently take both of its days and every set in them.
      */
@@ -108,56 +108,6 @@ data class EventEntity(
         coverDim
     )
 
-}
-
-/**
- * A collection of events, and optionally of other collections — a festival, a day of one, a tour.
- *
- * Collections nest; events do not, and a recording still belongs to exactly one event. That split
- * is the whole design. "Subtronics inside Coachella Day 1 inside Coachella" is strict containment,
- * and the alternative — letting a recording belong to several events — would express it by putting
- * the same recording in all three. That leaves "which event is this recording's?" unanswerable on
- * the record screen, breaks nearest-wins tag inheritance (with three parents there is no nearest),
- * and makes every total count it three times.
- *
- * Nesting the *container* costs one nullable column and a walk up the parents. Nesting the leaf
- * would cost the meaning of the leaf.
- *
- * Its date range, like an event's, is derived from what it contains.
- */
-@Entity(tableName = "event_groups")
-data class EventGroupEntity(
-    @PrimaryKey(autoGenerate = true) val groupId: Long = 0,
-    val name: String,
-    @ColumnInfo(defaultValue = "") val notes: String = "",
-    val createdAt: Long = 0L,
-    /**
-     * The collection this one sits inside, or null at the top.
-     *
-     * Not a foreign key: deleting a parent must orphan its children to the top level rather than
-     * cascade, because deleting "Coachella" should not silently take both of its days and every
-     * event in them with it.
-     */
-    @ColumnInfo(defaultValue = "NULL") val parentGroupId: Long? = null,
-
-    /** See [EventEntity.coverPath]. Null means inherit from the collection above this one. */
-    @ColumnInfo(defaultValue = "NULL") val coverPath: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
-    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
-    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
-    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null
-) {
-    val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled collection"
-
-    /** This collection's own cover, or null if it has none of its own to offer. */
-    val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
-        coverDim
-    )
 }
 
 /**

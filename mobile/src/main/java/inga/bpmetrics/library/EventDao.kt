@@ -81,24 +81,6 @@ interface EventDao {
     @Query("SELECT * FROM events WHERE eventId = :eventId")
     suspend fun getEvent(eventId: Long): EventEntity?
 
-    @Query(
-        """
-        SELECT e.* FROM events e
-        LEFT JOIN bpm_records r ON r.eventId = e.eventId
-        WHERE e.parentId = :groupId
-        GROUP BY e.eventId
-        ORDER BY MIN(COALESCE(r.startTime, e.createdAt)) ASC
-        """
-    )
-    // `parentId`, not the legacy `groupId`: filing an event under a collection has written the
-    // tree link since the fold, so reading the old column would show a collection frozen at
-    // whatever it held before the migration.
-    fun getEventsForGroupFlow(groupId: Long): Flow<List<EventEntity>>
-
-    /** Events not yet filed into a group. */
-    @Query("SELECT * FROM events WHERE groupId IS NULL ORDER BY createdAt DESC")
-    fun getUngroupedEventsFlow(): Flow<List<EventEntity>>
-
     @Insert
     suspend fun insertEvent(event: EventEntity): Long
 

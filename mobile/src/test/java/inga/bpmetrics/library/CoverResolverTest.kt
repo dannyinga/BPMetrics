@@ -191,7 +191,6 @@ class CoverResolverTest {
     @Test
     fun `an entity with no cover offers none`() {
         assertNull(EventEntity(eventId = 1, name = "Subtronics").ownCover)
-        assertNull(EventGroupEntity(groupId = 1, name = "Coachella").ownCover)
     }
 
     @Test

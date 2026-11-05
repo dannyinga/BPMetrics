@@ -530,11 +530,6 @@ class LibraryRepository(
 
     fun getAllEvents(): Flow<List<EventEntity>> = eventDao.getAllEventsFlow()
 
-    fun getEventsForGroup(groupId: Long): Flow<List<EventEntity>> =
-        eventDao.getEventsForGroupFlow(groupId)
-
-    fun getUngroupedEvents(): Flow<List<EventEntity>> = eventDao.getUngroupedEventsFlow()
-
     fun getRecordsForEvent(eventId: Long): Flow<List<BpmRecordEntity>> =
         eventDao.getRecordsForEventFlow(eventId)
 

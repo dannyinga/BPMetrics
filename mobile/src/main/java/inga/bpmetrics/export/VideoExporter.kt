@@ -453,29 +453,6 @@ object VideoExporter {
     }
 
     /**
-     * Extracts the raw capture time from the video metadata.
-     */
-    fun getVideoCaptureTime(context: Context, uri: Uri): Long? {
-        if (uri.scheme == "content") {
-            val projection = arrayOf(android.provider.MediaStore.Video.VideoColumns.DATE_TAKEN)
-            try {
-                context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val dateTaken = cursor.getLong(0)
-                        if (dateTaken > 0) return dateTaken
-                    }
-                }
-            } catch (e: Exception) {}
-        }
-        val retriever = MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(context, uri)
-            val dateStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE) ?: return null
-            ExportUtils.parseDateToMillis(dateStr)
-        } catch (e: Exception) { null } finally { retriever.release() }
-    }
-
-    /**
      * Extracts the frame rate of a video with rounding.
      */
     fun getVideoFrameRate(context: Context, uri: Uri): Int? {
@@ -605,23 +582,14 @@ object VideoExporter {
         val spanMs: Long get() = (endMs - startMs).coerceAtLeast(1L)
     }
 
-    fun getOverlappingVideos(context: Context, record: BpmRecordWithPoints): List<Uri> =
-        getOverlappingVideos(context, listOf(record))
-
     /**
      * Queries the MediaStore for videos overlapping any of [records].
      *
      * A multi-record export spans from the earliest session to the latest, so a video worth
      * suggesting may overlap only one of them — searching a single record's window would miss it.
-     */
-    fun getOverlappingVideos(context: Context, records: List<BpmRecordWithPoints>): List<Uri> =
-        getOverlappingClips(context, records).map { it.uri }
-
-    /**
-     * The same query, keeping what it already reads.
      *
-     * The projection has always asked for `DATE_TAKEN` and `DURATION` and then thrown both away,
-     * returning bare uris. Per-clip work needs them: which people to offer on a clip depends on who
+     * Keeps each video's `DATE_TAKEN` and `DURATION` rather than bare uris. Per-clip work needs
+     * them: which people to offer on a clip depends on who
      * was recording during *that clip's* few minutes, not during the whole event, and a clip filmed
      * after someone's watch stopped must not offer their curve.
      */
