@@ -9,7 +9,6 @@ import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.WatchEntity
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -24,12 +23,12 @@ import kotlinx.coroutines.launch
  */
 class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() {
 
-    private val _recordCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
-
     val uiState: StateFlow<WatchesUiState> = combine(
         repository.getAllWatches(),
         repository.getAllPeople(),
-        _recordCounts
+        // Observed, so a count follows recordings as they arrive, move and go. These loaded once,
+        // before the list had, and so showed 0 until the screen poked them.
+        repository.recordCountsByWatch
     ) { watches, people, counts ->
         val byId = people.associateBy { it.personId }
         WatchesUiState(
@@ -45,19 +44,6 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
             isEmpty = watches.isEmpty()
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WatchesUiState())
-
-    init {
-        refreshCounts()
-    }
-
-    /** Record counts are a per-watch query, so they are refreshed rather than observed. */
-    fun refreshCounts() {
-        launchGuarded(failure = null) {
-            val watches = uiState.value.watches.map { it.watch.watchId }
-            if (watches.isEmpty()) return@launchGuarded
-            _recordCounts.value = watches.associateWith { repository.countRecordsForWatch(it) }
-        }
-    }
 
     /**
      * Updates both names at once, since the dialog edits them together.
@@ -89,7 +75,6 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
                 deviceName = deviceName,
                 personId = personId
             )
-            refreshCounts()
             Feedback.say("Watch registered.")
         }
     }
@@ -124,7 +109,6 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
     fun applyToPast(plan: ApplyToPast) {
         launchGuarded(failure = "Couldn't change who wore those recordings.") {
             val changed = repository.claimPastRecords(plan.watchId, plan.fromPersonId, plan.toPersonId)
-            refreshCounts()
             Feedback.say(
                 if (changed == 1) "1 earlier recording is now ${plan.toName}'s."
                 else "$changed earlier recordings are now ${plan.toName}'s."
@@ -135,7 +119,6 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
     fun merge(fromWatchId: String, intoWatchId: String) {
         launchGuarded {
             repository.mergeWatches(fromWatchId, intoWatchId)
-            refreshCounts()
             Feedback.say("Watches merged.")
         }
     }
@@ -143,7 +126,6 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
     fun delete(watchId: String) {
         launchGuarded {
             repository.deleteWatch(watchId)
-            refreshCounts()
             Feedback.say("Watch removed. Existing recordings keep their names.")
         }
     }

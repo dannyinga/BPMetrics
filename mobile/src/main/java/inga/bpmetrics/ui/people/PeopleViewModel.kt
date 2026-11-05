@@ -8,7 +8,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -24,11 +23,11 @@ import kotlinx.coroutines.launch
  */
 class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
 
-    private val _recordCounts = MutableStateFlow<Map<Long, Int>>(emptyMap())
-
     val uiState: StateFlow<PeopleUiState> = combine(
         repository.getAllPeople(),
-        _recordCounts
+        // Observed, so a count follows recordings as they arrive, move and go. These loaded once,
+        // before the list had, and so showed 0 until the screen poked them.
+        repository.recordCountsByPerson
     ) { people, counts ->
         PeopleUiState(
             people = people.map { person ->
@@ -38,23 +37,9 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PeopleUiState())
 
-    init {
-        refreshCounts()
-    }
-
-    /** Record counts are a per-person query, so they are refreshed rather than observed. */
-    fun refreshCounts() {
-        launchGuarded(failure = null) {
-            val ids = uiState.value.people.map { it.person.personId }
-            if (ids.isEmpty()) return@launchGuarded
-            _recordCounts.value = ids.associateWith { repository.countRecordsForPerson(it) }
-        }
-    }
-
     fun addPerson(name: String, colorArgb: Int?) {
         launchGuarded {
             repository.addPerson(name, colorArgb)
-            refreshCounts()
             Feedback.say("${name.trim()} added.")
         }
     }
@@ -100,7 +85,6 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
         launchGuarded {
             val count = repository.countRecordsForPerson(personId)
             repository.deletePerson(personId)
-            refreshCounts()
             Feedback.say(
                 if (count > 0) {
                     "Removed. Their $count recording${if (count == 1) "" else "s"} keep their name."

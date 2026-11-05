@@ -134,21 +134,12 @@ class AnalysisViewModel(
     private val refinedRecords: Flow<List<AnalysisRecord>> = combine(
         allInScope, tree, _exclusions
     ) { records, events, excluded ->
-        if (excluded.isEmpty) records else {
-            val dropped = mutableSetOf<Long>()
-            excluded.excludedEventIds.forEach {
-                dropped += inga.bpmetrics.library.EventTree.descendantsOf(events, it)
-            }
-            events.forEach { event ->
-                if (event.excludedFromParentAnalysis &&
-                    event.eventId !in excluded.includedDespiteFlag
-                ) {
-                    dropped += inga.bpmetrics.library.EventTree.descendantsOf(events, event.eventId)
-                }
-            }
-            records.filter {
-                it.eventId !in dropped && it.recordId !in excluded.excludedRecordIds
-            }
+        // Flags apply whether or not anything is unticked; this used to skip them until something
+        // was, so unticking an unrelated set also dropped every flagged one. The event being
+        // analysed is never dropped by its own flag.
+        val dropped = ScopeRefinement.droppedEventIds(events, rootEventId, excluded)
+        records.filter {
+            it.eventId !in dropped && it.recordId !in excluded.excludedRecordIds
         }
     }
 
@@ -416,7 +407,9 @@ class AnalysisViewModel(
     ) { records, options, currentScope, isFrozen ->
 
         if (records.isEmpty()) {
-            return@combine AnalysisUiState(isEmpty = true, isFrozen = isFrozen, scope = currentScope)
+            return@combine AnalysisUiState(
+                isEmpty = true, isLoading = false, isFrozen = isFrozen, scope = currentScope
+            )
         }
 
         // Calculate Trio values: Absolute lowest min, Time-weighted Average, Absolute highest max
@@ -569,6 +562,7 @@ class AnalysisViewModel(
             dateRangeText = dateRangeText(records),
             scope = currentScope,
             isEmpty = false,
+            isLoading = false,
             isFrozen = isFrozen
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AnalysisUiState())
@@ -802,13 +796,21 @@ private fun LibraryRepository.describeScope(ref: ScopeRef): Flow<AnalysisScope> 
         AnalysisScope.Group(
             name = "$chosen recording" + if (chosen == 1) "" else "s",
             eventCount = 0,
-            recordCount = chosen
+            recordCount = chosen,
+            kind = AnalysisScope.Group.Kind.SELECTION
         )
     }
 
     is ScopeRef.Recording -> records.map { rows ->
         rows.firstOrNull { it.metadata.recordId == ref.recordId }
-            ?.let { AnalysisScope.Group(name = it.metadata.title, eventCount = 0, recordCount = 1) }
+            ?.let {
+                AnalysisScope.Group(
+                    name = it.metadata.title,
+                    eventCount = 0,
+                    recordCount = 1,
+                    kind = AnalysisScope.Group.Kind.RECORDING
+                )
+            }
             ?: AnalysisScope.Unknown
     }
 
@@ -820,7 +822,8 @@ private fun LibraryRepository.describeScope(ref: ScopeRef): Flow<AnalysisScope> 
                 // The subtree minus itself: "3 events" under a festival means its days and sets,
                 // not the festival counting itself as one of them.
                 eventCount = within.size - 1,
-                recordCount = rows.count { it.metadata.eventId in within }
+                recordCount = rows.count { it.metadata.eventId in within },
+                kind = AnalysisScope.Group.Kind.EVENT
             )
         } ?: AnalysisScope.Unknown
     }
@@ -898,10 +901,10 @@ private fun LibraryRepository.describeFilter(
     getAllPeople(),
     getAllWatches(),
     getAllEvents(),
-    // The whole tree. This read the collections flow, which since sets arrived returns nothing —
-    // so a filter naming a container described it as unknown.
-    allEventsInTree
-) { categories, people, watches, events, groups ->
+    // A collection id names a collection, so this is where it is looked up. Reading the event tree
+    // named whichever event happened to share the number.
+    getAllCollections()
+) { categories, people, watches, events, collections ->
     // Tags are not held in one flow, so they are gathered from the categories in play. Only the
     // selected ones are looked up, which is a handful at most.
     val categoryNames = categories.associate { it.categoryId to it.name }
@@ -920,7 +923,7 @@ private fun LibraryRepository.describeFilter(
                 .map { it.displayName },
             events = events.filter { it.eventId in filter.selectedEventIds }
                 .map { it.displayName },
-            groups = groups.filter { it.eventId in filter.selectedGroupIds }
+            groups = collections.filter { it.collectionId in filter.selectedGroupIds }
                 .map { it.displayName }
         )
     )
@@ -959,6 +962,11 @@ data class AnalysisUiState(
     val dateRangeText: String = "",
     val scope: AnalysisScope = AnalysisScope.Unknown,
     val isEmpty: Boolean = true,
+    /**
+     * True until the first result. The initial state is empty too, and every page flashed
+     * "Nothing matches this filter" while it was really still loading.
+     */
+    val isLoading: Boolean = true,
     val isFrozen: Boolean = false
 ) {
     val recordCount: Int get() = records.size

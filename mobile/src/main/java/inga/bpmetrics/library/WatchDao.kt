@@ -64,6 +64,10 @@ interface WatchDao {
     @Query("SELECT COUNT(*) FROM bpm_records WHERE watchId = :watchId")
     suspend fun countRecordsForWatch(watchId: String): Int
 
+    /** Recordings per watch, kept current. Watches with none have no row. */
+    @Query("SELECT watchId AS `key`, COUNT(*) AS n FROM bpm_records WHERE watchId IS NOT NULL GROUP BY watchId")
+    fun recordCountsByWatch(): Flow<List<CountByKey>>
+
     /**
      * Re-stamps the wearer on records from one watch within a date range.
      *

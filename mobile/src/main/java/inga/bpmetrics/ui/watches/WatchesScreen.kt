@@ -74,8 +74,6 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
     var showAddDialog by remember { mutableStateOf(false) }
     var applying by remember { mutableStateOf<ApplyToPast?>(null) }
 
-    LaunchedEffect(uiState.watches.size) { viewModel.refreshCounts() }
-
     Scaffold(
         topBar = {
             TopAppBar(

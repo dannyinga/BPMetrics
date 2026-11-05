@@ -938,6 +938,10 @@ class LibraryRepository(
 
     suspend fun countEventsAt(locationId: Long): Int = locationDao.countEventsAt(locationId)
 
+    /** Events per venue, as the list beside it changes. */
+    val eventCountsByLocation: Flow<Map<Long, Int>>
+        get() = locationDao.eventCountsByLocation().map { rows -> rows.associate { it.id to it.n } }
+
     /**
      * Removes a venue and forgets it everywhere, leaving everything else alone.
      *
@@ -2108,6 +2112,10 @@ class LibraryRepository(
 
     suspend fun countRecordsForWatch(watchId: String): Int = watchDao.countRecordsForWatch(watchId)
 
+    /** Recordings per watch, as they arrive and move. */
+    val recordCountsByWatch: Flow<Map<String, Int>>
+        get() = watchDao.recordCountsByWatch().map { rows -> rows.associate { it.key to it.n } }
+
     /**
      * Registers a watch before it has ever sent a record.
      *
@@ -2251,6 +2259,10 @@ class LibraryRepository(
         personDao.updateColor(personId, colorArgb)
 
     suspend fun countRecordsForPerson(personId: Long): Int = personDao.countRecordsForPerson(personId)
+
+    /** Recordings per person, as they arrive and are reattributed. */
+    val recordCountsByPerson: Flow<Map<Long, Int>>
+        get() = personDao.recordCountsByPerson().map { rows -> rows.associate { it.id to it.n } }
 
     /**
      * Attributes a chosen set of recordings to someone, or to nobody.

@@ -100,8 +100,10 @@ object FilterChips {
             chips += FilterChip(FilterDimension.EVENT, "event-${it.eventId}", it.displayName)
         }
 
-        events.filter { it.eventId in filter.selectedGroupIds }.forEach {
-            chips += FilterChip(FilterDimension.COLLECTION, "group-${it.eventId}", it.displayName)
+        // A collection id names a collection. This looked among events, so the chip named whichever
+        // event shared the number, or was missing, and with no chip there was nothing to clear.
+        options.collectionEntities.filter { it.collectionId in filter.selectedGroupIds }.forEach {
+            chips += FilterChip(FilterDimension.COLLECTION, "group-${it.collectionId}", it.displayName)
         }
 
         options.locations.filter { (id, _) -> id.toLongOrNull() in filter.selectedLocationIds }

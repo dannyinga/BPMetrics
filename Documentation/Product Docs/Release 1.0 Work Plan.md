@@ -125,6 +125,15 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 **Verify:** add unit tests for S4.2 (across a time-zone boundary) and S4.3 (exclusion with nothing else unticked).
 **Commit:** `fix: filters, roll-ups and counts that agree with the library`
 
+**As built:**
+- **S4.1:** the chip reads `FilterOptions.collectionEntities`, and the analysis header reads `getAllCollections()`. `FilterChipsTest` had a case that used an event's id as a collection id and passed only because of the bug; it now uses a real collection.
+- **S4.2:** `ui/library/PickerDays.kt` converts both ways: picker → local range on Apply, and stored range → picker days on reopen. Ranges saved before this still hold their UTC-midnight instants, and they show as they did until they're picked again.
+- **S4.3:** `ScopeRefinement.droppedEventIds` is the one place the rule lives. `recordsIn` and the analysis screen both call it, and the screen now also passes its root, so an event analysed directly is never dropped by its own flag.
+- **S4.4:** grouped counts observed as Flows (`eventCountsByLocation`, `recordCountsByPerson`, `recordCountsByWatch`). These are queries only, with no schema change. Every `refreshCounts()` and both `LaunchedEffect(size)` workarounds are gone.
+- **S4.5:** `AnalysisScope.Group.kind` (Collection, Event, Recording, Selection) drives the top bar's kind line and the empty-state text. `AnalysisUiState.isLoading` shows a spinner under the subject header. An empty scope keeps its header and section bar, so the Events tab still works.
+- **S4.6:** Edit counts both kinds ("Edit 2 events and 3 recordings", plus how many recordings that covers). Tags and photos go on picked events themselves. Attribute covers the recordings inside them. Add to a collection adds events as events; the separate "Add events to a collection…" item is gone. "Correct the time…" appears only when recordings are picked one by one. Merge with events selected says why it can't. The shift dialog's stuck flag, which made it appear "out of nowhere", is cleared.
+- **Filing moves events (Danny's call):** "File into an event…" / "Add to an event…" now nests picked events under the target, with everything inside them, and files only the recordings picked one by one. Before, it filed the recordings inside a picked event and left the event and its sets empty. A move that would put an event inside itself is refused and reported. "New event…" from either picker takes the picked events too. Before, "Move events into… → New event…" made the event and moved nothing.
+
 ### S5 — Settings that do what they say
 
 | Ticket | Work | Audit |
@@ -134,8 +143,9 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 | **S5.3** | Restoring a backup file confirms first and says plainly what it does. It doesn't overwrite settings it shouldn't, such as id-valued keys from another database. While it runs, progress shows on Restore itself (with a count), and both buttons are disabled. Back up suggests a dated name with no doubled `.json`. | §3 Settings, #33, #34 |
 | **S5.4** | Open the most-used settings group by default and move Sync status higher. | §3 Settings |
 | **S5.5** | The People edit dialog gets Cancel, a scrolling body, and a warning that removing a person unlinks their watches. | §3 Settings |
+| **S5.6** | **One entry per watch, whatever build it runs.** (a) `resolveWatch` also matches on the Data Layer node that sent the record. A watch id it hasn't seen, from a node an existing entry already has as `lastKnownNodeId`, files the recording under that entry, which keeps its name, wearer and colour. The entry remembers the new id as an alias so later syncs match directly; that's a schema change, so diff the schema first. This also covers pre-id builds keyed by model name. (b) `WatchDto` carries `lastKnownNodeId` (still format 7, which hasn't shipped), and restore matches on it the same way. Take it out of `BackupCoverageTest`'s excuses. (c) A real "Merge into…" action on a watch, using the existing `WatchesViewModel.merge`, with a confirm that gives the count. (d) The Watches screen suggests "This looks like the same watch as X" for entries with the same model whose first-to-last-seen ranges don't overlap. It's a suggestion that opens the merge confirm, never an automatic merge. No change on the watch, so watches already in use benefit. A factory reset gives a watch a new node, and that case is left to (c). **Verify:** a unit test where a reinstalled watch (new id, same node) lands on its old entry; one where two watches of the same model on different nodes stay apart; and a backup round trip that keeps the node. | #39 |
 
-**Commit:** `fix(settings): fields you can type in, and settings that exist`
+**Commit:** `fix(settings): fields you can type in, settings that exist, and one entry per watch`
 
 ### S6 — Export wizard keeps your work
 
@@ -311,7 +321,7 @@ Ambient mode and a tile are post-1.0.
 |---|---|---|
 | **S18.1** | A shared management-list scaffold for People, Watches, Locations and Tags. It provides FAB add, tap to edit, one destructive verb, `Feedback`, and `BpmEmptyState`. The FAB moves up while a snackbar is showing (since S2 the shared snackbar covers it). | §3 Settings table |
 | **S18.2** | Move the four screens onto it. Tags gets an empty state and drops the hidden edit mode. The scaffold leaves room so the FAB never covers the last row. Tags is titled "Tags" and its categories show counts. Watches: replace the red "will arrive unattributed" line repeated on every card with one banner ("N watches have no wearer"). The watch dialog gets Cancel, keeps Remove apart from Save, and hides "Model:" when the model is unknown. | §3 Settings, §6 |
-| **S18.3** | Remove "Register a watch" and the merge it promised (D2). Watches appear when they first sync. | #15 |
+| **S18.3** | Remove "Register a watch" and the dialog text promising a merge (D2). Watches appear when they first sync. Keep S5.6's "Merge into…" and its suggestion, and move them onto the scaffold. | #15 |
 | **S18.4** | "Use current" location explains a denied permission. | §3 Settings |
 
 **Commit:** `refactor(ui): one way to manage people, watches, places and tags`

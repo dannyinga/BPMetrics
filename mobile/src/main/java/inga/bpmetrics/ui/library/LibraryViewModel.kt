@@ -437,20 +437,36 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      *
      * @param onDone true when the dialog can close.
      */
-    fun createEvent(edit: EventEdit, recordIds: Set<Long> = emptySet(), onDone: (Boolean) -> Unit = {}) {
+    /**
+     * Makes an event, and files [recordIds] into it and nests [eventIds] under it.
+     *
+     * Events go in as events, as with [assignSelectedToEvent]. [onRefused] hears how many couldn't,
+     * which happens when the new event was itself placed inside one of them.
+     */
+    fun createEvent(
+        edit: EventEdit,
+        recordIds: Set<Long> = emptySet(),
+        eventIds: Set<Long> = emptySet(),
+        onRefused: (Int) -> Unit = {},
+        onDone: (Boolean) -> Unit = {}
+    ) {
         launchGuarded {
             val id = repository.createEvent(edit.name)
             repository.setEventType(id, edit.type)
             edit.parentId?.let { repository.setEventParent(id, it) }
             repository.setEventLocation(id, edit.locationId)
             if (recordIds.isNotEmpty()) repository.assignRecordsToEvent(recordIds, id)
+            if (eventIds.isNotEmpty()) {
+                val refused = moveEventsUnder(eventIds, id)
+                if (refused > 0) onRefused(refused)
+            }
 
             when (val result = repository.setEventWindow(
                 id, edit.windowStart, edit.windowEnd, edit.windowPeople
             )) {
                 is LibraryRepository.WindowResult.Saved -> {
                     _windowError.value = null
-                    clearSelection()
+                    clearWholeSelection()
                     onDone(true)
                 }
                 is LibraryRepository.WindowResult.Collides -> {
@@ -663,10 +679,18 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         launchGuarded { repository.deleteCollection(collectionId) }
     }
 
+    /**
+     * Puts the whole selection in a set: picked events as events, so the set follows their tree,
+     * and picked recordings as recordings. This used to take only the recordings, and a selection
+     * of events added nothing.
+     */
     fun addSelectionToCollection(collectionId: Long) {
+        val records = _selectedRecordIds.value
+        val events = _selectedEventIds.value
         launchGuarded {
-            repository.addRecordsToCollection(collectionId, _selectedRecordIds.value)
-            clearSelection()
+            if (records.isNotEmpty()) repository.addRecordsToCollection(collectionId, records)
+            events.forEach { repository.addEventToCollection(collectionId, it) }
+            clearWholeSelection()
         }
     }
 
@@ -790,28 +814,11 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * @param onDone how many moved, and how many were refused as cycles.
      */
     fun moveSelectedEventsInto(parentId: Long?, onDone: (moved: Int, refused: Int) -> Unit = { _, _ -> }) {
+        val events = _selectedEventIds.value
         launchGuarded {
-            var moved = 0
-            var refused = 0
-            _selectedEventIds.value.forEach { eventId ->
-                if (eventId == parentId) {
-                    refused++
-                } else if (repository.setEventParent(eventId, parentId)) {
-                    moved++
-                } else {
-                    refused++
-                }
-            }
+            val refused = moveEventsUnder(events, parentId)
             clearEventSelection()
-            onDone(moved, refused)
-        }
-    }
-
-    /** Puts every selected event in a set. */
-    fun addSelectedEventsToCollection(collectionId: Long) {
-        launchGuarded {
-            _selectedEventIds.value.forEach { repository.addEventToCollection(collectionId, it) }
-            clearEventSelection()
+            onDone(events.size - refused, refused)
         }
     }
 
@@ -927,18 +934,30 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * hangs every walk of the tree, and no screen should be the last thing preventing that.
      */
 
-    /** Files the current selection under an event, or unfiles it when [eventId] is null. */
-    fun assignSelectedToEvent(eventId: Long?) {
-        // The effective set, so filing a selected *event* files everything inside it. Refiling a
-        // day into a festival by picking the day is the same gesture as refiling four loose
-        // recordings, and the action should not care which was tapped.
-        val ids = selectedRecordIdsEffective.value
-        if (ids.isEmpty()) return
+    /**
+     * Files the current selection under an event, or takes it out of any when [eventId] is null.
+     *
+     * A picked event moves, with everything inside it, so filing Day 1 into a festival makes it
+     * one of the festival's days. This used to file the recordings inside the event instead, which
+     * left Day 1 and its sets standing empty. Picked recordings are filed as before.
+     *
+     * @param onDone how many events couldn't move there, because it is inside them.
+     */
+    fun assignSelectedToEvent(eventId: Long?, onDone: (refused: Int) -> Unit = {}) {
+        val records = _selectedRecordIds.value
+        val events = _selectedEventIds.value
+        if (records.isEmpty() && events.isEmpty()) return
         launchGuarded {
-            repository.assignRecordsToEvent(ids, eventId)
+            if (records.isNotEmpty()) repository.assignRecordsToEvent(records, eventId)
+            val refused = moveEventsUnder(events, eventId)
             clearWholeSelection()
+            onDone(refused)
         }
     }
+
+    /** Nests [events] under [parentId] one at a time, so each move sees the last. Returns refusals. */
+    private suspend fun moveEventsUnder(events: Set<Long>, parentId: Long?): Int =
+        events.count { it == parentId || !repository.setEventParent(it, parentId) }
 
     /**
      * The combined UI state, emitting a sorted and filtered list of records for the library list.
@@ -1140,12 +1159,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * and clearing all of them from a multi-selection is not what anyone means by this.
      */
     fun clearCoverForSelection(context: android.content.Context, onResult: (String) -> Unit) {
-        val ids = _selectedRecordIds.value.toList()
         launchGuarded {
-            val eventId = repository.sharedEventOf(ids)
-            if (eventId == null) {
-                onResult("These recordings are not all in the same event.")
-                return@launchGuarded
+            val eventId = when (val target = coverTarget()) {
+                is CoverTarget.Refused -> {
+                    onResult(target.reason)
+                    return@launchGuarded
+                }
+                is CoverTarget.Event -> target.eventId
             }
             val event = repository.getEvent(eventId)
             if (event?.coverPath == null) {
@@ -1254,15 +1274,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         source: android.net.Uri,
         onResult: (String) -> Unit
     ) {
-        val ids = _selectedRecordIds.value.toList()
         launchGuarded {
-            val eventId = repository.sharedEventOf(ids)
-            if (eventId == null) {
-                onResult(
-                    "These recordings are not all in the same event. File them into one first, " +
-                        "and its cover will apply to every recording in it."
-                )
-                return@launchGuarded
+            val eventId = when (val target = coverTarget()) {
+                is CoverTarget.Refused -> {
+                    onResult(target.reason)
+                    return@launchGuarded
+                }
+                is CoverTarget.Event -> target.eventId
             }
 
             val name = repository.getEvent(eventId)?.displayName ?: "cover"
@@ -1275,7 +1293,35 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             onResult(
                 if (stored) "Cover set on $name" else "That image could not be read"
             )
-            if (stored) clearSelection()
+            if (stored) clearWholeSelection()
+        }
+    }
+
+    /** Where a photo set from the selection goes, or why there is no one place. */
+    private sealed interface CoverTarget {
+        data class Event(val eventId: Long) : CoverTarget
+        data class Refused(val reason: String) : CoverTarget
+    }
+
+    /**
+     * One picked event is its own target. Picked recordings go to the event they share. A mix, or
+     * several events, has no single place, and saying so beats choosing one.
+     */
+    private suspend fun coverTarget(): CoverTarget {
+        val records = _selectedRecordIds.value
+        val events = _selectedEventIds.value
+        return when {
+            records.isEmpty() && events.size == 1 -> CoverTarget.Event(events.first())
+            events.isNotEmpty() ->
+                CoverTarget.Refused(
+                    "A photo goes on one event. Select just that event, or recordings from one " +
+                        "event."
+                )
+            else -> repository.sharedEventOf(records.toList())?.let { CoverTarget.Event(it) }
+                ?: CoverTarget.Refused(
+                    "These recordings are not all in the same event. File them into one first, " +
+                        "and its cover will apply to every recording in it."
+                )
         }
     }
 
@@ -1392,15 +1438,22 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         }
     }
 
-    fun addTagsToSelectedRecords(tagIds: List<Long>) {
-        val idsToTag = _selectedRecordIds.value
+    /**
+     * Tags the selection. A picked event gets the tag itself, so everything in it inherits it,
+     * including recordings that arrive later; a picked recording gets it directly. Picked events
+     * used to be skipped.
+     */
+    fun addTagsToSelection(tagIds: List<Long>) {
+        val records = _selectedRecordIds.value
+        val events = _selectedEventIds.value
         launchGuarded {
-            idsToTag.forEach { recordId ->
-                tagIds.forEach { tagId ->
-                    repository.addTagToRecord(recordId, tagId)
-                }
+            records.forEach { recordId ->
+                tagIds.forEach { tagId -> repository.addTagToRecord(recordId, tagId) }
             }
-            clearSelection()
+            events.forEach { eventId ->
+                tagIds.forEach { tagId -> repository.addTagToEvent(eventId, tagId) }
+            }
+            clearWholeSelection()
         }
     }
 
@@ -1412,11 +1465,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * rather than hidden behind the selection highlight.
      */
     fun assignPersonToSelectedRecords(personId: Long?) {
-        val ids = _selectedRecordIds.value
+        // The effective set: a wearer belongs to recordings, so a picked event means the ones in
+        // it. This took only the recordings picked one by one.
+        val ids = selectedRecordIdsEffective.value
         if (ids.isEmpty()) return
         launchGuarded {
             repository.assignPersonToRecords(ids, personId)
-            clearSelection()
+            clearWholeSelection()
         }
     }
 

@@ -36,8 +36,20 @@ sealed interface AnalysisScope {
         val eventCount: Int,
         val recordCount: Int,
         /** Whether membership answers a question, which changes what the count means. */
-        val isSmart: Boolean = false
+        val isSmart: Boolean = false,
+        /**
+         * What the page is about. Events, recordings and hand-picked selections all share this
+         * shape, and the screen called every one of them a "Collection".
+         */
+        val kind: Kind = Kind.COLLECTION
     ) : AnalysisScope {
+        enum class Kind(val label: String) {
+            COLLECTION("Collection"),
+            EVENT("Event"),
+            RECORDING("Recording"),
+            SELECTION("Selection")
+        }
+
         override val title: String get() = name
         override val detail: String
             get() = buildString {

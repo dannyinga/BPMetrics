@@ -332,10 +332,27 @@ fun AnalysisScreen(
             }
         }
 
+        // Loading is not empty. The page used to say "Nothing matches this filter" until the
+        // first result arrived, on every page, including ones with hundreds of recordings.
+        if (uiState.isLoading) {
+            Column(Modifier.padding(paddingValues).fillMaxSize()) {
+                subjectHeader?.invoke()
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.CircularProgressIndicator()
+                }
+            }
+            return@Scaffold
+        }
+
         if (uiState.isEmpty) {
             Column(Modifier.padding(paddingValues).fillMaxSize()) {
+                // An event with nothing recorded yet is still an event: its cover, its name, and
+                // the Events tab, which is the only way down to the days and sets inside it.
+                subjectHeader?.invoke()
                 filterNotice()
-                EmptyAnalysis(uiState, Modifier.fillMaxSize())
+                SectionBar(sections = sections, selected = section, onSelect = { section = it })
+                if (section == AnalysisSection.EVENTS) subjectChildren?.invoke()
+                else EmptyAnalysis(uiState, Modifier.fillMaxSize())
             }
             return@Scaffold
         }
@@ -1050,8 +1067,8 @@ private fun SectionTitle(title: String, subtitle: String?) {
  * event or a saved snapshot.
  */
 private fun AnalysisUiState.scopeSubtitle(): String {
-    val kind = when (scope) {
-        is AnalysisScope.Group -> "Collection"
+    val kind = when (val scope = scope) {
+        is AnalysisScope.Group -> scope.kind.label
         is AnalysisScope.Saved -> "Saved analysis"
         else -> "Filtered"
     }
@@ -1066,15 +1083,29 @@ private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifie
     BpmEmptyState(
         modifier = modifier,
         icon = Icons.Default.Insights,
-        title = when (uiState.scope) {
-            is AnalysisScope.Group -> "Nothing in this collection yet"
+        title = when (val scope = uiState.scope) {
+            is AnalysisScope.Group -> when (scope.kind) {
+                AnalysisScope.Group.Kind.COLLECTION -> "Nothing in this collection yet"
+                AnalysisScope.Group.Kind.EVENT -> "Nothing recorded here yet"
+                AnalysisScope.Group.Kind.RECORDING -> "Nothing to show for this recording"
+                AnalysisScope.Group.Kind.SELECTION -> "None of these recordings are left"
+            }
             is AnalysisScope.Saved -> "This analysis has no recordings"
             else -> "Nothing matches this filter"
         },
-        body = when (uiState.scope) {
-            is AnalysisScope.Group ->
-                "Add events to this collection, and file recordings into them, and their " +
-                    "numbers will appear here."
+        body = when (val scope = uiState.scope) {
+            is AnalysisScope.Group -> when (scope.kind) {
+                AnalysisScope.Group.Kind.COLLECTION ->
+                    "Add events to this collection, and file recordings into them, and their " +
+                        "numbers will appear here."
+                AnalysisScope.Group.Kind.EVENT ->
+                    "File recordings into this event, or into the events inside it, and their " +
+                        "numbers will appear here."
+                AnalysisScope.Group.Kind.RECORDING ->
+                    "Everything in it is left out. Clear the filter above to see it again."
+                AnalysisScope.Group.Kind.SELECTION ->
+                    "They have been deleted since they were selected."
+            }
             is AnalysisScope.Saved ->
                 "It was saved without any, or its recordings have since been deleted."
             else ->

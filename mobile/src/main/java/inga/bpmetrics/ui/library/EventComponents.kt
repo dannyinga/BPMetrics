@@ -572,7 +572,8 @@ fun NameDialog(
  */
 @Composable
 fun AddToEventDialog(
-    recordCount: Int,
+    /** What is being filed, as [selectionLabel] says it. */
+    what: String,
     /** The whole tree. Containers included: a recording can belong to a festival directly. */
     events: List<inga.bpmetrics.library.EventEntity>,
     /** When each happened, for ordering. See [inga.bpmetrics.library.EventTree.startsOf]. */
@@ -601,7 +602,7 @@ fun AddToEventDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add $recordCount recording${if (recordCount == 1) "" else "s"} to…") },
+        title = { Text("Add $what to…") },
         text = {
             Column(
                 Modifier

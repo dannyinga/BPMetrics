@@ -86,6 +86,10 @@ interface PersonDao {
     @Query("SELECT COUNT(*) FROM bpm_records WHERE personId = :personId")
     suspend fun countRecordsForPerson(personId: Long): Int
 
+    /** Recordings per person, kept current. People with none have no row. */
+    @Query("SELECT personId AS id, COUNT(*) AS n FROM bpm_records WHERE personId IS NOT NULL GROUP BY personId")
+    fun recordCountsByPerson(): Flow<List<CountById>>
+
     /**
      * Unlinks a person's records without erasing who made them.
      *

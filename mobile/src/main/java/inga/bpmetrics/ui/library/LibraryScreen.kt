@@ -223,7 +223,6 @@ fun LibraryScreen(
     var addingEventToCollection by remember { mutableStateOf<EventSummary?>(null) }
     val selectedEventIds = selectedEventIdsForMode
     var movingSelectedEvents by remember { mutableStateOf(false) }
-    var addingSelectedEventsToCollection by remember { mutableStateOf(false) }
     val unfiled by viewModel.unfiledRecords.collectAsStateWithLifecycle()
 
     var showCreateEventDialog by remember { mutableStateOf(false) }
@@ -242,6 +241,8 @@ fun LibraryScreen(
     // Set when "New event…" is chosen from the bulk menu, so the name dialog knows to file the
     // current selection into whatever it creates rather than creating an empty event.
     var namingEventForSelection by remember { mutableStateOf(false) }
+    // "Move events into… → New event…": the new event takes the picked events, and only those.
+    var namingEventForMove by remember { mutableStateOf(false) }
 
     if (isSelectionMode) {
         BackHandler {
@@ -386,7 +387,9 @@ fun LibraryScreen(
                         // Editing the recordings, all of it, behind one door. This menu held
                         // thirteen items, most of which were not actions on a selection but edits
                         // to the things in it — each having earned a row as it was added.
-                        if (hasSelection) {
+                        // Events too, even empty ones: a tag or a photo on an event is an edit
+                        // with nothing recorded in it yet.
+                        if (hasSelection || hasEvents) {
                             IconButton(onClick = { showBulkEdit = true }) {
                                 Icon(Icons.Default.Edit, contentDescription = "Edit selected")
                             }
@@ -422,7 +425,7 @@ fun LibraryScreen(
                                             contentDescription = null
                                         )
                                     },
-                                    enabled = hasSelection,
+                                    enabled = hasSelection || hasEvents,
                                     onClick = {
                                         showSelectionMenu = false
                                         showAddToEventDialog = true
@@ -439,28 +442,28 @@ fun LibraryScreen(
                                     enabled = selectedRecordIds.size > 1,
                                     onClick = {
                                         showSelectionMenu = false
-                                        showMergeDialog = true
+                                        // Merging joins recordings into one. It can't take an
+                                        // event, and leaving the events out quietly would merge
+                                        // less than was selected.
+                                        if (hasEvents) {
+                                            Feedback.say(
+                                                "Merge joins recordings, not events. Deselect " +
+                                                    "the events to merge the recordings."
+                                            )
+                                        } else {
+                                            showMergeDialog = true
+                                        }
                                     }
                                 )
 
-                                // The two things only an event can be. They were a separate strip
-                                // above the list with its own count and its own close button.
+                                // The one thing only an event can do. Adding events to a collection
+                                // was here too; Edit → Add to a collection now takes them.
                                 if (hasEvents) {
                                     DropdownMenuItem(
                                         text = { Text("Move events into…") },
                                         onClick = {
                                             showSelectionMenu = false
                                             movingSelectedEvents = true
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Add events to a collection…") },
-                                        leadingIcon = {
-                                            Icon(Icons.Default.Bookmarks, contentDescription = null)
-                                        },
-                                        onClick = {
-                                            showSelectionMenu = false
-                                            addingSelectedEventsToCollection = true
                                         }
                                     )
                                 }
@@ -913,9 +916,17 @@ fun LibraryScreen(
     // selection menu used to hold all of them flat, and grew a row every time a recording gained
     // a property.
     if (showBulkEdit) {
+        val onlyEvent = selectedEventIds.singleOrNull()?.takeIf { selectedRecordIds.isEmpty() }
         BulkEditDialog(
-            count = selectedRecordIds.size,
-            hasCover = selectedRecordsForBulk.any { coversByRecord[it.metadata.recordId] != null },
+            eventCount = selectedEventIds.size,
+            recordCount = selectedRecordIds.size,
+            coveredCount = effectiveRecordIds.size,
+            // One picked event is the photo's target itself; see LibraryViewModel.coverTarget.
+            hasCover = if (onlyEvent != null) {
+                filterOptions.eventTree.firstOrNull { it.eventId == onlyEvent }?.coverPath != null
+            } else {
+                selectedRecordsForBulk.any { coversByRecord[it.metadata.recordId] != null }
+            },
             onTags = { showBulkEdit = false; showBulkTagDialog = true },
             onAttribute = { showBulkEdit = false; showBulkWearerDialog = true },
             onFileIntoEvent = { showBulkEdit = false; showAddToEventDialog = true },
@@ -937,7 +948,7 @@ fun LibraryScreen(
         TagSelectionDialog(
             onDismiss = { showBulkTagDialog = false },
             onSave = { selectedTagIds ->
-                viewModel.addTagsToSelectedRecords(selectedTagIds)
+                viewModel.addTagsToSelection(selectedTagIds)
                 showBulkTagDialog = false
             },
             categories = categories,
@@ -947,6 +958,9 @@ fun LibraryScreen(
         )
     }
 
+    // The dialog draws nothing without recordings, and a flag left set showed it "out of nowhere"
+    // the next time one was selected. Edit only offers it with recordings picked; this makes sure.
+    if (showShiftTimeDialog && selectedRecordsForBulk.isEmpty()) showShiftTimeDialog = false
     if (showShiftTimeDialog) {
         ShiftTimeDialog(
             records = selectedRecordsForBulk.map { it.metadata },
@@ -961,7 +975,8 @@ fun LibraryScreen(
     if (showBulkWearerDialog) {
         val availablePeople by viewModel.availablePeople.collectAsStateWithLifecycle()
         BulkWearerDialog(
-            recordCount = selectedRecordIds.size,
+            // Everything it will change, including recordings inside picked events.
+            recordCount = effectiveRecordIds.size,
             people = availablePeople,
             onDismiss = { showBulkWearerDialog = false },
             onAssign = { personId ->
@@ -986,13 +1001,17 @@ fun LibraryScreen(
 
     if (showAddToEventDialog) {
         AddToEventDialog(
-            recordCount = effectiveRecordIds.size,
+            // Picked events move as events, so they are counted as events. See
+            // LibraryViewModel.assignSelectedToEvent.
+            what = selectionLabel(selectedEventIds.size, selectedRecordIds.size),
             events = filterOptions.eventTree,
             starts = filterOptions.eventStarts,
             counts = eventRecordCounts,
             onDismiss = { showAddToEventDialog = false },
             onPick = { eventId ->
-                viewModel.assignSelectedToEvent(eventId)
+                viewModel.assignSelectedToEvent(eventId) { refused ->
+                    if (refused > 0) Feedback.failed(cantNestMessage(refused))
+                }
                 showAddToEventDialog = false
             },
             onCreateEvent = {
@@ -1005,6 +1024,9 @@ fun LibraryScreen(
 
     if (showCreateEventDialog) {
         val forSelection = namingEventForSelection
+        val forMove = namingEventForMove
+        // Everything covered, for suggesting the window. What goes *in* is the picked recordings
+        // and the picked events, as events.
         val selected = effectiveRecordIds
         val knownTypes by viewModel.eventTypesInUse.collectAsStateWithLifecycle()
         val windowError by viewModel.windowError.collectAsStateWithLifecycle()
@@ -1029,14 +1051,21 @@ fun LibraryScreen(
             onDismiss = {
                 showCreateEventDialog = false
                 namingEventForSelection = false
+                namingEventForMove = false
                 creatingInside = null
                 viewModel.clearWindowError()
             },
             onConfirm = { edit ->
-                viewModel.createEvent(edit, if (forSelection) selected else emptySet()) { done ->
+                viewModel.createEvent(
+                    edit,
+                    recordIds = if (forSelection) selectedRecordIds else emptySet(),
+                    eventIds = if (forSelection || forMove) selectedEventIds else emptySet(),
+                    onRefused = { Feedback.failed(cantNestMessage(it)) }
+                ) { done ->
                     if (done) {
                         showCreateEventDialog = false
                         namingEventForSelection = false
+                        namingEventForMove = false
                         creatingInside = null
                     }
                 }
@@ -1143,7 +1172,9 @@ fun LibraryScreen(
 
     if (addingSelectionToCollection) {
         AddToCollectionDialog(
-            count = selectedRecordIds.size,
+            // Events and recordings both: picked events join as events. See
+            // LibraryViewModel.addSelectionToCollection.
+            what = selectionLabel(selectedEventIds.size, selectedRecordIds.size),
             collections = collections,
             onDismiss = { addingSelectionToCollection = false },
             onPick = {
@@ -1180,24 +1211,8 @@ fun LibraryScreen(
             },
             onCreateEvent = {
                 movingSelectedEvents = false
+                namingEventForMove = true
                 showCreateEventDialog = true
-            }
-        )
-    }
-
-    if (addingSelectedEventsToCollection) {
-        AddToCollectionDialog(
-            count = selectedEventIds.size,
-            noun = "event",
-            collections = collections,
-            onDismiss = { addingSelectedEventsToCollection = false },
-            onPick = {
-                viewModel.addSelectedEventsToCollection(it)
-                addingSelectedEventsToCollection = false
-            },
-            onCreate = {
-                addingSelectedEventsToCollection = false
-                showCreateGroupDialog = true
             }
         )
     }
@@ -1270,8 +1285,8 @@ fun LibraryScreen(
  */
 @Composable
 private fun AddToCollectionDialog(
-    count: Int,
-    noun: String = "recording",
+    /** What is being added, as [selectionLabel] says it. */
+    what: String,
     collections: List<CollectionSummary>,
     onDismiss: () -> Unit,
     onPick: (Long) -> Unit,
@@ -1279,7 +1294,7 @@ private fun AddToCollectionDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add $count $noun${if (count == 1) "" else "s"} to…") },
+        title = { Text("Add $what to…") },
         text = {
             Column(
                 Modifier

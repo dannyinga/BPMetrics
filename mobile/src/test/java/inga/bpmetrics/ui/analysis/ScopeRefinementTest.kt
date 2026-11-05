@@ -138,6 +138,30 @@ class ScopeRefinementTest {
         )
     }
 
+    // --- The screen's path (Audit #6) ---
+
+    @Test
+    fun `the flag applies with nothing unticked`() {
+        // The analysis screen skipped flags until something else was unticked, so Day 1's totals
+        // included the merch queue until you unticked, say, Subtronics.
+        assertEquals(setOf(4L), ScopeRefinement.droppedEventIds(festival(), rootId = 1))
+    }
+
+    @Test
+    fun `unticking an unrelated set drops only that set`() {
+        assertEquals(
+            setOf(3L, 4L),
+            ScopeRefinement.droppedEventIds(
+                festival(), rootId = 1, ScopeExclusions(excludedEventIds = setOf(3))
+            )
+        )
+    }
+
+    @Test
+    fun `the event being analysed is never dropped by its own flag`() {
+        assertEquals(emptySet<Long>(), ScopeRefinement.droppedEventIds(festival(), rootId = 4))
+    }
+
     @Test
     fun `a flagged event takes its subtree out with it`() {
         val nested = festival() + event(5, "Queue photos", parent = 4, from = at(15))

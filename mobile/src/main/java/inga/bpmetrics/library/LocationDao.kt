@@ -57,4 +57,8 @@ interface LocationDao {
     /** How many events name this place, so a delete can say what it is about to affect. */
     @Query("SELECT COUNT(*) FROM events WHERE locationId = :locationId")
     suspend fun countEventsAt(locationId: Long): Int
+
+    /** Events per venue, kept current. Venues nothing uses have no row. */
+    @Query("SELECT locationId AS id, COUNT(*) AS n FROM events WHERE locationId IS NOT NULL GROUP BY locationId")
+    fun eventCountsByLocation(): Flow<List<CountById>>
 }

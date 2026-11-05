@@ -32,6 +32,7 @@ class FilterChipsTest {
     private val coachella = EventEntity(eventId = 100, name = "Coachella", createdAt = 1)
     private val gorge = LocationEntity(locationId = 5, name = "The Gorge", createdAt = 1)
     private val watch = WatchEntity(watchId = "abc", deviceName = "Pixel Watch")
+    private val festivals = inga.bpmetrics.library.CollectionEntity(collectionId = 300, name = "Festivals")
 
     // The same shape the pickers offer, because the chips are now built from it rather than from
     // six registries — see [FilterChips.of]. A caller outside the library screen had to reach for
@@ -45,7 +46,7 @@ class FilterChipsTest {
         ),
         peopleEntities = listOf(kyle, ben),
         eventTree = listOf(coachella),
-        collectionEntities = emptyList()
+        collectionEntities = listOf(festivals)
     )
 
     private fun chips(filter: FilterState) = FilterChips.of(
@@ -153,12 +154,22 @@ class FilterChipsTest {
     }
 
     @Test
+    fun `a collection chip names the collection, not an event with the same number`() {
+        // Collection 100 does not exist; event 100 does. The chip used to say "Coachella".
+        assertTrue(chips(FilterState(selectedGroupIds = setOf(100))).isEmpty())
+
+        val chip = chips(FilterState(selectedGroupIds = setOf(300))).single()
+        assertEquals(FilterDimension.COLLECTION, chip.dimension)
+        assertEquals("Festivals", chip.label)
+    }
+
+    @Test
     fun `every dimension can be removed`() {
         val filter = FilterState(
             selectedPersonIds = setOf(1),
             selectedTagIds = setOf(10),
             selectedEventIds = setOf(100),
-            selectedGroupIds = setOf(100),
+            selectedGroupIds = setOf(300),
             selectedLocationIds = setOf(5),
             selectedWatchIds = setOf("abc"),
             dateRange = 1L to 2L,

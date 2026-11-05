@@ -39,7 +39,12 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun BulkEditDialog(
-    count: Int,
+    /** Events picked as events. Each one counts once, however much is inside it. */
+    eventCount: Int,
+    /** Recordings picked one by one. */
+    recordCount: Int,
+    /** Every recording the selection covers, including the ones inside picked events. */
+    coveredCount: Int,
     /** Whether the selection currently has a cover to remove. */
     hasCover: Boolean,
     onTags: () -> Unit,
@@ -53,14 +58,33 @@ fun BulkEditDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit $count recording${if (count == 1) "" else "s"}") },
+        // Both kinds, counted as picked. This said "Edit 0 recordings" over a selection of events.
+        title = { Text("Edit ${selectionLabel(eventCount, recordCount)}") },
         text = {
             Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                if (eventCount > 0) {
+                    Text(
+                        "${countLabel(coveredCount, "recording")} in all, counting what's inside " +
+                            if (eventCount == 1) "the event." else "the events.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 Row("Tags…", Icons.Default.Sell, onTags)
                 Row("Attribute to…", Icons.Default.People, onAttribute)
                 Row("File into an event…", Icons.Default.Folder, onFileIntoEvent)
                 Row("Add to a collection…", Icons.Default.Bookmarks, onAddToCollection)
-                Row("Correct the time…", Icons.Default.Schedule, onCorrectTime)
+                // Only for recordings picked one by one. An event has its own times, and moving
+                // the recordings inside it would leave them outside it.
+                if (recordCount > 0) {
+                    Row(
+                        if (eventCount > 0) "Correct the time of the ${countLabel(recordCount, "recording")}…"
+                        else "Correct the time…",
+                        Icons.Default.Schedule,
+                        onCorrectTime
+                    )
+                }
 
                 // A cover set from a multi-selection goes on the *event* those recordings share,
                 // not on each one — see LibraryViewModel.setCoverForSelection. It refuses rather
@@ -75,8 +99,13 @@ fun BulkEditDialog(
                 }
 
                 Text(
-                    "A photo set here goes on the event these recordings share, so one arriving " +
-                        "late from the same night inherits it.",
+                    if (eventCount > 0) {
+                        "Tags and photos go on the events themselves, so recordings arriving in " +
+                            "them later get them too."
+                    } else {
+                        "A photo set here goes on the event these recordings share, so one " +
+                            "arriving late from the same night inherits it."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
@@ -86,6 +115,13 @@ fun BulkEditDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Done") } }
     )
+}
+
+/** "2 events and 3 recordings", "2 events", "3 recordings". */
+fun selectionLabel(eventCount: Int, recordCount: Int): String = when {
+    eventCount == 0 -> countLabel(recordCount, "recording")
+    recordCount == 0 -> countLabel(eventCount, "event")
+    else -> "${countLabel(eventCount, "event")} and ${countLabel(recordCount, "recording")}"
 }
 
 @Composable
@@ -100,3 +136,8 @@ private fun Row(
         onClick = onClick
     )
 }
+
+/** Why some picked events stayed where they were: the target is inside them. */
+fun cantNestMessage(refused: Int): String =
+    if (refused == 1) "1 event stayed where it was. It can't go inside itself."
+    else "$refused events stayed where they were. An event can't go inside itself."

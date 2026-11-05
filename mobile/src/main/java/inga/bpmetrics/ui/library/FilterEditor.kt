@@ -858,9 +858,11 @@ private fun DateRangeDialog(
     onDismiss: () -> Unit,
     onConfirm: (Pair<Long, Long>?) -> Unit
 ) {
+    // The range is local days; the picker wants UTC midnights. See [PickerDays].
+    val shown = initial?.let(PickerDays::toPicker)
     val state = rememberDateRangePickerState(
-        initialSelectedStartDateMillis = initial?.first,
-        initialSelectedEndDateMillis = initial?.second
+        initialSelectedStartDateMillis = shown?.first,
+        initialSelectedEndDateMillis = shown?.second
     )
 
     AlertDialog(
@@ -875,11 +877,7 @@ private fun DateRangeDialog(
             val start = state.selectedStartDateMillis
             TextButton(
                 enabled = start != null,
-                onClick = {
-                    // A single day is a legal range: the end falls back to the start.
-                    val end = state.selectedEndDateMillis ?: start!!
-                    onConfirm(start!! to end + DAY_MS - 1)
-                }
+                onClick = { onConfirm(PickerDays.toRange(start!!, state.selectedEndDateMillis)) }
             ) { Text("Apply") }
         },
         dismissButton = {
@@ -892,8 +890,6 @@ private fun DateRangeDialog(
         }
     )
 }
-
-private const val DAY_MS = 24 * 60 * 60 * 1000L
 
 /** The widest band worth offering. Above this is not a heart rate, it is a fault. */
 private const val MAX_RATE = 220f

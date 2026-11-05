@@ -8,7 +8,6 @@ import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.LocationEntity
 import inga.bpmetrics.ui.feedback.Feedback
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -23,11 +22,11 @@ import kotlinx.coroutines.flow.stateIn
  */
 class LocationsViewModel(private val repository: LibraryRepository) : ViewModel() {
 
-    private val _eventCounts = MutableStateFlow<Map<Long, Int>>(emptyMap())
-
     val uiState: StateFlow<LocationsUiState> = combine(
         repository.getAllLocations(),
-        _eventCounts
+        // Observed. These loaded once, before the list had, so every venue showed "0 events" and
+        // delete said nothing was using a venue that was in use.
+        repository.eventCountsByLocation
     ) { locations, counts ->
         LocationsUiState(
             locations = locations.map {
@@ -37,23 +36,9 @@ class LocationsViewModel(private val repository: LibraryRepository) : ViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LocationsUiState())
 
-    init {
-        refreshCounts()
-    }
-
-    /** A per-location query, so refreshed rather than observed — as with People. */
-    fun refreshCounts() {
-        launchGuarded(failure = null) {
-            val ids = uiState.value.locations.map { it.location.locationId }
-            if (ids.isEmpty()) return@launchGuarded
-            _eventCounts.value = ids.associateWith { repository.countEventsAt(it) }
-        }
-    }
-
     fun addLocation(name: String, timeZoneId: String?) {
         launchGuarded {
             repository.createLocation(name, timeZoneId)
-            refreshCounts()
             Feedback.say("${name.trim()} added.")
         }
     }
@@ -93,12 +78,10 @@ class LocationsViewModel(private val repository: LibraryRepository) : ViewModel(
         val app = context.applicationContext
         launchGuarded(failure = "Couldn't delete that location.") {
             val deleted = repository.deleteLocation(app, locationId) ?: return@launchGuarded
-            refreshCounts()
             Feedback.undoable(
                 "${deleted.location.displayName} deleted. Its events keep their recordings."
             ) {
                 repository.restoreLocation(app, deleted)
-                refreshCounts()
             }
         }
     }

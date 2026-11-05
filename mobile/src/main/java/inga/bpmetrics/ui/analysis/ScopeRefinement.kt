@@ -74,6 +74,32 @@ object ScopeRefinement {
      * part of the day's average, not that it does not exist. That is also why it never touches the
      * library, the timeline or an export.
      */
+    /**
+     * The events whose recordings an analysis leaves out: everything unticked, and every event
+     * flagged "not part of the parent's analysis" other than the one being analysed, each with its
+     * subtree.
+     *
+     * The one place that rule lives. The analysis screen had its own copy that skipped the flags
+     * until something else was unticked, so unticking an unrelated set changed the totals by more
+     * than that set.
+     */
+    fun droppedEventIds(
+        events: List<EventEntity>,
+        rootId: Long?,
+        exclusions: ScopeExclusions = ScopeExclusions()
+    ): Set<Long> {
+        val dropped = mutableSetOf<Long>()
+        exclusions.excludedEventIds.forEach { dropped += EventTree.descendantsOf(events, it) }
+
+        events.forEach { event ->
+            val flagged = event.excludedFromParentAnalysis &&
+                event.eventId != rootId &&
+                event.eventId !in exclusions.includedDespiteFlag
+            if (flagged) dropped += EventTree.descendantsOf(events, event.eventId)
+        }
+        return dropped
+    }
+
     fun recordsIn(
         events: List<EventEntity>,
         records: List<BpmRecordEntity>,
@@ -87,15 +113,7 @@ object ScopeRefinement {
             EventTree.descendantsOf(events, rootId)
         }
 
-        val dropped = mutableSetOf<Long>()
-        exclusions.excludedEventIds.forEach { dropped += EventTree.descendantsOf(events, it) }
-
-        events.forEach { event ->
-            val flagged = event.excludedFromParentAnalysis &&
-                event.eventId != rootId &&
-                event.eventId !in exclusions.includedDespiteFlag
-            if (flagged) dropped += EventTree.descendantsOf(events, event.eventId)
-        }
+        val dropped = droppedEventIds(events, rootId, exclusions)
 
         return records.filter { record ->
             record.eventId in within &&

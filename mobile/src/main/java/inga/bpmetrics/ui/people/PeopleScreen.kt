@@ -37,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,8 +84,6 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
     // Reset whenever the dialog moves to a different person, or reframing one photograph would
     // open straight onto the next.
     var framingPhoto by remember(editing?.personId) { mutableStateOf(false) }
-
-    LaunchedEffect(uiState.people.size) { viewModel.refreshCounts() }
 
     Scaffold(
         topBar = {
