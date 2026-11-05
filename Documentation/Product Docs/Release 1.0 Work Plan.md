@@ -26,6 +26,7 @@ Everything left before 1.0, in order. It covers bug fixes, the consolidation ref
 | D3 | A brand typeface, or the system font? | *Open.* Decide during the theme phase. Taxonomy Sprint 6 called it a deliberate non-goal. | S25 |
 | D4 | The launcher glyph and brand colour. | *Open.* Danny's call. S26 needs the artwork or a direction. | S26 |
 | D5 | Hosting for the privacy policy (GitHub Pages, or a Play-hosted page). | **Decided: GitHub Pages from the repo.** | S28 |
+| D6 | How is a B2B set tagged? | **Decided: one tag for each artist, plus one for the B2B itself,** all in the Artist category. | S16A |
 
 ---
 
@@ -335,6 +336,28 @@ Ambient mode and a tile are post-1.0.
 | **S16.6** | The editor dialog's body scrolls, and its actions stay above the keyboard (`imePadding`) and below the status bar. On Android 16 today, Save and Cancel sit under the keyboard. | §6 |
 
 **Commit:** `refactor(ui): one editor with shared fields`
+
+### S16A — Artists from event names *(Danny, 2026-11-05)*
+
+Most Concert events are already named after their artist, but only some carry an Artist tag. In Danny's library, of 76 Concerts, the Bass Canyon sets are tagged and none of the Dancefestopia sets are. Tagging means typing the name a second time. This sprint reads the tag from the name instead. It comes after S16 because the suggestions live in the single editor that sprint builds.
+
+**Rule for B2B sets (Danny's call):** a B2B set gets a tag for each artist, *and* one for the B2B itself, all in the Artist category. "Excision B2B SLANDER" is tagged Excision, SLANDER and "Excision B2B SLANDER". Each artist's numbers include the set, and the pairing can still be compared on its own.
+
+| Ticket | Work | Source |
+|---|---|---|
+| **S16A.1** | **An event type names the tag category it expects.** Concert and Show expect Artist, and any type can be given one (Soccer Game → Team). The mapping is set from the event editor's type field ("Concerts are tagged with: Artist ▾"). It needs storage, either a small table or a stored setting. If it's a table, diff the schema first and give it a place in the backup (`BackupCoverageTest`). Nothing is hard-coded: a type with no category gets none of what follows. | Danny |
+| **S16A.2** | **Read the artist from the event name.** A pure `ArtistNames.parse(name)`, unit-tested on Danny's real names: "Excision B2B SLANDER", "Wooli B2B Crankdat", "Excision (Detox)", "SVDDEN DEATH: VOYD", "Boogie T @ The Granada", "Air Quotes B2B It'sNotImportant", "Inzo". Rules:<br>• Split on B2B, b2b, " x ", " & " and " vs ".<br>• Drop a trailing "(…)" and anything after ": ". Drop anything after " @ ", which can also offer a venue match.<br>• Match existing tags in the type's category, ignoring case, so "Inzo" finds INZO.<br>• A B2B produces each artist plus the B2B tag (rule above).<br><br>When an event of a typed category is named or renamed, an exact match to existing tags is applied straight away, with Undo through `Feedback.undoable`. Anything new is offered as one-tap chips in the editor ("Add SLANDER as an artist"). Tags are put on the event, so its recordings inherit them. | Danny |
+| **S16A.3** | **"Missing artists": fixing what's already there.** Reached from the Tags screen, and from a count on it ("31 concerts have no artist"). It lists every event whose type expects a category but carries no tag from it, each with the S16A.2 suggestion as chips. Tap to apply one, or "Apply all suggestions", with one Undo for the batch. The same screen offers cleanup:<br>• Tags that differ only in capitals (INZO / Inzo) → merge into one.<br>• Existing single-tag B2Bs ("Excision B2B SLANDER") → add the separate artist tags, keeping the B2B tag.<br><br>Every change shows a count and asks before it runs. | Danny |
+| **S16A.4** | **Name a set by picking its artists.** In the editor, for a type that expects a category, choosing artists first fills in the name: "Wooli B2B Crankdat" for two, the artist's name for one. The name stays editable, and once it's been typed over, picking artists no longer changes it. This is S16A.2 run the other way, so typing and tagging become one step. | Danny |
+
+**Verify:**
+- **Unit tests:** `ArtistNames.parse` on the names above, including case-only matches and a name with no artist in it.
+- **The fix-up pass:** applying "Apply all" to a copy of Danny's library tags every Dancefestopia set with nothing typed.
+- **Undo:** after an auto-applied tag, Undo leaves the event as it was.
+
+**Commit:** `feat(tags): concerts tag their artists from their names`
+
+*Not in this sprint:* pasting a festival's lineup to create its sets with their artists and times (idea 4), and choosing the set on the watch (idea 6). Both are candidates for after 1.0.
 
 ### S17 — Library cards and library flow
 
