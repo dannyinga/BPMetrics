@@ -545,9 +545,13 @@ class LibraryRepository(
 
     suspend fun countRecordsForEvent(eventId: Long): Int = eventDao.countRecordsForEvent(eventId)
 
-    suspend fun createEvent(name: String, groupId: Long? = null): Long {
+    /**
+     * @param createdAt when the event was made, if it's being restored. A restore used to stamp the
+     *   time of the restore, and then nothing could tell the event was the same one again.
+     */
+    suspend fun createEvent(name: String, groupId: Long? = null, createdAt: Long? = null): Long {
         val id = eventDao.insertEvent(
-            EventEntity(name = name.trim(), groupId = groupId, createdAt = System.currentTimeMillis())
+            EventEntity(name = name.trim(), groupId = groupId, createdAt = createdAt ?: System.currentTimeMillis())
         )
         Log.d(tag, "Created event '${name.trim()}' as $id")
         reconcileMembership()
@@ -1734,9 +1738,19 @@ class LibraryRepository(
          * case where a set has both.
          */
         eventIdsBySourceId: Map<Long, Long> = emptyMap(),
+        /**
+         * A collection here to overwrite with this one. It keeps its id, so rules elsewhere that
+         * name it still do; what it held, its rule and its frozen rows become the file's.
+         */
+        replacing: Long? = null
     ): Long {
+        if (replacing != null) {
+            deleteCollection(replacing)
+            collectionDao.clearFrozenRecords(replacing)
+        }
         val collectionId = collectionDao.insert(
             CollectionEntity(
+                collectionId = replacing ?: 0L,
                 name = dto.name,
                 notes = dto.notes,
                 createdAt = dto.createdAt,
@@ -1839,8 +1853,18 @@ class LibraryRepository(
     suspend fun getGroupTagsForBackup(): Map<Long, List<TagEntity>> = getEventTagsForBackup()
 
     /** Applies preferences from a backup. Returns how many were understood. */
+    /**
+     * Applies a backup's settings, keeping to the ones a restore may change. See
+     * [inga.bpmetrics.ui.settings.SettingsRepository.RESTORABLE_KEYS].
+     */
     suspend fun restoreSettings(snapshots: List<inga.bpmetrics.ui.settings.PreferenceSnapshot>): Int =
-        settingsRepository.importPreferences(snapshots)
+        settingsRepository.importPreferences(
+            snapshots.filter { it.key in inga.bpmetrics.ui.settings.SettingsRepository.RESTORABLE_KEYS }
+        )
+
+    /** Every stored setting, for comparing a backup's against. */
+    suspend fun currentSettings(): List<inga.bpmetrics.ui.settings.PreferenceSnapshot> =
+        settingsRepository.exportPreferences()
 
     /** The sort the library should open on, or null to keep the built-in order. */
     suspend fun getDefaultSort(): String? = settingsRepository.defaultSort.first()
@@ -2163,13 +2187,16 @@ class LibraryRepository(
         personId: Long?,
         colorArgb: Int?,
         firstSeen: Long,
-        lastSeen: Long
+        lastSeen: Long,
+        nodeId: String = "",
+        aliases: List<String> = emptyList()
     ) {
         watchDao.insertWatch(
             WatchEntity(
                 watchId = watchId,
                 deviceName = deviceName.trim(),
                 lastKnownModel = model,
+                lastKnownNodeId = nodeId,
                 colorArgb = colorArgb,
                 firstSeen = firstSeen,
                 lastSeen = lastSeen,
@@ -2177,6 +2204,7 @@ class LibraryRepository(
                 currentWearerName = personId?.let { personDao.getPerson(it)?.name }.orEmpty()
             )
         )
+        aliases.forEach { addWatchAlias(it, watchId) }
     }
 
     /** How many recordings [claimPastRecords] would change. See [PersonDao.countClaimablePastRecords]. */
@@ -2309,9 +2337,45 @@ class LibraryRepository(
      */
     suspend fun mergeWatches(fromWatchId: String, intoWatchId: String) {
         if (fromWatchId == intoWatchId) return
+        val from = watchDao.getWatch(fromWatchId)
         watchDao.reassignRecords(fromWatchId, intoWatchId)
+        // The merged-away id, and every id it had absorbed, now name the survivor. Without this the
+        // watch's next sync, still under the old id, made the entry again (Audit #39).
+        watchDao.repointAliases(fromWatchId, intoWatchId)
+        watchDao.insertAlias(WatchAliasEntity(alias = fromWatchId, watchId = intoWatchId))
+        if (from != null) {
+            watchDao.absorb(intoWatchId, from.lastKnownNodeId, from.firstSeen, from.lastSeen)
+        }
         watchDao.deleteWatch(fromWatchId)
         Log.d(tag, "Merged watch $fromWatchId into $intoWatchId")
+    }
+
+    /** Every alias, by the id it names. For backups. */
+    suspend fun watchAliases(): Map<String, List<String>> =
+        watchDao.allAliases().groupBy({ it.watchId }, { it.alias })
+
+    /** When each watch's recordings start and end, by watch id, as recordings arrive and move. */
+    val recordedSpans: Flow<Map<String, LongRange>>
+        get() = watchDao.recordedSpans().map { rows -> rows.associate { it.key to it.earliest..it.latest } }
+
+    /** Pairs of watches someone has said are different, as [WatchDuplicates.pairKey]s. */
+    val distinctWatchPairs: Flow<Set<String>> get() = settingsRepository.distinctWatchPairs
+
+    suspend fun markWatchesDistinct(a: String, b: String) =
+        settingsRepository.addDistinctWatchPair(WatchDuplicates.pairKey(a, b))
+
+    /**
+     * The entry [watchId] belongs to here, if any: its own, one it was merged into, or the one last
+     * heard from [nodeId]. Null when this library has never seen the watch.
+     */
+    suspend fun knownWatchFor(watchId: String, nodeId: String?): WatchEntity? =
+        watchDao.getWatch(watchId)
+            ?: watchDao.aliasTarget(watchId)?.let { watchDao.getWatch(it) }
+            ?: nodeId?.takeIf { it.isNotBlank() }?.let { watchDao.watchOnNode(it) }
+
+    /** Remembers [alias] as another id for [watchId]. */
+    suspend fun addWatchAlias(alias: String, watchId: String) {
+        if (alias != watchId) watchDao.insertAlias(WatchAliasEntity(alias = alias, watchId = watchId))
     }
 
     /** Removes a watch entry. Records keep their frozen wearer names and lose only the link. */
@@ -2323,6 +2387,12 @@ class LibraryRepository(
      * Prefers the stable id the watch generates. Older records only carry a device id, which is
      * the hardware model unless someone set one, so two identical watches collapse into a single
      * entry until they are separated by hand.
+     *
+     * An id this library hasn't seen is checked twice before it becomes a new entry: against ids
+     * merged into an entry, and against the Data Layer node it came from. A reinstalled watch app
+     * makes up a new id, but the watch's node is the same for every app on it and survives the
+     * reinstall, so a known node means a known watch. The new id is then remembered as an alias
+     * (Audit #39). Only a factory reset, which changes the node too, still makes a new entry.
      */
     private suspend fun resolveWatch(record: BpmWatchRecord, sourceNodeId: String?): WatchEntity? {
         val key = record.watchId?.takeIf { it.isNotBlank() }
@@ -2330,6 +2400,18 @@ class LibraryRepository(
             ?: return null
 
         val now = System.currentTimeMillis()
+        if (watchDao.getWatch(key) == null) {
+            val known = watchDao.aliasTarget(key)?.let { watchDao.getWatch(it) }
+                ?: sourceNodeId?.takeIf { it.isNotBlank() }?.let { watchDao.watchOnNode(it) }
+                    ?.also {
+                        watchDao.insertAlias(WatchAliasEntity(alias = key, watchId = it.watchId))
+                        Log.i(tag, "Watch id $key is ${it.watchId}, by its node")
+                    }
+            if (known != null) {
+                watchDao.touchWatch(known.watchId, now, record.deviceId, sourceNodeId.orEmpty())
+                return watchDao.getWatch(known.watchId)
+            }
+        }
         watchDao.insertWatch(
             WatchEntity(
                 watchId = key,

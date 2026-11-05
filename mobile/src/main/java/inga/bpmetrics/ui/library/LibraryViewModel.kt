@@ -5,11 +5,7 @@ import inga.bpmetrics.util.launchGuarded
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import inga.bpmetrics.core.BpmWatchRecord
 import inga.bpmetrics.export.JsonExporter
-import inga.bpmetrics.export.LibraryBackup
-import inga.bpmetrics.export.RestoreResult
-import inga.bpmetrics.export.restoreBackup
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CollectionEntity
 import inga.bpmetrics.library.FilterCodec
@@ -1021,53 +1017,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     /**
-     * Imports a record from a watch record object (e.g., from a CSV).
-     */
-    fun importRecord(watchRecord: BpmWatchRecord) {
-        launchGuarded {
-            repository.saveWatchRecordToLibrary(watchRecord)
-        }
-    }
-
-    /**
-     * Restores a whole backup: people and watches first, then the recordings that point at them.
+     * "Import recordings…": backups and CSVs, each previewed before anything is written.
      *
-     * Distinct from [importRecord], which takes one recording at a time and cannot recreate a
-     * person. Importing a backup record by record would return the recordings and leave every one
-     * of them attributed to nobody, because the ingest path can only *find* a person, not make one.
+     * Backups are restored whole, people and watches before the recordings that point at them, and
+     * CSVs one recording per file, skipping any already here. Both used to start writing as soon
+     * as the files were picked; CSVs also added a recording again every time its file was opened.
+     * See [inga.bpmetrics.ui.restore.ImportSession].
      */
-    fun restoreFromBackup(
-        backup: LibraryBackup,
-        context: android.content.Context,
-        onDone: (RestoreResult) -> Unit
-    ) {
-        launchGuarded {
-            onDone(restoreBackup(backup, repository, context))
-        }
-    }
-
-    /**
-     * Reads a backup file and restores it, then says in one message what happened.
-     *
-     * The file is read off the main thread. A whole library read on it held the screen frozen long
-     * enough for Android to offer to close the app before the restore had begun.
-     */
-    fun importBackupFile(
-        context: android.content.Context,
-        uri: android.net.Uri,
-        onDone: (String) -> Unit
-    ) {
-        launchGuarded {
-            val opened = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                JsonExporter.openBackup(context, uri)
-            }
-            when (opened) {
-                is inga.bpmetrics.export.BackupFile.Unreadable -> onDone(opened.reason)
-                is inga.bpmetrics.export.BackupFile.Read ->
-                    onDone(restoreBackup(opened.backup, repository, context).summary())
-            }
-        }
-    }
+    val importSession = inga.bpmetrics.ui.restore.ImportSession(repository, viewModelScope)
 
     /**
      * Writes the chosen recordings to [uri], with what they need and nothing else.
@@ -1106,6 +1063,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                         records = records,
                         people = repository.getAllPeople().first(),
                         watches = repository.getAllWatches().first(),
+                        watchAliases = repository.watchAliases(),
                         categories = repository.getAllCategories().first(),
                         events = events,
                         eventTags = repository.getEventTagsForBackup(),

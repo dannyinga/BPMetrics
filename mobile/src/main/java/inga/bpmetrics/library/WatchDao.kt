@@ -60,6 +60,50 @@ interface WatchDao {
     @Query("DELETE FROM watches WHERE watchId = :watchId")
     suspend fun deleteWatch(watchId: String)
 
+    // --- One watch, however many ids (Audit #39) ---
+
+    /** The entry an id belongs to when it isn't an entry's own. See [WatchAliasEntity]. */
+    @Query("SELECT watchId FROM watch_aliases WHERE alias = :alias")
+    suspend fun aliasTarget(alias: String): String?
+
+    /** Remembers another id for a watch. A later merge may re-point it, so it replaces. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAlias(alias: WatchAliasEntity)
+
+    /** Every id that names [watchId] other than its own, for backups and for merging. */
+    @Query("SELECT alias FROM watch_aliases WHERE watchId = :watchId")
+    suspend fun aliasesOf(watchId: String): List<String>
+
+    @Query("SELECT * FROM watch_aliases")
+    suspend fun allAliases(): List<WatchAliasEntity>
+
+    /** Points every alias of one entry at another, when the first is merged away. */
+    @Query("UPDATE watch_aliases SET watchId = :intoWatchId WHERE watchId = :fromWatchId")
+    suspend fun repointAliases(fromWatchId: String, intoWatchId: String)
+
+    /** The entry last heard from this Data Layer node, if any. Most recent first. */
+    @Query("SELECT * FROM watches WHERE lastKnownNodeId = :nodeId AND :nodeId != '' ORDER BY lastSeen DESC LIMIT 1")
+    suspend fun watchOnNode(nodeId: String): WatchEntity?
+
+    /**
+     * What a merge carries over: the node, so the next sync matches; and the widest span of when
+     * either entry was seen.
+     */
+    @Query(
+        """
+        UPDATE watches
+        SET lastKnownNodeId = CASE WHEN :nodeId != '' THEN :nodeId ELSE lastKnownNodeId END,
+            firstSeen = CASE WHEN :firstSeen > 0 AND (firstSeen = 0 OR :firstSeen < firstSeen) THEN :firstSeen ELSE firstSeen END,
+            lastSeen = MAX(lastSeen, :lastSeen)
+        WHERE watchId = :watchId
+        """
+    )
+    suspend fun absorb(watchId: String, nodeId: String, firstSeen: Long, lastSeen: Long)
+
+    /** When each watch recorded, from the recordings themselves: what the registry's dates can't be trusted for. */
+    @Query("SELECT watchId AS `key`, MIN(startTime) AS earliest, MAX(endTime) AS latest FROM bpm_records WHERE watchId IS NOT NULL GROUP BY watchId")
+    fun recordedSpans(): Flow<List<WatchSpan>>
+
     /** How many records are attributed to a watch, so the UI can warn before deleting it. */
     @Query("SELECT COUNT(*) FROM bpm_records WHERE watchId = :watchId")
     suspend fun countRecordsForWatch(watchId: String): Int

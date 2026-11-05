@@ -80,6 +80,11 @@ class SettingsRepository(context: Context) {
 
         val DEFAULT_SORT = stringPreferencesKey("default_sort")
 
+        /** Watch pairs someone has said are different watches. See WatchDuplicates. */
+        val DISTINCT_WATCH_PAIRS = androidx.datastore.preferences.core.stringSetPreferencesKey(
+            "distinct_watch_pairs"
+        )
+
         // --- Heart rate ---
 
         val RESTING_BPM = intPreferencesKey("resting_bpm")
@@ -196,14 +201,10 @@ class SettingsRepository(context: Context) {
     // the settings screen no longer offers them. Their *keys* survive in PreferencesKeys because
     // `legacyExportDefaultsAsPreset` still reads them once, to rescue anything a user had set
     // before rather than dropping it silently.
-
-    val defaultTimeZone: Flow<String> = dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.DEFAULT_TIME_ZONE] ?: java.time.ZoneId.systemDefault().id
-    }
-
-    suspend fun setDefaultTimeZone(timeZoneId: String) {
-        dataStore.edit { it[PreferencesKeys.DEFAULT_TIME_ZONE] = timeZoneId }
-    }
+    //
+    // Resting and maximum heart rate, the sync retry interval and the export time zone went the
+    // same way: nothing read them (Audit #7, D1). Their keys stay, so stored values are left alone
+    // and a backup still carries them.
 
     // --- Appearance ---
 
@@ -242,35 +243,17 @@ class SettingsRepository(context: Context) {
         dataStore.edit { it[PreferencesKeys.DEFAULT_SORT] = sort }
     }
 
-    // --- Heart rate ---
+    // --- Watches ---
 
     /**
-     * The rate to treat as resting when nothing more specific is known.
-     *
-     * A fallback, not a fact: it belongs on the person, and this is what a person with no figure of
-     * their own is measured against. See `PersonEntity.restingBpm`.
+     * Pairs of watches someone said are not the same watch, so the suggestion to merge them stops.
+     * A set, so a backup doesn't carry it: the ids are this library's.
      */
-    val restingBpm: Flow<Int> =
-        dataStore.data.map { it[PreferencesKeys.RESTING_BPM] ?: DEFAULT_RESTING_BPM }
+    val distinctWatchPairs: Flow<Set<String>> =
+        dataStore.data.map { it[PreferencesKeys.DISTINCT_WATCH_PAIRS].orEmpty() }
 
-    suspend fun setRestingBpm(bpm: Int) {
-        dataStore.edit { it[PreferencesKeys.RESTING_BPM] = bpm.coerceIn(30, 120) }
-    }
-
-    val maxBpm: Flow<Int> =
-        dataStore.data.map { it[PreferencesKeys.MAX_BPM] ?: DEFAULT_MAX_BPM }
-
-    suspend fun setMaxBpm(bpm: Int) {
-        dataStore.edit { it[PreferencesKeys.MAX_BPM] = bpm.coerceIn(120, 230) }
-    }
-
-    // --- Sync ---
-
-    val syncRetryMinutes: Flow<Int> =
-        dataStore.data.map { it[PreferencesKeys.SYNC_RETRY_MINUTES] ?: 15 }
-
-    suspend fun setSyncRetryMinutes(minutes: Int) {
-        dataStore.edit { it[PreferencesKeys.SYNC_RETRY_MINUTES] = minutes.coerceIn(1, 240) }
+    suspend fun addDistinctWatchPair(key: String) {
+        dataStore.edit { it[PreferencesKeys.DISTINCT_WATCH_PAIRS] = it[PreferencesKeys.DISTINCT_WATCH_PAIRS].orEmpty() + key }
     }
 
     // --- Retiring the old export defaults ---
@@ -335,8 +318,20 @@ class SettingsRepository(context: Context) {
     }
 
     companion object {
-        const val DEFAULT_RESTING_BPM = 60
-        const val DEFAULT_MAX_BPM = 190
+        /**
+         * The settings a restore may change, by key, with what Settings calls them.
+         *
+         * Everything else a backup carries stays put. Some are ids from the library the file came
+         * from (the auto-naming category is a number that means something else here); some are
+         * bookkeeping, where an older value does harm (a lower preset revision brings back
+         * built-ins someone deleted); and some are retired and read by nothing.
+         */
+        val RESTORABLE_KEYS: Map<String, String> = mapOf(
+            "dynamic_colour" to "Wallpaper colours",
+            "use_24_hour" to "24-hour clock",
+            "date_format" to "Date format",
+            "default_sort" to "Library order"
+        )
     }
 }
 

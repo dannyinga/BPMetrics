@@ -28,16 +28,20 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
         repository.getAllPeople(),
         // Observed, so a count follows recordings as they arrive, move and go. These loaded once,
         // before the list had, and so showed 0 until the screen poked them.
-        repository.recordCountsByWatch
-    ) { watches, people, counts ->
+        repository.recordCountsByWatch,
+        repository.recordedSpans,
+        repository.distinctWatchPairs
+    ) { watches, people, counts, spans, distinct ->
         val byId = people.associateBy { it.personId }
+        val likelySame = inga.bpmetrics.library.WatchDuplicates.likelySame(watches, spans, distinct)
         WatchesUiState(
             watches = watches.map { watch ->
                 WatchRow(
                     watch = watch,
                     recordCount = counts[watch.watchId] ?: 0,
                     // Resolved live, so renaming someone or recolouring them shows up here at once.
-                    wearer = watch.currentPersonId?.let { byId[it] }
+                    wearer = watch.currentPersonId?.let { byId[it] },
+                    likelySame = likelySame[watch.watchId].orEmpty()
                 )
             },
             people = people,
@@ -116,11 +120,20 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
         }
     }
 
-    fun merge(fromWatchId: String, intoWatchId: String) {
-        launchGuarded {
+    /**
+     * Folds one entry into another: its recordings move, and its id is remembered so the watch's
+     * next sync lands on [intoWatchId] too. The survivor keeps its own name and wearer.
+     */
+    fun merge(fromWatchId: String, intoWatchId: String, intoName: String) {
+        launchGuarded(failure = "Couldn't merge those watches.") {
             repository.mergeWatches(fromWatchId, intoWatchId)
-            Feedback.say("Watches merged.")
+            Feedback.say("Merged into $intoName.")
         }
+    }
+
+    /** Stops suggesting that two watches are one. */
+    fun markDistinct(a: String, b: String) {
+        launchGuarded { repository.markWatchesDistinct(a, b) }
     }
 
     fun delete(watchId: String) {
@@ -146,7 +159,9 @@ class WatchesViewModel(private val repository: LibraryRepository) : ViewModel() 
 data class WatchRow(
     val watch: WatchEntity,
     val recordCount: Int,
-    val wearer: PersonEntity? = null
+    val wearer: PersonEntity? = null,
+    /** Other entries that look like this same watch under another id. See WatchDuplicates. */
+    val likelySame: List<WatchEntity> = emptyList()
 )
 
 data class WatchesUiState(

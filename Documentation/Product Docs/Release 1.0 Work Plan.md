@@ -147,6 +147,39 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 
 **Commit:** `fix(settings): fields you can type in, settings that exist, and one entry per watch`
 
+**As built:**
+- **S5.1:** removed the Heart rate group, the retry interval, the export time zone, the People resting/max fields, `HeartRateZones` and its test, and `PersonEntity.hasOwnZones`. The columns and preference keys stay. Backups still carry people's figures, so they survive for a later recompute pass.
+- **S5.2:** with S5.1 done, Settings has no number fields left. The ticket's bug lived on in the export editor's Width, Height and Visible window fields. They now edit as text and commit on Done or when focus leaves, through `ui/components/NumberEntry`, which clamps to 16–4096 px and 1–600 s and says so under the field.
+- **S5.3, plus Danny's preview request:** both ways in (Settings → Restore from file, and Library → Import recordings…) go through `ui/restore/ImportSession`. It reads the file, shows `ImportPreviewDialog` and writes nothing until confirmed.
+  - **The preview** comes from `RestorePlanner`, which applies the restore's own matching rules without writing. It's a full-screen list of every item in the file, grouped by kind. Each kind has an "All…" shortcut (add new and skip what's here, add new and replace what's here, or skip all) and opens to a per-item Add / Replace / Skip control. Danny's calls:
+    - **Grouping:** per kind, expandable.
+    - **Default:** what's here starts on Skip, which keeps yours.
+    - **Event matching:** name, parent and creation time.
+  - **What each choice does:** `RestoreChoices` carries them into `restoreBackup`.
+    - **Skip on something here** keeps it and links the file's references to it.
+    - **Replace** writes the file's version over it, though never a recording's readings.
+    - **Add a copy** is offered only for events, collections and presets.
+    - **Skip on something new** leaves it out. A skipped event's contents go to the nearest ancestor that came in.
+    - **Shared rules:** `RestoreKeys` and `EventMatcher` are used by both the preview and the restore, so the two agree.
+  - **Event matching:** events are matched by `EventMatcher`, and a restore now keeps an event's `createdAt`; before, it stamped the time of the restore. Restoring a library's own backup therefore does nothing by default. A library that was itself restored before this build (the emulator copy) still has restore-time stamps, so its events show as new.
+  - **Collections** match by name and `createdAt`. Replacing one keeps its id, so other rules that name it still work.
+  - **Settings** are per item: Keep mine or Use the file's. Only `SettingsRepository.RESTORABLE_KEYS` are offered (wallpaper colours, 24-hour clock, date format, library order), never id-valued or bookkeeping keys.
+  - **Progress:** shown as a count in the dialog and on the Restore button, with both buttons disabled.
+  - **CSVs** get the same screen: Add or Skip for new recordings, and Skip or Replace (title, notes, tags) for ones already here. Before, every import of the same CSV added it again.
+  - **Duplicates within a file:** a recording that appears twice in one file is now saved once.
+  - **Backup names:** "BPMetrics backup 2026-11-05.json", so nothing doubles the `.json`.
+- **S5.4:** Sync is first and Backup opens by default.
+- **S5.5:** the People dialog scrolls, has Cancel, keeps Remove in the body apart from Save, and the remove confirm names the watches that will lose their wearer.
+- **S5.6:**
+  - **(a) Matching on sync:** schema **31** adds `watch_aliases`, checked against the exported schema before committing. An unknown id is looked up as an alias first, then by node, and is remembered on a match. The alias turned out to be required: Danny's restored library has no node ids, so without it a merge would come undone on the next sync.
+  - **(b) Backups:** they carry `lastKnownNodeId` and `aliases`. A restore recognises a watch by id, alias or node, and translates rules that name the file's id.
+  - **(c) Merging:** "Merge into another watch…" moves the recordings, re-points aliases, and carries the node and the seen dates over.
+  - **(d) The hint:** `WatchDuplicates` compares the recordings' own time spans, since a pre-S3 restore stamped every watch's first/last-seen dates. "Not the same" stores the pair in `distinct_watch_pairs`.
+  - **Verified** on the emulator: "The OG" was suggested as "OG", merged, and the alias was written.
+- **Tests:** `RestorePlannerTest`, `NumberEntryTest`, `WatchDuplicatesTest`, three more `BackupRestoreTest` cases, the watch node and aliases in `BackupCoverageTest`, and instrumented `WatchIdentityTest` (5 cases) plus `migrate30To31`.
+  - **Old fixtures fixed:** four migration tests had failed since August, because their fixtures inserted recordings without the `description` column. They're fixed, and all 70 pass on API 33.
+- **Found and fixed in this sprint:** restoring a backup into the library it came from used to add every event and collection again ("110 events, 12 collections" against 287 recordings already here). Fixed by the event and collection matching above. Verified on the emulator: the 12 collections are recognised. Adding a single event from the list brought in exactly that event, with nothing else changed.
+
 ### S6 — Export wizard keeps your work
 
 | Ticket | Work | Audit |

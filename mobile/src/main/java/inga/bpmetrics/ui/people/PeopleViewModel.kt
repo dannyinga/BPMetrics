@@ -25,13 +25,19 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
 
     val uiState: StateFlow<PeopleUiState> = combine(
         repository.getAllPeople(),
+        repository.getAllWatches(),
         // Observed, so a count follows recordings as they arrive, move and go. These loaded once,
         // before the list had, and so showed 0 until the screen poked them.
         repository.recordCountsByPerson
-    ) { people, counts ->
+    ) { people, watches, counts ->
+        val worn = watches.filter { it.currentPersonId != null }.groupBy { it.currentPersonId }
         PeopleUiState(
             people = people.map { person ->
-                PersonRow(person = person, recordCount = counts[person.personId] ?: 0)
+                PersonRow(
+                    person = person,
+                    recordCount = counts[person.personId] ?: 0,
+                    watchNames = worn[person.personId].orEmpty().map { it.displayName }
+                )
             },
             isEmpty = people.isEmpty()
         )
@@ -72,11 +78,10 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
         launchGuarded { repository.clearPersonPhoto(context, personId) }
     }
 
-    fun save(personId: Long, name: String, colorArgb: Int, restingBpm: Int?, maxBpm: Int?) {
+    fun save(personId: Long, name: String, colorArgb: Int) {
         launchGuarded {
             repository.renamePerson(personId, name)
             repository.setPersonColor(personId, colorArgb)
-            repository.setPersonZones(personId, restingBpm, maxBpm)
             Feedback.say("Saved.")
         }
     }
@@ -109,7 +114,9 @@ class PeopleViewModel(private val repository: LibraryRepository) : ViewModel() {
  */
 data class PersonRow(
     val person: PersonEntity,
-    val recordCount: Int
+    val recordCount: Int,
+    /** The watches they are wearing now, by name. */
+    val watchNames: List<String> = emptyList()
 )
 
 data class PeopleUiState(

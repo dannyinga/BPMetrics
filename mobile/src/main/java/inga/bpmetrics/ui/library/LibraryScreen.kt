@@ -250,45 +250,21 @@ fun LibraryScreen(
         }
     }
 
-    // Launcher for importing CSV and JSON (.bpmjson) file(s)
+    // Backups and CSVs, each shown as a preview of what it adds before anything is written. See
+    // LibraryViewModel.importSession.
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris: List<Uri> ->
-        // Backups are told apart from CSVs by what is in them, not by their name or type: a file
-        // that has been texted or downloaded usually arrives as octet-stream under a URI with no
-        // extension, and deciding from those sent good backups to the CSV importer.
-        val (backups, csvs) = uris.partition { JsonExporter.looksLikeJson(context, it) }
+    ) { uris: List<Uri> -> viewModel.importSession.open(context, uris) }
 
-        // Restored as a whole backup rather than record by record, so the people and watches come
-        // back before the recordings that refer to them. Each reports its own outcome once it is
-        // known — this used to announce success from the file's record count before the restore
-        // had run, and then report the failure after it.
-        backups.forEach { uri ->
-            viewModel.importBackupFile(context, uri) { message ->
-                Feedback.say(message)
-            }
-        }
-
-        if (csvs.isNotEmpty()) {
-            var imported = 0
-            csvs.forEach { uri ->
-                CsvExporter.importFromCsv(context, uri)?.let {
-                    viewModel.importRecord(it)
-                    imported++
-                }
-            }
-            when {
-                imported == csvs.size ->
-                    Feedback.say("Imported $imported recording${if (imported == 1) "" else "s"}.")
-                imported > 0 -> Feedback.failed(
-                    "Imported $imported of ${csvs.size} files. The rest couldn't be read."
-                )
-                else -> Feedback.failed(
-                    "${if (csvs.size == 1) "That file" else "Those files"} couldn't be read " +
-                        "as a BPMetrics backup or CSV."
-                )
-            }
-        }
+    val importPlan by viewModel.importSession.plan.collectAsStateWithLifecycle()
+    val importProgress by viewModel.importSession.progress.collectAsStateWithLifecycle()
+    importPlan?.let { plan ->
+        inga.bpmetrics.ui.restore.ImportPreviewDialog(
+            plan = plan,
+            progress = importProgress,
+            onConfirm = { choices -> viewModel.importSession.confirm(context, choices) },
+            onDismiss = { viewModel.importSession.dismiss() }
+        )
     }
 
     // Ids, not records. A CSV is every reading of every chosen recording, so the readings are
@@ -488,7 +464,7 @@ fun LibraryScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Save as file (.bpmjson)") },
+                                    text = { Text("Save as a file") },
                                     leadingIcon = {
                                         Icon(Icons.Default.Save, contentDescription = null)
                                     },
@@ -497,8 +473,7 @@ fun LibraryScreen(
                                         showSelectionMenu = false
                                         recordsToBackUp = selectedRecords
                                         saveBackupLauncher.launch(
-                                            "BPMetrics_Backup_" +
-                                                System.currentTimeMillis() + ".bpmjson"
+                                            JsonExporter.suggestedFileName("recordings")
                                         )
                                     }
                                 )

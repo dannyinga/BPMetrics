@@ -243,7 +243,7 @@ interface BpmRecordDao {
  *
  * A file-level constant because an annotation argument cannot reference the class it annotates.
  */
-internal const val LIBRARY_DB_VERSION = 30
+internal const val LIBRARY_DB_VERSION = 31
 
 @Database(
     entities = [
@@ -263,7 +263,8 @@ internal const val LIBRARY_DB_VERSION = 30
         EventWindowPersonCrossRef::class,
         SavedAnalysisRecordEntity::class,
         ExportPresetEntity::class,
-        RenderJobEntity::class
+        RenderJobEntity::class,
+        WatchAliasEntity::class
     ],
     version = LIBRARY_DB_VERSION,
     exportSchema = true
@@ -1472,6 +1473,28 @@ abstract class LibraryDatabase : RoomDatabase() {
         }
 
         /**
+         * Other ids a watch has been known by. See [WatchAliasEntity].
+         *
+         * A new table, so nothing existing is touched. Starts empty: the duplicates already in a
+         * library can't be told apart from two real watches without the node, which no row from
+         * before this has kept reliably, so they are merged by hand.
+         *
+         * Must match what Room generates for the entity, down to the index name.
+         */
+        val MIGRATION_30_31 = object : Migration(30, 31) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `watch_aliases` " +
+                        "(`alias` TEXT NOT NULL, `watchId` TEXT NOT NULL, PRIMARY KEY(`alias`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_watch_aliases_watchId` ON `watch_aliases` (`watchId`)"
+                )
+                android.util.Log.i(TAG, "MIGRATION_30_31: watches remember other ids")
+            }
+        }
+
+        /**
          * Whether opening the database will run a migration.
          *
          * Read straight off the database file rather than through Room, so this can be answered
@@ -1583,7 +1606,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_26_27,
                         MIGRATION_27_28,
                         MIGRATION_28_29,
-                        MIGRATION_29_30
+                        MIGRATION_29_30,
+                        MIGRATION_30_31
                     )
                     // NEVER add fallbackToDestructiveMigration() here.
                     // Data loss is unacceptable. If migrations fail, crash loudly.

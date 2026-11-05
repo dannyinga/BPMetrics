@@ -30,12 +30,11 @@ data class PersonEntity(
     val colorArgb: Int,
     val createdAt: Long = 0L,
     /**
-     * This person's own resting rate, or null to use the app-wide figure.
+     * Resting and maximum rate, as typed in before 1.0.
      *
-     * On the person rather than in Settings because it *is* a fact about a person: a runner's
-     * resting rate and a stranger's are different numbers, and a single app-wide value would make
-     * time-in-zone say something false about whichever of them it did not describe. Settings holds
-     * the fallback for anyone who has not given one.
+     * Nothing reads them: zones use fixed bands, and the fields that set these are gone (Audit #7,
+     * D1). Kept so the column and anyone's stored figures survive, and so a backup still carries
+     * them, for when personal zones come back with a recompute pass.
      */
     @ColumnInfo(defaultValue = "NULL") val restingBpm: Int? = null,
     @ColumnInfo(defaultValue = "NULL") val maxBpm: Int? = null,
@@ -59,9 +58,6 @@ data class PersonEntity(
 ) {
     /** How to refer to this person when their name has somehow been left blank. */
     val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Unnamed person"
-
-    /** Whether this person has figures of their own, rather than inheriting the defaults. */
-    val hasOwnZones: Boolean get() = restingBpm != null || maxBpm != null
 
     /**
      * Their photograph and how it is framed, or null if they have none.

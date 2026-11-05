@@ -1537,8 +1537,8 @@ class LibraryDatabaseMigrationTest {
     fun migrate27To28_turnsSameTimeAnalysesIntoLiveSets() {
         helper.createDatabase(TEST_DB, 27).apply {
             execSQL(
-                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
-                    "VALUES (5, 'Kyle', 100, 100, 200, 100)"
+                "INSERT INTO bpm_records (recordId, title, description, date, startTime, endTime, durationMs) " +
+                    "VALUES (5, 'Kyle', '', 100, 100, 200, 100)"
             )
             execSQL(
                 "INSERT INTO saved_analyses (analysisId, name, createdAt, kind) " +
@@ -1665,8 +1665,8 @@ class LibraryDatabaseMigrationTest {
     fun migrate28To29_addsTheColumnsEmpty() {
         helper.createDatabase(TEST_DB, 28).apply {
             execSQL(
-                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
-                    "VALUES (1, 'Subtronics', 100, 100, 200, 100)"
+                "INSERT INTO bpm_records (recordId, title, description, date, startTime, endTime, durationMs) " +
+                    "VALUES (1, 'Subtronics', '', 100, 100, 200, 100)"
             )
             close()
         }
@@ -1694,12 +1694,12 @@ class LibraryDatabaseMigrationTest {
     fun migrate28To29_leavesTheBackfillGateUsable() {
         helper.createDatabase(TEST_DB, 28).apply {
             execSQL(
-                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
-                    "VALUES (1, 'A', 100, 100, 200, 100)"
+                "INSERT INTO bpm_records (recordId, title, description, date, startTime, endTime, durationMs) " +
+                    "VALUES (1, 'A', '', 100, 100, 200, 100)"
             )
             execSQL(
-                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
-                    "VALUES (2, 'B', 200, 200, 300, 100)"
+                "INSERT INTO bpm_records (recordId, title, description, date, startTime, endTime, durationMs) " +
+                    "VALUES (2, 'B', '', 200, 200, 300, 100)"
             )
             close()
         }
@@ -1750,8 +1750,8 @@ class LibraryDatabaseMigrationTest {
                 "INSERT INTO collections (collectionId, name, createdAt) VALUES (1, 'Best of', 0)"
             )
             execSQL(
-                "INSERT INTO bpm_records (recordId, title, date, startTime, endTime, durationMs) " +
-                    "VALUES (1, 'Subtronics', 100, 100, 200, 100)"
+                "INSERT INTO bpm_records (recordId, title, description, date, startTime, endTime, durationMs) " +
+                    "VALUES (1, 'Subtronics', '', 100, 100, 200, 100)"
             )
             close()
         }
@@ -1784,6 +1784,27 @@ class LibraryDatabaseMigrationTest {
             assertEquals(0, it.getInt(0))
         }
 
+        db.close()
+    }
+
+    /** Watches gain a table of other ids, empty, and nothing existing changes (Audit #39). */
+    @Test
+    fun migrate30To31_addsAnEmptyAliasTable() {
+        helper.createDatabase(TEST_DB, 30).apply {
+            execSQL("INSERT INTO watches (watchId, deviceName, firstSeen, lastSeen) VALUES ('501af8fd', 'Blue', 0, 0)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 31, true, LibraryDatabase.MIGRATION_30_31)
+
+        db.query("SELECT COUNT(*) FROM watch_aliases").use {
+            it.moveToFirst()
+            assertEquals(0, it.getInt(0))
+        }
+        db.query("SELECT deviceName FROM watches WHERE watchId = '501af8fd'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Blue", it.getString(0))
+        }
         db.close()
     }
 }

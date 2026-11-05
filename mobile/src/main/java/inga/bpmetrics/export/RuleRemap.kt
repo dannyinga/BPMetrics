@@ -10,7 +10,9 @@ import inga.bpmetrics.library.FilterState
  * numbers in the library it lands in. That is how "Danny BC" (an event and a person) came back
  * matching nothing, and "Colin BC" came back matching one unrelated recording.
  *
- * Watch ids are the watch's own UUID and survive as they are. Event types and the query are text.
+ * Watch ids are the watch's own and mostly survive as they are. The exception is a watch this
+ * library knows under another id (Audit #39), which [Maps.watches] translates; any other watch id
+ * passes through. Event types and the query are text.
  *
  * ## When an id can't be translated
  *
@@ -32,7 +34,9 @@ internal object RuleRemap {
         val people: Map<Long, Long> = emptyMap(),
         val tags: Map<Long, Long> = emptyMap(),
         val locations: Map<Long, Long> = emptyMap(),
-        val collections: Map<Long, Long> = emptyMap()
+        val collections: Map<Long, Long> = emptyMap(),
+        /** Only the watches known here under another id. Anything not in it is kept. */
+        val watches: Map<String, String> = emptyMap()
     )
 
     /** What a dimension is called when telling the user which part of a rule was lost. */
@@ -58,7 +62,8 @@ internal object RuleRemap {
                 selectedPersonIds = rule.selectedPersonIds.through(maps.people, Kind.PERSON),
                 selectedTagIds = rule.selectedTagIds.through(maps.tags, Kind.TAG),
                 selectedLocationIds = rule.selectedLocationIds.through(maps.locations, Kind.VENUE),
-                selectedGroupIds = rule.selectedGroupIds.through(maps.collections, Kind.COLLECTION)
+                selectedGroupIds = rule.selectedGroupIds.through(maps.collections, Kind.COLLECTION),
+                selectedWatchIds = rule.selectedWatchIds.mapTo(mutableSetOf()) { maps.watches[it] ?: it }
             ),
             lost = lost
         )

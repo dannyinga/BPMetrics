@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -73,6 +75,9 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
     var editing by remember { mutableStateOf<WatchEntity?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var applying by remember { mutableStateOf<ApplyToPast?>(null) }
+    // Merging: choosing where one entry goes, then confirming with the count.
+    var mergingFrom by remember { mutableStateOf<WatchRow?>(null) }
+    var confirmingMerge by remember { mutableStateOf<Pair<WatchRow, WatchRow>?>(null) }
 
     Scaffold(
         topBar = {
@@ -100,7 +105,12 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(uiState.watches, key = { it.watch.watchId }) { row ->
-                    WatchCard(row = row, onClick = { editing = row.watch })
+                    WatchCard(
+                        row = row,
+                        onClick = { editing = row.watch },
+                        onMerge = { mergingFrom = row },
+                        onNotSame = { row.likelySame.forEach { viewModel.markDistinct(row.watch.watchId, it.watchId) } }
+                    )
                 }
             }
         }
@@ -127,7 +137,45 @@ fun WatchesScreen(onOpenDrawer: () -> Unit) {
             onDelete = {
                 viewModel.delete(watch.watchId)
                 editing = null
+            },
+            onMerge = {
+                mergingFrom = uiState.watches.firstOrNull { it.watch.watchId == watch.watchId }
+                editing = null
             }
+        )
+    }
+
+    mergingFrom?.let { from ->
+        MergePickerDialog(
+            from = from,
+            others = uiState.watches.filter { it.watch.watchId != from.watch.watchId },
+            onDismiss = { mergingFrom = null },
+            onPick = { into ->
+                mergingFrom = null
+                confirmingMerge = from to into
+            }
+        )
+    }
+
+    confirmingMerge?.let { (from, into) ->
+        AlertDialog(
+            onDismissRequest = { confirmingMerge = null },
+            title = { Text("Merge ${from.watch.displayName} into ${into.watch.displayName}?") },
+            text = {
+                Text(
+                    "Its ${if (from.recordCount == 1) "recording moves" else "${from.recordCount} recordings move"} " +
+                        "to ${into.watch.displayName}, which keeps its own name and wearer. " +
+                        "${from.watch.displayName} is removed, and anything it sends later lands on " +
+                        "${into.watch.displayName}. Who wore each recording doesn't change."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.merge(from.watch.watchId, into.watch.watchId, into.watch.displayName)
+                    confirmingMerge = null
+                }) { Text("Merge") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingMerge = null }) { Text("Cancel") } }
         )
     }
 
@@ -207,7 +255,12 @@ private fun EmptyWatches(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
+private fun WatchCard(
+    row: WatchRow,
+    onClick: () -> Unit,
+    onMerge: () -> Unit,
+    onNotSame: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -254,8 +307,73 @@ private fun WatchCard(row: WatchRow, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.error
                 )
             }
+            // A suggestion, never a merge: the same model recording at different times is what one
+            // watch reinstalled looks like, and also what two watches used in turn look like.
+            if (row.likelySame.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Might be the same watch as " +
+                        row.likelySame.joinToString(" or ") { it.displayName } +
+                        ". Their recordings never overlap.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row {
+                    TextButton(onClick = onMerge) { Text("Merge…") }
+                    TextButton(onClick = onNotSame) { Text("Not the same") }
+                }
+            }
         }
     }
+}
+
+/**
+ * Where to merge a watch entry: the one it goes into keeps its name, wearer and id.
+ *
+ * The ones that look like the same watch come first. Any other can still be picked, because the
+ * suggestion can't see everything a person knows about which watch was where.
+ */
+@Composable
+private fun MergePickerDialog(
+    from: WatchRow,
+    others: List<WatchRow>,
+    onDismiss: () -> Unit,
+    onPick: (WatchRow) -> Unit
+) {
+    val likely = from.likelySame.map { it.watchId }.toSet()
+    val ordered = others.sortedByDescending { it.watch.watchId in likely }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Merge ${from.watch.displayName} into…") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 420.dp)
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
+            ) {
+                ordered.forEach { row ->
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(row.watch.displayName)
+                                Text(
+                                    buildString {
+                                        if (row.watch.watchId in likely) append("Looks like the same watch · ")
+                                        append(if (row.recordCount == 1) "1 recording" else "${row.recordCount} recordings")
+                                        row.wearer?.let { append(" · ${it.displayName}") }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
+                        onClick = { onPick(row) }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -265,7 +383,8 @@ private fun WatchEditDialog(
     onDismiss: () -> Unit,
     onSave: (deviceName: String, personId: Long?) -> Unit,
     onApplyToPast: (deviceName: String, personId: Long) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onMerge: () -> Unit
 ) {
     var deviceName by remember(watch.watchId) { mutableStateOf(watch.deviceName) }
     var personId by remember(watch.watchId) { mutableStateOf(watch.currentPersonId) }
@@ -308,6 +427,10 @@ private fun WatchEditDialog(
                     Spacer(Modifier.height(12.dp))
                     Text("Model: ${watch.lastKnownModel}", style = MaterialTheme.typography.bodySmall)
                 }
+
+                // The merge the "Register a watch" text promised, and that had no button.
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onMerge) { Text("Merge into another watch…") }
             }
         },
         confirmButton = {

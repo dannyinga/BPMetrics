@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -161,15 +162,17 @@ fun PeopleScreen(onOpenDrawer: () -> Unit) {
             )
         }
 
+        val row = uiState.people.firstOrNull { it.person.personId == person.personId }
         PersonEditDialog(
             person = person,
-            recordCount = uiState.people.firstOrNull { it.person.personId == person.personId }?.recordCount ?: 0,
+            recordCount = row?.recordCount ?: 0,
             pickPhoto = pickPhoto,
             onFramePhoto = { framingPhoto = true },
             onRemovePhoto = { viewModel.clearPhoto(context, person.personId) },
+            watchNames = row?.watchNames.orEmpty(),
             onDismiss = { editing = null },
-            onSave = { name, color, resting, max ->
-                viewModel.save(person.personId, name, color, resting, max)
+            onSave = { name, color ->
+                viewModel.save(person.personId, name, color)
                 editing = null
             },
             onDelete = {
@@ -276,21 +279,24 @@ private fun PersonEditDialog(
     pickPhoto: () -> Unit,
     onFramePhoto: () -> Unit,
     onRemovePhoto: () -> Unit,
+    /** The watches they're wearing, which removing them leaves with no wearer. */
+    watchNames: List<String>,
     onDismiss: () -> Unit,
-    onSave: (String, Int, Int?, Int?) -> Unit,
+    onSave: (String, Int) -> Unit,
     onDelete: () -> Unit
 ) {
     var name by remember(person.personId) { mutableStateOf(person.name) }
     var color by remember(person.personId) { mutableStateOf(person.colorArgb) }
-    var resting by remember(person.personId) { mutableStateOf(person.restingBpm) }
-    var max by remember(person.personId) { mutableStateOf(person.maxBpm) }
     var confirmDelete by remember(person.personId) { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit person") },
         text = {
-            Column {
+            // Scrolls: photo, name and the colour grid don't fit a small phone with the keyboard up.
+            Column(
+                Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())
+            ) {
                 // Their photograph, alongside the name it belongs to. Saved as soon as it is
                 // chosen rather than waiting for the dialog's Save: the file is already copied by
                 // then, and a Cancel that leaves an orphaned image on disk is worse than a photo
@@ -340,60 +346,53 @@ private fun PersonEditDialog(
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                 )
                 ColorPicker(colorArgb = color, onColorChange = { color = it })
+                // Resting and maximum heart rate were here. Nothing read them (Audit #7, D1).
 
+                // Apart from Save, in the body, so a destructive verb isn't the button beside it.
                 Spacer(Modifier.height(16.dp))
-                Text(
-                    "Heart rate",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                )
-                Text(
-                    // Their own figures if given; the app-wide ones otherwise. A shared value
-                    // would make time-in-zone say something false about whoever it did not fit.
-                    "Leave blank to use the figures in Settings.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OptionalBpmField(
-                        value = resting,
-                        label = "Resting",
-                        modifier = Modifier.weight(1f)
-                    ) { resting = it }
-                    OptionalBpmField(
-                        value = max,
-                        label = "Maximum",
-                        modifier = Modifier.weight(1f)
-                    ) { max = it }
-                }
+                TextButton(
+                    onClick = { confirmDelete = true },
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("Remove ${person.displayName}…") }
             }
         },
         confirmButton = {
             TextButton(
                 enabled = name.isNotBlank(),
-                onClick = { onSave(name, color, resting, max) }
+                onClick = { onSave(name, color) }
             ) { Text("Save") }
         },
-        dismissButton = {
-            TextButton(
-                onClick = { confirmDelete = true },
-                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) { Text("Remove") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 
     if (confirmDelete) {
         DeleteConfirmDialog(
             title = "Remove ${person.displayName}?",
-            message = if (recordCount > 0) {
-                "Their $recordCount recording${if (recordCount == 1) "" else "s"} will be kept and " +
-                    "will still show their name — they just stop being someone you can filter by " +
-                    "or recolour."
-            } else {
-                "They have no recordings."
+            message = buildString {
+                append(
+                    if (recordCount > 0) {
+                        "Their $recordCount recording${if (recordCount == 1) "" else "s"} will be " +
+                            "kept and will still show their name — they just stop being someone " +
+                            "you can filter by or recolour."
+                    } else {
+                        "They have no recordings."
+                    }
+                )
+                // Said here because it changes what happens next, not just what is shown: the
+                // watch's next recordings arrive with nobody on them.
+                when (watchNames.size) {
+                    0 -> Unit
+                    1 -> append(
+                        "\n\n${watchNames.single()} will have no wearer, so its next recordings " +
+                            "arrive unattributed."
+                    )
+                    else -> append(
+                        "\n\n${watchNames.joinToString()} will have no wearer, so their next " +
+                            "recordings arrive unattributed."
+                    )
+                }
             },
             onDismiss = { confirmDelete = false },
             onConfirm = {
@@ -440,35 +439,3 @@ private fun PersonAddDialog(
     )
 }
 
-/**
- * A heart rate that may simply not be given.
- *
- * Empty is a real answer here — it means "use the app-wide figure" — so the field commits null
- * rather than refusing to be cleared. That distinction is the whole point of storing these as
- * nullable: zero is a heart rate, and absence is not.
- */
-@Composable
-private fun OptionalBpmField(
-    value: Int?,
-    label: String,
-    modifier: Modifier = Modifier,
-    onValue: (Int?) -> Unit
-) {
-    var text by remember(value) { mutableStateOf(value?.toString() ?: "") }
-
-    OutlinedTextField(
-        value = text,
-        onValueChange = { typed ->
-            val cleaned = typed.filter { it.isDigit() }.take(3)
-            text = cleaned
-            onValue(cleaned.toIntOrNull())
-        },
-        label = { Text(label) },
-        placeholder = { Text("Default") },
-        singleLine = true,
-        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
-        ),
-        modifier = modifier
-    )
-}

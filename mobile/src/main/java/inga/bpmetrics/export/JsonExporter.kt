@@ -364,7 +364,14 @@ data class WatchDto(
     val colorArgb: Int? = null,
     /** When it was first and last heard from. 0 when unknown, and never the time of the restore. */
     val firstSeen: Long = 0L,
-    val lastSeen: Long = 0L
+    val lastSeen: Long = 0L,
+    /**
+     * The Data Layer node it was last heard from, and the other ids it has been known by. Both are
+     * how a restore recognises the same watch under a new id, instead of adding it again (Audit
+     * #39). Format 7.
+     */
+    val lastKnownNodeId: String = "",
+    val aliases: List<String> = emptyList()
 )
 
 /**
@@ -511,7 +518,9 @@ object JsonExporter {
          * Every tag, so a collection rule naming one that no exported recording or event carries
          * can still say what it meant. See [RuleNames].
          */
-        tags: List<TagEntity> = emptyList()
+        tags: List<TagEntity> = emptyList(),
+        /** Other ids each watch has been known by, by watch id. See [inga.bpmetrics.library.WatchAliasEntity]. */
+        watchAliases: Map<String, List<String>> = emptyMap()
     ): LibraryBackup {
         val locationNames = locations.associate { it.locationId to it.name }
         val categoryNames = categories.associate { it.categoryId to it.name }
@@ -594,7 +603,9 @@ object JsonExporter {
                     wearerName = watch.currentPersonId?.let { peopleById[it]?.name },
                     colorArgb = watch.colorArgb,
                     firstSeen = watch.firstSeen,
-                    lastSeen = watch.lastSeen
+                    lastSeen = watch.lastSeen,
+                    lastKnownNodeId = watch.lastKnownNodeId,
+                    aliases = watchAliases[watch.watchId].orEmpty()
                 )
             }
 
@@ -805,6 +816,17 @@ object JsonExporter {
      * as `application/octet-stream`, under a content URI with no extension in it. Deciding from
      * those sent a perfectly good backup down the CSV importer, which said only that it failed.
      */
+    /**
+     * What to offer as a backup's file name: "BPMetrics backup 2026-11-05.json".
+     *
+     * Ends in .json because the save dialog is asked for that type and appends .json to anything
+     * else, which is how files came out as `BPMetrics_Backup_1762300000000.bpmjson.json`. Dated
+     * rather than stamped with milliseconds, so a folder of them sorts and reads. Opening doesn't
+     * care either way: a backup is recognised by what is in it.
+     */
+    fun suggestedFileName(what: String = "backup", on: java.time.LocalDate = java.time.LocalDate.now()): String =
+        "BPMetrics $what $on.json"
+
     fun looksLikeJson(context: Context, uri: Uri): Boolean = try {
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val head = ByteArray(64)

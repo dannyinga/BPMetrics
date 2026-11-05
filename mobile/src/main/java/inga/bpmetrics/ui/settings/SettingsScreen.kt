@@ -101,13 +101,16 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(Modifier.height(8.dp))
-            AppearanceSection(viewModel)
-            LibrarySection(viewModel)
-            HeartRateSection(viewModel)
-            ExportSection(viewModel)
-            BackupSection(viewModel)
-            StorageSection(viewModel)
+            // Status first: whether recordings are still on their way is the one thing here that
+            // changes on its own, and it was last, below six groups of preferences. Then Backup,
+            // open, because it's what people come here to do. Heart rate, the sync retry interval
+            // and the export time zone are gone: nothing read them (Audit #7, D1).
             SyncSection(viewModel)
+            BackupSection(viewModel)
+            LibrarySection(viewModel)
+            AppearanceSection(viewModel)
+            ExportSection(viewModel)
+            StorageSection(viewModel)
             // No About section here: the app already has one, and two places claiming to be the
             // version number is how they come to disagree.
             Spacer(Modifier.height(32.dp))
@@ -210,32 +213,6 @@ private fun LibrarySection(viewModel: SettingsViewModel) {
                     label = { Text(category.name) }
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun HeartRateSection(viewModel: SettingsViewModel) {
-    val resting by viewModel.restingBpm.collectAsStateWithLifecycle()
-    val max by viewModel.maxBpm.collectAsStateWithLifecycle()
-
-    SettingsGroup("Heart rate", "The figures zones are measured against") {
-        Hint(
-            "A fallback for anyone without figures of their own. Set a person's own resting and " +
-                "maximum on their profile — these two are what everyone else is measured against."
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            NumberField(
-                value = resting,
-                label = "Resting",
-                modifier = Modifier.weight(1f)
-            ) { viewModel.setRestingBpm(it) }
-            NumberField(
-                value = max,
-                label = "Maximum",
-                modifier = Modifier.weight(1f)
-            ) { viewModel.setMaxBpm(it) }
         }
     }
 }
@@ -383,7 +360,6 @@ private fun SyncSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val incoming by viewModel.incomingCount.collectAsStateWithLifecycle()
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val retry by viewModel.syncRetryMinutes.collectAsStateWithLifecycle()
 
     SettingsGroup("Sync", "What is still coming from the watch") {
         Text(
@@ -412,13 +388,6 @@ private fun SyncSection(viewModel: SettingsViewModel) {
         }) {
             Text("Check for recordings now")
         }
-
-        Spacer(Modifier.height(12.dp))
-        NumberField(
-            value = retry,
-            label = "Retry every (minutes)",
-            modifier = Modifier.fillMaxWidth()
-        ) { viewModel.setSyncRetryMinutes(it) }
     }
 }
 
@@ -488,7 +457,19 @@ private fun relaunch(context: Context) {
 private fun BackupSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val busy by viewModel.backupBusy.collectAsStateWithLifecycle()
+    val writing by viewModel.writingBackup.collectAsStateWithLifecycle()
     val lastRestore by viewModel.lastRestore.collectAsStateWithLifecycle()
+    val plan by viewModel.importSession.plan.collectAsStateWithLifecycle()
+    val progress by viewModel.importSession.progress.collectAsStateWithLifecycle()
+
+    plan?.let {
+        inga.bpmetrics.ui.restore.ImportPreviewDialog(
+            plan = it,
+            progress = progress,
+            onConfirm = { choices -> viewModel.importSession.confirm(context, choices) },
+            onDismiss = { viewModel.importSession.dismiss() }
+        )
+    }
 
     val saveLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
@@ -501,7 +482,7 @@ private fun BackupSection(viewModel: SettingsViewModel) {
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let { viewModel.readBackup(context, it) } }
 
-    SettingsGroup("Backup", "One file with everything in it") {
+    SettingsGroup("Backup", "One file with everything in it", initiallyExpanded = true) {
         Hint(
             "A backup holds every recording and its readings, the people and their photographs, " +
                 "watches, venues, your events and how they nest, collections and their rules, " +
@@ -516,22 +497,30 @@ private fun BackupSection(viewModel: SettingsViewModel) {
             Button(
                 enabled = !busy,
                 onClick = {
-                    saveLauncher.launch("BPMetrics_Backup_" + System.currentTimeMillis() + ".bpmjson")
+                    saveLauncher.launch(inga.bpmetrics.export.JsonExporter.suggestedFileName())
                 },
                 modifier = Modifier.weight(1f)
-            ) { Text(if (busy) "Working..." else "Back up") }
+            ) { Text(if (writing) "Backing up…" else "Back up") }
 
+            // Progress on the button doing the work. It used to show on Back up while Restore
+            // stayed enabled for a second tap.
             OutlinedButton(
                 enabled = !busy,
                 onClick = { openLauncher.launch(arrayOf("*/*")) },
                 modifier = Modifier.weight(1f)
-            ) { Text("Restore from file") }
+            ) {
+                Text(
+                    progress?.let { "Restoring ${it.done} of ${it.total}" }
+                        ?: if (busy && !writing) "Reading…" else "Restore from file"
+                )
+            }
         }
 
         Spacer(Modifier.height(8.dp))
         Hint(
-            "Restoring adds to this library rather than replacing it. People, venues and presets " +
-                "already here are matched by name rather than duplicated."
+            "Restoring adds to this library rather than replacing it. You'll see everything in " +
+                "the file first, and choose for each item whether to add it, replace yours with " +
+                "it, or skip it."
         )
 
         // What the last restore actually did, kept on screen. A toast says "restored" and is gone
@@ -576,12 +565,14 @@ private fun BackupSection(viewModel: SettingsViewModel) {
 private fun SettingsGroup(
     title: String,
     subtitle: String,
+    /** Open when the screen opens. One group is, so the screen doesn't open on seven closed rows. */
+    initiallyExpanded: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    // Collapsed on open, and saveable so that a rotation — or a trip into the preset editor and
-    // back — does not silently close the section someone was working in. Keyed by title because
-    // the sections are siblings in one Column and would otherwise share a slot.
-    var expanded by rememberSaveable(title) { mutableStateOf(false) }
+    // Saveable so that a rotation — or a trip into the preset editor and back — does not silently
+    // close the section someone was working in. Keyed by title because the sections are siblings
+    // in one Column and would otherwise share a slot.
+    var expanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -640,49 +631,17 @@ private fun SwitchRow(
 }
 
 /**
- * A number, written through as it is typed.
- *
- * Holds its own text so a half-typed "6" on the way to "60" is not committed and echoed back — the
- * value is applied whenever what is typed parses, and the field keeps showing the characters.
- */
-@Composable
-private fun NumberField(
-    value: Int,
-    label: String,
-    modifier: Modifier = Modifier,
-    onValue: (Int) -> Unit
-) {
-    var editing by remember(value) { mutableStateOf<String?>(null) }
-
-    OutlinedTextField(
-        value = editing ?: value.toString(),
-        onValueChange = { typed ->
-            val cleaned = typed.filter { it.isDigit() }.take(4)
-            editing = cleaned
-            cleaned.toIntOrNull()?.let(onValue)
-        },
-        label = { Text(label) },
-        singleLine = true,
-        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
-        ),
-        modifier = modifier
-    )
-}
-
-/**
  * Export settings.
  *
  * Not a second home for the appearance options — those live in a preset, and duplicating them here
  * is exactly what this screen used to do wrong. What belongs here is everything *about* presets
- * that no single preset can hold: which one new exports start from, getting one in or out of the
- * app, and the time zone stamped on a video when nothing else says.
+ * that no single preset can hold: which one new exports start from, and getting one in or out of
+ * the app.
  */
 @Composable
 private fun ExportSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val presets by viewModel.presets.collectAsStateWithLifecycle()
-    val timeZone by viewModel.defaultTimeZone.collectAsStateWithLifecycle()
     var deleting by remember { mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null) }
     var editing by remember { mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null) }
     var creating by remember { mutableStateOf(false) }
@@ -745,23 +704,6 @@ private fun ExportSection(viewModel: SettingsViewModel) {
             }
         }
 
-        Spacer(Modifier.height(16.dp))
-        Label("Time zone")
-        Hint(
-            // Stamped onto a video's clock labels. Almost always the phone's own, and worth
-            // changing exactly once: when the footage was filmed somewhere else.
-            "Used for the times drawn on an export. Change it when the recordings were made in " +
-                "a different zone from the one you are in now."
-        )
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = timeZone,
-            onValueChange = { viewModel.setDefaultTimeZone(it) },
-            label = { Text("Zone id") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Hint("This phone is in ${java.time.ZoneId.systemDefault().id}")
     }
 
     editing?.let { entity ->

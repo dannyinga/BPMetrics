@@ -800,12 +800,14 @@ fun LookSections(
                 NumberField(
                     value = preset.width,
                     label = "Width",
+                    range = DIMENSION_RANGE,
                     modifier = Modifier.weight(1f),
                     onValue = { onChange(preset.copy(width = it)) }
                 )
                 NumberField(
                     value = preset.height,
                     label = "Height",
+                    range = DIMENSION_RANGE,
                     modifier = Modifier.weight(1f),
                     onValue = { onChange(preset.copy(height = it)) }
                 )
@@ -1077,6 +1079,7 @@ fun LookSections(
             NumberField(
                 value = (preset.windowSizeMs / 1000).toInt(),
                 label = "Visible window (seconds)",
+                range = WINDOW_RANGE,
                 modifier = Modifier.fillMaxWidth(),
                 onValue = { onChange(preset.copy(windowSizeMs = it * 1000L)) }
             )
@@ -1339,25 +1342,65 @@ private fun TypedValueField(
     )
 }
 
+/**
+ * A whole number, edited as text and applied when the typing is done.
+ *
+ * This showed the stored value and applied every keystroke that parsed, so the field couldn't be
+ * cleared to type a fresh number (it snapped back), and each digit on the way re-laid the preview.
+ * Now it keeps what is typed and commits on Done or when focus leaves, through [NumberEntry],
+ * saying under the field when it had to change the number.
+ */
 @Composable
 private fun NumberField(
     value: Int,
     label: String,
+    range: IntRange,
     modifier: Modifier = Modifier,
     onValue: (Int) -> Unit
 ) {
+    var text by remember(value) { mutableStateOf(value.toString()) }
+    var note by remember { mutableStateOf<String?>(null) }
+    var focused by remember { mutableStateOf(false) }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+
+    fun commit() {
+        val result = inga.bpmetrics.ui.components.NumberEntry.commit(text, value, range)
+        text = result.value.toString()
+        note = result.note
+        if (result.value != value) onValue(result.value)
+    }
+
     OutlinedTextField(
-        value = value.toString(),
-        onValueChange = { text ->
-            // Ignores anything unparseable rather than resetting to zero, so deleting the last
-            // digit mid-edit does not silently make the canvas one pixel wide.
-            text.toIntOrNull()?.takeIf { it > 0 }?.let(onValue)
+        value = text,
+        onValueChange = { typed ->
+            text = typed.filter { it.isDigit() }.take(6)
+            note = null
         },
         label = { Text(label) },
+        supportingText = note?.let { { Text(it) } },
         singleLine = true,
-        modifier = modifier
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Number,
+            imeAction = androidx.compose.ui.text.input.ImeAction.Done
+        ),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+            onDone = {
+                commit()
+                focusManager.clearFocus()
+            }
+        ),
+        modifier = modifier.onFocusChanged {
+            if (focused && !it.isFocused) commit()
+            focused = it.isFocused
+        }
     )
 }
+
+/** Pixels. Below 16 there's no graph to draw; above 4096 most phones' encoders refuse. */
+private val DIMENSION_RANGE = 16..4096
+
+/** Seconds of graph across the frame. */
+private val WINDOW_RANGE = 1..600
 
 /**
  * Which clip step 3 is previewing.

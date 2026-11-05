@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
@@ -85,54 +86,12 @@ class SettingsViewModel(
         launchGuarded { settingsRepository.setDateFormat(pattern) }
     }
 
-    // --- Heart rate ---
-
-    val restingBpm: StateFlow<Int> = settingsRepository.restingBpm
-        .stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5000),
-            SettingsRepository.DEFAULT_RESTING_BPM
-        )
-
-    fun setRestingBpm(bpm: Int) {
-        launchGuarded { settingsRepository.setRestingBpm(bpm) }
-    }
-
-    val maxBpm: StateFlow<Int> = settingsRepository.maxBpm
-        .stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5000),
-            SettingsRepository.DEFAULT_MAX_BPM
-        )
-
-    fun setMaxBpm(bpm: Int) {
-        launchGuarded { settingsRepository.setMaxBpm(bpm) }
-    }
-
     // --- Sync ---
-
-    val syncRetryMinutes: StateFlow<Int> = settingsRepository.syncRetryMinutes
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 15)
-
-    fun setSyncRetryMinutes(minutes: Int) {
-        launchGuarded { settingsRepository.setSyncRetryMinutes(minutes) }
-    }
 
     /** How many recordings are still on their way from a watch. */
     val incomingCount: StateFlow<Int> = IncomingRecordManager.incoming
         .map { incoming -> incoming.count { it.status.isActive } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-
-    val defaultTimeZone: StateFlow<String> = settingsRepository.defaultTimeZone
-        .stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5000),
-            java.time.ZoneId.systemDefault().id
-        )
-
-    fun setDefaultTimeZone(zoneId: String) {
-        launchGuarded { settingsRepository.setDefaultTimeZone(zoneId) }
-    }
 
     // --- Export ---
 
@@ -325,12 +284,24 @@ class SettingsViewModel(
     // --- Backup file: everything this app holds, in one document ---
 
     private val _backupBusy = MutableStateFlow(false)
-    /** True while a file is being written or read, so the buttons can say so and refuse a second. */
-    val backupBusy: StateFlow<Boolean> = _backupBusy.asStateFlow()
+    /** Writing a backup, as distinct from reading or restoring one. */
+    val writingBackup: StateFlow<Boolean> = _backupBusy.asStateFlow()
 
     private val _lastRestore = MutableStateFlow<inga.bpmetrics.export.RestoreResult?>(null)
     /** What the last restore actually did. Kept on screen rather than flashed past in a toast. */
     val lastRestore: StateFlow<inga.bpmetrics.export.RestoreResult?> = _lastRestore.asStateFlow()
+
+    /** Reading, previewing and applying a backup file. See [inga.bpmetrics.ui.restore.ImportSession]. */
+    val importSession = inga.bpmetrics.ui.restore.ImportSession(repository, viewModelScope) {
+        _lastRestore.value = it
+    }
+
+    /**
+     * True while a file is being written, read or restored, so both buttons can say so and refuse
+     * a second. Restoring used to leave Restore enabled and show its progress on Back up.
+     */
+    val backupBusy: StateFlow<Boolean> = combine(_backupBusy, importSession.busy) { a, b -> a || b }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /**
      * Writes the whole library — every recording, and everything organising them — to [uri].
@@ -361,6 +332,7 @@ class SettingsViewModel(
                         locations = repository.getAllLocations().first(),
                         presets = repository.getPresetsForBackup(),
                         tags = repository.allTags.first(),
+                        watchAliases = repository.watchAliases(),
                         readImage = { name ->
                             runCatching {
                                 inga.bpmetrics.library.CoverStore.fileFor(context, name)
@@ -404,31 +376,13 @@ class SettingsViewModel(
      * matched by name rather than duplicated, and recordings are added. Restoring the same file
      * twice is the case that decides whether this is safe to offer, which is why the round trip is
      * asserted by a test rather than trusted.
+     *
+     * Nothing is written until the preview is confirmed. This used to start restoring the moment
+     * the file was picked.
      */
     fun readBackup(context: Context, uri: android.net.Uri) {
-        if (_backupBusy.value) return
-        launchGuarded {
-            _backupBusy.value = true
-            try {
-                val opened = withContext(Dispatchers.IO) {
-                    inga.bpmetrics.export.JsonExporter.openBackup(context, uri)
-                }
-                val backup = when (opened) {
-                    is inga.bpmetrics.export.BackupFile.Read -> opened.backup
-                    is inga.bpmetrics.export.BackupFile.Unreadable -> {
-                        Feedback.failed(opened.reason)
-                        return@launchGuarded
-                    }
-                }
-                val result = inga.bpmetrics.export.restoreBackup(backup, repository, context)
-                _lastRestore.value = result
-                if (result.failure == null && result.rulesNeedingAttention.isEmpty()) Feedback.say(result.summary())
-                else Feedback.failed(result.summary())
-                refreshStorage(context)
-            } finally {
-                _backupBusy.value = false
-            }
-        }
+        if (backupBusy.value) return
+        importSession.open(context, listOf(uri))
     }
 
     class Factory(

@@ -54,6 +54,16 @@ class BackupRestoreTest {
         coEvery { repository.recordIdsByIdentity() } returns emptyMap()
         coEvery { repository.addPerson(any(), any()) } returns 60L
         coEvery { repository.setCollectionRule(any(), any()) } returns true
+        // A relaxed mock would answer with a made-up watch, and every watch would look known.
+        coEvery { repository.knownWatchFor(any(), any()) } returns null
+        // Flows the restore reads. A relaxed mock's never emits, and `first()` on it throws.
+        every { repository.getAllCategories() } returns flowOf(emptyList())
+        every { repository.allTags } returns flowOf(emptyList())
+        every { repository.allEventsInTree } returns flowOf(emptyList())
+        every { repository.getAllCollections() } returns flowOf(emptyList())
+        every { repository.getTagsForEvent(any()) } returns flowOf(emptyList())
+        every { repository.getTagsForRecord(any()) } returns flowOf(emptyList())
+        coEvery { repository.getPresetsForBackup() } returns emptyList()
     }
 
     @After
@@ -81,8 +91,8 @@ class BackupRestoreTest {
 
     @Test
     fun `a rule is translated into the library it lands in`() = runTest {
-        coEvery { repository.createEvent("Bass Canyon", any()) } returns 103L
-        coEvery { repository.restoreCollection(any(), any(), any(), any()) } returns 400L
+        coEvery { repository.createEvent("Bass Canyon", any(), any()) } returns 103L
+        coEvery { repository.restoreCollection(any(), any(), any(), any(), any()) } returns 400L
         val written = slot<String>()
         coEvery { repository.setCollectionRule(400L, capture(written)) } returns true
 
@@ -113,8 +123,8 @@ class BackupRestoreTest {
 
     @Test
     fun `a rule from an older file is reported, and matches nothing it can't identify`() = runTest {
-        coEvery { repository.createEvent("Bass Canyon", any()) } returns 103L
-        coEvery { repository.restoreCollection(any(), any(), any(), any()) } returns 400L
+        coEvery { repository.createEvent("Bass Canyon", any(), any()) } returns 103L
+        coEvery { repository.restoreCollection(any(), any(), any(), any(), any()) } returns 400L
         val written = slot<String>()
         coEvery { repository.setCollectionRule(400L, capture(written)) } returns true
 
@@ -166,6 +176,174 @@ class BackupRestoreTest {
     }
 
     @Test
+    fun `a watch known here under another id is recognised, not added again`() = runTest {
+        // Here it is 501af8fd; the file, written after a reinstall, calls it 9949b398.
+        coEvery { repository.knownWatchFor("9949b398", "node-og") } returns
+            inga.bpmetrics.library.WatchEntity(watchId = "501af8fd")
+        coEvery { repository.restoreCollection(any(), any(), any(), any(), any()) } returns 400L
+        val written = slot<String>()
+        coEvery { repository.setCollectionRule(400L, capture(written)) } returns true
+
+        val result = restoreBackup(
+            LibraryBackup(
+                watches = listOf(WatchDto(watchId = "9949b398", lastKnownNodeId = "node-og")),
+                collections = listOf(
+                    CollectionDto(
+                        name = "Blue's",
+                        filterJson = FilterCodec.toJson(FilterState(selectedWatchIds = setOf("9949b398")))
+                    )
+                )
+            ),
+            repository, context
+        )
+
+        coVerify(exactly = 0) {
+            repository.restoreWatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+        }
+        coVerify { repository.addWatchAlias("9949b398", "501af8fd") }
+        assertEquals(0, result.watchesCreated)
+        assertEquals(setOf("501af8fd"), FilterCodec.parseOrNull(written.captured)!!.selectedWatchIds)
+    }
+
+    // --- Add, replace or skip, per item ---
+
+    private val readings = listOf(BpmDataPointDto(1_000L, 100.0), BpmDataPointDto(2_000L, 101.0))
+
+    @Test
+    fun `an event already here isn't added again, and its recordings land in it`() = runTest {
+        every { repository.allEventsInTree } returns flowOf(
+            listOf(inga.bpmetrics.library.EventEntity(eventId = 70, name = "Bass Canyon", createdAt = 111L))
+        )
+        coEvery { repository.saveWatchRecordToLibrary(any(), any(), any(), any()) } returns 77L
+
+        val result = restoreBackup(
+            LibraryBackup(
+                events = listOf(EventDto(eventId = 3, name = "Bass Canyon", createdAt = 111L)),
+                records = listOf(
+                    BpmRecordJsonDto(startTime = 1_000L, endTime = 61_000L, eventId = 3, dataPoints = readings)
+                )
+            ),
+            repository, context
+        )
+
+        coVerify(exactly = 0) { repository.createEvent(any(), any(), any()) }
+        coVerify { repository.assignRecordsToEvent(listOf(77L), 70L) }
+        assertEquals(0, result.eventsCreated)
+    }
+
+    @Test
+    fun `a skipped event hands its recordings to the event above it`() = runTest {
+        coEvery { repository.createEvent("Bass Canyon", any(), any()) } returns 103L
+        coEvery { repository.saveWatchRecordToLibrary(any(), any(), any(), any()) } returns 77L
+
+        restoreBackup(
+            LibraryBackup(
+                events = listOf(
+                    EventDto(eventId = 3, name = "Bass Canyon"),
+                    EventDto(eventId = 4, name = "Day 1", parentEventId = 3)
+                ),
+                records = listOf(
+                    BpmRecordJsonDto(startTime = 1_000L, endTime = 61_000L, eventId = 4, dataPoints = readings)
+                )
+            ),
+            repository, context,
+            choices = RestoreChoices(mapOf(RestoreChoices.id(RestoreKind.EVENT, "id:4") to RestoreChoice.SKIP))
+        )
+
+        coVerify(exactly = 0) { repository.createEvent("Day 1", any(), any()) }
+        coVerify { repository.assignRecordsToEvent(listOf(77L), 103L) }
+    }
+
+    @Test
+    fun `an added event keeps when it was made`() = runTest {
+        restoreBackup(
+            LibraryBackup(events = listOf(EventDto(eventId = 3, name = "Bass Canyon", createdAt = 111L))),
+            repository, context
+        )
+        coVerify { repository.createEvent("Bass Canyon", any(), 111L) }
+    }
+
+    @Test
+    fun `a person here is kept unless replaced, and a new one can be skipped`() = runTest {
+        val backup = LibraryBackup(
+            people = listOf(PersonDto(name = "Danny", colorArgb = 9), PersonDto(name = "Bethany"))
+        )
+
+        restoreBackup(
+            backup, repository, context,
+            choices = RestoreChoices(mapOf(RestoreChoices.id(RestoreKind.PERSON, "bethany") to RestoreChoice.SKIP))
+        )
+        coVerify(exactly = 0) { repository.setPersonColor(any(), any()) }
+        coVerify(exactly = 0) { repository.addPerson(any(), any()) }
+
+        restoreBackup(
+            backup, repository, context,
+            choices = RestoreChoices(mapOf(RestoreChoices.id(RestoreKind.PERSON, "danny") to RestoreChoice.REPLACE))
+        )
+        coVerify { repository.setPersonColor(50L, 9) }
+        coVerify { repository.addPerson("Bethany", any()) }
+    }
+
+    @Test
+    fun `a recording here is replaced only when asked, and never re-saved`() = runTest {
+        coEvery { repository.recordIdsByIdentity() } returns mapOf(Triple(1_000L, 61_000L, "Watch") to 5L)
+        val backup = LibraryBackup(
+            records = listOf(
+                BpmRecordJsonDto(title = "Subtronics", startTime = 1_000L, endTime = 61_000L, dataPoints = readings)
+            )
+        )
+
+        restoreBackup(backup, repository, context)
+        coVerify(exactly = 0) { repository.updateRecordTitle(any(), any()) }
+
+        val result = restoreBackup(
+            backup, repository, context,
+            choices = RestoreChoices(
+                mapOf(RestoreChoices.id(RestoreKind.RECORDING, RestoreKeys.recording(1_000L, 61_000L, "Watch")) to RestoreChoice.REPLACE)
+            )
+        )
+        coVerify { repository.updateRecordTitle(5L, "Subtronics") }
+        coVerify(exactly = 0) { repository.saveWatchRecordToLibrary(any(), any(), any(), any()) }
+        assertEquals(1, result.itemsReplaced)
+    }
+
+    @Test
+    fun `a restore leaves this phone's settings alone unless asked`() = runTest {
+        val backup = LibraryBackup(
+            settings = listOf(inga.bpmetrics.ui.settings.PreferenceSnapshot("use_24_hour", "boolean", "true"))
+        )
+
+        restoreBackup(backup, repository, context)
+        coVerify(exactly = 0) { repository.restoreSettings(any()) }
+
+        restoreBackup(
+            backup, repository, context,
+            choices = RestoreChoices(mapOf(RestoreChoices.id(RestoreKind.SETTING, "use_24_hour") to RestoreChoice.REPLACE))
+        )
+        coVerify(exactly = 1) { repository.restoreSettings(backup.settings) }
+    }
+
+    @Test
+    fun `the same recording twice in one file is saved once, and progress is reported`() = runTest {
+        coEvery { repository.saveWatchRecordToLibrary(any(), any(), any(), any()) } returns 77L
+        val twice = BpmRecordJsonDto(
+            deviceId = "SM-R900", startTime = 1_000L, endTime = 61_000L,
+            dataPoints = listOf(BpmDataPointDto(1_000L, 100.0), BpmDataPointDto(2_000L, 101.0))
+        )
+        val seen = mutableListOf<Pair<Int, Int>>()
+
+        val result = restoreBackup(
+            LibraryBackup(records = listOf(twice, twice)), repository, context,
+            onProgress = { done, total -> seen += done to total }
+        )
+
+        coVerify(exactly = 1) { repository.saveWatchRecordToLibrary(any(), any(), any(), any()) }
+        assertEquals(1, result.recordsImported)
+        assertEquals(1, result.recordsAlreadyHere)
+        assertEquals(listOf(1 to 2, 2 to 2), seen)
+    }
+
+    @Test
     fun `a watch the library already has keeps what it has`() = runTest {
         every { repository.getAllWatches() } returns flowOf(
             listOf(inga.bpmetrics.library.WatchEntity(watchId = "501af8fd"))
@@ -176,7 +354,9 @@ class BackupRestoreTest {
             repository, context
         )
 
-        coVerify(exactly = 0) { repository.restoreWatch(any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) {
+            repository.restoreWatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+        }
         assertEquals(0, result.watchesCreated)
         assertNull(result.failure)
     }

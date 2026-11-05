@@ -92,8 +92,7 @@ class BackupCoverageTest {
         ),
         inga.bpmetrics.library.WatchEntity::class.java to mapOf(
             "currentPersonId" to "Carried as wearerName; people are renumbered on import.",
-            "currentWearerName" to "The legacy name column, rewritten from wearerName on restore.",
-            "lastKnownNodeId" to "This pairing's Data Layer node; learned again on the next sync."
+            "currentWearerName" to "The legacy name column, rewritten from wearerName on restore."
         )
     )
 
@@ -162,7 +161,9 @@ class BackupCoverageTest {
             watches = listOf(
                 WatchDto(
                     watchId = "501af8fd", deviceName = "Blue", wearerName = "Danny",
-                    colorArgb = 7, firstSeen = 1_000L, lastSeen = 2_000L
+                    colorArgb = 7, firstSeen = 1_000L, lastSeen = 2_000L,
+                    // How a restore recognises the same watch under another id (Audit #39).
+                    lastKnownNodeId = "node-og", aliases = listOf("9949b398")
                 )
             ),
             collections = listOf(
