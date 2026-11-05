@@ -86,6 +86,22 @@ class ExportClockZoneTest {
         assertNull(resolvedZoneOf(listOf(recording(1, event = 1, zone = "Mars/Olympus_Mons"))))
     }
 
+    /**
+     * With no venue, an export reads in the phone's zone, the one Contents showed the clip in.
+     *
+     * It used to fall back to the preset's frozen zone: an unfiled set at The Granada, shown as
+     * 12:23 AM, rendered as 10:23 PM because every preset said Pacific.
+     */
+    @Test
+    fun `an export with no venue reads in the phone's zone, not a preset's`() {
+        val central = java.time.ZoneId.of("America/Chicago")
+        assertEquals("America/Chicago", exportZoneOf(listOf(recording(1, event = null)), phoneZone = central))
+        assertEquals(
+            "America/Denver",
+            exportZoneOf(listOf(recording(1, event = 1, zone = "America/Denver")), phoneZone = central)
+        )
+    }
+
     // --- The stale column ---
 
     private val context = mockk<Context>(relaxed = true)

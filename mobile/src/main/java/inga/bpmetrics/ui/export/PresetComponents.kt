@@ -43,14 +43,16 @@ import inga.bpmetrics.ui.components.FlowRow
  * overflow, because the common action is "use this one" and the rare ones should not sit next to
  * it competing for attention.
  *
- * @param selectedId Which preset the current settings came from, or null once they have been
- *   edited away from it — an "Update" that silently wrote unrelated settings into a preset would
- *   be worse than having to save a new one.
+ * @param selectedId Which preset the current settings started from. It stays selected through
+ *   edits, so "Update to current settings" is there when there's something to update with.
+ * @param edited Whether the settings hold changes no preset has. Choosing a preset then asks
+ *   first, because it replaces them (Audit #21).
  */
 @Composable
 fun PresetBar(
     presets: List<ExportPresetEntity>,
     selectedId: Long?,
+    edited: Boolean,
     onApply: (ExportPresetEntity) -> Unit,
     onSaveAs: (String) -> Unit,
     onUpdate: (ExportPresetEntity) -> Unit,
@@ -62,6 +64,8 @@ fun PresetBar(
     var showSaveDialog by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<ExportPresetEntity?>(null) }
     var confirmDelete by remember { mutableStateOf<ExportPresetEntity?>(null) }
+    var confirmApply by remember { mutableStateOf<ExportPresetEntity?>(null) }
+    val selected = presets.firstOrNull { it.presetId == selectedId }
 
     Column(Modifier.fillMaxWidth()) {
         Row(
@@ -85,7 +89,7 @@ fun PresetBar(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     FilterChip(
                         selected = preset.presetId == selectedId,
-                        onClick = { onApply(preset) },
+                        onClick = { if (edited) confirmApply = preset else onApply(preset) },
                         leadingIcon = if (preset.isDefault) {
                             {
                                 Icon(
@@ -118,9 +122,8 @@ fun PresetBar(
                                     onClick = { menuFor = null; onSetDefault(preset) }
                                 )
                             }
-                            // Only offered while the settings still are this preset. Updating from
-                            // settings that have drifted would write changes the user never
-                            // associated with it.
+                            // On the preset the settings started from, edited or not. It used to
+                            // vanish at the first edit, which was the one time it was wanted.
                             if (preset.presetId == selectedId && !preset.isBuiltIn) {
                                 DropdownMenuItem(
                                     text = { Text("Update to current settings") },
@@ -146,13 +149,41 @@ fun PresetBar(
             }
         }
 
-        if (selectedId == null && presets.isNotEmpty()) {
+        if (edited) {
             Text(
-                "Settings have been changed since a preset was applied.",
+                when {
+                    selected == null -> "These settings aren't saved as a preset."
+                    selected.isBuiltIn -> "Changed from ${selected.name}. Save as a new preset to keep them."
+                    else -> "Changed from ${selected.name}. Update it from its menu, or save as a new preset."
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+
+    confirmApply?.let { preset ->
+        AlertDialog(
+            onDismissRequest = { confirmApply = null },
+            title = { Text("Use ${preset.name}?") },
+            text = {
+                Text(
+                    if (selected != null) {
+                        "Your changes to ${selected.name} aren't saved, and ${preset.name} replaces them."
+                    } else {
+                        "These settings aren't saved as a preset, and ${preset.name} replaces them."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onApply(preset); confirmApply = null }) {
+                    Text("Use ${preset.name}")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmApply = null }) { Text("Keep my changes") }
+            }
+        )
     }
 
     if (showSaveDialog) {

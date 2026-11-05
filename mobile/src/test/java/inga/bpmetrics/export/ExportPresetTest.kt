@@ -155,12 +155,26 @@ class ExportPresetTest {
             graphLeft = 0.11f, graphTop = 0.22f, graphRight = 0.83f, graphBottom = 0.94f,
             windowSizeMs = 12_345L, frameRate = 50, matchSourceFrameRate = true,
             overlayBitRate = 9_100_000, regularBitRate = 3_200_000,
-            syncOffsetMs = -1_750L, timeZoneId = "Europe/Lisbon"
+            syncOffsetMs = -1_750L
         )
 
         val restored = ExportPreset.fromJson(edited.toJson())
 
         assertEquals(edited, restored)
+    }
+
+    @Test
+    fun `a preset saved with a time zone still opens, and doesn't carry it on`() {
+        // Presets froze the phone's zone until S7; a zone belongs to a location now.
+        val old = """
+            {"version":1,"name":"Pacific era","width":1920,"height":1080,"frameRate":30,
+             "windowSizeMs":30000,"timeZoneId":"America/Los_Angeles"}
+        """.trimIndent()
+
+        val restored = ExportPreset.fromJson(old)!!
+
+        assertEquals("Pacific era", restored.name)
+        assertTrue("timeZoneId" !in restored.toJson())
     }
 
     @Test
@@ -181,8 +195,7 @@ class ExportPresetTest {
         assertEquals(shipped.graphLeft, restored.graphLeft, 0.0001f)
         assertEquals(shipped.graphBottom, restored.graphBottom, 0.0001f)
         // A non-null String that Gson would have left null.
-        assertNotNull(restored.timeZoneId)
-        assertTrue(restored.timeZoneId.isNotBlank())
+        assertNotNull(restored.name)
         // Absent booleans and longs are legitimately false and zero, and stay that way.
         assertEquals(false, restored.matchSourceFrameRate)
         assertEquals(0L, restored.syncOffsetMs)

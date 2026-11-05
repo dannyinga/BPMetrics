@@ -87,6 +87,42 @@ data class ImageCrop(
     val endWallClockMs: Long? = null
 ) {
     val isNarrowed: Boolean get() = startWallClockMs != null || endWallClockMs != null
+
+    /** What's wrong with this window, or null. A window that ends before it starts draws nothing. */
+    val problem: String?
+        get() = if (startWallClockMs != null && endWallClockMs != null && startWallClockMs >= endWallClockMs) {
+            "From has to be before To."
+        } else null
+}
+
+/** The look an export starts with, and the saved preset it came from. */
+internal data class StartingLook(val preset: ExportPreset, val presetId: Long?)
+
+/**
+ * Where a new export's look comes from: the last one used, and the default preset only when
+ * there's no last one (Audit §3 Export).
+ *
+ * @param lastUsedFrom the saved preset the last-used look started from, if it still exists.
+ */
+internal fun startingLook(
+    lastUsedJson: String?,
+    lastUsedFrom: ExportPresetEntity?,
+    default: ExportPresetEntity?
+): StartingLook? {
+    lastUsedJson?.let { ExportPreset.fromJson(it) }?.let {
+        return StartingLook(it, lastUsedFrom?.presetId)
+    }
+    val fromDefault = default?.let { ExportPreset.fromJson(it.configJson) } ?: return null
+    return StartingLook(fromDefault, default.presetId)
+}
+
+/**
+ * Whether the look holds changes no preset has: it differs from the preset it started from, or,
+ * with none, it has been changed by hand.
+ */
+internal fun isPresetEdited(selected: ExportPresetEntity?, current: ExportPreset, touched: Boolean): Boolean {
+    val stored = selected?.let { ExportPreset.fromJson(it.configJson) } ?: return touched
+    return stored != current
 }
 
 /** One image, and what goes on it. */
@@ -704,22 +740,27 @@ class ExportUtilityViewModel(
     val preset: StateFlow<ExportPreset> = _preset.asStateFlow()
 
     /**
-     * Which preset the current settings came from, or null once they have drifted.
+     * Which preset the current settings started from. Kept through edits; [presetEdited] says
+     * whether they still match it.
      *
-     * What makes "Update to current settings" safe to offer: it only appears while the settings
-     * still *are* that preset, so it cannot silently absorb changes the user never associated
-     * with it.
+     * Editing used to clear this, which took "Update to current settings" away at exactly the
+     * moment there was something to update with (Audit #21).
      */
     private val _selectedPresetId = MutableStateFlow<Long?>(null)
     val selectedPresetId: StateFlow<Long?> = _selectedPresetId.asStateFlow()
 
+    /** Whether the look has been changed this session when no preset is selected. */
+    private val _presetTouched = MutableStateFlow(false)
+
     /**
-     * Restores the default preset, or the settings last used.
-     *
-     * Distinct things: a default is a preset someone chose to be pre-selected, while last-used is
-     * simply where they left off. The default wins when there is one, because it was an explicit
-     * decision and the other is a side effect.
+     * Whether the look has changes no preset holds: it differs from the selected preset, or, with
+     * none selected, it's been changed here. Choosing a preset asks first while this is true.
      */
+    val presetEdited: StateFlow<Boolean> =
+        combine(presets, _selectedPresetId, _preset, _presetTouched) { saved, id, current, touched ->
+            isPresetEdited(saved.firstOrNull { it.presetId == id }, current, touched)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     /**
      * Whether the stored preset has already been loaded into this session.
      *
@@ -737,17 +778,15 @@ class ExportUtilityViewModel(
         if (presetRestored) return
         presetRestored = true
         launchGuarded(failure = null) {
-            val default = repository.getDefaultExportPreset()
-            if (default != null) {
-                ExportPreset.fromJson(default.configJson)?.let {
-                    _preset.value = it
-                    _selectedPresetId.value = default.presetId
-                }
-                return@launchGuarded
-            }
-            settingsRepository.lastUsedExportPreset()
-                ?.let { ExportPreset.fromJson(it) }
-                ?.let { _preset.value = it }
+            val lastUsedId = settingsRepository.lastUsedExportPresetId()
+            val start = startingLook(
+                lastUsedJson = settingsRepository.lastUsedExportPreset(),
+                lastUsedFrom = lastUsedId?.let { repository.getExportPreset(it) },
+                default = repository.getDefaultExportPreset()
+            ) ?: return@launchGuarded
+            _preset.value = start.preset
+            _selectedPresetId.value = start.presetId
+            _presetTouched.value = false
         }
     }
 
@@ -755,24 +794,27 @@ class ExportUtilityViewModel(
         ExportPreset.fromJson(entity.configJson)?.let {
             _preset.value = it
             _selectedPresetId.value = entity.presetId
+            _presetTouched.value = false
         }
     }
 
     /**
      * What to call the look a job was queued with.
      *
-     * The applied preset's name, or the canvas shape when the settings have drifted off one — a
-     * queue row saying "1080×1920" is still more use than one saying nothing.
+     * The applied preset's name, marked when it's been changed, or the canvas shape when there's
+     * no preset: a queue row saying "1080×1920" is still more use than one saying nothing.
      */
     fun presetLabel(): String {
         val named = _preset.value.name.takeIf { it.isNotBlank() && _selectedPresetId.value != null }
-        return named ?: "${_preset.value.width}×${_preset.value.height}"
+            ?: return "${_preset.value.width}×${_preset.value.height}"
+        return if (presetEdited.value) "$named (edited)" else named
     }
 
-    /** Records that the settings have moved away from whichever preset was applied. */
+    /** A change to the look. The preset it started from stays selected; see [presetEdited]. */
     fun setPreset(preset: ExportPreset) {
+        if (preset == _preset.value) return
         _preset.value = preset
-        _selectedPresetId.value = null
+        _presetTouched.value = true
     }
 
     /**
@@ -787,6 +829,7 @@ class ExportUtilityViewModel(
             val toSave = framing.into(_preset.value).copy(name = name)
             _preset.value = toSave
             _selectedPresetId.value = repository.saveExportPreset(name, toSave.toJson())
+            _presetTouched.value = false
         }
     }
 
@@ -795,6 +838,9 @@ class ExportUtilityViewModel(
             val toSave = framing.into(_preset.value).copy(name = entity.name)
             _preset.value = toSave
             repository.updateExportPreset(entity.presetId, entity.name, toSave.toJson())
+            _selectedPresetId.value = entity.presetId
+            _presetTouched.value = false
+            inga.bpmetrics.ui.feedback.Feedback.say("Updated ${entity.name}.")
         }
     }
 
@@ -809,10 +855,10 @@ class ExportUtilityViewModel(
         }
     }
 
-    /** Remembers where the user left off, for the next export that has no default to fall back on. */
+    /** Remembers where the user left off. The next export starts here, ahead of the default. */
     fun rememberLastUsed() {
         launchGuarded {
-            settingsRepository.setLastUsedExportPreset(_preset.value.toJson())
+            settingsRepository.setLastUsedExportPreset(_preset.value.toJson(), _selectedPresetId.value)
         }
     }
 
@@ -832,8 +878,9 @@ class ExportUtilityViewModel(
         launchGuarded {
             val name = imported.name.ifBlank { "Imported preset" }
             val id = repository.saveExportPreset(name, imported.copy(name = name).toJson())
-            _preset.value = imported
+            _preset.value = imported.copy(name = name)
             _selectedPresetId.value = id
+            _presetTouched.value = false
             onDone(true)
         }
     }
@@ -899,7 +946,9 @@ class ExportUtilityViewModel(
                 customRecordColors = colours,
                 recordPhotos = photos,
                 graphTitle = title,
-                alignByElapsedTime = false
+                alignByElapsedTime = false,
+                // The footage's own clock, for the preview and the render alike.
+                clipZoneId = clip?.zoneId
             ),
             overlayVideoUri = overlay,
             // The render aligns against exactly what the picker resolved and the preview drew.
@@ -1050,8 +1099,7 @@ class ExportUtilityViewModel(
             // `ImageExporter.inZoneOf`, which fixes the same thing for video — an image's time axis
             // and its date line are read in this zone, so the preset's frozen Pacific put a
             // Chicago set's hours and, near midnight, its *date* in the wrong place.
-            timeZoneId = inga.bpmetrics.library.resolvedZoneOf(records.map { it.metadata })
-                ?: preset.timeZoneId,
+            timeZoneId = inga.bpmetrics.library.exportZoneOf(records.map { it.metadata }),
             showWordmark = preset.showWordmark,
             wordmarkCorner = preset.wordmarkCorner,
             wordmarkOpacity = preset.wordmarkOpacity
@@ -1069,6 +1117,16 @@ class ExportUtilityViewModel(
 
     fun setImageCrop(crop: ImageCrop) {
         _imageCrop.value = crop
+    }
+
+    /**
+     * A time typed into a crop field that can't be read, or null. Held so Next waits for it: the
+     * window would otherwise be exported with the last time that could be read, not the one shown.
+     */
+    private val _cropTypingProblem = MutableStateFlow<String?>(null)
+
+    fun setCropTypingProblem(problem: String?) {
+        _cropTypingProblem.value = problem
     }
 
     /**
@@ -1234,10 +1292,8 @@ class ExportUtilityViewModel(
                 )
             )
         )
-        // Editing the look drops the "this is preset X" link, as every other look change does —
-        // otherwise "Update to current settings" would offer to absorb a change nobody associated
-        // with that preset.
-        _selectedPresetId.value = null
+        // A change to the look like any other: the preset stays selected and shows as edited.
+        _presetTouched.value = true
 
         _clips.value = _clips.value.map {
             if (it.recordIds.size.coerceAtLeast(1) == cast) it.copy(graph = null) else it
@@ -1596,9 +1652,13 @@ class ExportUtilityViewModel(
      * over a plain background instead: hours of video, for a collection (Audit #20). With no
      * footage at all, the plain background is the export, and nothing blocks it.
      */
-    val nextBlockedReason: StateFlow<String?> = combine(_step, records, _kind, _clips) { step, records, kind, clips ->
+    val nextBlockedReason: StateFlow<String?> = combine(
+        _step, records, _kind, _clips,
+        combine(_imageCrop, _cropTypingProblem) { crop, typed -> typed ?: crop.problem }
+    ) { step, records, kind, clips, cropProblem ->
         when {
             step == ExportStep.SOURCE && records.isEmpty() -> "Choose what to export."
+            step == ExportStep.CONTENTS && kind == ExportKind.IMAGE && cropProblem != null -> cropProblem
             step == ExportStep.CONTENTS && kind == ExportKind.VIDEO &&
                 clips.isNotEmpty() && clips.none { it.selected } ->
                 "Tick at least one clip to export."
@@ -1647,6 +1707,7 @@ class ExportUtilityViewModel(
             labelOverride.value = null
             _imageTitle.value = null
             _imageCrop.value = ImageCrop()
+            _cropTypingProblem.value = null
             _manualOverlay.value = null
             _clips.value = emptyList()
             clipsFoundFor = null

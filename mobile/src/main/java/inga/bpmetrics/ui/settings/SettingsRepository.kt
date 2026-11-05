@@ -52,7 +52,6 @@ class SettingsRepository(context: Context) {
         val VID_LOCK_ASPECT = booleanPreferencesKey("vid_lock_aspect")
         val VID_SYNC_OFFSET = longPreferencesKey("vid_sync_offset")
         val VID_GRAPH_RECT = stringPreferencesKey("vid_graph_rect")
-        val DEFAULT_TIME_ZONE = stringPreferencesKey("default_timezone")
 
         /** Which of the library's three views was last open. */
 
@@ -63,8 +62,17 @@ class SettingsRepository(context: Context) {
         // Deliberately not re-declared: a value still on disk is simply never read, and reusing
         // the name for something else would hand a new feature somebody's stale answers.
 
-        /** The export appearance last used, for when no preset has been made default. */
+        /** The export appearance last used. Wins over the default preset. */
         val LAST_USED_EXPORT_PRESET = stringPreferencesKey("last_used_export_preset")
+
+        /** Which saved preset the last-used look started from, so it shows as that preset. */
+        val LAST_USED_EXPORT_PRESET_ID = longPreferencesKey("last_used_export_preset_id")
+
+        /**
+         * Whether Export has asked to post notifications. Asked once, before the first render;
+         * after a refusal, step 4 says what's missing instead of asking again.
+         */
+        val ASKED_RENDER_NOTIFICATIONS = booleanPreferencesKey("asked_render_notifications")
 
         // --- Appearance ---
 
@@ -114,15 +122,33 @@ class SettingsRepository(context: Context) {
     /**
      * The export appearance last used, as a serialized preset.
      *
-     * Distinct from a default preset: a default is something someone chose to pre-select, this is
-     * simply where they left off. The default wins when there is one, because it was a decision
-     * and this is a side effect.
+     * Wins over the default preset (Audit §3 Export). It used to be the other way round, so with a
+     * default set every export started from the default, and whatever was tweaked last time had to
+     * be done again. The default is what a first export starts from.
      */
     suspend fun lastUsedExportPreset(): String? =
         dataStore.data.first()[PreferencesKeys.LAST_USED_EXPORT_PRESET]
 
-    suspend fun setLastUsedExportPreset(json: String) {
-        dataStore.edit { it[PreferencesKeys.LAST_USED_EXPORT_PRESET] = json }
+    /** The saved preset the last-used look started from, or null if it wasn't from one. */
+    suspend fun lastUsedExportPresetId(): Long? =
+        dataStore.data.first()[PreferencesKeys.LAST_USED_EXPORT_PRESET_ID]
+
+    suspend fun setLastUsedExportPreset(json: String, presetId: Long? = null) {
+        dataStore.edit {
+            it[PreferencesKeys.LAST_USED_EXPORT_PRESET] = json
+            if (presetId != null) {
+                it[PreferencesKeys.LAST_USED_EXPORT_PRESET_ID] = presetId
+            } else {
+                it.remove(PreferencesKeys.LAST_USED_EXPORT_PRESET_ID)
+            }
+        }
+    }
+
+    suspend fun askedRenderNotifications(): Boolean =
+        dataStore.data.first()[PreferencesKeys.ASKED_RENDER_NOTIFICATIONS] ?: false
+
+    suspend fun setAskedRenderNotifications() {
+        dataStore.edit { it[PreferencesKeys.ASKED_RENDER_NOTIFICATIONS] = true }
     }
 
     /**
@@ -300,8 +326,7 @@ class SettingsRepository(context: Context) {
             showGrid = prefs[PreferencesKeys.VID_SHOW_GRID] ?: shipped.showGrid,
             showTitle = prefs[PreferencesKeys.VID_SHOW_TITLE] ?: shipped.showTitle,
             showCurrentStats = prefs[PreferencesKeys.VID_SHOW_STATS] ?: shipped.showCurrentStats,
-            lockAspectRatio = prefs[PreferencesKeys.VID_LOCK_ASPECT] ?: shipped.lockAspectRatio,
-            timeZoneId = prefs[PreferencesKeys.DEFAULT_TIME_ZONE] ?: shipped.timeZoneId
+            lockAspectRatio = prefs[PreferencesKeys.VID_LOCK_ASPECT] ?: shipped.lockAspectRatio
         )
     }
 

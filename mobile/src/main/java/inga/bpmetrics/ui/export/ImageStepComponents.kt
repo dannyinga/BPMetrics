@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -55,6 +56,8 @@ fun ImageContentsStep(
     showGroupingChoice: Boolean,
     crop: ImageCrop,
     onCropChange: (ImageCrop) -> Unit,
+    /** A crop time that can't be read, so Next can wait for it. */
+    onCropTypingProblem: (String?) -> Unit = {},
     naturalSpan: Pair<Long, Long>?,
     timeZoneId: String,
     title: String?,
@@ -125,6 +128,7 @@ fun ImageContentsStep(
                 ClockCropFields(
                     crop = crop,
                     onCropChange = onCropChange,
+                    onTypingProblem = onCropTypingProblem,
                     naturalSpan = naturalSpan,
                     timeZoneId = timeZoneId
                 )
@@ -369,11 +373,15 @@ private fun TransparencyBacked(
  *
  * Empty means the natural span, which is a different thing from typing the natural span: the
  * recordings underneath can change, and "I did not narrow this" should follow them.
+ *
+ * Times show and read in the 12/24-hour setting, and a time that can't be used says why, under
+ * its field. Next waits until both fields can be read and From comes before To.
  */
 @Composable
 private fun ClockCropFields(
     crop: ImageCrop,
     onCropChange: (ImageCrop) -> Unit,
+    onTypingProblem: (String?) -> Unit,
     naturalSpan: Pair<Long, Long>,
     timeZoneId: String
 ) {
@@ -384,6 +392,11 @@ private fun ClockCropFields(
         val from = java.time.Instant.ofEpochMilli(naturalSpan.first).atZone(zone).toLocalDate()
         val to = java.time.Instant.ofEpochMilli(naturalSpan.second).atZone(zone).toLocalDate()
         from != to
+    }
+    var fromProblem by remember { mutableStateOf<String?>(null) }
+    var toProblem by remember { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.LaunchedEffect(fromProblem, toProblem) {
+        onTypingProblem(fromProblem?.let { "From: $it" } ?: toProblem?.let { "To: $it" })
     }
 
     Column {
@@ -406,20 +419,32 @@ private fun ClockCropFields(
             ClockField(
                 label = "From",
                 value = crop.startWallClockMs,
+                span = naturalSpan,
                 placeholder = naturalSpan.first,
                 zone = zone,
                 withDate = multiDay,
                 modifier = Modifier.weight(1f),
+                onProblem = { fromProblem = it },
                 onValue = { onCropChange(crop.copy(startWallClockMs = it)) }
             )
             ClockField(
                 label = "To",
                 value = crop.endWallClockMs,
+                span = naturalSpan,
                 placeholder = naturalSpan.second,
                 zone = zone,
                 withDate = multiDay,
                 modifier = Modifier.weight(1f),
+                onProblem = { toProblem = it },
                 onValue = { onCropChange(crop.copy(endWallClockMs = it)) }
+            )
+        }
+        crop.problem?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp)
             )
         }
         if (crop.isNarrowed) {
@@ -431,59 +456,79 @@ private fun ClockCropFields(
 }
 
 /**
- * One clock time, parsed as it is typed.
+ * One clock time, read through [ClockEntry].
  *
- * Holds its own text: parsing on every keystroke and writing the parsed value back would fight the
- * user halfway through "09:1". What is typed stays typed, and only a complete time is committed.
+ * Holds its own text while it has focus, so the field isn't rewritten mid-typing. A time that can
+ * be read is applied as it's typed; one that can't shows its reason under the field once focus
+ * leaves, and is reported through [onProblem] straight away so Next waits for it.
  */
 @Composable
 private fun ClockField(
     label: String,
     value: Long?,
+    span: Pair<Long, Long>,
     placeholder: Long,
     zone: java.time.ZoneId,
     withDate: Boolean,
     modifier: Modifier = Modifier,
+    onProblem: (String?) -> Unit,
     onValue: (Long?) -> Unit
 ) {
-    val pattern = if (withDate) "yyyy-MM-dd HH:mm" else "HH:mm"
-    val formatter = remember(pattern) { java.time.format.DateTimeFormatter.ofPattern(pattern) }
-    val shownDefault = remember(value, placeholder, pattern) {
-        value?.let { formatter.format(java.time.Instant.ofEpochMilli(it).atZone(zone)) } ?: ""
+    val use24Hour = inga.bpmetrics.ui.util.StringFormatHelpers.use24Hour
+    val shown = remember(value, zone, withDate, use24Hour) {
+        value?.let { ClockEntry.format(it, zone, withDate, use24Hour) } ?: ""
     }
-    var text by remember(shownDefault) { mutableStateOf(shownDefault) }
+    var text by remember { mutableStateOf(shown) }
+    var focused by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    // Follows the value when it changes from outside — "Use the whole range", or a new source —
+    // but never while being typed in.
+    androidx.compose.runtime.LaunchedEffect(shown) {
+        if (!focused) {
+            text = shown
+            error = null
+            onProblem(null)
+        }
+    }
+
+    fun read(typed: String) = ClockEntry.parse(typed, span, zone, withDate, use24Hour)
 
     androidx.compose.material3.OutlinedTextField(
         value = text,
         onValueChange = { typed ->
             text = typed
-            if (typed.isBlank()) {
-                onValue(null)
-                return@OutlinedTextField
-            }
-            // The day is taken from the placeholder when only a time was typed, so a single-day
-            // export does not need the date spelled out to know which day it means.
-            val parsed = runCatching {
-                if (withDate) {
-                    java.time.LocalDateTime.parse(typed.trim().replace(' ', 'T'))
-                        .atZone(zone).toInstant().toEpochMilli()
-                } else {
-                    val day = java.time.Instant.ofEpochMilli(placeholder).atZone(zone).toLocalDate()
-                    day.atTime(java.time.LocalTime.parse(typed.trim()))
-                        .atZone(zone).toInstant().toEpochMilli()
+            error = null
+            when (val result = read(typed)) {
+                is ClockEntry.Result.Value -> {
+                    onProblem(null)
+                    onValue(result.ms)
                 }
-            }.getOrNull()
-            if (parsed != null) onValue(parsed)
+                is ClockEntry.Result.Error -> onProblem(result.message)
+            }
         },
         label = { Text(label) },
         placeholder = {
             Text(
-                formatter.format(java.time.Instant.ofEpochMilli(placeholder).atZone(zone)),
+                ClockEntry.format(placeholder, zone, withDate, use24Hour),
                 style = MaterialTheme.typography.bodySmall
             )
         },
+        isError = error != null,
+        supportingText = error?.let { { Text(it) } },
         singleLine = true,
         textStyle = MaterialTheme.typography.bodyMedium,
-        modifier = modifier
+        modifier = modifier.onFocusChanged { state ->
+            if (focused && !state.isFocused) {
+                when (val result = read(text)) {
+                    // Tidied into the app's own format once typing is done.
+                    is ClockEntry.Result.Value -> text = result.ms?.let {
+                        ClockEntry.format(it, zone, withDate, use24Hour)
+                    } ?: ""
+                    is ClockEntry.Result.Error -> error = result.message
+                }
+            }
+            focused = state.isFocused
+        }
     )
 }

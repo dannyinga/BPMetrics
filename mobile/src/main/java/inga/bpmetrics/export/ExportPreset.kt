@@ -157,7 +157,11 @@ data class ExportPreset(
      * phone that filmed, not of one clip.
      */
     val syncOffsetMs: Long = 0L,
-    val timeZoneId: String = java.time.ZoneId.systemDefault().id,
+
+    // "timeZoneId" lived here until S7. A time zone is where something happened, which is a
+    // location's business, not a look's: each preset froze the phone's zone on the day it was made,
+    // and a set in Kansas came out in Pacific time. Exports read their clock from
+    // [inga.bpmetrics.library.exportZoneOf]. Older preset JSON still carries the key; Gson skips it.
 
     // Live readouts
     /**
@@ -331,7 +335,6 @@ data class ExportPreset(
 
         return copy(
             name = name ?: "",
-            timeZoneId = timeZoneId?.takeIf { it.isNotBlank() } ?: shipped.timeZoneId,
             width = width.takeIf { it > 0 } ?: shipped.width,
             height = height.takeIf { it > 0 } ?: shipped.height,
             frameRate = frameRate.takeIf { it in 1..240 } ?: shipped.frameRate,
@@ -395,7 +398,6 @@ data class ExportPreset(
                 showCurrentStats = showCurrentStats,
                 headerXPercent = headerXPercent,
                 futureOpacity = futureOpacity,
-                timeZoneId = timeZoneId,
                 pillShowPhoto = pillShowPhoto,
                 pillShowName = pillShowName,
                 pillBpmInPersonColor = pillBpmInPersonColor,
@@ -488,8 +490,7 @@ data class ExportPreset(
                 matchSourceFrameRate = config.matchSourceFrameRate,
                 overlayBitRate = config.overlayBitRate,
                 regularBitRate = config.regularBitRate,
-                syncOffsetMs = config.syncOffsetMs,
-                timeZoneId = image.timeZoneId
+                syncOffsetMs = config.syncOffsetMs
             )
         }
 

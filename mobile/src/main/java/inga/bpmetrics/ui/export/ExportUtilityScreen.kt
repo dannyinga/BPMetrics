@@ -101,6 +101,7 @@ fun ExportUtilityScreen(
     val oldestFirst by viewModel.clipsOldestFirst.collectAsStateWithLifecycle()
     val presets by viewModel.presets.collectAsStateWithLifecycle()
     val selectedPresetId by viewModel.selectedPresetId.collectAsStateWithLifecycle()
+    val presetEdited by viewModel.presetEdited.collectAsStateWithLifecycle()
     val preset by viewModel.preset.collectAsStateWithLifecycle()
     var presetToExport by remember {
         mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null)
@@ -465,13 +466,14 @@ fun ExportUtilityScreen(
                                 showGroupingChoice = source is ExportSource.Group,
                                 crop = imageCrop,
                                 onCropChange = { viewModel.setImageCrop(it) },
+                                onCropTypingProblem = { viewModel.setCropTypingProblem(it) },
                                 naturalSpan = imageNaturalSpan,
                                 // The crop fields are typed in this zone and read back in it, so
                                 // they have to match the picture: "from 21:00" means 21:00 where
                                 // the set was, and the image is now drawn in that clock.
-                                timeZoneId = inga.bpmetrics.library.resolvedZoneOf(
+                                timeZoneId = inga.bpmetrics.library.exportZoneOf(
                                     records.map { it.metadata }
-                                ) ?: preset.timeZoneId,
+                                ),
                                 title = imageTitle,
                                 onTitleChange = { viewModel.setImageTitle(it) }
                             )
@@ -531,6 +533,7 @@ fun ExportUtilityScreen(
                     jobCount = pendingJobs.size,
                     presets = presets,
                     selectedPresetId = selectedPresetId,
+                    presetEdited = presetEdited,
                     preset = preset,
                     onPresetChange = { viewModel.setPreset(it) },
                     // Previewed against the first ticked clip, since that is what most of the
@@ -620,6 +623,7 @@ fun ExportUtilityScreen(
                     val batch = listOf(source, pendingJobs.map { it.clip.uri to it.recordIds }, preset, imageTitle)
                     val queuedBatch by viewModel.queuedBatch.collectAsStateWithLifecycle()
                     val label = imageTitle?.takeIf { it.isNotBlank() } ?: scopeTitle
+                    val notifications = rememberRenderNotificationGate()
                     MakeStep(
                         estimate = viewModel.estimate(
                             pendingJobs, fallbackDurationMs,
@@ -633,23 +637,27 @@ fun ExportUtilityScreen(
                             if (preset.matchSourceFrameRate && pendingJobs.isNotEmpty()) "the clips' frame rate"
                             else "${preset.frameRate} fps",
                         queued = queuedBatch == batch,
+                        notificationsOff = !notifications.enabled,
+                        onTurnOnNotifications = { notifications.turnOn() },
                         onOpenQueue = onOpenQueue,
                         onQueue = {
-                            viewModel.markQueued(batch)
-                            viewModel.rememberLastUsed()
-                            queueBatch(
-                                context = context,
-                                viewModel = viewModel,
-                                jobs = pendingJobs,
-                                allRecords = records,
-                                colours = recordColours,
-                                photos = recordPhotos,
-                                manualOverlay = manualOverlay,
-                                // The caption burned into every video in the batch.
-                                label = imageTitle?.takeIf { it.isNotBlank() } ?: scopeTitle,
-                                clipTitles = clipTitles,
-                                titleOverride = imageTitle?.takeIf { it.isNotBlank() }
-                            )
+                            notifications.beforeRender {
+                                viewModel.markQueued(batch)
+                                viewModel.rememberLastUsed()
+                                queueBatch(
+                                    context = context,
+                                    viewModel = viewModel,
+                                    jobs = pendingJobs,
+                                    allRecords = records,
+                                    colours = recordColours,
+                                    photos = recordPhotos,
+                                    manualOverlay = manualOverlay,
+                                    // The caption burned into every video in the batch.
+                                    label = imageTitle?.takeIf { it.isNotBlank() } ?: scopeTitle,
+                                    clipTitles = clipTitles,
+                                    titleOverride = imageTitle?.takeIf { it.isNotBlank() }
+                                )
+                            }
                         }
                     )
                 }
@@ -719,7 +727,13 @@ private fun queueBatch(
             context,
             forThisClip.first().metadata.recordId,
             // Named by clip time, so a queue of six is readable rather than six identical rows.
-            "$name · ${getTimeString(job.clip.startedAtMs, forThisClip.clock)}",
+            // In the clock the video prints, so the name and the frame agree.
+            "$name · ${getTimeString(
+                job.clip.startedAtMs,
+                java.time.ZoneId.of(
+                    inga.bpmetrics.library.exportZoneOf(forThisClip.map { it.metadata }, job.clip.zoneId)
+                )
+            )}",
             viewModel.buildConfig(
                 forRecords = forThisClip,
                 overlay = job.clip.uri,
@@ -750,6 +764,9 @@ private fun MakeStep(
     format: String,
     /** Whether this exact batch has already been queued. See [ExportUtilityViewModel.queuedBatch]. */
     queued: Boolean,
+    /** Whether notifications are off, so step 4 can say what that costs. */
+    notificationsOff: Boolean = false,
+    onTurnOnNotifications: () -> Unit = {},
     onQueue: () -> Unit,
     onOpenQueue: () -> Unit
 ) {
@@ -846,6 +863,19 @@ private fun MakeStep(
             )
             Spacer(Modifier.height(20.dp))
             Button(onClick = onOpenQueue) { Text("Open the render queue") }
+            if (notificationsOff) {
+                Spacer(Modifier.height(20.dp))
+                Text(
+                    "Notifications are off, so you won't see progress, or hear when a render " +
+                        "finishes or fails, until you open the render queue.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                androidx.compose.material3.TextButton(onClick = onTurnOnNotifications) {
+                    Text("Turn on notifications")
+                }
+            }
         }
     }
 }
@@ -883,6 +913,7 @@ private fun LookStep(
     jobCount: Int,
     presets: List<inga.bpmetrics.library.ExportPresetEntity>,
     selectedPresetId: Long?,
+    presetEdited: Boolean,
     preset: ExportPreset,
     onPresetChange: (ExportPreset) -> Unit,
     previewOverlay: Uri?,
@@ -1066,6 +1097,7 @@ private fun LookStep(
                     PresetBar(
                         presets = presets,
                         selectedId = selectedPresetId,
+                        edited = presetEdited,
                         onApply = onApplyPreset,
                         onSaveAs = onSaveAs,
                         onUpdate = onUpdatePreset,

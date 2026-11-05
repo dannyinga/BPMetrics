@@ -104,11 +104,8 @@ object LocationResolver {
 /**
  * The zone these recordings were resolved to from a venue, or null where none of them has one.
  *
- * Distinct from [clock], which always answers *something* — it falls back to the reader's own zone,
- * which is right for a screen and wrong for a caller that has a better fallback of its own. An
- * export does: the zone set in Settings for exactly the recordings no venue covers. Collapsing "no
- * venue" into "this phone's zone" is how a Chicago set came to be captioned in Pacific time — the
- * answer arrived looking like a real zone, and nothing downstream could tell it had been guessed.
+ * Distinct from [clock], which always answers *something*: it falls back to the reader's own zone.
+ * An export takes its answer from [exportZoneOf], which falls back the same way.
  *
  * The first recording *with* a zone rather than the first recording. One export is one occasion in
  * one place, and a single unfiled wearer at the front of the list should not decide the clock for
@@ -118,6 +115,25 @@ fun resolvedZoneOf(records: List<BpmRecordEntity>): String? =
     records.firstNotNullOfOrNull { record ->
         record.timeZoneId?.takeIf { it in java.util.TimeZone.getAvailableIDs() }
     }
+
+/**
+ * The clock an export is drawn in:
+ * 1. the venue's zone, which someone set on purpose;
+ * 2. else the offset the footage says it was filmed at ([inga.bpmetrics.export.ClipZone]), which
+ *    is what the clock in the room said;
+ * 3. else the phone's zone, the clock every screen shows these recordings in.
+ *
+ * The fallback used to be the preset's zone, the phone's zone frozen into a preset when it was
+ * made. Every preset on a phone set up in Pacific time said "America/Los_Angeles", so a set with no
+ * venue, shown as 12:23 AM in Contents, rendered as 10:23 PM. Presets no longer carry a zone.
+ */
+fun exportZoneOf(
+    records: List<BpmRecordEntity>,
+    clipZoneId: String? = null,
+    phoneZone: java.time.ZoneId = java.time.ZoneId.systemDefault()
+): String = resolvedZoneOf(records)
+    ?: clipZoneId?.takeIf { runCatching { java.time.ZoneId.of(it) }.isSuccess }
+    ?: phoneZone.id
 
 /**
  * The clock this recording is read in.

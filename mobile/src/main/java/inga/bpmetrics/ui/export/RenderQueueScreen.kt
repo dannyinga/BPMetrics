@@ -4,6 +4,11 @@ import inga.bpmetrics.export.BpmExportService
 import inga.bpmetrics.export.RenderQueueManager
 import inga.bpmetrics.export.RenderJob
 import inga.bpmetrics.export.RenderStatus
+import inga.bpmetrics.export.VideoExporter
+import inga.bpmetrics.ui.feedback.Feedback
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
@@ -83,7 +88,7 @@ import inga.bpmetrics.ui.theme.BpmLow
  * What is rendering, and what has rendered.
  *
  * Its own section of the app. It was folded into the export flow's last step for a while, on the
- * reasoning that an export ends up in the queue — but that made the last thing the flow did be
+ * reasoning that an export ends up in the queue â but that made the last thing the flow did be
  * handing back a list of everything ever queued, and it meant checking on a render that started
  * yesterday required walking into a new export to find it. Starting a render and watching one are
  * different errands.
@@ -95,6 +100,7 @@ fun RenderQueueScreen(onOpenDrawer: () -> Unit) {
     val active = queue.count {
         it.status == RenderStatus.QUEUED || it.status == RenderStatus.RENDERING
     }
+    val finished = queue.count { it.isFinished }
 
     androidx.compose.material3.Scaffold(
         topBar = {
@@ -108,6 +114,15 @@ fun RenderQueueScreen(onOpenDrawer: () -> Unit) {
                             androidx.compose.material.icons.Icons.Default.Menu,
                             contentDescription = "Open navigation drawer"
                         )
+                    }
+                },
+                actions = {
+                    // Saved and cancelled renders, which had to be dismissed one at a time. Failed
+                    // ones stay, with their reason and Retry.
+                    if (finished > 0) {
+                        androidx.compose.material3.TextButton(onClick = { RenderQueueManager.clearFinished() }) {
+                            Text("Clear finished")
+                        }
                     }
                 }
             )
@@ -127,12 +142,15 @@ fun RenderQueueScreen(onOpenDrawer: () -> Unit) {
 fun RenderQueueContent(modifier: Modifier = Modifier) {
     val queue by RenderQueueManager.queue.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var confirmCancel by remember { mutableStateOf<RenderJob?>(null) }
 
     val totalJobs = queue.size
     val activeJobs = queue.count { it.status == RenderStatus.RENDERING }
     val queuedJobs = queue.count { it.status == RenderStatus.QUEUED }
     val completedJobs = queue.count { it.status == RenderStatus.COMPLETED }
-    val failedOrCancelled = queue.count { it.status == RenderStatus.FAILED || it.status == RenderStatus.CANCELLED }
+    val failedJobs = queue.count { it.status == RenderStatus.FAILED }
+    val cancelledJobs = queue.count { it.status == RenderStatus.CANCELLED }
 
     Column(modifier = modifier.fillMaxSize()) {
         // Stats Panel
@@ -142,7 +160,8 @@ fun RenderQueueContent(modifier: Modifier = Modifier) {
                 active = activeJobs,
                 queued = queuedJobs,
                 completed = completedJobs,
-                failed = failedOrCancelled
+                failed = failedJobs,
+                cancelled = cancelledJobs
             )
         }
 
@@ -157,16 +176,53 @@ fun RenderQueueContent(modifier: Modifier = Modifier) {
                 items(queue, key = { it.id }) { job ->
                     RenderJobCard(
                         job = job,
-                        onCancel = { RenderQueueManager.cancelJob(job.id) },
+                        // A render can be minutes in, and Cancel sits where a thumb lands.
+                        onCancel = { confirmCancel = job },
                         onRemove = { RenderQueueManager.removeJob(job.id) },
                         onRetry = {
-                            RenderQueueManager.retryJob(job.id)
-                            BpmExportService.resumeQueue(context)
+                            // The checks the render makes first, made before queueing again: a job
+                            // that failed for want of space went straight back to fail the same way.
+                            scope.launch {
+                                val problem = withContext(Dispatchers.IO) {
+                                    VideoExporter.preflightProblem(context, job.config)
+                                }
+                                if (problem != null) {
+                                    RenderQueueManager.updateJobStatus(job.id, RenderStatus.FAILED, error = problem)
+                                    Feedback.failed(problem)
+                                } else {
+                                    RenderQueueManager.retryJob(job.id)
+                                    BpmExportService.resumeQueue(context)
+                                }
+                            }
                         }
                     )
                 }
             }
         }
+    }
+
+    confirmCancel?.let { job ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmCancel = null },
+            title = { Text("Cancel this render?") },
+            text = {
+                Text(
+                    "${job.recordTitle} stops where it is, and nothing is saved. You can retry it " +
+                        "later, from the start."
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    RenderQueueManager.cancelJob(job.id)
+                    confirmCancel = null
+                }) { Text("Cancel render", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmCancel = null }) {
+                    Text("Keep rendering")
+                }
+            }
+        )
     }
 }
 
@@ -176,7 +232,8 @@ fun RenderStatsPanel(
     active: Int,
     queued: Int,
     completed: Int,
-    failed: Int
+    failed: Int,
+    cancelled: Int = 0
 ) {
     Card(
         modifier = Modifier
@@ -203,8 +260,17 @@ fun RenderStatsPanel(
                 StatItem(label = "Active", value = active.toString(), color = BpmAccent)
                 StatItem(label = "Queued", value = queued.toString(), color = BpmLow)
                 StatItem(label = "Completed", value = completed.toString(), color = BpmSuccess)
+                // Counted as what they are. Failed and cancelled were added up as "Inactive",
+                // which hid that something had gone wrong.
                 if (failed > 0) {
-                    StatItem(label = "Inactive", value = failed.toString(), color = BpmHigh)
+                    StatItem(label = "Failed", value = failed.toString(), color = BpmHigh)
+                }
+                if (cancelled > 0) {
+                    StatItem(
+                        label = "Cancelled",
+                        value = cancelled.toString(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -237,7 +303,14 @@ fun RenderJobCard(
     onRemove: () -> Unit,
     onRetry: () -> Unit = {}
 ) {
-    var expandedError by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // Where it was saved, read from the media store, so a finished job says where to look.
+    val location by androidx.compose.runtime.produceState<String?>(null, job.status, job.targetUri) {
+        val uri = job.targetUri
+        value = if (job.status == RenderStatus.COMPLETED && uri != null) {
+            withContext(Dispatchers.IO) { inga.bpmetrics.export.ExportUtils.describeLocation(context, uri) }
+        } else null
+    }
 
     // Pulsing alpha for active rendering jobs
     val infiniteTransition = rememberInfiniteTransition(label = "pulsing")
@@ -342,13 +415,14 @@ fun RenderJobCard(
                     }
                     Text(
                         text = when (job.status) {
-                            RenderStatus.RENDERING -> "Rendering video..."
-                            RenderStatus.QUEUED -> "Queued in render sequence"
-                            RenderStatus.COMPLETED -> "Render completed successfully"
-                            RenderStatus.FAILED -> "Rendering failed"
+                            RenderStatus.RENDERING -> "Rendering…"
+                            RenderStatus.QUEUED -> "Waiting its turn"
+                            RenderStatus.COMPLETED -> "Saved to ${location ?: "Movies/BPMetrics"}"
+                            RenderStatus.FAILED -> "Failed"
                             RenderStatus.CANCELLED -> "Cancelled"
                         },
-                        style = MaterialTheme.typography.labelSmall,
+                        style = if (job.status == RenderStatus.COMPLETED) MaterialTheme.typography.bodySmall
+                            else MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
                     )
                 }
@@ -479,54 +553,30 @@ fun RenderJobCard(
                 )
             }
 
-            // Error display for failed rendering
-            if (job.status == RenderStatus.FAILED && !job.error.isNullOrEmpty()) {
+            // Why it failed, in plain words and in full. It was behind "Tap to view error details"
+            // and set in monospace, as if it were for a developer.
+            if (job.status == RenderStatus.FAILED) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(MaterialTheme.shapes.small)
                         .background(BpmHigh.copy(alpha = 0.08f))
-                        .clickable { expandedError = !expandedError }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Info,
-                        contentDescription = "Error Info",
+                        contentDescription = null,
                         tint = BpmHigh,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(16.dp).padding(top = 2.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Tap to view error details",
-                        color = BpmHigh,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
+                        text = job.error?.takeIf { it.isNotBlank() } ?: "It stopped without saying why.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f)
                     )
-                }
-
-                AnimatedVisibility(
-                    visible = expandedError,
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp)
-                            .clip(MaterialTheme.shapes.small)
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                            .padding(12.dp)
-                    ) {
-                        Text(
-                            text = job.error ?: "Unknown error",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
             }
         }
@@ -537,7 +587,7 @@ fun RenderJobCard(
 /**
  * Nothing rendering.
  *
- * Says where renders come from rather than only that there are none — an empty screen that just
+ * Says where renders come from rather than only that there are none â an empty screen that just
  * apologises leaves someone guessing what they were supposed to have done.
  */
 @Composable

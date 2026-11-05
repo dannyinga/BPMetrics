@@ -26,7 +26,24 @@ import inga.bpmetrics.ui.theme.BPMetricsTheme
  */
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        /** Which section to open on, from a notification. */
+        const val EXTRA_OPEN = "inga.bpmetrics.OPEN"
+        const val OPEN_RENDER_QUEUE = "render_queue"
+    }
+
     private val tag = "BPMetrics Main Activity"
+
+    /**
+     * A section a notification asked to open, until the nav host has opened it. Render
+     * notifications opened the app wherever it was last, not on the queue they were about.
+     */
+    private val openRequest = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra(EXTRA_OPEN)?.let { openRequest.value = it }
+    }
 
     /** Lazily initialized repository for managing BPM data. */
     private val libraryRepository by lazy { (application as BPMetricsApp).libraryRepository }
@@ -64,6 +81,11 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        // Only on a fresh start: a rotation brings the same intent back, and shouldn't move anyone.
+        if (savedInstanceState == null) {
+            intent?.getStringExtra(EXTRA_OPEN)?.let { openRequest.value = it }
+        }
+
         // Register the data client listener to the activity's lifecycle
         lifecycle.addObserver(dataClientListener)
 
@@ -97,8 +119,13 @@ class MainActivity : ComponentActivity() {
                 StringFormatHelpers.datePattern = datePattern
             }
 
+            val open by openRequest.collectAsState()
             BPMetricsTheme(dynamicColor = dynamicColour) {
-                BPMetricsNavHost(libraryRepository)
+                BPMetricsNavHost(
+                    libraryRepository,
+                    openRequest = open,
+                    onOpenHandled = { openRequest.value = null }
+                )
             }
         }
     }

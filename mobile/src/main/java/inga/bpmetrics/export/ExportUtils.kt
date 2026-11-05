@@ -68,6 +68,25 @@ object ExportUtils {
     }
 
     /**
+     * Where a saved file is, as a person would look for it: "Movies/BPMetrics/Name_123.mp4".
+     *
+     * Read from the media store rather than assumed, so the queue shows the file's real name.
+     * Null when the system won't say.
+     */
+    fun describeLocation(context: Context, uri: android.net.Uri): String? = runCatching {
+        val columns = arrayOf(
+            android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+            android.provider.MediaStore.MediaColumns.DISPLAY_NAME
+        )
+        context.contentResolver.query(uri, columns, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val folder = cursor.getString(0)?.trimEnd('/')
+            val name = cursor.getString(1)
+            listOfNotNull(folder, name).joinToString("/").takeIf { it.isNotBlank() }
+        }
+    }.getOrNull()
+
+    /**
      * Saves a video file into the public MediaStore (Movies/BPMetrics) so it appears in the device Gallery.
      */
     fun saveVideoToGallery(context: Context, videoFile: File, title: String): android.net.Uri? {

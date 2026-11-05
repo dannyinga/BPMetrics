@@ -678,7 +678,9 @@ private fun renderPreviewFrame(
                 customRecordColors = colours,
                 recordPhotos = photos,
                 graphTitle = title,
-                alignByElapsedTime = false
+                alignByElapsedTime = false,
+                // The footage's own clock, as the render reads it.
+                clipZoneId = clip?.zoneId
             ),
             records = records
         )
@@ -802,16 +804,36 @@ fun LookSections(
                     label = "Width",
                     range = DIMENSION_RANGE,
                     modifier = Modifier.weight(1f),
-                    onValue = { onChange(preset.copy(width = it)) }
+                    onValue = { width ->
+                        onChange(
+                            if (preset.lockAspectRatio) {
+                                preset.copy(
+                                    width = width,
+                                    height = CanvasSize.follow(preset.height, preset.width, width, DIMENSION_RANGE)
+                                )
+                            } else preset.copy(width = width)
+                        )
+                    }
                 )
                 NumberField(
                     value = preset.height,
                     label = "Height",
                     range = DIMENSION_RANGE,
                     modifier = Modifier.weight(1f),
-                    onValue = { onChange(preset.copy(height = it)) }
+                    onValue = { height ->
+                        onChange(
+                            if (preset.lockAspectRatio) {
+                                preset.copy(
+                                    height = height,
+                                    width = CanvasSize.follow(preset.width, preset.height, height, DIMENSION_RANGE)
+                                )
+                            } else preset.copy(height = height)
+                        )
+                    }
                 )
             }
+            // It was saved with every preset and read by nothing, so typing a width never moved
+            // the height (Audit §3 Export). Now it does.
             SwitchRow("Lock aspect ratio", preset.lockAspectRatio) {
                 onChange(preset.copy(lockAspectRatio = it))
             }
@@ -1398,6 +1420,20 @@ private fun NumberField(
 
 /** Pixels. Below 16 there's no graph to draw; above 4096 most phones' encoders refuse. */
 private val DIMENSION_RANGE = 16..4096
+
+/** The canvas's other side, when one side is typed with the aspect ratio locked. */
+internal object CanvasSize {
+    /**
+     * [other] scaled by the factor [oldSide] went to [newSide], to the nearest even number
+     * (video encoders want even sides), kept in [range].
+     */
+    fun follow(other: Int, oldSide: Int, newSide: Int, range: IntRange): Int {
+        if (oldSide <= 0) return other
+        val scaled = other.toDouble() * newSide / oldSide
+        val even = (Math.round(scaled / 2.0) * 2).toInt()
+        return even.coerceIn(range)
+    }
+}
 
 /** Seconds of graph across the frame. */
 private val WINDOW_RANGE = 1..600

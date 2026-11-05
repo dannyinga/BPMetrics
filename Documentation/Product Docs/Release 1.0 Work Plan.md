@@ -236,6 +236,57 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 **Verify:** on the Pixel_7_Pro emulator (Android 13), where the permission is currently denied, the prompt appears and progress notifications show. Force a failure (an export larger than the free space) and check that the queue and the notification both give the reason.
 **Commit:** `fix(export): presets that don't eat edits, and a queue that reports back`
 
+**As built:**
+- **S7.1:** before the first render, step 4 asks once in its own words what notifications give: progress, plus word when a render is done or why it failed. Then it shows the system prompt. "Not now" or a refusal still queues the render. From then on the Queued screen says what's missing and offers "Turn on notifications", which opens the app's notification settings.
+- **S7.2:**
+  - **The preset stays selected through edits.** `presetEdited` compares the look with the stored preset, so changing a setting and changing it back isn't an edit.
+  - **What the bar shows:** a note saying what the look was changed from, with "Update to current settings" always in that preset's menu.
+  - **Asking first:** while there are unsaved changes, choosing a preset asks before replacing them, with "Use X" or "Keep my changes".
+  - **Queue labels:** queued jobs are labelled "Name (edited)".
+- **S7.3:** last-used now records which preset it started from, and `startingLook()` puts it ahead of the default. The default is what a first export starts from.
+- **S7.4:**
+  - **Width and height:** these fields already committed on Done (since S5).
+  - **Lock aspect ratio:** typing one side now scales the other, to an even number (`CanvasSize.follow`).
+  - **Crop fields:** they show and read times in the 12/24-hour setting, through `ClockEntry`. They accept either clock, pick AM or PM from the recording's span, and give a reason under the field: can't read it, outside the recording, needs the date, needs AM/PM. "From has to be before To" shows under the pair.
+  - **Next waits:** on an image's Contents step, Next waits for any of these problems to be fixed.
+- **S7.5:**
+  - **Cancel and Clear finished:** Cancel asks first. "Clear finished" removes saved and cancelled jobs and keeps failed ones, with their reason and Retry.
+  - **Locations:** a finished job shows where it was saved, read from the media store, e.g. "Saved to Movies/BPMetrics/Mr_Amsterdam_….mp4".
+  - **Stats:** count Failed and Cancelled separately.
+  - **Failure reasons:** shown inline in body text, written by `RenderFailure.describe`.
+  - **Retry:** runs `VideoExporter.preflightProblem()` first (clip readable, free space), which the render itself now runs too, and refuses with the up-to-date reason.
+  - **Notifications:**
+    - Every render notification's tap opens the render queue (`MainActivity.EXTRA_OPEN`).
+    - Saved and failed renders go on a new alerting channel, "Finished and failed renders".
+    - The saved notification has a Play action.
+    - The failed notification gives the reason.
+- **S7.6:** the service declares `mediaProcessing|dataSync` and starts as `mediaProcessing` on Android 15 and up. **The audit was wrong about the version:** the type is new in Android 15, not 14, so Android 14 still runs renders as `dataSync`, and the Play Console declaration for `dataSync` is still needed while minSdk is below 35.
+- **S7.7:** `android:label="@string/app_name"` on `<application>`; the system prompt now reads "Allow BPMetrics to send you notifications?".
+- **Verified on the emulator (API 33):**
+  - **Notifications:** the permission was denied and never asked. Start showed the explanation, then the system prompt, and the progress notification appeared on the quiet channel. Tapping it opened the render queue.
+  - **Presets:** with a default set, the look was last-used, not the default. Applying a preset, then typing a width of 960, gave 960×540 and showed "Changed from 4 person best". Update was still in its menu. Choosing another preset asked first.
+  - **Cancel:** asked first; "Keep rendering" let it finish.
+  - **Saved:** the notification on the alerting channel gave the full path, with a Play action.
+  - **Forced failure:** I filled the storage after step 4's check, then tapped Start. The queue and the notification both said "Not enough space: it needs about 68 MB free… the phone has 0 MB."
+  - **Retry with space back:** rendered.
+  - **Retry with too little space:** an older job needing 4.6 GB was refused, and its reason updated.
+  - **Clear finished:** left only the failed job.
+  - **Clean-up:** the filler file and the test videos were deleted.
+  - **Over real footage:** a 36-second Samsung clip from Boogie T rendered over its five recordings, with the saved notification giving its path.
+    - **The clip's start time:** "Filmed at" read 12:23:35, matching the filename. That's the stamp read as the last frame, corroborated by the file's modification time.
+    - **Copy caveat:** a copy made with `adb push` loses that time, so set it back with `touch -d @<seconds>` and rescan.
+- **Also fixed: exports two hours early.**
+  - **What happened:** with no venue, an export's clock fell back to the preset's zone, which is the phone's zone frozen into the preset when it was made. All eight presets said America/Los_Angeles, so the Boogie T clip, shown as 12:23 AM in Contents, rendered as 10:23 PM.
+  - **The fix:** `exportZoneOf()` falls back to the phone's zone, the clock every screen uses. It's used by the video and image renders and by the crop fields.
+  - **The footage's own clock comes second.** `ClipZone` reads the MP4's `mdta` tags directly: Samsung's `com.samsung.android.utc_offset`, or the offset at the end of an iPhone's `com.apple.quicktime.creationdate`. Android's metadata reader exposes neither. It seeks to the `moov` box and never reads the video data.
+    - **Order:** `exportZoneOf()` uses the venue's zone, then the clip's offset, then the phone's zone.
+    - **Where it's read:** when a clip is found or picked (`VideoClip.zoneId`), and again by the render for a job restored from the queue.
+    - **Where it's used:** the Look preview, the render, and the queued video's name.
+    - **Not changed:** screens, such as the Contents card, still show the recordings' clock.
+    - **Checked on the emulator:** with the emulator switched to Pacific time, Contents showed 10:23 PM, and the preview, the rendered frame and the file name all read 12:23 AM.
+  - **Presets no longer have a time zone.** A zone is where something happened, which is a location's business. `ExportPreset.timeZoneId` is gone, and so is the old `default_timezone` setting's migration into a preset. Older preset JSON still carries the key, and it's ignored.
+- **Also fixed: the queue reappearing in Export.** Step 4's "Open the render queue" pushed the queue on top of Export, so the queue was saved as part of Export's state. Coming back to Export, even from an event's Export button, showed the queue again. It now switches sections, like the drawer does.
+
 ---
 
 ## Phase C — Watch
@@ -414,7 +465,7 @@ Most Concert events are already named after their artist, but only some carry an
 
 | Ticket | Work | Audit |
 |---|---|---|
-| **S19.1** | Distinct loading and empty states on People, Watches, Locations and analysis. The event timeline currently says "Nothing measured in this scope" for about 15 seconds while it loads. | §2, §6 |
+| **S19.1** | Distinct loading and empty states on People, Watches, Locations and analysis. The event timeline currently says "Nothing measured in this scope" for about 15 seconds while it loads, and the Library shows "Nothing here yet" for a moment on a cold start (seen in S7). | §2, §6 |
 | **S19.2** | Move work to IO with progress: CSV import and export, `looksLikeJson`, image save, Save CSV, diagnostics, and the Recovery database copy. | §2 |
 
 **Commit:** `fix(ui): load before saying empty; keep files off the main thread`
@@ -425,7 +476,7 @@ Most Concert events are already named after their artist, but only some carry an
 |---|---|---|
 | **S20.1** | Make whole rows `toggleable`/`selectable` (clip cards, settings, tags, refinement, pickers), and remove `clickable` where nothing happens (moment rows). | §2 |
 | **S20.2** | Use `rememberSaveable` for the analysis tab, chart zoom and scrub, export sections and the event-page tab. | §2 |
-| **S20.3** | Back arrows on live analysis and the render queue, with the queue going back to Export. Breadcrumbs don't push duplicate pages. Export entered from a detail page goes back to that page. Tapping the Export tab returns to the wizard, not to a queue opened from it. | §2, §6 |
+| **S20.3** | Back arrows on live analysis and the render queue, with the queue going back to Export. Breadcrumbs don't push duplicate pages. Export entered from a detail page goes back to that page. (Tapping the Export tab returning to the wizard rather than a queue opened from it was fixed in S7.) | §2, §6 |
 
 **Commit:** `fix(ui): rows that respond, state that stays, Back that goes back`
 

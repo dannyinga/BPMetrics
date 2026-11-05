@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+      Rendering a video is media processing, and Android 15 has a foreground-service type for it
+      (Play #14). It's new in 15, so on Android 14 the render still runs as dataSync; the service
+      picks one at runtime.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!--
       Reading the gallery, to find footage filmed while a recording was running. The permission
@@ -34,6 +40,7 @@
 
     <application
         android:name=".BPMetricsApp"
+        android:label="@string/app_name"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -43,7 +50,7 @@
 
         <service
             android:name=".export.BpmExportService"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:exported="false" />
 
         <service

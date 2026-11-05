@@ -51,6 +51,11 @@ object ImageExporter {
         val headerXPercent: Float = 0.85f,
         val futureOpacity: Float = 0.65f,
         val timeZoneId: String = java.time.ZoneId.systemDefault().id,
+        /**
+         * The UTC offset the footage says it was filmed at ("-05:00"), when it says. The clock
+         * uses it where no venue gives a zone. See [ClipZone].
+         */
+        val clipZoneId: String? = null,
         val customRecordColors: Map<Long, Int> = emptyMap(),
         /**
          * The wearer's photograph for each recording, already cropped, keyed by record id.
@@ -571,12 +576,12 @@ object ImageExporter {
      * render queue, which rebuilds a job's config after a restart with its recordings not loaded
      * yet, and it would have to be remembered again at every future call site.
      *
-     * The config's own zone survives as the fallback, for recordings no venue covers.
+     * For recordings no venue covers, the phone's zone, as on every screen (see
+     * [inga.bpmetrics.library.exportZoneOf]). The config's zone, which is the preset's, is never
+     * used: it put an unfiled Kansas set two hours early.
      */
     private fun ImageExportConfig.inZoneOf(records: List<inga.bpmetrics.library.BpmRecordEntity>) =
-        inga.bpmetrics.library.resolvedZoneOf(records)
-            ?.let { copy(timeZoneId = it) }
-            ?: this
+        copy(timeZoneId = inga.bpmetrics.library.exportZoneOf(records, clipZoneId))
 
     /** What the clock says, or null when it is switched off. */
     private fun clockTextFor(

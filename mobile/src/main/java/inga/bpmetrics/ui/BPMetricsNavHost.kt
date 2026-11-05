@@ -9,6 +9,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,8 +64,19 @@ import kotlinx.coroutines.launch
  * pushed on top of whichever section opened them and keep ordinary back-arrow navigation.
  */
 @Composable
-fun BPMetricsNavHost(repository: LibraryRepository) {
+fun BPMetricsNavHost(
+    repository: LibraryRepository,
+    /** A section a notification asked for. See [inga.bpmetrics.MainActivity.EXTRA_OPEN]. */
+    openRequest: String? = null,
+    onOpenHandled: () -> Unit = {}
+) {
     val navController = rememberNavController()
+    LaunchedEffect(openRequest) {
+        if (openRequest == inga.bpmetrics.MainActivity.OPEN_RENDER_QUEUE) {
+            navController.navigateToSection(AppDestination.RENDER_QUEUE)
+        }
+        if (openRequest != null) onOpenHandled()
+    }
     val context = LocalContext.current
     val app = context.applicationContext as BPMetricsApp
     val settingsRepository = app.settingsRepository
@@ -434,7 +446,9 @@ fun BPMetricsNavHost(repository: LibraryRepository) {
                 ExportUtilityScreen(
                     viewModel = exportViewModel,
                     onOpenDrawer = openDrawer,
-                    onOpenQueue = { navController.navigate(Routes.RENDER_QUEUE) }
+                    // As a section, like the drawer opens it. Pushed on top of Export, the queue was
+                    // saved as part of Export, so coming back to Export showed the queue again.
+                    onOpenQueue = { navController.navigateToSection(AppDestination.RENDER_QUEUE) }
                 )
             }
 

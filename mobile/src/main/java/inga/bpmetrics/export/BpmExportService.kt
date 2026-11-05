@@ -33,7 +33,14 @@ class BpmExportService : Service() {
     private lateinit var notificationManager: NotificationManager
 
     companion object {
+        /** Progress: quiet, since it updates every second. */
         private const val CHANNEL_ID = "export_channel"
+
+        /**
+         * Finished and failed renders. Its own channel so these can make a sound: on the quiet
+         * progress channel a failure arrived without a sound and was easy to miss.
+         */
+        private const val RESULTS_CHANNEL_ID = "export_results"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "inga.bpmetrics.ACTION_STOP_EXPORT"
 
@@ -95,7 +102,18 @@ class BpmExportService : Service() {
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION_ID, createNotification("Queue processing started", 0f))
+        // Media processing where the platform has the type (Android 15); Android 14 has no type
+        // for it, so the render runs as data sync there (Play #14).
+        val serviceType = when {
+            android.os.Build.VERSION.SDK_INT >= 35 ->
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q ->
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            else -> 0
+        }
+        androidx.core.app.ServiceCompat.startForeground(
+            this, NOTIFICATION_ID, createNotification("Starting renders", 0f), serviceType
+        )
         
         // Ensure the queue processing loop is running
         if (queueJob == null || queueJob?.isCompleted == true) {
@@ -180,15 +198,16 @@ class BpmExportService : Service() {
                     ExportUtils.discardStagedExport(file)
 
                     RenderQueueManager.updateJobStatus(nextJob.id, RenderStatus.COMPLETED, targetUri = finalUri)
-                    showCompletionNotification(nextJob.recordTitle, true, finalUri)
+                    showSavedNotification(nextJob.recordTitle, finalUri)
                 } catch (e: Exception) {
                     e.printStackTrace()
                     val wasCancelled = coroutineContext[Job]?.isCancelled == true
                     val status = if (wasCancelled) RenderStatus.CANCELLED else RenderStatus.FAILED
-                    RenderQueueManager.updateJobStatus(nextJob.id, status, error = e.message ?: e.toString())
+                    val reason = RenderFailure.describe(e)
+                    RenderQueueManager.updateJobStatus(nextJob.id, status, error = if (wasCancelled) null else reason)
 
                     if (!wasCancelled) {
-                        showCompletionNotification(nextJob.recordTitle, false)
+                        showFailedNotification(nextJob.recordTitle, reason)
                     }
                 }
             }
@@ -216,10 +235,23 @@ class BpmExportService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel =
-            NotificationChannel(CHANNEL_ID, "Video Export", NotificationManager.IMPORTANCE_LOW)
-        notificationManager.createNotificationChannel(channel)
+        notificationManager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "Render progress", NotificationManager.IMPORTANCE_LOW)
+        )
+        notificationManager.createNotificationChannel(
+            NotificationChannel(RESULTS_CHANNEL_ID, "Finished and failed renders", NotificationManager.IMPORTANCE_DEFAULT)
+        )
     }
+
+    /** Opens the app on the render queue. Every render notification's tap goes there. */
+    private fun openQueueIntent(requestCode: Int): PendingIntent = PendingIntent.getActivity(
+        this,
+        requestCode,
+        Intent(this, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_OPEN, MainActivity.OPEN_RENDER_QUEUE)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
 
     private fun createNotification(contentTitle: String, progress: Float): Notification {
         val stopIntent = Intent(this, BpmExportService::class.java).apply {
@@ -227,42 +259,48 @@ class BpmExportService : Service() {
         }
         val stopPendingIntent = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE)
 
-        val contentIntent = Intent(this, MainActivity::class.java)
-        val pendingContentIntent = PendingIntent.getActivity(this, 0, contentIntent, PendingIntent.FLAG_IMMUTABLE)
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(contentTitle)
-            .setContentText("${(progress * 100).toInt()}% complete")
+            .setContentText("${(progress * 100).toInt()}% done")
             .setSmallIcon(R.drawable.stat_sys_download)
             .setProgress(100, (progress * 100).toInt(), false)
             .setOngoing(true)
-            .setContentIntent(pendingContentIntent)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(openQueueIntent(0))
             .addAction(R.drawable.ic_menu_close_clear_cancel, "Cancel", stopPendingIntent)
             .build()
     }
 
-    private fun showCompletionNotification(title: String, success: Boolean, videoUri: Uri? = null) {
-        val contentIntent = if (success && videoUri != null) {
-            val intent = Intent(Intent.ACTION_VIEW).apply {
+    private fun showSavedNotification(title: String, videoUri: Uri?) {
+        val where = videoUri?.let { ExportUtils.describeLocation(this, it) } ?: "Movies/BPMetrics"
+        val builder = NotificationCompat.Builder(this, RESULTS_CHANNEL_ID)
+            .setContentTitle("Video saved: $title")
+            .setContentText("Saved to $where")
+            .setSmallIcon(R.drawable.stat_sys_download_done)
+            .setAutoCancel(true)
+            .setContentIntent(openQueueIntent(1))
+        if (videoUri != null) {
+            val play = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(videoUri, "video/mp4")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            PendingIntent.getActivity(
-                this,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            builder.addAction(
+                R.drawable.ic_media_play, "Play",
+                PendingIntent.getActivity(this, 2, play, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             )
-        } else null
+        }
+        notificationManager.notify(NOTIFICATION_ID + 1 + System.currentTimeMillis().toInt(), builder.build())
+    }
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(if (success) "Export Complete" else "Export Failed")
-            .setContentText(if (success) "Saved to Movies/BPMetrics. Tap to play video." else "There was an error encoding '$title'.")
-            .setSmallIcon(if (success) R.drawable.stat_sys_download_done else R.drawable.stat_notify_error)
+    /** A failed render, with its reason. It used to say only "There was an error encoding". */
+    private fun showFailedNotification(title: String, reason: String) {
+        val notification = NotificationCompat.Builder(this, RESULTS_CHANNEL_ID)
+            .setContentTitle("Render failed: $title")
+            .setContentText(reason)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(reason))
+            .setSmallIcon(R.drawable.stat_notify_error)
             .setAutoCancel(true)
-            .apply {
-                if (contentIntent != null) setContentIntent(contentIntent)
-            }
+            .setContentIntent(openQueueIntent(3))
             .build()
         notificationManager.notify(NOTIFICATION_ID + 1 + System.currentTimeMillis().toInt(), notification)
     }

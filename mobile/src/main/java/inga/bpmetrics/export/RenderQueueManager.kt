@@ -51,6 +51,10 @@ data class RenderJob(
     /** How many recordings are drawn, whether or not they are currently loaded. */
     val recordCount: Int get() = recordIds.size.takeIf { it > 0 } ?: config.records.size
 
+    /** Saved or cancelled: nothing left to do or to look into. What "Clear finished" removes. */
+    val isFinished: Boolean
+        get() = status == RenderStatus.COMPLETED || status == RenderStatus.CANCELLED
+
     /** Whether this can be run again as it stands, without being reconfigured. */
     val isRetryable: Boolean
         get() = status == RenderStatus.FAILED || status == RenderStatus.CANCELLED
@@ -229,11 +233,13 @@ object RenderQueueManager {
 
     fun getNextJob(): RenderJob? = _queue.value.firstOrNull { it.status == RenderStatus.QUEUED }
 
-    fun clearCompleted() {
+    /**
+     * Drops saved and cancelled jobs. Failed ones stay: they still hold a reason and a Retry, so
+     * clearing them is a separate, per-job decision.
+     */
+    fun clearFinished() {
         synchronized(this) {
-            _queue.value = _queue.value.filter {
-                it.status == RenderStatus.QUEUED || it.status == RenderStatus.RENDERING
-            }
+            _queue.value = _queue.value.filterNot { it.isFinished }
         }
         persistAll()
     }

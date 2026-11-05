@@ -99,6 +99,44 @@ object VideoExporter {
         val bytes = (bitrate.toLong() / 8) * (durationMs / 1000).coerceAtLeast(1)
         return Sizing(bitrate, bytes)
     }
+
+    /** The frame rate a render will use: the footage's when asked for and readable, else the set one. */
+    private fun renderFrameRate(context: Context, config: VideoExportConfig): Int =
+        if (config.matchSourceFrameRate && config.overlayVideoUri != null) {
+            getVideoFrameRate(context, config.overlayVideoUri)?.coerceIn(1, 120) ?: config.frameRate
+        } else {
+            config.frameRate
+        }
+
+    /**
+     * Why this render can't start, in words for the queue and the notification, or null if it can.
+     *
+     * The render runs it first, and so does Retry before queueing a job again, so a job that
+     * failed for want of space isn't put back only to fail the same way (Audit §3 Export).
+     */
+    fun preflightProblem(context: Context, config: VideoExportConfig): String? {
+        config.overlayVideoUri?.let { clip ->
+            val readable = runCatching {
+                context.contentResolver.openFileDescriptor(clip, "r")?.use { true } ?: false
+            }.getOrDefault(false)
+            if (!readable) {
+                return "The clip it was made from can't be opened. It may have been deleted, or " +
+                    "BPMetrics can no longer see it."
+            }
+        }
+        val durationMs = (config.imageConfig.endTimeMs - config.imageConfig.startTimeMs).coerceAtLeast(1000L)
+        val sized = sizing(
+            config.imageConfig.width, config.imageConfig.height, renderFrameRate(context, config),
+            hasOverlay = config.overlayVideoUri != null, durationMs = durationMs
+        )
+        val freeBytes = context.cacheDir.usableSpace
+        if (freeBytes < sized.requiredFreeBytes) {
+            return "Not enough space: it needs about ${sized.requiredFreeBytes / 1_000_000} MB free " +
+                "while it renders, and the phone has ${freeBytes / 1_000_000} MB. Free some up and retry."
+        }
+        return null
+    }
+
     private const val TAG = "VideoExporter"
 
     /**
@@ -142,6 +180,13 @@ object VideoExporter {
         config: VideoExportConfig,
         onProgress: (Float) -> Unit
     ): File = withContext(Dispatchers.IO) {
+        // The clock the footage was filmed on, for the time printed on the frame. Read here as
+        // well as when the clip was found, because a job restored from the queue doesn't carry it.
+        val config = config.overlayVideoUri
+            ?.takeIf { config.imageConfig.clipZoneId == null }
+            ?.let { clip -> config.copy(imageConfig = config.imageConfig.copy(clipZoneId = ClipZone.of(context, clip))) }
+            ?: config
+
         // 1. Setup File
         val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
         val fileName = "${sanitizedTitle}.mp4"
@@ -173,27 +218,15 @@ object VideoExporter {
         val height = config.imageConfig.height
         // Matched to the footage when asked for, falling back to the stated rate when the file will
         // not say — a clip whose metadata is unreadable is not a reason to refuse the export.
-        val fps = if (config.matchSourceFrameRate && config.overlayVideoUri != null) {
-            getVideoFrameRate(context, config.overlayVideoUri)?.coerceIn(1, 120)
-                ?: config.frameRate
-        } else {
-            config.frameRate
-        }
+        val fps = renderFrameRate(context, config)
 
         // The bitrate and the size, by the same sum step 4 shows before anything is queued.
         val sized = sizing(width, height, fps, hasOverlay = config.overlayVideoUri != null, durationMs = totalDataDurationMs)
         val targetBitrate = sized.bitrate
 
-        // Refuse a render there is plainly no room for, rather than discovering it part way and
-        // leaving the phone worse off than before it started.
-        val requiredBytes = sized.requiredFreeBytes
-        val freeBytes = context.cacheDir.usableSpace
-        if (freeBytes < requiredBytes) {
-            throw IOException(
-                "Not enough space to export: about ${requiredBytes / 1_000_000}MB needed, " +
-                    "${freeBytes / 1_000_000}MB free. Free up some space and try again."
-            )
-        }
+        // Refuse a render there is plainly no room for, or whose clip has gone, rather than
+        // discovering it part way and leaving the phone worse off than before it started.
+        preflightProblem(context, config)?.let { throw IOException(it) }
 
         if (config.overlayVideoUri != null) {
             mediaUri = config.overlayVideoUri
@@ -478,7 +511,8 @@ object VideoExporter {
             startedAtMs = stamp?.startedAtMs ?: (System.currentTimeMillis() - durationMs),
             durationMs = durationMs,
             displayName = name,
-            basis = stamp?.basis ?: VideoTiming.Basis.ASSUMED
+            basis = stamp?.basis ?: VideoTiming.Basis.ASSUMED,
+            zoneId = ClipZone.of(context, uri)
         )
     }
 
@@ -577,7 +611,9 @@ object VideoExporter {
          * again — the two drifting apart is what put every MP4 export a clip-length away from its
          * own preview.
          */
-        val basis: VideoTiming.Basis = VideoTiming.Basis.ASSUMED
+        val basis: VideoTiming.Basis = VideoTiming.Basis.ASSUMED,
+        /** The UTC offset the file says it was filmed at, if it says. See [ClipZone]. */
+        val zoneId: String? = null
     ) {
         val endedAtMs: Long get() = startedAtMs + durationMs
 
@@ -684,6 +720,8 @@ object VideoExporter {
         return clips
             .filter { clip -> records.any { clip.overlaps(it) } }
             .sortedBy { it.startedAtMs }
+            // Only for the clips that matched, since it opens each file.
+            .map { it.copy(zoneId = ClipZone.of(context, it.uri)) }
     }
 
     /**
