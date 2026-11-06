@@ -28,6 +28,10 @@ import kotlin.math.roundToLong
  * stamp marks the end of saving rather than the last frame, so a stamp alone lands a clip late by
  * however long saving took; the name was written at the press and does not have that problem.
  *
+ * Best of all is a camera that wrote the moment down with its zone, as an iPhone does. That beats
+ * the name and the stamp both, and it is the only thing that survives the clip being shared: the
+ * copy is stamped, and often named, when it was made.
+ *
  * Deliberately free of Android types: the judgement is arithmetic, and arithmetic is worth testing
  * without a device.
  */
@@ -97,6 +101,14 @@ object VideoTiming {
 
     /** What the stamp on a file turned out to mean. */
     enum class Basis {
+        /**
+         * The camera wrote down when filming began, zone and all, in the file's own tags (an
+         * iPhone's creation date). Preferred over everything worked out from the stamp: a shared
+         * or re-encoded copy is stamped when the copy was made, hours or days later, and only this
+         * survives the copying. See [ClipZone.capturedAt].
+         */
+        CAPTURED,
+
         /** It marked the first frame, corroborated by the file's mtime. */
         STARTED,
 
@@ -148,14 +160,21 @@ object VideoTiming {
      *   `MediaStore` reports this column in *seconds*, so callers must scale it.
      * @param fileName the file's display name, if known, for cameras that name a file after when
      *   filming began.
+     * @param capturedAtMs when the file's own tags say filming began, if they say. Wins outright.
      * @return the resolved start, or null when there is no stamp to work from at all.
      */
     fun resolve(
         dateTakenMs: Long,
         durationMs: Long,
         dateModifiedMs: Long,
-        fileName: String? = null
+        fileName: String? = null,
+        capturedAtMs: Long? = null
     ): Stamp? {
+        if (capturedAtMs != null && capturedAtMs > 0L) {
+            // Written to the second, so the press was half a second after it on average.
+            val rounding = if (capturedAtMs % 1000L == 0L) WITHIN_SECOND_MS else 0L
+            return Stamp(capturedAtMs + rounding, Basis.CAPTURED)
+        }
         val fromStamp = resolveStamp(dateTakenMs, durationMs, dateModifiedMs) ?: return null
         return fileName?.let { named(it, dateTakenMs, durationMs, fromStamp) } ?: fromStamp
     }

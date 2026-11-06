@@ -376,4 +376,30 @@ class VideoTimingTest {
         assertEquals(VideoTiming.Basis.NAMED, stamp?.basis)
         assertEquals(1_779_678_217_500L, stamp?.startedAtMs)
     }
+
+    @Test
+    fun `an iPhone copy shared the next morning is placed when it was filmed`() {
+        // VID_20260524_094251.mp4, as Android lists it: stamped when the copy was made, named and
+        // finished when the phone saved it. The copy's udta date says when filming began.
+        val at = { iso: String -> java.time.Instant.parse(iso).toEpochMilli() }
+        val fromStore = VideoTiming.resolve(
+            dateTakenMs = at("2026-05-24T16:28:14Z"),
+            durationMs = 118_700L,
+            dateModifiedMs = at("2026-05-24T16:42:51Z"),
+            fileName = "VID_20260524_094251.mp4"
+        )!!
+        // Nothing about the file itself can be trusted: neither the stamp nor the name agree.
+        assertEquals(VideoTiming.Basis.ASSUMED, fromStore.basis)
+
+        val captured = VideoTiming.resolve(
+            dateTakenMs = at("2026-05-24T16:28:14Z"),
+            durationMs = 118_700L,
+            dateModifiedMs = at("2026-05-24T16:42:51Z"),
+            fileName = "VID_20260524_094251.mp4",
+            capturedAtMs = at("2026-05-24T05:47:59Z")
+        )!!
+        assertEquals(VideoTiming.Basis.CAPTURED, captured.basis)
+        // Ten forty-eight in the evening on day one, half a second into the second it names.
+        assertEquals(at("2026-05-24T05:47:59.500Z"), captured.startedAtMs)
+    }
 }

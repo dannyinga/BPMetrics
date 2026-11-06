@@ -394,6 +394,10 @@ object VideoExporter {
      * own metadata for a video handed over by a picker that MediaStore has no row for.
      */
     fun resolveStamp(context: Context, uri: Uri): VideoTiming.Stamp? {
+        // A camera that wrote down when filming began settles it, whatever the stamp says.
+        ClipZone.capturedAt(context, uri)?.let { captured ->
+            return VideoTiming.resolve(dateTakenMs = captured, durationMs = 0L, dateModifiedMs = 0L, capturedAtMs = captured)
+        }
         if (uri.scheme == "content") {
             val projection = arrayOf(
                 android.provider.MediaStore.Video.VideoColumns.DATE_TAKEN,
@@ -704,34 +708,51 @@ object VideoExporter {
         // clips that need correcting, before there is any chance to correct them. The precise
         // overlap test happens below, once each stamp has been resolved.
         val margin = 15 * 60 * 60_000L
-        val selection = "${android.provider.MediaStore.Video.Media.DATE_TAKEN} <= ? AND ${android.provider.MediaStore.Video.Media.DATE_TAKEN} >= ?"
-        val selectionArgs = arrayOf((recEnd + margin).toString(), (recStart - margin).toString())
-        try {
+        val taken = android.provider.MediaStore.Video.Media.DATE_TAKEN
+        val added = android.provider.MediaStore.Video.Media.DATE_ADDED
+
+        /**
+         * Adds the clips one query finds. With [sharedLater], only those whose own tags say when
+         * filming began: their stamps are far from the recordings, so nothing else could place them.
+         */
+        fun scan(selection: String, args: Array<String>, sharedLater: Boolean) = try {
             context.contentResolver.query(
                 android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                projection, selection, selectionArgs,
-                "${android.provider.MediaStore.Video.Media.DATE_TAKEN} DESC"
+                projection, selection, args, "$taken DESC"
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media._ID)
-                val takenCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DATE_TAKEN)
+                val takenCol = cursor.getColumnIndexOrThrow(taken)
                 val durationCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DURATION)
                 val nameCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DISPLAY_NAME)
                 val modifiedCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DATE_MODIFIED)
                 while (cursor.moveToNext()) {
                     val durationMs = cursor.getLong(durationCol)
-                    val stamp = VideoTiming.resolve(
+                    val uri = android.content.ContentUris.withAppendedId(
+                        android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        cursor.getLong(idCol)
+                    )
+                    val modifiedS = cursor.getLong(modifiedCol)
+                    val fromStore = VideoTiming.resolve(
                         dateTakenMs = cursor.getLong(takenCol),
                         durationMs = durationMs,
                         // MediaStore keeps this column in seconds; everything else here is millis.
-                        dateModifiedMs = cursor.getLong(modifiedCol) * 1000L,
+                        dateModifiedMs = modifiedS * 1000L,
                         fileName = cursor.getString(nameCol)
                     ) ?: continue
+                    // The file's own capture date beats anything worked out from the stamp: a
+                    // shared iPhone clip is stamped when it was shared. Not opened when the camera's
+                    // file name already settled it, which is every clip a Samsung filmed, and which
+                    // among the later ones means a clip filmed later rather than shared later.
+                    if (fromStore.basis == VideoTiming.Basis.NAMED && sharedLater) continue
+                    val captured = if (fromStore.basis == VideoTiming.Basis.NAMED) null
+                    else ClipZone.capturedAt(context, uri, version = modifiedS)
+                    if (sharedLater && captured == null) continue
+                    val stamp = captured?.let {
+                        VideoTiming.resolve(cursor.getLong(takenCol), durationMs, 0L, capturedAtMs = it)
+                    } ?: fromStore
                     clips.add(
                         VideoClip(
-                            uri = android.content.ContentUris.withAppendedId(
-                                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                                cursor.getLong(idCol)
-                            ),
+                            uri = uri,
                             startedAtMs = stamp.startedAtMs,
                             durationMs = durationMs,
                             displayName = cursor.getString(nameCol).orEmpty(),
@@ -741,6 +762,13 @@ object VideoExporter {
                 }
             }
         } catch (e: Exception) { Log.e(TAG, "Error querying overlapping videos", e) }
+
+        // Stamped around the recordings: what the phone filmed, and copies made the same night.
+        scan("$taken <= ? AND $taken >= ?", arrayOf((recEnd + margin).toString(), (recStart - margin).toString()), sharedLater = false)
+        // Stamped well after, but added since the recordings began: a friend's clip that arrived
+        // days later. A copy can't exist before what it's a copy of, which keeps this to the few
+        // files added since, and only those without a camera's name are opened.
+        scan("$taken > ? AND $added >= ?", arrayOf((recEnd + margin).toString(), (recStart / 1000L).toString()), sharedLater = true)
 
         // The real overlap test, now that every stamp means the same thing. Ascending, because a
         // set of clips from one evening reads as the evening it was.

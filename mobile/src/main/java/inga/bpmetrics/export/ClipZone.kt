@@ -16,7 +16,11 @@ import java.time.ZoneOffset
  * (`com.samsung.android.utc_offset = -0500`), and an iPhone writes its creation date with the
  * offset on the end (`com.apple.quicktime.creationdate = 2026-10-17T00:23:35-0500`). Android's
  * own metadata reader exposes neither, so this reads the MP4's tags directly: the `keys` and
- * `ilst` boxes of the movie's `meta` box. It seeks past the video data rather than reading it.
+ * `ilst` boxes of the movie's `meta` box, and the plain `date` and `©day` boxes of its `udta`,
+ * where a shared iPhone copy keeps the date. It seeks past the video data rather than reading it.
+ *
+ * The same dates say when filming began ([capturedAt]), which [VideoTiming] trusts above anything
+ * it can work out from the stamp.
  *
  * An export's clock is the venue's zone, then this, then the phone's
  * ([inga.bpmetrics.library.exportZoneOf]).
@@ -26,6 +30,19 @@ object ClipZone {
     private const val TAG = "ClipZone"
     const val SAMSUNG_OFFSET = "com.samsung.android.utc_offset"
     const val APPLE_CREATION_DATE = "com.apple.quicktime.creationdate"
+
+    /**
+     * The plain `date` box in the movie's `udta`, where an iPhone's shared or re-encoded copy
+     * keeps when filming began ("2026-05-23T22:47:59-0700"). The copy's own creation time, which
+     * Android reads as `DATE_TAKEN`, is when the copy was made.
+     */
+    const val UDTA_DATE = "udta.date"
+
+    /** QuickTime's `©day` in `udta`: the same, as some exporters write it. */
+    const val UDTA_DAY = "udta.©day"
+
+    /** Where a camera says when filming began, best first. */
+    private val CAPTURE_DATES = listOf(APPLE_CREATION_DATE, UDTA_DATE, UDTA_DAY)
 
     /** Where the bytes come from: a file in the app, an array in tests. */
     interface Source {
@@ -43,7 +60,38 @@ object ClipZone {
     }
 
     /** The clip's offset as a zone id ("-05:00"), or null when the file doesn't say. */
-    fun of(context: Context, uri: Uri): String? = runCatching {
+    fun of(context: Context, uri: Uri): String? = tagsOf(context, uri)?.let { offsetFrom(it)?.id }
+
+    /**
+     * When the camera says filming began, or null when it doesn't say. Only a date that states its
+     * own zone counts: one without could be any of two dozen instants.
+     */
+    fun capturedAt(context: Context, uri: Uri): Long? = tagsOf(context, uri)?.let { capturedAt(it) }
+
+    /**
+     * [capturedAt], remembered for this run of the app. Finding clips opens every file that came
+     * from somewhere else, and doing that again on every trip between steps is wasted work.
+     *
+     * @param version anything that changes when the file does (its `DATE_MODIFIED`), so an edited
+     *   file is read again.
+     */
+    fun capturedAt(context: Context, uri: Uri, version: Long): Long? {
+        val key = "$uri@$version"
+        synchronized(captures) { captures[key] }?.let { return it.takeIf { it != NOT_STATED } }
+        val read = capturedAt(context, uri)
+        synchronized(captures) { captures[key] = read ?: NOT_STATED }
+        return read
+    }
+
+    private const val NOT_STATED = Long.MIN_VALUE
+
+    /** The last couple of thousand files read, least recently used dropped first. */
+    private val captures = object : LinkedHashMap<String, Long>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?) = size > 2_000
+    }
+
+    /** The file's tags, or null when it can't be read. */
+    fun tagsOf(context: Context, uri: Uri): Map<String, String>? = runCatching {
         context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
             FileInputStream(descriptor.fileDescriptor).channel.use { channel ->
                 val source = object : Source {
@@ -59,7 +107,7 @@ object ClipZone {
                         return buffer.array().copyOf(buffer.position())
                     }
                 }
-                offsetFrom(readTags(source))?.id
+                readTags(source)
             }
         }
     }.onFailure { Log.w(TAG, "Couldn't read the clip's tags", it) }.getOrNull()
@@ -67,7 +115,9 @@ object ClipZone {
     /** The offset the tags state, or null. Only real offsets: whole quarter hours within ±14h. */
     fun offsetFrom(tags: Map<String, String>): ZoneOffset? {
         val stated = tags[SAMSUNG_OFFSET]?.trim()
-            ?: tags[APPLE_CREATION_DATE]?.let { Regex("""([+-]\d{2}:?\d{2})$""").find(it.trim())?.value }
+            ?: CAPTURE_DATES.firstNotNullOfOrNull { key ->
+                tags[key]?.let { Regex("""([+-]\d{2}:?\d{2})$""").find(it.trim())?.value }
+            }
             ?: return null
         val match = Regex("""^([+-])(\d{2}):?(\d{2})$""").find(stated) ?: return null
         val sign = if (match.groupValues[1] == "-") -1 else 1
@@ -77,17 +127,49 @@ object ClipZone {
         return runCatching { ZoneOffset.ofHoursMinutes(sign * hours, sign * minutes) }.getOrNull()
     }
 
-    /** The movie's `mdta` tags, by name. Empty when it has none or isn't an MP4. */
+    /**
+     * When the [tags] say filming began, as an instant, or null when they don't say with a zone.
+     *
+     * "2026-05-23T22:47:59-0700", with or without the colon in the offset, fractions of a second, or
+     * a Z. A date with no zone at all is refused rather than guessed at.
+     */
+    fun capturedAt(tags: Map<String, String>): Long? = CAPTURE_DATES.firstNotNullOfOrNull { key ->
+        tags[key]?.trim()?.let { text ->
+            // ISO wants the offset's colon; QuickTime usually leaves it out.
+            val iso = Regex("""([+-]\d{2})(\d{2})$""").replace(text) { "${it.groupValues[1]}:${it.groupValues[2]}" }
+            runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
+        }
+    }
+
+    /**
+     * The movie's tags by name: the `mdta` tags of its `meta` boxes, and the plain [UDTA_DATE] and
+     * [UDTA_DAY] boxes of its `udta`. Empty when it has none or isn't an MP4.
+     */
     fun readTags(source: Source): Map<String, String> {
         val moov = children(source, 0, source.size).firstOrNull { it.type == "moov" } ?: return emptyMap()
         val moovChildren = children(source, moov.bodyStart, moov.end)
+        val udtaChildren = moovChildren.filter { it.type == "udta" }.flatMap { udta ->
+            children(source, udta.bodyStart, udta.end)
+        }
         // A `meta` straight under the movie (QuickTime and Android's muxer), or inside `udta`.
-        val metas = moovChildren.filter { it.type == "meta" } +
-            moovChildren.filter { it.type == "udta" }.flatMap { udta ->
-                children(source, udta.bodyStart, udta.end).filter { it.type == "meta" }
+        val metas = moovChildren.filter { it.type == "meta" } + udtaChildren.filter { it.type == "meta" }
+        val dates = buildMap {
+            udtaChildren.firstOrNull { it.type == "date" }?.let { box ->
+                put(UDTA_DATE, String(source.read(box.bodyStart, boxLength(box)), Charsets.UTF_8))
             }
-        return metas.fold(emptyMap()) { tags, meta -> tags + tagsIn(source, meta) }
+            udtaChildren.firstOrNull { it.type == "©day" }?.let { box ->
+                // QuickTime text: a two-byte length and a two-byte language before the text.
+                val body = source.read(box.bodyStart, boxLength(box))
+                if (body.size > 4) {
+                    val length = ((body[0].toInt() and 0xFF) shl 8 or (body[1].toInt() and 0xFF)).coerceAtMost(body.size - 4)
+                    put(UDTA_DAY, String(body, 4, length, Charsets.UTF_8))
+                }
+            }
+        }
+        return metas.fold(dates) { tags, meta -> tags + tagsIn(source, meta) }
     }
+
+    private fun boxLength(box: Box): Int = (box.end - box.bodyStart).toInt().coerceIn(0, 256)
 
     private class Box(val type: String, val start: Long, val bodyStart: Long, val end: Long)
 
