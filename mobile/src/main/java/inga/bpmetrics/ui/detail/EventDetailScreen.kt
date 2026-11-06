@@ -84,7 +84,7 @@ fun EventDetailScreen(
 
     // Registered once for the screen: a launcher outlives the dialog that starts it.
     val pickCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
-        subject.setCover(context, uri) { ok ->
+        libraryViewModel.setCover(context, inga.bpmetrics.library.ItemRef.Event(eventId), uri) { ok ->
             if (ok) framingCover = true
             else Feedback.failed("That image couldn't be read.")
         }
@@ -244,9 +244,9 @@ fun EventDetailScreen(
                 )
             },
             onDismiss = { framingCover = false },
-            onConfirm = { subject.setCoverCrop(it); framingCover = false },
+            onConfirm = { libraryViewModel.setCoverCrop(inga.bpmetrics.library.ItemRef.Event(eventId), it); framingCover = false },
             // Stays open: removing is usually the first half of replacing.
-            onRemove = { subject.clearCover(context) }
+            onRemove = { libraryViewModel.clearCover(context, inga.bpmetrics.library.ItemRef.Event(eventId)) }
         )
     }
 

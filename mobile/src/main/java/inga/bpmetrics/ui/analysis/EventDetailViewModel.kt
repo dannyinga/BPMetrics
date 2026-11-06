@@ -127,7 +127,7 @@ class EventDetailViewModel(
      * hiding it would leave someone wondering why their filter matched. It is not removable here.
      */
     val tags: StateFlow<List<Inherited<TagEntity>>> = combine(
-        repository.getTagsForEvent(eventId),
+        repository.tagsOf(inga.bpmetrics.library.ItemRef.Event(eventId)),
         // Observed rather than read once, so tagging an event above this one refreshes this page
         // rather than waiting for something else to reload it.
         repository.allEventTags,
@@ -160,63 +160,20 @@ class EventDetailViewModel(
     fun removeTag(tagId: Long) {
         launchGuarded(failure = "Couldn't remove that tag.") {
             val name = repository.getTag(tagId)?.name ?: "Tag"
-            repository.removeTagFromEvent(eventId, tagId)
+            repository.removeTag(inga.bpmetrics.library.ItemRef.Event(eventId), tagId)
             // An event tag has no sibling rule or auto-naming, so adding it back is the undo.
             inga.bpmetrics.ui.feedback.Feedback.undoable("Removed $name from this event.") {
-                repository.addTagToEvent(eventId, tagId)
+                repository.addTag(inga.bpmetrics.library.ItemRef.Event(eventId), tagId)
             }
         }
     }
 
     fun rename(name: String) {
-        launchGuarded { repository.renameEvent(eventId, name) }
+        launchGuarded { repository.rename(inga.bpmetrics.library.ItemRef.Event(eventId), name) }
     }
 
     fun setNotes(notes: String) {
-        launchGuarded { repository.setEventNotes(eventId, notes) }
-    }
-
-    /**
-     * A picture for this event, and so for every recording filed under it.
-     *
-     * Including ones that arrive from a watch afterwards — nothing is written onto the recordings,
-     * they resolve upward to find it. See `CoverResolver`.
-     */
-    fun setCover(
-        context: android.content.Context,
-        source: android.net.Uri,
-        onResult: (Boolean) -> Unit
-    ) {
-        launchGuarded {
-            val hint = repository.getEvent(eventId)?.displayName ?: "event"
-            onResult(
-                repository.setCover(
-                    context = context,
-                    owner = inga.bpmetrics.library.ItemRef.Event(eventId),
-                    source = source,
-                    nameHint = hint
-                )
-            )
-        }
-    }
-
-    /** Re-frames the picture this event already has, leaving the file alone. */
-    fun setCoverCrop(cover: inga.bpmetrics.library.Cover) {
-        launchGuarded {
-            repository.setCoverCrop(inga.bpmetrics.library.ItemRef.Event(eventId), cover)
-        }
-    }
-
-    /**
-     * Takes this event's own picture off.
-     *
-     * Its recordings fall back to the collection above it rather than to nothing, which is why the
-     * column stores null rather than an empty string.
-     */
-    fun clearCover(context: android.content.Context) {
-        launchGuarded {
-            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Event(eventId))
-        }
+        launchGuarded { repository.setNotes(inga.bpmetrics.library.ItemRef.Event(eventId), notes) }
     }
 
     // `deleteEvent` was here too, and is gone for the same reason: the editor deletes, through

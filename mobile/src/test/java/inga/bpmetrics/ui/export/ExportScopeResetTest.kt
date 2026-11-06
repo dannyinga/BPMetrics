@@ -79,7 +79,7 @@ class ExportScopeResetTest {
         vm.setSource(ExportSource.Event(7))
         vm.setImageCrop(ImageCrop(startWallClockMs = 1_000L, endWallClockMs = 2_000L))
 
-        vm.setSource(ExportSource.Group(3))
+        vm.setSource(ExportSource.Collection(3))
 
         assertEquals(ImageCrop(), vm.imageCrop.value)
     }

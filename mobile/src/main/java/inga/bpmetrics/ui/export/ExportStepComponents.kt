@@ -229,8 +229,8 @@ fun SourceStep(
                         },
                         cover = collection.ownCover,
                         placeholder = Icons.Default.Bookmarks,
-                        isSelected = selected == ExportSource.Group(collection.collectionId),
-                        onClick = { onSelect(ExportSource.Group(collection.collectionId)) }
+                        isSelected = selected == ExportSource.Collection(collection.collectionId),
+                        onClick = { onSelect(ExportSource.Collection(collection.collectionId)) }
                     )
                 }
 

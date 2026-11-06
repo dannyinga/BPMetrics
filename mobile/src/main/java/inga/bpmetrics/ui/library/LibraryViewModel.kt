@@ -1,5 +1,9 @@
 package inga.bpmetrics.ui.library
 
+import inga.bpmetrics.ui.components.setCoverOn
+import inga.bpmetrics.ui.components.cropCoverOn
+import inga.bpmetrics.ui.components.clearCoverOn
+import inga.bpmetrics.library.ItemRef
 import inga.bpmetrics.library.location
 import inga.bpmetrics.library.cover
 import inga.bpmetrics.util.launchGuarded
@@ -286,7 +290,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     fun renameView(collectionId: Long, name: String) {
-        launchGuarded { repository.renameCollection(collectionId, name) }
+        launchGuarded { repository.rename(inga.bpmetrics.library.ItemRef.Collection(collectionId), name) }
     }
 
     /**
@@ -448,7 +452,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             val id = repository.createEvent(edit.name)
             repository.setEventType(id, edit.type)
             edit.parentId?.let { repository.setEventParent(id, it) }
-            repository.setEventLocation(id, edit.locationId)
+            repository.setLocation(inga.bpmetrics.library.ItemRef.Event(id), edit.locationId)
             if (recordIds.isNotEmpty()) repository.assignRecordsToEvent(recordIds, id)
             if (eventIds.isNotEmpty()) {
                 val refused = moveEventsUnder(eventIds, id)
@@ -478,7 +482,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     fun renameEvent(eventId: Long, name: String) {
-        launchGuarded { repository.renameEvent(eventId, name) }
+        launchGuarded { repository.rename(inga.bpmetrics.library.ItemRef.Event(eventId), name) }
     }
 
     /** Types already used, offered by the editor so a vocabulary forms instead of scattering. */
@@ -506,9 +510,9 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     fun applyEventEdit(eventId: Long, edit: EventEdit, onDone: (Boolean) -> Unit = {}) {
         launchGuarded {
-            repository.renameEvent(eventId, edit.name)
+            repository.rename(inga.bpmetrics.library.ItemRef.Event(eventId), edit.name)
             repository.setEventType(eventId, edit.type)
-            repository.setEventLocation(eventId, edit.locationId)
+            repository.setLocation(inga.bpmetrics.library.ItemRef.Event(eventId), edit.locationId)
 
             when (val result = repository.setEventWindow(
                 eventId, edit.windowStart, edit.windowEnd, edit.windowPeople
@@ -666,11 +670,11 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     }
 
     fun renameCollection(collectionId: Long, name: String) {
-        launchGuarded { repository.renameCollection(collectionId, name) }
+        launchGuarded { repository.rename(inga.bpmetrics.library.ItemRef.Collection(collectionId), name) }
     }
 
     fun deleteCollection(collectionId: Long) {
-        launchGuarded { repository.deleteCollection(collectionId) }
+        launchGuarded { repository.delete(inga.bpmetrics.library.ItemRef.Collection(collectionId)) }
     }
 
     /**
@@ -912,11 +916,11 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun deleteEvent(eventId: Long) {
-        launchGuarded { repository.deleteEvent(eventId) }
+        launchGuarded { repository.delete(inga.bpmetrics.library.ItemRef.Event(eventId)) }
     }
 
-    fun setEventGroup(eventId: Long, groupId: Long?) {
-        launchGuarded { repository.setEventGroup(eventId, groupId) }
+    fun setEventParent(eventId: Long, parentId: Long?) {
+        launchGuarded { repository.setEventParent(eventId, parentId) }
     }
 
     /**
@@ -1135,84 +1139,25 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         }
     }
 
-    /**
-     * A picture for one event, from wherever it is being edited.
-     *
-     * The timeline row's editor offers this now. It deliberately did not — the reasoning was that a
-     * photo button with nothing to check it against was worse than no button — but that objection
-     * dissolved once picking one opens the framing sheet, which *is* the picture at the size the
-     * library will draw it. Being able to set a cover only from inside the event was the loss.
-     */
-    fun setEventCover(
+    // A cover for any one recording, event or collection, from wherever it is being edited: the
+    // timeline row's editor, a collection, an event's page. These replace six functions here and
+    // three more on the event page's view model that differed only in which item they named.
+
+    /** Gives [ref] the picture at [source]. [onResult] says whether it was stored. */
+    fun setCover(
         context: android.content.Context,
-        eventId: Long,
+        ref: inga.bpmetrics.library.ItemRef,
         source: android.net.Uri,
         onResult: (Boolean) -> Unit
-    ) {
-        launchGuarded {
-            val hint = repository.getEvent(eventId)?.displayName ?: "event"
-            onResult(
-                repository.setCover(
-                    context = context,
-                    owner = inga.bpmetrics.library.ItemRef.Event(eventId),
-                    source = source,
-                    nameHint = hint
-                )
-            )
-        }
-    }
+    ) = setCoverOn(repository, context, ref, source, onResult = onResult)
 
-    /** Re-frames the picture an event already has, leaving the file alone. */
-    fun setEventCoverCrop(eventId: Long, cover: inga.bpmetrics.library.Cover) {
-        launchGuarded {
-            repository.setCoverCrop(inga.bpmetrics.library.ItemRef.Event(eventId), cover)
-        }
-    }
+    /** Re-frames the picture [ref] already has, leaving the file alone. */
+    fun setCoverCrop(ref: inga.bpmetrics.library.ItemRef, cover: inga.bpmetrics.library.Cover) =
+        cropCoverOn(repository, ref, cover)
 
-    fun clearEventCover(context: android.content.Context, eventId: Long) {
-        launchGuarded {
-            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Event(eventId))
-        }
-    }
-
-    /**
-     * A picture for a collection.
-     *
-     * Its own only. A set has no parent to inherit from and nothing inherits *from* it either: the
-     * events it names live on the timeline and take their covers from the tree, so a set showing
-     * its picture on its members would override what those members already inherit.
-     */
-    fun setCollectionCover(
-        context: android.content.Context,
-        groupId: Long,
-        source: android.net.Uri,
-        onResult: (Boolean) -> Unit
-    ) {
-        launchGuarded {
-            val hint = repository.getEventGroup(groupId)?.displayName ?: "collection"
-            onResult(
-                repository.setCover(
-                    context = context,
-                    owner = inga.bpmetrics.library.ItemRef.Collection(groupId),
-                    source = source,
-                    nameHint = hint
-                )
-            )
-        }
-    }
-
-    /** Re-frames the picture a collection already has, leaving the file alone. */
-    fun setCollectionCoverCrop(groupId: Long, cover: inga.bpmetrics.library.Cover) {
-        launchGuarded {
-            repository.setCoverCrop(inga.bpmetrics.library.ItemRef.Collection(groupId), cover)
-        }
-    }
-
-    fun clearCollectionCover(context: android.content.Context, groupId: Long) {
-        launchGuarded {
-            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Collection(groupId))
-        }
-    }
+    /** Takes [ref]'s own picture off, so it shows what it inherits. */
+    fun clearCover(context: android.content.Context, ref: inga.bpmetrics.library.ItemRef) =
+        clearCoverOn(repository, context, ref)
 
     /**
      * Gives the selected recordings a cover, by putting it on the event they share.
@@ -1344,8 +1289,8 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         val records = _selectedRecordIds.value
         val events = _selectedEventIds.value
         launchGuarded {
-            records.forEach { repository.deleteRecordWithId(it) }
-            events.forEach { repository.deleteEvent(it) }
+            records.forEach { repository.delete(inga.bpmetrics.library.ItemRef.Recording(it)) }
+            events.forEach { repository.delete(inga.bpmetrics.library.ItemRef.Event(it)) }
             clearWholeSelection()
         }
     }
@@ -1378,7 +1323,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     fun tagsInCategory(categoryId: Long) = repository.getTagsByCategory(categoryId)
 
     /** The tags applied to this event *here*, inherited ones excluded — those are not editable. */
-    fun ownTagsOfEvent(eventId: Long) = repository.getTagsForEvent(eventId)
+    fun ownTagsOfEvent(eventId: Long) = repository.tagsOf(ItemRef.Event(eventId))
 
     /**
      * Replaces an event's own tags with [tagIds].
@@ -1388,9 +1333,9 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      */
     fun setEventTags(eventId: Long, tagIds: List<Long>) {
         launchGuarded {
-            val current = repository.getTagsForEvent(eventId).first().map { it.tagId }
-            current.filterNot { it in tagIds }.forEach { repository.removeTagFromEvent(eventId, it) }
-            tagIds.filterNot { it in current }.forEach { repository.addTagToEvent(eventId, it) }
+            val current = repository.tagsOf(ItemRef.Event(eventId)).first().map { it.tagId }
+            current.filterNot { it in tagIds }.forEach { repository.removeTag(ItemRef.Event(eventId), it) }
+            tagIds.filterNot { it in current }.forEach { repository.addTag(ItemRef.Event(eventId), it) }
         }
     }
 
@@ -1404,10 +1349,10 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         val events = _selectedEventIds.value
         launchGuarded {
             records.forEach { recordId ->
-                tagIds.forEach { tagId -> repository.addTagToRecord(recordId, tagId) }
+                tagIds.forEach { tagId -> repository.addTag(ItemRef.Recording(recordId), tagId) }
             }
             events.forEach { eventId ->
-                tagIds.forEach { tagId -> repository.addTagToEvent(eventId, tagId) }
+                tagIds.forEach { tagId -> repository.addTag(ItemRef.Event(eventId), tagId) }
             }
             clearWholeSelection()
         }

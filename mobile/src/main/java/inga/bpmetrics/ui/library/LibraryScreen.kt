@@ -1063,7 +1063,7 @@ fun LibraryScreen(
 
     val pickRowCover = rememberCoverPicker { uri ->
         renamingEvent?.let { summary ->
-            viewModel.setEventCover(context, summary.event.eventId, uri) { ok ->
+            viewModel.setCover(context, inga.bpmetrics.library.ItemRef.Event(summary.event.eventId), uri) { ok ->
                 if (ok) framingRowCover = true
                 else Feedback.failed("That image couldn't be read.")
             }
@@ -1092,8 +1092,8 @@ fun LibraryScreen(
                     onPick = pickRowCover,
                     framing = framingRowCover,
                     onFramingChange = { framingRowCover = it },
-                    onCrop = { viewModel.setEventCoverCrop(live.eventId, it) },
-                    onRemove = { viewModel.clearEventCover(context, live.eventId) },
+                    onCrop = { viewModel.setCoverCrop(inga.bpmetrics.library.ItemRef.Event(live.eventId), it) },
+                    onRemove = { viewModel.clearCover(context, inga.bpmetrics.library.ItemRef.Event(live.eventId)) },
                     title = "Frame ${live.displayName}",
                     previewContent = {
                         Text(
@@ -1115,7 +1115,7 @@ fun LibraryScreen(
             rows = eventPickerRows,
             onDismiss = { movingEvent = null },
             onPick = { parentId ->
-                viewModel.setEventGroup(summary.event.eventId, parentId)
+                viewModel.setEventParent(summary.event.eventId, parentId)
                 movingEvent = null
             },
             onCreateEvent = {

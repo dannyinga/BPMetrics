@@ -72,7 +72,7 @@ fun CollectionsScreen(
     var covering by remember { mutableStateOf<CollectionSummary?>(null) }
     val pickCover = rememberCoverPicker { uri ->
         covering?.let { target ->
-            viewModel.setCollectionCover(context, target.collection.collectionId, uri) { ok ->
+            viewModel.setCover(context, inga.bpmetrics.library.ItemRef.Collection(target.collection.collectionId), uri) { ok ->
                 if (!ok) {
                     Feedback.failed("That image couldn't be read.")
                 }
@@ -130,7 +130,7 @@ fun CollectionsScreen(
                 onRename = { renaming = it },
                 onSetCover = { covering = it; pickCover() },
                 onRemoveCover = {
-                    viewModel.clearCollectionCover(context, it.collection.collectionId)
+                    viewModel.clearCover(context, inga.bpmetrics.library.ItemRef.Collection(it.collection.collectionId))
                 },
                 onDelete = { deleting = it },
                 onTogglePin = {

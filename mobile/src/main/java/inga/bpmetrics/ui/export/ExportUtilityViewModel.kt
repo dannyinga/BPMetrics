@@ -202,7 +202,7 @@ sealed interface ExportSource {
     data object None : ExportSource
     data class Recordings(val recordIds: Set<Long>) : ExportSource
     data class Event(val eventId: Long) : ExportSource
-    data class Group(val groupId: Long) : ExportSource
+    data class Collection(val collectionId: Long) : ExportSource
 
     /** A frozen analysis, which names the export and pins which recordings it covers. */
     data class SavedAnalysis(val analysisId: Long) : ExportSource
@@ -613,8 +613,8 @@ class ExportUtilityViewModel(
             // reporting 47 recordings exports those 47. References are followed now rather than
             // frozen when they were made, so a recording filed into one of its events last night
             // is in this export without anyone re-adding anything.
-            is ExportSource.Group ->
-                through(inga.bpmetrics.library.ScopeRef.Collection(source.groupId))
+            is ExportSource.Collection ->
+                through(inga.bpmetrics.library.ScopeRef.Collection(source.collectionId))
             // Resolved by id against the library, so a recording deleted since the analysis was
             // saved simply is not offered — an export cannot render a curve that is gone.
             is ExportSource.SavedAnalysis -> savedAnalysisRecordIds.value
@@ -653,8 +653,8 @@ class ExportUtilityViewModel(
             // path would wrap; [scopeTitle] is the one that ends up drawn on the picture.
             is ExportSource.Event ->
                 events.firstOrNull { it.eventId == source.eventId }?.displayName.orEmpty()
-            is ExportSource.Group ->
-                collections.firstOrNull { it.collectionId == source.groupId }?.displayName.orEmpty()
+            is ExportSource.Collection ->
+                collections.firstOrNull { it.collectionId == source.collectionId }?.displayName.orEmpty()
             is ExportSource.SavedAnalysis -> savedAnalysisName.value
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
@@ -695,8 +695,8 @@ class ExportUtilityViewModel(
                 events = events,
                 places = placesById
             )
-            is ExportSource.Group ->
-                collections.firstOrNull { it.collectionId == source.groupId }?.displayName.orEmpty()
+            is ExportSource.Collection ->
+                collections.firstOrNull { it.collectionId == source.collectionId }?.displayName.orEmpty()
             is ExportSource.SavedAnalysis -> savedAnalysisName.value
             is ExportSource.Recordings -> {
                 val single = records.singleOrNull()
@@ -1749,7 +1749,7 @@ class ExportUtilityViewModel(
             records = records,
             events = events,
             // Only a group can become more than one image; everything else is one timeline.
-            splitByEvent = source is ExportSource.Group && grouping == ImageGrouping.PER_EVENT,
+            splitByEvent = source is ExportSource.Collection && grouping == ImageGrouping.PER_EVENT,
             scopeTitle = title
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

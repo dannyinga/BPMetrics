@@ -61,8 +61,8 @@ class BackupRestoreTest {
         every { repository.allTags } returns flowOf(emptyList())
         every { repository.allEventsInTree } returns flowOf(emptyList())
         every { repository.getAllCollections() } returns flowOf(emptyList())
-        every { repository.getTagsForEvent(any()) } returns flowOf(emptyList())
-        every { repository.getTagsForRecord(any()) } returns flowOf(emptyList())
+        every { repository.tagsOf(any()) } returns flowOf(emptyList())
+        every { repository.tagsOf(any()) } returns flowOf(emptyList())
         coEvery { repository.getPresetsForBackup() } returns emptyList()
     }
 
@@ -71,7 +71,7 @@ class BackupRestoreTest {
 
     @Test
     fun `a legacy group's cover goes on the event it becomes`() = runTest {
-        coEvery { repository.createEventGroup("Bass Canyon") } returns 9L
+        coEvery { repository.createEvent("Bass Canyon", any()) } returns 9L
 
         restoreBackup(
             LibraryBackup(
@@ -92,7 +92,7 @@ class BackupRestoreTest {
     @Test
     fun `an event from before nesting goes under the group it named`() = runTest {
         // Written to events.groupId until S10, which nothing reads, so the event lost its place.
-        coEvery { repository.createEventGroup("Bass Canyon") } returns 9L
+        coEvery { repository.createEvent("Bass Canyon", any()) } returns 9L
         coEvery { repository.createEvent("Day 1", any()) } returns 103L
 
         restoreBackup(
@@ -318,7 +318,7 @@ class BackupRestoreTest {
         )
 
         restoreBackup(backup, repository, context)
-        coVerify(exactly = 0) { repository.updateRecordTitle(any(), any()) }
+        coVerify(exactly = 0) { repository.rename(match { it is inga.bpmetrics.library.ItemRef.Recording }, any()) }
 
         val result = restoreBackup(
             backup, repository, context,
@@ -326,7 +326,7 @@ class BackupRestoreTest {
                 mapOf(RestoreChoices.id(RestoreKind.RECORDING, RestoreKeys.recording(1_000L, 61_000L, "Watch")) to RestoreChoice.REPLACE)
             )
         )
-        coVerify { repository.updateRecordTitle(5L, "Subtronics") }
+        coVerify { repository.rename(inga.bpmetrics.library.ItemRef.Recording(5L), "Subtronics") }
         coVerify(exactly = 0) { repository.saveWatchRecordToLibrary(any(), any(), any(), any()) }
         assertEquals(1, result.itemsReplaced)
     }

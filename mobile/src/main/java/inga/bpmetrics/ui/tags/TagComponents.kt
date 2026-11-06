@@ -66,7 +66,7 @@ import kotlinx.coroutines.flow.Flow
  * chosen or created in the same gesture.
  *
  * **One tag per category.** Picking a second value on an axis replaces the first rather than adding
- * to it, matching what `LibraryRepository.addTagToRecord` does on write. A dialog that let you tick
+ * to it, matching what `LibraryRepository.addTag` does on write. A dialog that let you tick
  * both and then silently dropped one would be worse than the constraint.
  *
  * @param onCreateTag Makes a tag on an axis, creating the axis if it is new, and hands back its id.

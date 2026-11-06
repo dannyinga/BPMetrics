@@ -463,7 +463,7 @@ fun ExportUtilityScreen(
                                 onGroupingChange = { viewModel.setImageGrouping(it) },
                                 // Only a group can become more than one image, so only a group is
                                 // asked.
-                                showGroupingChoice = source is ExportSource.Group,
+                                showGroupingChoice = source is ExportSource.Collection,
                                 crop = imageCrop,
                                 onCropChange = { viewModel.setImageCrop(it) },
                                 onCropTypingProblem = { viewModel.setCropTypingProblem(it) },

@@ -14,6 +14,31 @@ import kotlinx.coroutines.flow.Flow
 interface BpmRecordDao {
 
     /**
+     * A picture for one recording, overriding whatever its event would give it.
+     *
+     * The exception rather than the rule — see `CoverResolver`. Null across the board hands the
+     * recording back to its event's cover.
+     */
+    @Query(
+        "UPDATE bpm_records SET coverPath = :path, coverCropLeft = :left, coverCropTop = :top, " +
+            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur, " +
+            "coverDim = :dim WHERE recordId = :recordId"
+    )
+    suspend fun updateCover(
+        recordId: Long,
+        path: String?,
+        left: Float?,
+        top: Float?,
+        right: Float?,
+        bottom: Float?,
+        blur: Float?,
+        dim: Float?
+    )
+
+    @Query("SELECT coverPath FROM bpm_records WHERE recordId = :recordId")
+    suspend fun coverPathOf(recordId: Long): String?
+
+    /**
      * Inserts a new [BpmRecordEntity] and returns its generated record ID.
      */
     @Insert(onConflict = OnConflictStrategy.REPLACE)

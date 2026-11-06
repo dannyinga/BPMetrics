@@ -437,6 +437,26 @@ Ambient mode and a tile are post-1.0.
 
 **Commit:** `refactor(library): one repository verb per operation`
 
+**As built:**
+- **S12.1:** `rename(ref)`, `setNotes(ref)` and `delete(ref)` take an `ItemRef`, and the per-type `when` lives once, in the repository.
+  - **Notes:** a recording's notes are its description.
+  - **Delete:** keeps each type's cleanup. A recording takes its readings; an event releases its recordings; a collection drops its links, and frozen rows cascade.
+  - **Removed:** the 14 functions they replace, including the unused `renameSavedAnalysis` and `deleteSavedAnalysis`.
+- **S12.2:** the repository's `setCover` names the stored file from the item itself, so callers no longer look up a hint.
+  - **Shared actions:** `ui/components/CoverActions.kt` holds `setCoverOn`, `cropCoverOn` and `clearCoverOn`, which work from any page's view model.
+  - **`LibraryViewModel`:** has one `setCover`/`setCoverCrop`/`clearCover(ref)`, used by the library, collections, collection page and event page.
+  - **The recording page:** calls the shared actions with its own reload.
+  - **Removed:** the event page's three wrappers, the recording page's three and six in `LibraryViewModel`.
+  - **DAO:** the recording cover queries moved from `EventDao` to `BpmRecordDao`, as `updateCover` and `coverPathOf`.
+- **S12.3:** `setLocation(ref)`, `addTag(ref)`, `removeTag(ref)` and `tagsOf(ref)` take a `TreeItemRef`, a new sub-interface of `ItemRef` covering recordings and events.
+  - **Collections can't hold them:** passing one doesn't compile.
+  - **`TreeItem.ref`:** narrowed to `TreeItemRef`.
+  - **`addTag`:** returns the tag a recording displaced (one per category), and null for an event.
+- **S12.4:** the "group" API is gone: `setEventGroup`, `setEventGroupParent`, `setEventGroupNotes`, `getEventGroup`, `createEventGroup`, the `*TagToGroup`/`getTagsForGroup` functions, `allGroupTags` and `getGroupTagsForBackup`.
+  - **Old backups:** restoring one makes its groups as plain events with `createEvent`.
+  - **Renames:** `ExportSource.Group(groupId)` is `ExportSource.Collection(collectionId)`, and `Routes.GROUP_DETAIL` is `Routes.COLLECTION_DETAIL` (`collection_detail/{collectionId}`). `LibraryViewModel.setEventGroup` is `setEventParent`.
+- **Verified on the emulator:** a collection opens on the new route; Export from it starts with that collection, and an image export still offers "One image per event".
+
 ---
 
 ## Phase E — Export refactor

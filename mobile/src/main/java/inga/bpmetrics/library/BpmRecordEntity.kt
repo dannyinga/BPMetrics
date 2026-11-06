@@ -142,7 +142,7 @@ data class BpmRecordEntity (
     @ColumnInfo(defaultValue = "") val zonesEncoded: String = ""
     ) : TreeItem {
 
-    override val ref: ItemRef get() = ItemRef.Recording(recordId)
+    override val ref: TreeItemRef get() = ItemRef.Recording(recordId)
 
     /**
      * The title, or what [RecordNameFormatter] makes of a placeholder. Without the wearer's live

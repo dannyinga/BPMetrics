@@ -133,7 +133,7 @@ class BpmRecordViewModel(
      */
     fun setLocation(locationId: Long?) {
         launchGuarded {
-            repository.setRecordLocation(recordId, locationId)
+            repository.setLocation(inga.bpmetrics.library.ItemRef.Recording(recordId), locationId)
             loadRecord()
         }
     }
@@ -204,50 +204,9 @@ class BpmRecordViewModel(
         }
     }
 
-    /**
-     * Gives this recording a picture of its own.
-     *
-     * Works whether or not the recording is filed under anything. Covers normally live on the event
-     * so that everything from one night matches without repeating the operation — but a recording
-     * that is not part of anything has no event to hang one on, and "file it into an event first"
-     * is not an answer when the recording is a one-off.
-     *
-     * Set here it overrides whatever an event would have supplied, which is also what makes this
-     * the way to give one recording in a set its own picture.
-     */
-    fun setOwnCover(context: android.content.Context, source: android.net.Uri, onResult: (Boolean) -> Unit) {
-        launchGuarded {
-            val hint = _record.value?.metadata?.title?.takeIf { it.isNotBlank() } ?: "recording"
-            val stored = repository.setCover(
-                context = context,
-                owner = inga.bpmetrics.library.ItemRef.Recording(recordId),
-                source = source,
-                nameHint = hint
-            )
-            if (stored) loadRecord()
-            onResult(stored)
-        }
-    }
-
-    /** Re-frames this recording's own cover. */
-    fun setOwnCoverCrop(cover: inga.bpmetrics.library.Cover) {
-        launchGuarded {
-            repository.setCoverCrop(inga.bpmetrics.library.ItemRef.Recording(recordId), cover)
-            loadRecord()
-        }
-    }
-
-    /**
-     * Removes this recording's own picture.
-     *
-     * Hands it back to its event's cover rather than leaving it with none — which is why the column
-     * stores null rather than an empty string.
-     */
-    fun clearOwnCover(context: android.content.Context) {
-        launchGuarded {
-            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Recording(recordId))
-            loadRecord()
-        }
+    /** Reads the record again now, for a change made from the page (a new cover, say). */
+    suspend fun reloadNow() {
+        _record.value = repository.getRecordWithId(recordId)
     }
 
     /**
@@ -255,7 +214,7 @@ class BpmRecordViewModel(
      */
     fun deleteRecord() {
         launchGuarded {
-            repository.deleteRecordWithId(recordId)
+            repository.delete(inga.bpmetrics.library.ItemRef.Recording(recordId))
         }
     }
 
@@ -266,7 +225,7 @@ class BpmRecordViewModel(
      */
     fun updateTitle(newTitle: String) {
         launchGuarded {
-            repository.updateRecordTitle(recordId, newTitle)
+            repository.rename(inga.bpmetrics.library.ItemRef.Recording(recordId), newTitle)
             loadRecord()
         }
     }
@@ -278,7 +237,7 @@ class BpmRecordViewModel(
      */
     fun updateDescription(newDescription: String) {
         launchGuarded {
-            repository.updateRecordDescription(recordId, newDescription)
+            repository.setNotes(inga.bpmetrics.library.ItemRef.Recording(recordId), newDescription)
             loadRecord()
         }
     }
@@ -317,7 +276,7 @@ class BpmRecordViewModel(
      */
     fun addTag(tagId: Long) {
         launchGuarded {
-            repository.addTagToRecord(recordId, tagId)
+            repository.addTag(inga.bpmetrics.library.ItemRef.Recording(recordId), tagId)
             loadRecord()
         }
     }
@@ -330,7 +289,7 @@ class BpmRecordViewModel(
     fun removeTag(tagId: Long) {
         launchGuarded(failure = "Couldn't remove that tag.") {
             val name = repository.getTag(tagId)?.name ?: "Tag"
-            repository.removeTagFromRecord(recordId, tagId)
+            repository.removeTag(inga.bpmetrics.library.ItemRef.Recording(recordId), tagId)
             loadRecord()
             inga.bpmetrics.ui.feedback.Feedback.undoable("Removed $name.") {
                 repository.restoreRecordTag(recordId, tagId)

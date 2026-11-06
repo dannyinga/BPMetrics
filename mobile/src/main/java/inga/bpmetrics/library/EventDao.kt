@@ -208,32 +208,6 @@ interface EventDao {
     @Query("UPDATE bpm_records SET eventId = :eventId WHERE recordId IN (:recordIds)")
     suspend fun assignRecordsToEvent(recordIds: List<Long>, eventId: Long?): Int
 
-    /** Unfiles everything under an event, used when the event itself is deleted. */
-    /**
-     * A picture for one recording, overriding whatever its event would give it.
-     *
-     * The exception rather than the rule — see `CoverResolver`. Null across the board hands the
-     * recording back to its event's cover.
-     */
-    @Query(
-        "UPDATE bpm_records SET coverPath = :path, coverCropLeft = :left, coverCropTop = :top, " +
-            "coverCropRight = :right, coverCropBottom = :bottom, coverBlur = :blur, " +
-            "coverDim = :dim WHERE recordId = :recordId"
-    )
-    suspend fun updateRecordCover(
-        recordId: Long,
-        path: String?,
-        left: Float?,
-        top: Float?,
-        right: Float?,
-        bottom: Float?,
-        blur: Float?,
-        dim: Float?
-    )
-
-    @Query("SELECT coverPath FROM bpm_records WHERE recordId = :recordId")
-    suspend fun recordCoverPathOf(recordId: Long): String?
-
     /**
      * The distinct events these recordings are filed under, ignoring any that are unfiled.
      *

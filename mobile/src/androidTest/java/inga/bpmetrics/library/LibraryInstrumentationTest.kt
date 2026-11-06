@@ -38,7 +38,7 @@ class LibraryInstrumentationTest {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         db = Room.inMemoryDatabaseBuilder(context, LibraryDatabase::class.java).build()
 
-        // A relaxed mock returns a Flow that never emits, and `addTagToRecord` calls `.first()` on
+        // A relaxed mock returns a Flow that never emits, and `addTag` calls `.first()` on
         // this one — which throws rather than yielding a default. Stubbed explicitly: no category
         // drives auto-naming in these tests.
         every { settingsRepository.defaultNamingCategoryId } returns flowOf(null)
@@ -84,7 +84,7 @@ class LibraryInstrumentationTest {
         assertTrue(saved!!.metadata.title.contains("Untitled"))
 
         // 3. Edit the title
-        repository.updateRecordTitle(recordId, "Morning Run")
+        repository.rename(inga.bpmetrics.library.ItemRef.Recording(recordId), "Morning Run")
         
         // 4. Verify title change
         val updatedRecord = repository.getRecordWithId(recordId)
@@ -105,16 +105,16 @@ class LibraryInstrumentationTest {
         val tag = repository.getTagsByCategory(category.categoryId).first()[0]
 
         // 3. Add Tag to Record
-        repository.addTagToRecord(recordId, tag.tagId)
+        repository.addTag(ItemRef.Recording(recordId), tag.tagId)
         
         // 4. Verify tag assignment
-        var recordTags = repository.getTagsForRecord(recordId).first()
+        var recordTags = repository.tagsOf(ItemRef.Recording(recordId)).first()
         assertEquals(1, recordTags.size)
         assertEquals("Running", recordTags[0].name)
 
         // 5. Remove Tag
-        repository.removeTagFromRecord(recordId, tag.tagId)
-        recordTags = repository.getTagsForRecord(recordId).first()
+        repository.removeTag(ItemRef.Recording(recordId), tag.tagId)
+        recordTags = repository.tagsOf(ItemRef.Recording(recordId)).first()
         assertEquals(0, recordTags.size)
     }
 }

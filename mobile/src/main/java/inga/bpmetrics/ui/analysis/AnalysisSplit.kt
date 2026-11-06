@@ -40,7 +40,7 @@ sealed interface SplitAxis {
      * A tag category. The axis this whole document exists to make possible.
      *
      * One tag per category per recording is what makes this a partition rather than a set of
-     * overlapping filters — see `LibraryRepository.addTagToRecord`.
+     * overlapping filters — see `LibraryRepository.addTag`.
      */
     data class TagCategory(val categoryId: Long, val name: String) : SplitAxis {
         override val key = "tag-$categoryId"

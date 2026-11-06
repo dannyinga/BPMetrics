@@ -351,7 +351,7 @@ fun BPMetricsNavHost(
                 CollectionsScreen(
                     viewModel = libraryViewModel,
                     onOpenDrawer = openDrawer,
-                    onOpen = { navController.navigate("${Routes.GROUP_DETAIL}/$it") },
+                    onOpen = { navController.navigate("${Routes.COLLECTION_DETAIL}/$it") },
                     // The whole library is a scope too, and the only one that always exists.
                     onAnalyseEverything = {
                         analysisFilter = inga.bpmetrics.library.FilterState()
@@ -367,15 +367,15 @@ fun BPMetricsNavHost(
             }
 
             composable(
-                route = "${Routes.GROUP_DETAIL}/{groupId}",
-                arguments = listOf(navArgument("groupId") { type = NavType.LongType })
+                route = "${Routes.COLLECTION_DETAIL}/{collectionId}",
+                arguments = listOf(navArgument("collectionId") { type = NavType.LongType })
             ) { backStackEntry ->
-                val groupId = backStackEntry.arguments?.getLong("groupId") ?: return@composable
+                val collectionId = backStackEntry.arguments?.getLong("collectionId") ?: return@composable
                 CollectionDetailScreen(
                     navController = navController,
                     repository = repository,
                     libraryViewModel = libraryViewModel,
-                    collectionId = groupId,
+                    collectionId = collectionId,
                     onBack = { navController.popBackStack() },
                     onSave = { name, records ->
                         scope.launch {
@@ -390,7 +390,7 @@ fun BPMetricsNavHost(
                     // Scoped as the *collection* rather than as its recordings, so the utility can
                     // still offer one image per event. Flattening it to a bare set of records
                     // would throw away the structure that choice depends on.
-                    onExport = { openExportOf(ExportSource.Group(groupId)) }
+                    onExport = { openExportOf(ExportSource.Collection(collectionId)) }
                 )
             }
 
@@ -533,5 +533,5 @@ object Routes {
      * One group, aggregated. Renders the same screen as [ANALYSIS_LIVE] — a group is a scope, not
      * a different kind of analysis.
      */
-    const val GROUP_DETAIL = "group_detail"
+    const val COLLECTION_DETAIL = "collection_detail"
 }

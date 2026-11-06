@@ -190,10 +190,10 @@ class ImportSession(
                                     // What a CSV carries beyond the readings: the title, the
                                     // notes and the tags.
                                     record.title?.takeIf { it.isNotBlank() }
-                                        ?.let { repository.updateRecordTitle(existing, it) }
-                                    record.description?.let { repository.updateRecordDescription(existing, it) }
-                                    repository.getTagsForRecord(existing).first()
-                                        .forEach { repository.removeTagFromRecord(existing, it.tagId) }
+                                        ?.let { repository.rename(inga.bpmetrics.library.ItemRef.Recording(existing), it) }
+                                    record.description?.let { repository.setNotes(inga.bpmetrics.library.ItemRef.Recording(existing), it) }
+                                    repository.tagsOf(inga.bpmetrics.library.ItemRef.Recording(existing)).first()
+                                        .forEach { repository.removeTag(inga.bpmetrics.library.ItemRef.Recording(existing), it.tagId) }
                                     repository.attachTagsToRecord(existing, record.tagNames)
                                     replaced++
                                 }

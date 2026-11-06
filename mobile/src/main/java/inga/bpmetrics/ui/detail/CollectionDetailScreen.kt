@@ -69,7 +69,7 @@ fun CollectionDetailScreen(
 
     var framingCover by remember { mutableStateOf(false) }
     val pickCover = rememberCoverPicker { uri ->
-        libraryViewModel.setCollectionCover(context, collectionId, uri) { ok ->
+        libraryViewModel.setCover(context, inga.bpmetrics.library.ItemRef.Collection(collectionId), uri) { ok ->
             // Straight into framing, while the choice is fresh.
             if (ok) framingCover = true
             else Feedback.failed("That image couldn't be read.")
@@ -155,11 +155,11 @@ fun CollectionDetailScreen(
             },
             onDismiss = { framingCover = false },
             onConfirm = {
-                libraryViewModel.setCollectionCoverCrop(collectionId, it)
+                libraryViewModel.setCoverCrop(inga.bpmetrics.library.ItemRef.Collection(collectionId), it)
                 framingCover = false
             },
             // Stays open: removing is usually the first half of replacing.
-            onRemove = { libraryViewModel.clearCollectionCover(context, collectionId) }
+            onRemove = { libraryViewModel.clearCover(context, inga.bpmetrics.library.ItemRef.Collection(collectionId)) }
         )
     }
 

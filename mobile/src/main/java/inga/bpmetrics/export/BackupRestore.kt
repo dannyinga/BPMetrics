@@ -234,14 +234,14 @@ suspend fun restoreBackup(
             if (choices.of(RestoreKind.EVENT, RestoreKeys.group(group.name), matched = false) == RestoreChoice.SKIP) {
                 return@forEach
             }
-            groupIdsByName[group.name] = repository.createEventGroup(group.name)
+            groupIdsByName[group.name] = repository.createEvent(group.name)
             groupsCreated++
         }
         backup.eventGroups.forEach { group ->
             val groupId = groupIdsByName[group.name] ?: return@forEach
-            if (group.notes.isNotBlank()) repository.setEventGroupNotes(groupId, group.notes)
+            if (group.notes.isNotBlank()) repository.setNotes(inga.bpmetrics.library.ItemRef.Event(groupId), group.notes)
             group.parentName?.let { parent ->
-                groupIdsByName[parent]?.let { repository.setEventGroupParent(groupId, it) }
+                groupIdsByName[parent]?.let { repository.setEventParent(groupId, it) }
             }
             // An event, because that is what a legacy group becomes (see createEventGroup). Writing
             // it as a Collection put the picture in the collections table under an event's id, so
@@ -249,7 +249,7 @@ suspend fun restoreBackup(
             restoreCover(repository, context, inga.bpmetrics.library.ItemRef.Event(groupId),
                 group.cover, group.name)
             group.tags.filter(::tagAllowed)
-                .forEach { applyTag(repository, it) { id -> repository.addTagToGroup(groupId, id) } }
+                .forEach { applyTag(repository, it) { id -> repository.addTag(inga.bpmetrics.library.ItemRef.Event(groupId), id) } }
         }
 
         // --- Events ---
@@ -282,7 +282,7 @@ suspend fun restoreBackup(
             val landed = when {
                 choice == RestoreChoice.SKIP -> here ?: return@forEach
                 choice == RestoreChoice.REPLACE && here != null -> here.also {
-                    if (event.name.isNotBlank()) repository.renameEvent(it, event.name)
+                    if (event.name.isNotBlank()) repository.rename(inga.bpmetrics.library.ItemRef.Event(it), event.name)
                     replaced++
                 }
                 else -> repository.createEvent(
@@ -314,7 +314,7 @@ suspend fun restoreBackup(
         backup.events.distinctBy { RestoreKeys.event(it) }.forEach { event ->
             val eventId = (if (event.eventId != 0L) eventIdsBySourceId[event.eventId] else eventIdsByName[event.name])
                 ?.takeIf { it in writeDetails } ?: return@forEach
-            if (event.notes.isNotBlank()) repository.setEventNotes(eventId, event.notes)
+            if (event.notes.isNotBlank()) repository.setNotes(inga.bpmetrics.library.ItemRef.Event(eventId), event.notes)
             repository.restoreEventTaxonomy(
                 eventId = eventId,
                 // An event naming itself as its parent is dropped rather than written. By id where
@@ -331,7 +331,7 @@ suspend fun restoreBackup(
                 excludedFromParentAnalysis = event.excludedFromParentAnalysis
             )
             event.locationName?.let { locationIdsByName[it] }
-                ?.let { repository.setEventLocation(eventId, it) }
+                ?.let { repository.setLocation(inga.bpmetrics.library.ItemRef.Event(eventId), it) }
             restoreCover(repository, context, inga.bpmetrics.library.ItemRef.Event(eventId),
                 event.cover, event.name)
             // Replacing makes the event's own tags the file's; adding just gives it the file's.
@@ -339,10 +339,10 @@ suspend fun restoreBackup(
                 val q = RestoreKeys.qualify(qualified)
                 repository.findOrCreateTag(q.substringBefore(':'), q.substringAfter(':'))
             }.toSet()
-            repository.getTagsForEvent(eventId).first().map { it.tagId }
+            repository.tagsOf(inga.bpmetrics.library.ItemRef.Event(eventId)).first().map { it.tagId }
                 .filterNot { it in wanted }
-                .forEach { repository.removeTagFromEvent(eventId, it) }
-            wanted.forEach { repository.addTagToEvent(eventId, it) }
+                .forEach { repository.removeTag(inga.bpmetrics.library.ItemRef.Event(eventId), it) }
+            wanted.forEach { repository.addTag(inga.bpmetrics.library.ItemRef.Event(eventId), it) }
         }
 
         // --- Recordings ---
@@ -404,7 +404,7 @@ suspend fun restoreBackup(
                 repository.assignRecordsToEvent(listOf(newId), eventId)
             }
             dto.locationName?.let { locationIdsByName[it] }
-                ?.let { repository.setRecordLocation(newId, it) }
+                ?.let { repository.setLocation(inga.bpmetrics.library.ItemRef.Recording(newId), it) }
             restoreCover(repository, context, inga.bpmetrics.library.ItemRef.Recording(newId),
                 dto.cover, dto.title)
             imported++
@@ -573,20 +573,20 @@ private suspend fun replaceRecording(
     eventId: Long?,
     locationId: Long?
 ) {
-    if (dto.title.isNotBlank()) repository.updateRecordTitle(recordId, dto.title)
-    repository.updateRecordDescription(recordId, dto.description)
+    if (dto.title.isNotBlank()) repository.rename(inga.bpmetrics.library.ItemRef.Recording(recordId), dto.title)
+    repository.setNotes(inga.bpmetrics.library.ItemRef.Recording(recordId), dto.description)
     dto.wearerName?.let { personIdsByName[RestoreKeys.person(it)] }
         ?.let { repository.assignPersonToRecords(listOf(recordId), it) }
     val wanted = tagNames.mapNotNull { qualified ->
         val q = RestoreKeys.qualify(qualified)
         repository.findOrCreateTag(q.substringBefore(':'), q.substringAfter(':'))
     }.toSet()
-    repository.getTagsForRecord(recordId).first().map { it.tagId }
+    repository.tagsOf(inga.bpmetrics.library.ItemRef.Recording(recordId)).first().map { it.tagId }
         .filterNot { it in wanted }
-        .forEach { repository.removeTagFromRecord(recordId, it) }
-    wanted.forEach { repository.addTagToRecord(recordId, it) }
+        .forEach { repository.removeTag(inga.bpmetrics.library.ItemRef.Recording(recordId), it) }
+    wanted.forEach { repository.addTag(inga.bpmetrics.library.ItemRef.Recording(recordId), it) }
     repository.assignRecordsToEvent(listOf(recordId), eventId)
-    repository.setRecordLocation(recordId, locationId)
+    repository.setLocation(inga.bpmetrics.library.ItemRef.Recording(recordId), locationId)
     restoreCover(repository, context, inga.bpmetrics.library.ItemRef.Recording(recordId), dto.cover, dto.title)
 }
 

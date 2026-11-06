@@ -7,8 +7,8 @@ package inga.bpmetrics.library
  * Maps 1:1 onto [ScopeRef], so going from "this item" to "what it covers" is one call.
  */
 sealed interface ItemRef {
-    data class Recording(val recordId: Long) : ItemRef
-    data class Event(val eventId: Long) : ItemRef
+    data class Recording(val recordId: Long) : TreeItemRef
+    data class Event(val eventId: Long) : TreeItemRef
     data class Collection(val collectionId: Long) : ItemRef
 
     /** The scope this item stands for: itself, or itself and everything beneath it. */
@@ -19,6 +19,12 @@ sealed interface ItemRef {
             is Collection -> ScopeRef.Collection(collectionId)
         }
 }
+
+/**
+ * A recording or an event: the things that hold tags and a place. A collection can't, so a call
+ * like `addTag` takes this and a collection doesn't type-check.
+ */
+sealed interface TreeItemRef : ItemRef
 
 /**
  * Anything with a page of its own: a recording, an event, a collection
@@ -42,6 +48,8 @@ sealed interface LibraryItem {
  * work decided: a collection holds no tags and no place of its own.
  */
 sealed interface TreeItem : LibraryItem {
+    override val ref: TreeItemRef
+
     /** A recording's event, or an event's parent. */
     val parentEventId: Long?
     val ownLocationId: Long?

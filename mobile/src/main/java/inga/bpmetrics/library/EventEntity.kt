@@ -92,7 +92,7 @@ data class EventEntity(
      */
     @ColumnInfo(defaultValue = "NULL") val locationId: Long? = null
 ) : TreeItem {
-    override val ref: ItemRef get() = ItemRef.Event(eventId)
+    override val ref: TreeItemRef get() = ItemRef.Event(eventId)
 
     /** How to refer to this event when it has somehow been left unnamed. */
     override val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled event"

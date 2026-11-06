@@ -1,5 +1,8 @@
 package inga.bpmetrics.ui.detail
 
+import inga.bpmetrics.ui.components.setCoverOn
+import inga.bpmetrics.ui.components.cropCoverOn
+import inga.bpmetrics.ui.components.clearCoverOn
 import inga.bpmetrics.library.location
 import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.foundation.layout.Arrangement
@@ -97,7 +100,7 @@ fun RecordingDetailScreen(
     // live inside the editor.
     var framingCover by remember { mutableStateOf(false) }
     val pickCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
-        subject.setOwnCover(context, uri) { ok ->
+        subject.setCoverOn(repository, context, inga.bpmetrics.library.ItemRef.Recording(recordId), uri, then = subject::reloadNow) { ok ->
             // Straight into framing, while the choice is fresh.
             if (ok) framingCover = true
             else Feedback.failed("That image couldn't be read.")
@@ -241,9 +244,9 @@ fun RecordingDetailScreen(
             title = "Frame this recording",
             previewContent = {},
             onDismiss = { framingCover = false },
-            onConfirm = { subject.setOwnCoverCrop(it); framingCover = false },
+            onConfirm = { subject.cropCoverOn(repository, inga.bpmetrics.library.ItemRef.Recording(recordId), it, then = subject::reloadNow); framingCover = false },
             // Stays open: removing is usually the first half of replacing.
-            onRemove = { subject.clearOwnCover(context) }
+            onRemove = { subject.clearCoverOn(repository, context, inga.bpmetrics.library.ItemRef.Recording(recordId), then = subject::reloadNow) }
         )
     }
 

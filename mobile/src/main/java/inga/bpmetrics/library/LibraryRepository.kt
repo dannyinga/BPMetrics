@@ -216,33 +216,6 @@ class LibraryRepository(
     }
 
     /**
-     * Updates the title of a BPM record.
-     *
-     * Suspends until the write has happened, rather than launching it into the repository's own
-     * scope and returning. Both callers already reload the record immediately afterwards, so
-     * fire-and-forget meant they reliably reloaded the value from *before* the edit — a rename
-     * that appeared not to take until something else refreshed the screen.
-     *
-     * @param recordId The ID of the record to update.
-     * @param newTitle The new title for the record.
-     */
-    suspend fun updateRecordTitle(recordId: Long, newTitle: String) {
-        Log.d(tag, "Updating title for record $recordId to: $newTitle")
-        recordDao.updateTitleOnly(recordId, newTitle)
-    }
-
-    /**
-     * Updates the description of a BPM record.
-     *
-     * @param recordId The ID of the record to update.
-     * @param newDescription The new description for the record.
-     */
-    suspend fun updateRecordDescription(recordId: Long, newDescription: String) {
-        Log.d(tag, "Updating description for record $recordId to: $newDescription")
-        recordDao.updateDescriptionOnly(recordId, newDescription)
-    }
-
-    /**
      * Updates the device ID and wearer name of a BPM record.
      */
     /**
@@ -254,19 +227,6 @@ class LibraryRepository(
     suspend fun updateRecordDeviceAndWearer(recordId: Long, deviceId: String, personId: Long?) {
         val name = personId?.let { personDao.getPerson(it)?.name }.orEmpty()
         recordDao.updateDeviceAndWearer(recordId, deviceId, name, personId)
-    }
-
-    /**
-     * Deletes a BPM record and its associated data points from the database.
-     *
-     * @param id The ID of the record to delete.
-     */
-    suspend fun deleteRecordWithId(id: Long) {
-        Log.d(tag, "Deleting record and data points for ID: $id")
-        recordDao.deleteRecordById(id)
-        recordDao.deleteDataPointsByRecordId(id)
-        collectionDao.forgetRecord(id)
-        reconcileMembership()
     }
 
     /**
@@ -520,12 +480,6 @@ class LibraryRepository(
         )
     }
 
-    suspend fun renameSavedAnalysis(collectionId: Long, name: String) =
-        collectionDao.rename(collectionId, name.trim())
-
-    /** Cascades to the frozen rows through the foreign key. */
-    suspend fun deleteSavedAnalysis(collectionId: Long) = collectionDao.delete(collectionId)
-
     // --- Events and groups ---
 
     fun getAllEvents(): Flow<List<EventEntity>> = eventDao.getAllEventsFlow()
@@ -769,17 +723,6 @@ class LibraryRepository(
     }
 
     /**
-     * Where an event happened, by reference to the venue registry.
-     *
-     * Reconciles afterwards: the zone a recording is read in is inherited, so pointing an event at
-     * a different venue changes what every recording under it says the time was.
-     */
-    suspend fun setEventLocation(eventId: Long, locationId: Long?) {
-        eventDao.updateLocation(eventId, locationId)
-        reconcileTimeZones()
-    }
-
-    /**
      * Moves recordings in time by the same amount, for a watch whose clock was wrong.
      *
      * A watch that has been flat for a while can boot with a stale clock and no phone or Wi-Fi to
@@ -806,12 +749,6 @@ class LibraryRepository(
         Log.i(tag, "Moved ${ids.size} recording(s) by $deltaMs ms")
         reconcileMembership()
         return ids.size
-    }
-
-    /** A venue chosen for one recording, overriding what it would inherit. */
-    suspend fun setRecordLocation(recordId: Long, locationId: Long?) {
-        recordDao.updateRecordLocation(recordId, locationId)
-        reconcileTimeZones()
     }
 
     /**
@@ -1035,10 +972,6 @@ class LibraryRepository(
         return EventMembership.conflicts(eventDao.getAllEvents(), windowPeople)
     }
 
-    suspend fun renameEvent(eventId: Long, name: String) = eventDao.rename(eventId, name.trim())
-
-    suspend fun setEventNotes(eventId: Long, notes: String) = eventDao.updateNotes(eventId, notes)
-
     /**
      * Puts an event's place in the tree back as a backup recorded it.
      *
@@ -1062,7 +995,109 @@ class LibraryRepository(
         reconcileMembership()
     }
 
+    // --- One verb per operation (Model and Export Consolidation §4) ---
+    //
+    // Each of these was written once per kind of item: three renames, four notes setters, two
+    // location setters, nine tag functions, four deletes. Room still needs a query per table, so
+    // the `when` lives here, once, and no caller has to know which table an item is in.
+
+    /** Renames a recording, event or collection. A recording's name is its title. */
+    suspend fun rename(ref: ItemRef, name: String) {
+        when (ref) {
+            is ItemRef.Recording -> recordDao.updateTitleOnly(ref.recordId, name)
+            is ItemRef.Event -> eventDao.rename(ref.eventId, name.trim())
+            is ItemRef.Collection -> collectionDao.rename(ref.collectionId, name.trim())
+        }
+    }
+
+    /** Sets an item's notes. A recording's notes are its description. */
+    suspend fun setNotes(ref: ItemRef, notes: String) {
+        when (ref) {
+            is ItemRef.Recording -> recordDao.updateDescriptionOnly(ref.recordId, notes)
+            is ItemRef.Event -> eventDao.updateNotes(ref.eventId, notes)
+            is ItemRef.Collection -> collectionDao.updateNotes(ref.collectionId, notes)
+        }
+    }
+
+    /**
+     * Sets where a recording or event happened, or clears it with null. Every recording's clock is
+     * reconciled after, since a venue decides the zone of everything beneath it.
+     */
+    suspend fun setLocation(ref: TreeItemRef, locationId: Long?) {
+        when (ref) {
+            is ItemRef.Recording -> recordDao.updateRecordLocation(ref.recordId, locationId)
+            is ItemRef.Event -> eventDao.updateLocation(ref.eventId, locationId)
+        }
+        reconcileTimeZones()
+    }
+
+    /**
+     * Removes an item. What else goes depends on what it is:
+     * - a recording takes its readings with it;
+     * - an event releases its recordings, which become unfiled, not deleted;
+     * - a collection removes a grouping and no data, frozen rows included (they cascade).
+     */
+    suspend fun delete(ref: ItemRef) {
+        when (ref) {
+            is ItemRef.Recording -> {
+                recordDao.deleteRecordById(ref.recordId)
+                recordDao.deleteDataPointsByRecordId(ref.recordId)
+                collectionDao.forgetRecord(ref.recordId)
+                reconcileMembership()
+            }
+            is ItemRef.Event -> {
+                eventDao.unfileRecordsForEvent(ref.eventId)
+                eventDao.deleteEvent(ref.eventId)
+                // A set naming it must forget it, or the set keeps a reference to nothing and
+                // quietly resolves to fewer recordings than it says it holds.
+                collectionDao.forgetEvent(ref.eventId)
+                reconcileMembership()
+            }
+            is ItemRef.Collection -> {
+                collectionDao.clearEvents(ref.collectionId)
+                collectionDao.clearRecords(ref.collectionId)
+                collectionDao.delete(ref.collectionId)
+            }
+        }
+        Log.d(tag, "Deleted $ref")
+    }
+
+    /**
+     * Tags a recording or event.
+     *
+     * @return for a recording, the tag it displaced: a recording holds one tag per category, so
+     *   tagging it Hulk takes Spiderman off. Null for an event, which keeps them all.
+     */
+    suspend fun addTag(ref: TreeItemRef, tagId: Long): TagEntity? = when (ref) {
+        is ItemRef.Recording -> tagRecord(ref.recordId, tagId)
+        is ItemRef.Event -> {
+            tagDao.insertEventTagCrossRef(EventTagCrossRef(ref.eventId, tagId))
+            null
+        }
+    }
+
+    suspend fun removeTag(ref: TreeItemRef, tagId: Long) {
+        when (ref) {
+            is ItemRef.Recording -> tagDao.untagRecord(ref.recordId, tagId)
+            is ItemRef.Event -> tagDao.untagEvent(ref.eventId, tagId)
+        }
+    }
+
+    /** An item's own tags, live. Not what it inherits: see [effectiveTags] for that. */
+    fun tagsOf(ref: TreeItemRef): Flow<List<TagEntity>> = when (ref) {
+        is ItemRef.Recording -> tagDao.getTagsForRecordFlow(ref.recordId)
+        is ItemRef.Event -> tagDao.getTagsForEventFlow(ref.eventId)
+    }
+
     // --- Cover images ---
+
+    /** What an item is called, for naming its cover file. */
+    private suspend fun nameOf(ref: ItemRef): String = when (ref) {
+        is ItemRef.Recording -> runCatching { recordDao.getRecordEntity(ref.recordId).title }.getOrNull()
+            ?.takeIf { it.isNotBlank() } ?: "recording"
+        is ItemRef.Event -> getEvent(ref.eventId)?.displayName ?: "event"
+        is ItemRef.Collection -> getCollection(ref.collectionId)?.displayName ?: "collection"
+    }
 
     // Covers go on any [ItemRef]. One type rather than three near-identical methods, because
     // everything around setting a cover (importing the file, deleting the one it replaces,
@@ -1075,7 +1110,7 @@ class LibraryRepository(
         // The collections table, not events. A set has its own row; writing this through the event
         // DAO would have stamped the cover onto whichever event happened to share the id.
         is ItemRef.Collection -> collectionDao.coverPathOf(owner.collectionId)
-        is ItemRef.Recording -> eventDao.recordCoverPathOf(owner.recordId)
+        is ItemRef.Recording -> recordDao.coverPathOf(owner.recordId)
     }
 
     private suspend fun writeCover(owner: ItemRef, cover: Cover?) {
@@ -1092,7 +1127,7 @@ class LibraryRepository(
             is ItemRef.Collection ->
                 collectionDao.updateCover(owner.collectionId, p, l, t, r, b, blur, dim)
             is ItemRef.Recording ->
-                eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur, dim)
+                recordDao.updateCover(owner.recordId, p, l, t, r, b, blur, dim)
         }
     }
 
@@ -1109,7 +1144,8 @@ class LibraryRepository(
         context: android.content.Context,
         owner: ItemRef,
         source: android.net.Uri,
-        nameHint: String
+        /** Names the stored file. The item's own name when not given. */
+        nameHint: String? = null
     ): Boolean {
         val id = when (owner) {
             is ItemRef.Event -> owner.eventId
@@ -1117,7 +1153,7 @@ class LibraryRepository(
             is ItemRef.Recording -> owner.recordId
         }
         val previous = currentCoverPath(owner)
-        val stored = CoverStore.importFrom(context, source, nameHint, id) ?: return false
+        val stored = CoverStore.importFrom(context, source, nameHint ?: nameOf(owner), id) ?: return false
 
         writeCover(owner, Cover(stored))
 
@@ -1292,25 +1328,6 @@ class LibraryRepository(
         return removed
     }
 
-    /** Files an event under a collection, refusing a move that would make a cycle. */
-    suspend fun setEventGroup(eventId: Long, groupId: Long?) = setEventParent(eventId, groupId)
-
-    /**
-     * Removes an event and releases its recordings.
-     *
-     * Deleting the container must never delete the contents — those recordings are the only copy of
-     * something that happened, and the event is just a label someone put on them.
-     */
-    suspend fun deleteEvent(eventId: Long) {
-        eventDao.unfileRecordsForEvent(eventId)
-        eventDao.deleteEvent(eventId)
-        // A set naming it must forget it, or the set keeps a reference to nothing and quietly
-        // resolves to fewer recordings than it says it holds.
-        collectionDao.forgetEvent(eventId)
-        reconcileMembership()
-        Log.d(tag, "Deleted event $eventId; its recordings are unfiled, not removed")
-    }
-
     /**
      * Files recordings under an event, or unfiles them when [eventId] is null.
      *
@@ -1378,26 +1395,6 @@ class LibraryRepository(
         collectionDao.insert(
             CollectionEntity(name = name.trim(), createdAt = System.currentTimeMillis())
         ).also { Log.d(tag, "Created collection '${name.trim()}' as $it") }
-
-    suspend fun renameCollection(collectionId: Long, name: String) =
-        collectionDao.rename(collectionId, name.trim())
-
-    suspend fun setCollectionNotes(collectionId: Long, notes: String) =
-        collectionDao.updateNotes(collectionId, notes)
-
-    /**
-     * Removes a set. Nothing it named goes with it.
-     *
-     * The whole difference from deleting an event: a set was a second view over things that live
-     * elsewhere, so this removes a grouping and no data. No reconcile either — membership in a set
-     * has never had anything to do with where a recording lives.
-     */
-    suspend fun deleteCollection(collectionId: Long) {
-        collectionDao.clearEvents(collectionId)
-        collectionDao.clearRecords(collectionId)
-        collectionDao.delete(collectionId)
-        Log.d(tag, "Deleted collection $collectionId; what it held is untouched")
-    }
 
     suspend fun addEventToCollection(collectionId: Long, eventId: Long) =
         collectionDao.addEvent(CollectionEventCrossRef(collectionId, eventId))
@@ -1483,28 +1480,6 @@ class LibraryRepository(
      */
     val allEventsInTree: Flow<List<EventEntity>> = eventDao.getAllEventsFlowUnfiltered()
 
-    suspend fun getEventGroup(groupId: Long): CollectionEntity? = collectionDao.get(groupId)
-
-    /**
-     * Recreates a pre-fold collection while restoring an old backup, as a plain event.
-     *
-     * Only [inga.bpmetrics.export.restoreBackup] calls this, and only for a file written at format
-     * 3 or earlier. Those collections were tiers — containers holding events — so a container is
-     * what they come back as. It carries no type: the tier marker meant something for one schema
-     * version and would now read as a user-chosen word.
-     */
-    suspend fun createEventGroup(name: String): Long {
-        val id = eventDao.insertEvent(
-            EventEntity(name = name.trim(), createdAt = System.currentTimeMillis())
-        )
-        Log.d(tag, "Restored legacy collection '${name.trim()}' as event $id")
-        reconcileMembership()
-        return id
-    }
-
-    suspend fun setEventGroupNotes(groupId: Long, notes: String) =
-        eventDao.updateNotes(groupId, notes)
-
     /**
      * Cuts a shorter recording out of a longer one.
      *
@@ -1577,7 +1552,7 @@ class LibraryRepository(
             newId
         )
 
-        // Written straight, not through [addTagToRecord]. That path enforces one tag per category
+        // Written straight, not through [addTag]. That path enforces one tag per category
         // and auto-renames from the naming category, both of which are for a tag being *chosen*;
         // this is a copy of a set that already obeys the rule, onto a recording that has just been
         // given the name the split asked for.
@@ -1628,28 +1603,17 @@ class LibraryRepository(
         )
 
         records.flatMap { it.tags }.distinctBy { it.tagId }.forEach { tag ->
-            addTagToRecord(newId, tag.tagId)
+            addTag(ItemRef.Recording(newId), tag.tagId)
         }
         updateRecordDeviceAndWearer(newId, first.metadata.deviceId, first.metadata.personId)
         first.metadata.eventId?.let { assignRecordsToEvent(listOf(newId), it) }
 
         if (deleteOriginals) {
-            records.forEach { deleteRecordWithId(it.metadata.recordId) }
+            records.forEach { delete(ItemRef.Recording(it.metadata.recordId)) }
         }
         Log.i(tag, "Merged ${records.size} recordings into $newId")
         return newId
     }
-
-    /**
-     * Files one collection inside another.
-     *
-     * @return false when the move would make a collection its own ancestor, or nest deeper than
-     *   a cycle. Refused here rather than in the UI: a cycle makes
-     *   every walk of the tree non-terminating, and no screen should be the only thing standing
-     *   between the database and an infinite loop.
-     */
-    suspend fun setEventGroupParent(groupId: Long, parentGroupId: Long?): Boolean =
-        setEventParent(groupId, parentGroupId)
 
     /**
      * Files one event inside another.
@@ -1735,7 +1699,7 @@ class LibraryRepository(
         replacing: Long? = null
     ): Long {
         if (replacing != null) {
-            deleteCollection(replacing)
+            delete(ItemRef.Collection(replacing))
             collectionDao.clearFrozenRecords(replacing)
         }
         val collectionId = collectionDao.insert(
@@ -1838,9 +1802,6 @@ class LibraryRepository(
     suspend fun getEventTagsForBackup(): Map<Long, List<TagEntity>> =
         tagDao.getAllEventTagsFlow().first()
             .groupBy({ it.ownerId }, { it.tag })
-
-    /** The tags applied to each collection, keyed by collection id. See [getEventTagsForBackup]. */
-    suspend fun getGroupTagsForBackup(): Map<Long, List<TagEntity>> = getEventTagsForBackup()
 
     /** Applies preferences from a backup. Returns how many were understood. */
     /**
@@ -2651,7 +2612,7 @@ class LibraryRepository(
      *
      *  the tag that was displaced, if one was, so a caller can say so.
      */
-    suspend fun addTagToRecord(recordId: Long, tagId: Long): TagEntity? {
+    private suspend fun tagRecord(recordId: Long, tagId: Long): TagEntity? {
         val tag = tagDao.getTagById(tagId)
 
         val displaced = tag?.let { incoming ->
@@ -2676,19 +2637,9 @@ class LibraryRepository(
     }
 
     /**
-     * Removes a tag from a record.
-     * 
-     * @param recordId The ID of the record.
-     * @param tagId The ID of the tag to remove.
-     */
-    suspend fun removeTagFromRecord(recordId: Long, tagId: Long) {
-        tagDao.untagRecord(recordId, tagId)
-    }
-
-    /**
      * Puts back a tag that was just removed, for Undo.
      *
-     * Not [addTagToRecord]: that displaces a sibling in the same category and may auto-name the
+     * Not [addTag]: that displaces a sibling in the same category and may auto-name the
      * recording, and an Undo has to return things to exactly how they were, not apply the tag anew.
      */
     suspend fun restoreRecordTag(recordId: Long, tagId: Long) {
@@ -2702,23 +2653,10 @@ class LibraryRepository(
     // A tag applied here reaches every recording underneath, resolved on read. Nothing is written
     // onto the recordings: see §2.5 of the product doc, and [EffectiveTagsResolver].
 
-    suspend fun addTagToEvent(eventId: Long, tagId: Long) =
-        tagDao.insertEventTagCrossRef(EventTagCrossRef(eventId, tagId))
-
-    suspend fun removeTagFromEvent(eventId: Long, tagId: Long) = tagDao.untagEvent(eventId, tagId)
-
-    fun getTagsForEvent(eventId: Long): Flow<List<TagEntity>> = tagDao.getTagsForEventFlow(eventId)
-
     // Collections are events, so their tags live in `event_tag_cross_ref` alongside everything
     // else — migration 23→24 copied the existing ones across. These three used to write and read
     // `event_group_tag_cross_ref`, which would have put new tags somewhere inheritance no longer
     // looks: applied, visible on the collection, and silently absent from every recording under it.
-
-    suspend fun addTagToGroup(groupId: Long, tagId: Long) = addTagToEvent(groupId, tagId)
-
-    suspend fun removeTagFromGroup(groupId: Long, tagId: Long) = removeTagFromEvent(groupId, tagId)
-
-    fun getTagsForGroup(groupId: Long): Flow<List<TagEntity>> = getTagsForEvent(groupId)
 
     /** Every tag in the library, live, for the filter bar to offer. */
     val allTags: Flow<List<TagEntity>> = tagDao.getAllTagsFlow()
@@ -2726,9 +2664,6 @@ class LibraryRepository(
     /** Every event's tags, indexed by event. Live, so applying one anywhere updates every reader. */
     val allEventTags: Flow<Map<Long, List<TagEntity>>> =
         tagDao.getAllEventTagsFlow().map { EffectiveTagsResolver.index(it) }
-
-    /** Collections are events, so their tags come from the same index. */
-    val allGroupTags: Flow<Map<Long, List<TagEntity>>> get() = allEventTags
 
     /**
      * Effective tags for every recording in the library, keyed by record id.
@@ -2752,13 +2687,6 @@ class LibraryRepository(
             events = events
         )
     }
-
-    /**
-     * Returns a flow of all tags currently assigned to a specific record.
-     * 
-     * @param recordId The ID of the record.
-     */
-    fun getTagsForRecord(recordId: Long): Flow<List<TagEntity>> = tagDao.getTagsForRecordFlow(recordId)
 
     /**
      * Stops the background collector started in [init].
