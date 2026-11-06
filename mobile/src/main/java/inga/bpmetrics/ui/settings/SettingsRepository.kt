@@ -12,7 +12,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import inga.bpmetrics.export.ImageExporter
+import inga.bpmetrics.export.VideoFrameRenderer
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.ui.settings.SettingsRepository.PreferencesKeys.DEFAULT_NAMING_CATEGORY_ID
 import kotlinx.coroutines.flow.Flow

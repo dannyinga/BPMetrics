@@ -66,7 +66,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
 import inga.bpmetrics.export.ExportPreset
-import inga.bpmetrics.export.ImageExporter
+import inga.bpmetrics.export.VideoFrameRenderer
 import inga.bpmetrics.export.WordmarkCorner
 import inga.bpmetrics.export.PillCorner
 import inga.bpmetrics.export.VideoExporter
@@ -654,7 +654,7 @@ private fun renderPreviewFrame(
     // Clock-aligned whenever there is footage, matching what the export will do. Elapsed alignment
     // starts every recording at 0:00, which is only right when there is no video to agree with.
     // Always clock-aligned, matching the export.
-    val aligned = ImageExporter.alignRecords(records)
+    val aligned = VideoFrameRenderer.alignRecords(records)
 
     // The clip's own window on the shared timeline, worked out by the clip itself so this and the
     // render cannot reach different answers. Scrubbing moves through the *clip*, not through the
@@ -705,7 +705,7 @@ private fun renderPreviewFrame(
         }
     }
 
-    ImageExporter.renderAlignedRecordsOnCanvas(
+    VideoFrameRenderer.renderAlignedRecordsOnCanvas(
         canvas = canvas,
         aligned = aligned,
         content = content,

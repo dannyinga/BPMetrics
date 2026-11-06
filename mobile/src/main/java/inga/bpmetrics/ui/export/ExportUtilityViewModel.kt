@@ -7,8 +7,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordWithPoints
+import inga.bpmetrics.export.ChartKit
 import inga.bpmetrics.export.ExportPreset
-import inga.bpmetrics.export.TimelineImageExporter
+import inga.bpmetrics.export.ImageRenderer
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.ui.analysis.EventAnalysis
 import inga.bpmetrics.library.ExportPresetEntity
@@ -930,7 +931,7 @@ class ExportUtilityViewModel(
     ): inga.bpmetrics.export.ExportRequest.Video {
         // Always clock-aligned. A recording happened at a particular time, and starting it at 0:00
         // of a video only ever looked right when the two happened to begin together.
-        val timeline = inga.bpmetrics.export.ImageExporter.timelineFor(forRecords)
+        val timeline = inga.bpmetrics.export.VideoFrameRenderer.timelineFor(forRecords)
 
         // The clip's own window on the shared timeline. Without this the export spans the whole
         // recording and the footage drifts out of sync within seconds.
@@ -992,7 +993,7 @@ class ExportUtilityViewModel(
         return plan.mapNotNull { entry ->
             val spec = buildTimelineSpec(entry, preset, colours, names, eventNames, crop, override)
                 ?: return@mapNotNull null
-            val bitmap = runCatching { TimelineImageExporter.render(spec) }.getOrNull()
+            val bitmap = runCatching { ImageRenderer.render(spec) }.getOrNull()
                 ?: return@mapNotNull null
             // Named by what the picture is titled, not by what the plan called it, so a typed
             // title reaches the caption in step 4 and the filename on disk as well as the graph.
@@ -1015,7 +1016,7 @@ class ExportUtilityViewModel(
         eventNames: Map<Long, String>,
         crop: ImageCrop,
         titleOverride: String?
-    ): TimelineImageExporter.Spec? {
+    ): ImageRenderer.Spec? {
         val records = entry.records.filter { it.dataPoints.isNotEmpty() }
         if (records.isEmpty()) return null
 
@@ -1029,7 +1030,7 @@ class ExportUtilityViewModel(
         // One curve per person, not per recording: someone whose watch dropped out mid-evening has
         // two recordings and is still one line on the graph and one row in the summary.
         val byPerson = records.groupBy { it.metadata.personId ?: -it.metadata.recordId }
-        val series = byPerson.mapNotNull { (_, group) ->
+        val series = byPerson.entries.mapIndexedNotNull { index, (_, group) ->
             val first = group.first()
             val points = group
                 .flatMap { rec ->
@@ -1040,15 +1041,17 @@ class ExportUtilityViewModel(
                 .filter { (at, _) -> at in windowStart..windowEnd }
                 .sortedBy { it.first }
                 .map { (at, bpm) ->
-                    TimelineImageExporter.Series.Point(at - windowStart, bpm)
+                    ImageRenderer.Series.Point(at - windowStart, bpm)
                 }
-            if (points.isEmpty()) return@mapNotNull null
+            if (points.isEmpty()) return@mapIndexedNotNull null
 
-            TimelineImageExporter.Series(
-                label = names[first.metadata.personId]
-                    ?: first.metadata.wearerName.takeIf { it.isNotBlank() }
-                    ?: first.metadata.title,
-                colorArgb = colours[first.metadata.recordId] ?: preset.lowBpmColor,
+            ImageRenderer.Series(
+                // The person's name where there's a person, else the same wearer label a video
+                // puts on its readout.
+                label = names[first.metadata.personId] ?: ChartKit.wearerLabel(first),
+                // Their colour, else the palette by position, as a video does. This fell back to
+                // the preset's low colour, so two unassigned people came out the same green.
+                colorArgb = ChartKit.colourFor(first.metadata.recordId, index, colours),
                 points = points
             )
         }
@@ -1065,7 +1068,7 @@ class ExportUtilityViewModel(
                     .maxOf { it.metadata.startTime + it.metadata.durationMs }
                     .coerceAtMost(windowEnd)
                 if (to <= from) return@mapNotNull null
-                TimelineImageExporter.Section(
+                ImageRenderer.Section(
                     label = eventNames[eventId] ?: "Event",
                     startMs = from - windowStart,
                     endMs = to - windowStart
@@ -1073,7 +1076,7 @@ class ExportUtilityViewModel(
             }
             .sortedBy { it.startMs }
 
-        return TimelineImageExporter.Spec(
+        return ImageRenderer.Spec(
             title = titleOverride ?: entry.label,
             windowStartWallClockMs = windowStart,
             windowEndWallClockMs = windowEnd,

@@ -12,7 +12,7 @@ import org.junit.Test
  * The clock-time cases are the ones that keep a video in sync: a record must land at the same
  * offset it would occupy if it had been exported on its own.
  */
-class ImageExporterAlignmentTest {
+class VideoFrameAlignmentTest {
 
     private val tenAm = 1_700_000_000_000L
 
@@ -54,7 +54,7 @@ class ImageExporterAlignmentTest {
         // Started three minutes after the first one.
         val second = record(id = 2, startTime = tenAm + 180_000L, durationMs = 60_000L)
 
-        val aligned = ImageExporter.alignRecords(listOf(first, second))
+        val aligned = VideoFrameRenderer.alignRecords(listOf(first, second))
 
         assertEquals(tenAm, aligned.timeline.originWallClockMs)
         assertEquals(0L, aligned.records[0].dataPoints.first().timestamp)
@@ -69,8 +69,8 @@ class ImageExporterAlignmentTest {
         val early = record(id = 1, startTime = tenAm, durationMs = 60_000L)
         val late = record(id = 2, startTime = tenAm + 180_000L, durationMs = 60_000L)
 
-        val forward = ImageExporter.alignRecords(listOf(early, late))
-        val reversed = ImageExporter.alignRecords(listOf(late, early))
+        val forward = VideoFrameRenderer.alignRecords(listOf(early, late))
+        val reversed = VideoFrameRenderer.alignRecords(listOf(late, early))
 
         assertEquals(forward.timeline, reversed.timeline)
         assertEquals(0L, reversed.records[1].dataPoints.first().timestamp)
@@ -86,8 +86,8 @@ class ImageExporterAlignmentTest {
         val early = record(id = 1, startTime = tenAm, durationMs = 60_000L)
         val late = record(id = 2, startTime = tenAm + gapMs, durationMs = 60_000L)
 
-        val alone = ImageExporter.alignRecords(listOf(late))
-        val together = ImageExporter.alignRecords(listOf(early, late))
+        val alone = VideoFrameRenderer.alignRecords(listOf(late))
+        val together = VideoFrameRenderer.alignRecords(listOf(early, late))
 
         val aloneFirst = alone.records.first().dataPoints.first().timestamp
         val togetherFirst = together.records[1].dataPoints.first().timestamp
@@ -104,7 +104,7 @@ class ImageExporterAlignmentTest {
         val delayed = record(id = 1, startTime = tenAm, durationMs = 30_000L, firstSampleOffsetMs = 5_000L)
         val prompt = record(id = 2, startTime = tenAm, durationMs = 30_000L)
 
-        val aligned = ImageExporter.alignRecords(listOf(delayed, prompt))
+        val aligned = VideoFrameRenderer.alignRecords(listOf(delayed, prompt))
 
         assertEquals(5_000L, aligned.records[0].dataPoints.first().timestamp)
         assertEquals(0L, aligned.records[1].dataPoints.first().timestamp)
@@ -117,7 +117,7 @@ class ImageExporterAlignmentTest {
             record(id = 2, startTime = tenAm + 180_000L, durationMs = 90_000L)
         )
 
-        assertEquals(ImageExporter.alignRecords(records).timeline, ImageExporter.timelineFor(records))
+        assertEquals(VideoFrameRenderer.alignRecords(records).timeline, VideoFrameRenderer.timelineFor(records))
     }
 
     @Test
@@ -127,14 +127,14 @@ class ImageExporterAlignmentTest {
             record(id = 9, startTime = tenAm + 5_000L, durationMs = 10_000L)
         )
 
-        val aligned = ImageExporter.alignRecords(records)
+        val aligned = VideoFrameRenderer.alignRecords(records)
 
         assertEquals(listOf(7L, 9L), aligned.records.map { it.metadata.recordId })
     }
 
     @Test
     fun `an empty selection yields an empty timeline rather than failing`() {
-        val aligned = ImageExporter.alignRecords(emptyList())
+        val aligned = VideoFrameRenderer.alignRecords(emptyList())
 
         assertEquals(emptyList<BpmRecordWithPoints>(), aligned.records)
         assertEquals(0L, aligned.timeline.durationMs)

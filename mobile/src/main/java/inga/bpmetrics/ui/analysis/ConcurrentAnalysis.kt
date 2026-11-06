@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
-import inga.bpmetrics.export.ImageExporter
+import inga.bpmetrics.export.VideoFrameRenderer
 import inga.bpmetrics.library.clock
 import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.BpmZones

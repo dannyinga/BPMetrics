@@ -151,7 +151,7 @@ class VideoTimingTest {
     @Test
     fun `a clip sits where it was filmed on the recording timeline`() {
         // Recording began at noon; filming began two minutes in and ran for one.
-        val timeline = ImageExporter.Timeline(originWallClockMs = noon, durationMs = 10 * minute)
+        val timeline = VideoFrameRenderer.Timeline(originWallClockMs = noon, durationMs = 10 * minute)
 
         val window = clip(noon + 2 * minute, minute).windowOn(timeline, syncOffsetMs = 0L)
 
@@ -163,7 +163,7 @@ class VideoTimingTest {
     fun `the sync offset moves the clip along the timeline`() {
         // What the preview was missing: it computed this window without the offset, so nudging the
         // setting moved the exported video and left the preview showing the old alignment.
-        val timeline = ImageExporter.Timeline(originWallClockMs = noon, durationMs = 10 * minute)
+        val timeline = VideoFrameRenderer.Timeline(originWallClockMs = noon, durationMs = 10 * minute)
         val filmed = clip(noon + 2 * minute, minute)
 
         val ahead = filmed.windowOn(timeline, syncOffsetMs = 5_000L)
@@ -178,7 +178,7 @@ class VideoTimingTest {
 
     @Test
     fun `a window cannot start before the timeline or run past its end`() {
-        val timeline = ImageExporter.Timeline(originWallClockMs = noon, durationMs = 90_000L)
+        val timeline = VideoFrameRenderer.Timeline(originWallClockMs = noon, durationMs = 90_000L)
 
         val clamped = clip(noon, 10 * minute).windowOn(timeline, syncOffsetMs = -60_000L)
 

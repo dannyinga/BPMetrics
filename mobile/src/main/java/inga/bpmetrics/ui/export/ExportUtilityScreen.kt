@@ -261,7 +261,7 @@ fun ExportUtilityScreen(
 
     LaunchedEffect(presetToExport) {
         presetToExport?.let {
-            savePresetLauncher.launch("${it.name.replace(" ", "_")}.bpmpreset")
+            savePresetLauncher.launch("${inga.bpmetrics.export.FileNames.of(it.name)}.bpmpreset")
         }
     }
 
@@ -591,7 +591,7 @@ fun ExportUtilityScreen(
                         onSaveAll = {
                             val images = rendered.orEmpty()
                             val written = images.count { image ->
-                                inga.bpmetrics.export.ExportUtils.saveImageToGallery(
+                                inga.bpmetrics.export.MediaStoreSaver.saveImage(
                                     context, image.bitmap, "${sourceLabel}_${image.label}"
                                 ) != null
                             }

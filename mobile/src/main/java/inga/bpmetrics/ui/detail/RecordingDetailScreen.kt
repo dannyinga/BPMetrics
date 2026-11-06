@@ -207,7 +207,7 @@ fun RecordingDetailScreen(
                         leadingIcon = { Icon(Icons.Default.Save, contentDescription = null) },
                         onClick = {
                             menuOpen = false
-                            r?.let { saveCsv.launch(it.metadata.title.replace(" ", "_") + ".csv") }
+                            r?.let { saveCsv.launch(inga.bpmetrics.export.FileNames.of(it.metadata.title) + ".csv") }
                         }
                     )
                     DropdownMenuItem(

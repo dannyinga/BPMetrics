@@ -126,7 +126,7 @@ object CsvExporter {
      * @param record The record to share.
      */
     fun shareCsv(context: Context, record: BpmRecordWithPoints) {
-        val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
+        val sanitizedTitle = FileNames.of(record.metadata.title)
         val fileName = "${sanitizedTitle}_data.csv"
         val tempFile = File(context.cacheDir, fileName)
 
@@ -144,7 +144,7 @@ object CsvExporter {
     fun shareCsvs(context: Context, records: List<BpmRecordWithPoints>) {
         if (records.isEmpty()) return
         val files = records.map { record ->
-            val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
+            val sanitizedTitle = FileNames.of(record.metadata.title)
             val fileName = "${sanitizedTitle}_data.csv"
             val tempFile = File(context.cacheDir, fileName)
             try {
@@ -168,7 +168,7 @@ object CsvExporter {
             val parentUri = DocumentsContract.buildDocumentUriUsingTree(folderUri, parentId)
 
             records.forEach { record ->
-                val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
+                val sanitizedTitle = FileNames.of(record.metadata.title)
                 val fileName = "${sanitizedTitle}_data.csv"
 
                 // Create document inside parent folder

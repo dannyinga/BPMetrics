@@ -15,7 +15,7 @@ import org.junit.Test
  * nothing else. Video frames are rendered independently, and a position carried between them would
  * come out different on a re-render — so these tests pin the placement to the timestamp alone.
  */
-class ImageExporterRankingTest {
+class VideoFrameRankingTest {
 
     /** A record whose readings are [bpms], one per second from the start of the timeline. */
     private fun record(id: Long, bpms: List<Double>, startOffsetMs: Long = 0L): BpmRecordWithPoints {
@@ -47,7 +47,7 @@ class ImageExporterRankingTest {
 
     @Test
     fun `the fastest heart rate takes the top place`() {
-        val slots = ImageExporter.animatedRankSlots(
+        val slots = VideoFrameRenderer.animatedRankSlots(
             listOf(steady(1, 120.0), steady(2, 150.0), steady(3, 90.0)),
             playhead = 30_000.0
         )
@@ -59,7 +59,7 @@ class ImageExporterRankingTest {
 
     @Test
     fun `a settled stack sits on whole places rather than between them`() {
-        val slots = ImageExporter.animatedRankSlots(
+        val slots = VideoFrameRenderer.animatedRankSlots(
             listOf(steady(1, 120.0), steady(2, 150.0)),
             playhead = 30_000.0
         )
@@ -79,11 +79,11 @@ class ImageExporterRankingTest {
 
     @Test
     fun `a wearer who speeds past another ends up above them`() {
-        val before = ImageExporter.animatedRankSlots(overtaking(), playhead = 50_000.0)
+        val before = VideoFrameRenderer.animatedRankSlots(overtaking(), playhead = 50_000.0)
         assertEquals("slower wearer starts below", 1f, before[0], TOLERANCE)
         assertEquals(0f, before[1], TOLERANCE)
 
-        val after = ImageExporter.animatedRankSlots(overtaking(), playhead = 70_000.0)
+        val after = VideoFrameRenderer.animatedRankSlots(overtaking(), playhead = 70_000.0)
         assertEquals("and finishes above", 0f, after[0], TOLERANCE)
         assertEquals(1f, after[1], TOLERANCE)
     }
@@ -91,7 +91,7 @@ class ImageExporterRankingTest {
     @Test
     fun `the change of place is a slide rather than a jump`() {
         // A quarter of the way through, both pills are caught between places.
-        val slots = ImageExporter.animatedRankSlots(overtaking(), playhead = 59_650.0)
+        val slots = VideoFrameRenderer.animatedRankSlots(overtaking(), playhead = 59_650.0)
 
         assertTrue("expected a part-way position, got ${slots[0]}", slots[0] > 0f && slots[0] < 1f)
         assertTrue("expected a part-way position, got ${slots[1]}", slots[1] > 0f && slots[1] < 1f)
@@ -105,7 +105,7 @@ class ImageExporterRankingTest {
         // space in opposite directions. There is no arrangement in which they avoid each other —
         // which is why the draw order puts whichever is moving furthest on top, and why each pill
         // carries a rim in its wearer's colour so the boundary survives the overlap.
-        val slots = ImageExporter.animatedRankSlots(overtaking(), playhead = 59_800.0)
+        val slots = VideoFrameRenderer.animatedRankSlots(overtaking(), playhead = 59_800.0)
 
         assertEquals(0.5f, slots[0], 0.05f)
         assertEquals(0.5f, slots[1], 0.05f)
@@ -114,7 +114,7 @@ class ImageExporterRankingTest {
     @Test
     fun `the slide is over within its allotted time`() {
         // The crossing is at 59.5s and the slide lasts 600ms, so by 60.2s it is done.
-        val slots = ImageExporter.animatedRankSlots(overtaking(), playhead = 60_200.0)
+        val slots = VideoFrameRenderer.animatedRankSlots(overtaking(), playhead = 60_200.0)
 
         assertEquals(0f, slots[0], TOLERANCE)
         assertEquals(1f, slots[1], TOLERANCE)
@@ -128,7 +128,7 @@ class ImageExporterRankingTest {
             steady(2, 80.0)
         )
 
-        val slots = ImageExporter.animatedRankSlots(records, playhead = 90_000.0)
+        val slots = VideoFrameRenderer.animatedRankSlots(records, playhead = 90_000.0)
 
         assertEquals("the reading wearer holds the top place", 0f, slots[1], TOLERANCE)
         assertEquals(1f, slots[0], TOLERANCE)
@@ -136,7 +136,7 @@ class ImageExporterRankingTest {
 
     @Test
     fun `wearers on the same heart rate keep the order they were given`() {
-        val slots = ImageExporter.animatedRankSlots(
+        val slots = VideoFrameRenderer.animatedRankSlots(
             listOf(steady(1, 100.0), steady(2, 100.0), steady(3, 100.0)),
             playhead = 30_000.0
         )
@@ -154,7 +154,7 @@ class ImageExporterRankingTest {
         // Whatever the pills are doing, their positions must still add up to the same total, or
         // the block would drift up or down the graph mid-swap and take the clock with it.
         listOf(50_000.0, 59_500.0, 59_800.0, 60_100.0, 70_000.0).forEach { playhead ->
-            val total = ImageExporter.animatedRankSlots(records, playhead).sum()
+            val total = VideoFrameRenderer.animatedRankSlots(records, playhead).sum()
             assertEquals("at $playhead", 3f, total, TOLERANCE)
         }
     }
@@ -163,15 +163,15 @@ class ImageExporterRankingTest {
     fun `the same instant always places the pills identically`() {
         // Frames are rendered independently and not necessarily in order, so a frame drawn again
         // after a seek has to come out exactly as it did the first time.
-        val first = ImageExporter.animatedRankSlots(overtaking(), playhead = 59_800.0)
-        val second = ImageExporter.animatedRankSlots(overtaking(), playhead = 59_800.0)
+        val first = VideoFrameRenderer.animatedRankSlots(overtaking(), playhead = 59_800.0)
+        val second = VideoFrameRenderer.animatedRankSlots(overtaking(), playhead = 59_800.0)
 
         assertEquals(first.toList(), second.toList())
     }
 
     @Test
     fun `a lone wearer holds the only place`() {
-        val slots = ImageExporter.animatedRankSlots(listOf(steady(1, 100.0)), playhead = 30_000.0)
+        val slots = VideoFrameRenderer.animatedRankSlots(listOf(steady(1, 100.0)), playhead = 30_000.0)
 
         assertEquals(1, slots.size)
         assertEquals(0f, slots[0], TOLERANCE)
@@ -184,9 +184,9 @@ class ImageExporterRankingTest {
         val other = steady(2, 61.0, seconds = 3_600)
 
         // At 1000s the first wearer is on 60 + (1000 % 100) = 60, just below the other.
-        assertEquals(listOf(1, 0), ImageExporter.rankOrderAt(listOf(long, other), 1_000_000.0))
+        assertEquals(listOf(1, 0), VideoFrameRenderer.rankOrderAt(listOf(long, other), 1_000_000.0))
         // At 1050s it is on 110, well above.
-        assertEquals(listOf(0, 1), ImageExporter.rankOrderAt(listOf(long, other), 1_050_000.0))
+        assertEquals(listOf(0, 1), VideoFrameRenderer.rankOrderAt(listOf(long, other), 1_050_000.0))
     }
 
     private companion object {

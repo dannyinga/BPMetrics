@@ -505,6 +505,21 @@ Ambient mode and a tile are post-1.0.
 
 **Commit:** `refactor(export): shared chart kit, honest names, one way to save`
 
+**As built:**
+- **S14.1:** `VideoFrameRenderer` and `ImageRenderer`, renamed with history kept, and their tests with them (`VideoFrameAlignmentTest`, `VideoFrameRankingTest`, `ImageRendererSpecTest`).
+- **S14.2:** `export/ChartKit.kt` holds the BPM range, gridlines, colour, wearer label and distinct labels, `ellipsize`, paint, scale, zone and gap constant. Each renderer's private copy is deleted.
+  - **One range:** padded, at least 20 bpm tall, padding kept within 30–220, then widened to whole gridline steps. The picture's gridlines are now round numbers, as the video's already were.
+  - **Colours:** the image builder uses `ChartKit.colourFor`, so a recording nobody is assigned to gets a palette colour by position in a picture too.
+  - **Scale:** off the short edge, 1 at 1080. A square video used to measure itself against a 1920 width and drew at 0.28× in a half-width frame, against 0.5× for portrait. It now matches portrait (see the note below).
+- **S14.3:** the single-recording video path (`renderOnCanvas` and its own range) is deleted. Every video goes through the aligned path, so one recording is drawn exactly as the preview draws it (Audit #27).
+  - **Gap check (#26):** the line to the end of the plot compared pixels with milliseconds. It now converts the pixels to time first.
+- **S14.4:** `export/MediaStoreSaver.kt`, `saveVideo` and `saveImage` over one `save`. Both now delete their gallery entry if writing fails; the video saver used to leave a hidden pending one behind.
+  - **One file name rule:** `FileNames.of(title)` keeps letters in any language ("Café Tacvba", which the old ASCII rule turned into "Caf__Tacvba"), digits, `-` and `_`, and caps the length at 80. It replaced five copies in two variants, plus the suggested names for CSV and preset saves.
+- **S14.5:** `RendererReferenceTest` (androidTest) draws a fixed two-person input with each renderer and compares it with `src/androidTest/assets/reference/`. A pixel counts as different past 8 steps in any channel, and the test fails past 0.5% of pixels. The references were recorded on Pixel_7_Pro, checked by eye, and the test re-records a missing one.
+  - **Also:** `MediaStoreSaverTest` checks that a picture saves and that a failed video copy leaves nothing behind, and `ChartKitTest` covers the range, colours, labels and file names.
+- **Note for later: readout names on narrow frames.** At the corrected square scale, a half-width frame gives the pill's name about 29 px, so "Danny" shows as "D…" and "Bethany" not at all. A portrait canvas with the same frame was already doing this. The pill's width budget (22% of the frame) doesn't grow with its height cap.
+- **Verified:** all unit tests and both apps build, and 5 device tests pass on the emulator.
+
 ---
 
 ## Phase F — One component per job

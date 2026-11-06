@@ -25,9 +25,13 @@ import androidx.core.graphics.withClip
 import kotlin.math.abs
 
 /**
- * Handles static image rendering of BPM graphs and shared configuration for rendering.
+ * Draws one frame of a video: the moving graph, its readouts, header and clock, on a transparent
+ * canvas laid over the footage. Also what the Look step previews with, so the two agree.
+ *
+ * Named for what it does. It was `ImageExporter`, though it never exported an image; the picture
+ * export is [ImageRenderer].
  */
-object ImageExporter {
+object VideoFrameRenderer {
 
 
 
@@ -63,12 +67,12 @@ object ImageExporter {
         
         val firstPoint = points.first()
         if (timestampMs < firstPoint.timestamp) {
-            return if (firstPoint.timestamp - timestampMs <= BpmRecord.GAP_THRESHOLD_MS) firstPoint.bpm else null
+            return if (firstPoint.timestamp - timestampMs <= ChartKit.GAP_MS) firstPoint.bpm else null
         }
         
         val lastPoint = points.last()
         if (timestampMs > lastPoint.timestamp) {
-            return if (timestampMs - lastPoint.timestamp <= BpmRecord.GAP_THRESHOLD_MS) lastPoint.bpm else null
+            return if (timestampMs - lastPoint.timestamp <= ChartKit.GAP_MS) lastPoint.bpm else null
         }
         
         // Binary search rather than a scan: this runs for every wearer on every frame, and the
@@ -88,100 +92,12 @@ object ImageExporter {
         
         val t1 = p1.timestamp.toDouble()
         val t2 = p2.timestamp.toDouble()
-        if (t2 - t1 > BpmRecord.GAP_THRESHOLD_MS) {
+        if (t2 - t1 > ChartKit.GAP_MS) {
             return null
         }
         
         val ratio = (timestampMs - t1) / (t2 - t1)
         return p1.bpm + ratio * (p2.bpm - p1.bpm)
-    }
-
-    /**
-     * Core rendering logic that draws the BPM graph onto a [Canvas].
-     *
-     * This method handles drawing the background, grid, axes, data curve, and current stats overlay.
-     * It is used for both static image export and video frame generation.
-     *
-     * @param canvas The canvas to draw on.
-     * @param record The BPM record data.
-     * @param content what is drawn: the recording, the window, the caption, colours and photos.
-     * @param look how it looks: the preset, which also gives the scrolling window's width.
-     * @param currentTimeMs Optional current playback time for video rendering (affects scrolling window).
-     * @param graphRect the normalized rectangle (0-1) the graph is drawn in. The preset's own
-     *   frame for one curve by default.
-     */
-    fun renderOnCanvas(
-        canvas: Canvas,
-        record: BpmRecordWithPoints,
-        content: ExportContent,
-        look: ExportPreset,
-        currentTimeMs: Double? = null,
-        graphRect: RectF = look.frameFor(1).toRectF()
-    ) = renderOnCanvasInZone(
-        canvas, record, Frame.of(content, look, listOf(record.metadata)),
-        currentTimeMs, look.windowSizeMs, graphRect
-    )
-
-    private fun renderOnCanvasInZone(
-        canvas: Canvas,
-        record: BpmRecordWithPoints,
-        config: Frame,
-        currentTimeMs: Double?,
-        windowSizeMs: Long?,
-        graphRect: RectF
-    ) {
-        if (record.dataPoints.isEmpty()) return
-
-        // 1. Setup Dimensions and Scaling
-        val dims = RenderingDimensions(canvas, graphRect, config)
-        val scaleFactor = dims.scaleFactor
-
-        // 2. Setup Ranges (Using expanded snippet bounds for stability)
-        val ranges = calculateRanges(record, config, windowSizeMs)
-
-        // 3. Setup Viewport (Time window)
-        val viewport = calculateViewport(currentTimeMs, windowSizeMs, config, record)
-
-        // 4. Draw Background with Rounded Corners
-        val paint = Paint().apply { isAntiAlias = true; fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals }
-        drawContainer(canvas, dims, config, paint)
-
-        // 5. Draw Grid and Axes (Clipped to Graph Area)
-        // Origin zero, because this path's playhead is already an absolute timestamp — the
-        // multi-record one is relative to a shared timeline and needs its origin added back.
-        // Passing the record's start time here added it twice and put the clock hours out.
-        drawGridAndAxes(canvas, dims, ranges, config, paint, viewport, timelineOriginMs = 0L)
-
-        // 6. Draw Data Curve (Strictly clipped to 85% width to prevent HUD occlusion)
-        drawDataCurve(canvas, dims, ranges, viewport, record, config, paint)
-
-        // 7. Draw Glowing Head (Clipped to Graph Area)
-        drawGlowingHead(canvas, dims, ranges, viewport, record, config, 0L, paint)
-
-        // 8. The readout, drawn by the same code the multi-wearer path uses.
-        //
-        // There were two implementations of "show the current reading", and the solo one — the
-        // commonest export there is — never received any of the work done on the other: no
-        // photograph, no name, no configurable size, still a pulsing heart beside the digits. Two
-        // sites drawing the same thing is how one of them quietly stops matching, and this is that
-        // having already happened.
-        if (config.look.showCurrentStats) {
-            drawMultiStatsHUD(
-                canvas = canvas,
-                dims = dims,
-                viewport = viewport,
-                records = listOf(record),
-                config = config,
-                ranges = ranges,
-                // Absolute already on this path — see the note beside drawGridAndAxes above.
-                timelineOriginMs = 0L,
-                paint = paint
-            )
-        }
-
-        drawWordmark(canvas, dims, config, paint)
-
-        canvas.restore() // Final restore from drawContainer's save
     }
 
     /**
@@ -497,7 +413,7 @@ object ImageExporter {
             paint.textAlign = Paint.Align.CENTER
 
             val room = (dims.graphWidth - (clockWidth + gap) * 2f).coerceAtLeast(0f)
-            canvas.drawText(ellipsize(ranges.title, room, paint), centreX, baseline, paint)
+            canvas.drawText(ChartKit.ellipsize(ranges.title, room, paint), centreX, baseline, paint)
         }
 
         if (clock != null) {
@@ -527,7 +443,7 @@ object ImageExporter {
         // at a time.
         ClockMode.CLOCK -> StringFormatHelpers.getTimeString(
             timelineOriginMs + viewport.playhead.toLong(),
-            java.time.ZoneId.of(config.zoneId),
+            ChartKit.zone(config.zoneId),
             withSeconds = true
         )
         // From the start of the session, which is well defined however many people are on the
@@ -604,7 +520,7 @@ object ImageExporter {
                         val cx = (lastX + x) / 2f
                         
                         val prevTime = if (index == 0) viewport.start else pastPoints[index - 1].timestamp.toDouble()
-                        val isGap = (p.timestamp - prevTime) > BpmRecord.GAP_THRESHOLD_MS
+                        val isGap = (p.timestamp - prevTime) > ChartKit.GAP_MS
 
                         if (isGap) {
                             pastDashedPath.moveTo(lastX, lastY)
@@ -620,7 +536,7 @@ object ImageExporter {
                 }
 
                 // Connect past to playhead
-                val isGapToPlayhead = pastPoints.isNotEmpty() && (viewport.playhead - pastPoints.last().timestamp) > BpmRecord.GAP_THRESHOLD_MS
+                val isGapToPlayhead = pastPoints.isNotEmpty() && (viewport.playhead - pastPoints.last().timestamp) > ChartKit.GAP_MS
                 if (isGapToPlayhead) {
                     pastDashedPath.moveTo(lastX, lastY)
                     pastDashedPath.cubicTo(cxMid, lastY, cxMid, midY, playheadX, midY)
@@ -643,7 +559,7 @@ object ImageExporter {
                     val cx = (lastX + x) / 2f
                     
                     val prevTime = if (index == 0) viewport.playhead else futurePoints[index - 1].timestamp.toDouble()
-                    val isGap = (p.timestamp - prevTime) > BpmRecord.GAP_THRESHOLD_MS
+                    val isGap = (p.timestamp - prevTime) > ChartKit.GAP_MS
 
                     if (isGap) {
                         futureDashedPath.moveTo(lastX, lastY)
@@ -669,7 +585,10 @@ object ImageExporter {
 
                 if (endX > lastX) {
                     val cx = (lastX + endX) / 2f
-                    val isGapToEnd = (endX - lastPointX) > BpmRecord.GAP_THRESHOLD_MS
+                    // In time, not pixels. This compared the segment's width in pixels with a gap in
+                    // milliseconds, so it was never a gap and the dashed end was never drawn (Audit #26).
+                    val msAcross = (endX - lastX) / dims.graphWidth * viewport.duration
+                    val isGapToEnd = msAcross > ChartKit.GAP_MS
                     if (isGapToEnd) {
                         futureDashedPath.moveTo(lastX, lastY)
                         futureDashedPath.cubicTo(cx, lastY, cx, finalY, endX, finalY)
@@ -711,7 +630,7 @@ object ImageExporter {
         firstPointX: Float,
         lastPointX: Float
     ) {
-        val paint = Paint().apply { isAntiAlias = true; fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals }
+        val paint = ChartKit.paint()
 
         // --- 1. DEFINE HORIZONTAL ALPHA MASKS ---
         val pastAlphaMask = LinearGradient(
@@ -801,21 +720,7 @@ object ImageExporter {
      * assigned to.
      */
     private fun colorForRecord(record: BpmRecordWithPoints, index: Int, config: Frame): Int =
-        config.content.colours[record.metadata.recordId]
-            ?: PersonColors.defaultFor(index)
-
-    /**
-     * Shortens [text] with a trailing ellipsis until it fits [maxWidth] at the paint's current
-     * text settings. Returns [text] untouched when it already fits.
-     */
-    private fun ellipsize(text: String, maxWidth: Float, paint: Paint): String {
-        if (maxWidth <= 0f) return ""
-        if (paint.measureText(text) <= maxWidth) return text
-
-        var end = text.length
-        while (end > 0 && paint.measureText(text.take(end) + "…") > maxWidth) end--
-        return if (end <= 0) "" else text.take(end) + "…"
-    }
+        ChartKit.colourFor(record.metadata.recordId, index, config.content.colours)
 
     /**
      * The name to show for whoever wore the watch, falling back to the device then the title.
@@ -823,35 +728,6 @@ object ImageExporter {
      * The title is only used when it says something. A pill reading "Untitled 4" over someone's
      * heart rate is worse than one reading "Unknown", and it goes out in a video.
      */
-    /**
-     * Each record's label, told apart where two would read the same.
-     *
-     * Two recordings by one person (two watches on, or a split recording) got two identical
-     * pills, and nothing on screen said which curve was which (Audit §6 Export). A repeat adds
-     * what differs: the watch if it does, else the recording's own title, else a number.
-     */
-    internal fun distinctLabelsOf(records: List<BpmRecordWithPoints>): List<String> {
-        val base = records.map(::wearerLabelOf)
-        return records.mapIndexed { i, record ->
-            val same = base.indices.filter { base[it] == base[i] }
-            if (same.size < 2) return@mapIndexed base[i]
-            val device = record.metadata.deviceId.takeIf { it.isNotBlank() }
-            val title = record.metadata.title.takeIf { !RecordNameFormatter.isPlaceholder(it) }
-            val detail = when {
-                device != null && same.map { records[it].metadata.deviceId }.distinct().size == same.size &&
-                    device != base[i] -> device
-                title != null && same.map { records[it].metadata.title }.distinct().size == same.size -> title
-                else -> "${same.indexOf(i) + 1}"
-            }
-            "${base[i]} · $detail"
-        }
-    }
-
-    private fun wearerLabelOf(record: BpmRecordWithPoints): String =
-        record.metadata.wearerName.takeIf { it.isNotBlank() }
-            ?: record.metadata.deviceId.takeIf { it.isNotBlank() }
-            ?: record.metadata.title.takeIf { !RecordNameFormatter.isPlaceholder(it) }
-            ?: "Unknown"
 
     private fun drawGlowingHead(
         canvas: Canvas,
@@ -912,8 +788,10 @@ object ImageExporter {
         val drawAreaBottom = rect.bottom * fullHeight
         val drawAreaWidth = drawAreaRight - drawAreaLeft
         val drawAreaHeight = drawAreaBottom - drawAreaTop
-        val refWidth = if (fullHeight > fullWidth) 1080f else 1920f
-        val scaleFactor = (drawAreaWidth / refWidth).coerceAtLeast(0.5f * (fullWidth / refWidth))
+        // The canvas's scale (see [ChartKit.scale]), shrunk with the share of the width the graph
+        // takes, but never below half of it, so a small graph keeps readable text.
+        private val canvasScale = ChartKit.scale(fullWidth, fullHeight)
+        val scaleFactor = (canvasScale * drawAreaWidth / fullWidth).coerceAtLeast(0.5f * canvasScale)
         val outerRect = RectF(drawAreaLeft, drawAreaTop, drawAreaRight, drawAreaBottom)
 
         // UPDATED: Standardized padding
@@ -940,34 +818,6 @@ object ImageExporter {
     }
 
     private class Viewport(val start: Double, val end: Double, val playhead: Double, val duration: Double, val lookahead: Long)
-
-    private fun calculateRanges(record: BpmRecordWithPoints, config: Frame, windowSizeMs: Long? = null): BpmRanges {
-        // Expand the search range by the window size (or 5s default) to capture everything that will be visible
-        val margin = windowSizeMs ?: 5000L
-        val searchStart = config.content.startMs - margin
-        val searchEnd = config.content.endMs + margin
-
-        val snippetPoints = record.dataPoints.filter { it.timestamp >= searchStart && it.timestamp <= searchEnd }
-        val sMin = snippetPoints.minOfOrNull { it.bpm } ?: record.minDataPoint?.bpm ?: 60.0
-        val sMax = snippetPoints.maxOfOrNull { it.bpm } ?: record.maxDataPoint?.bpm ?: 180.0
-        val sRange = (sMax - sMin).coerceAtLeast(1.0)
-
-        val minSpread = 20.0
-        val center = (sMax + sMin) / 2.0
-        val adjMin = if (sRange < minSpread) center - 10.0 else sMin
-        val adjMax = if (sRange < minSpread) center + 10.0 else sMax
-
-        // Widened out to whole gridline steps, so the top and bottom of the plot *are* gridlines
-        // rather than two arbitrary edges with lines floating inside them. Outward only: cropping
-        // to a tidy number would put a peak off the top, and a graph that hides the highest
-        // reading is worse than one with an untidy edge.
-        val snapped = GraphAxes.snapBpmRange(
-            adjMin - (minSpread * 0.1),
-            adjMax + (minSpread * 0.1)
-        )
-
-        return BpmRanges(snapped.start, snapped.endInclusive, record.metadata.title)
-    }
 
     private fun calculateViewport(currentTime: Double?, windowSize: Long?, config: Frame, record: BpmRecordWithPoints): Viewport {
         // 1. Determine the playhead position (50% through the selected snippet if currentTime is null)
@@ -1100,14 +950,15 @@ object ImageExporter {
         val primaryRecord = processedRecords.first()
 
         val dims = RenderingDimensions(canvas, graphRect, config)
-        val paint = Paint().apply { isAntiAlias = true; fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals }
+        val paint = ChartKit.paint()
 
         val allPoints = processedRecords.flatMap { it.dataPoints }
         if (allPoints.isEmpty()) return
-        val minBpm = (allPoints.minOf { it.bpm } - 5.0).coerceAtLeast(30.0)
-        val maxBpm = (allPoints.maxOf { it.bpm } + 5.0).coerceAtMost(220.0)
+        // The one scale both renderers use, so a picture and a video of the same recordings read
+        // against the same gridlines.
+        val bpmRange = ChartKit.bpmRange(allPoints.map { it.bpm })
         val ranges = BpmRanges(
-            minBpm, maxBpm,
+            bpmRange.start, bpmRange.endInclusive,
             config.content.title?.takeIf { it.isNotBlank() } ?: "Multi-Watch Session"
         )
 
@@ -1320,7 +1171,7 @@ object ImageExporter {
 
         paint.isFakeBoldText = false
         paint.textSize = labelSize
-        val labels = distinctLabelsOf(records)
+        val labels = ChartKit.distinctLabels(records)
         val fullNameWidth = if (config.look.pillShowName) {
             labels.maxOfOrNull { paint.measureText(it) } ?: 0f
         } else {
@@ -1350,7 +1201,7 @@ object ImageExporter {
         val maxLabelWidth = widthBudget - (padH * 2 + avatarSize + gap) -
             (if (stacked) 0f else gap + digitWidth)
         val shownLabels = if (config.look.pillShowName && maxLabelWidth > labelSize) {
-            labels.map { ellipsize(it, maxLabelWidth, paint) }
+            labels.map { ChartKit.ellipsize(it, maxLabelWidth, paint) }
         } else {
             List(records.size) { "" }
         }
@@ -1416,7 +1267,7 @@ object ImageExporter {
         val pillWidth = m.pillWidth
         val shownLabels = m.shownLabels
         val stacked = m.stacked
-        val labels = distinctLabelsOf(records)
+        val labels = ChartKit.distinctLabels(records)
 
         // Line metrics for the baselines. Recomputed from the sizes above rather than carried in
         // ReadoutMetrics: they depend on nothing but the paint and the size, so passing them would
@@ -1670,7 +1521,7 @@ object ImageExporter {
         var legendTop = dims.graphTop + 16f * dims.scaleFactor
         val itemHeight = 32f * dims.scaleFactor
 
-        val legendLabels = distinctLabelsOf(records)
+        val legendLabels = ChartKit.distinctLabels(records)
         records.forEachIndexed { index, record ->
             val wearerLabel = legendLabels[index]
             val color = colorForRecord(record, index, config)

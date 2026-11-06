@@ -162,7 +162,7 @@ object VideoExporter {
             ?: throw IOException("There's nothing to draw: no recordings came with this export.")
 
         // 1. Setup File
-        val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
+        val sanitizedTitle = FileNames.of(record.metadata.title)
         val fileName = "${sanitizedTitle}.mp4"
         val outputFile = File(context.cacheDir, fileName)
         if (outputFile.exists()) outputFile.delete()
@@ -175,13 +175,13 @@ object VideoExporter {
         // Place every record on one timeline up front. Doing it here rather than per frame keeps
         // the overlay cheap, and — more importantly — means the video is clipped against exactly
         // the same origin the graph is drawn against, so all records stay in sync with it.
+        //
+        // One recording too, through the same path. It had its own, with its own BPM scale and the
+        // recording's name for a title in place of the caption, while the preview always took this
+        // one, so a one-person video didn't look like its preview (Audit #27).
         val exportRecords = request.content.records.ifEmpty { listOf(record) }
-        val alignedRecords = if (exportRecords.size > 1) {
-            ImageExporter.alignRecords(exportRecords)
-        } else {
-            null
-        }
-        val timelineOriginMs = alignedRecords?.timeline?.originWallClockMs ?: record.metadata.startTime
+        val alignedRecords = VideoFrameRenderer.alignRecords(exportRecords)
+        val timelineOriginMs = alignedRecords.timeline.originWallClockMs
 
         var isInputImage = false
         val mediaUri: Uri
@@ -274,25 +274,14 @@ object VideoExporter {
             override fun getBitmap(presentationTimeUs: Long): Bitmap {
                 reusableCanvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
                 val currentRecordAbsoluteTimeMs = startTimeMs + ((presentationTimeUs / 1000.0))
-                if (alignedRecords != null) {
-                    ImageExporter.renderAlignedRecordsOnCanvas(
-                        canvas = reusableCanvas,
-                        aligned = alignedRecords,
-                        content = request.content,
-                        look = request.preset,
-                        currentTimeMs = currentRecordAbsoluteTimeMs,
-                        graphRect = graphRect
-                    )
-                } else {
-                    ImageExporter.renderOnCanvas(
-                        canvas = reusableCanvas,
-                        record = record,
-                        content = request.content,
-                        look = request.preset,
-                        currentTimeMs = currentRecordAbsoluteTimeMs,
-                        graphRect = graphRect
-                    )
-                }
+                VideoFrameRenderer.renderAlignedRecordsOnCanvas(
+                    canvas = reusableCanvas,
+                    aligned = alignedRecords,
+                    content = request.content,
+                    look = request.preset,
+                    currentTimeMs = currentRecordAbsoluteTimeMs,
+                    graphRect = graphRect
+                )
                 return reusableBitmap
             }
         }
@@ -533,7 +522,7 @@ object VideoExporter {
     /**
      * Calculates where a video sits on a timeline whose position 0 is [timelineOriginMs].
      *
-     * For a multi-record export the origin is [ImageExporter.Timeline.originWallClockMs] rather
+     * For a multi-record export the origin is [VideoFrameRenderer.Timeline.originWallClockMs] rather
      * than any one record's start, so a single video lines up with every record on the graph.
      *
      * @return the video's start and end, as offsets from the timeline origin.
@@ -616,7 +605,7 @@ object VideoExporter {
          * @param syncOffsetMs nudges the clip along the timeline, so a positive value runs the
          *   curves ahead of the footage.
          */
-        fun windowOn(timeline: ImageExporter.Timeline, syncOffsetMs: Long): ClipWindow {
+        fun windowOn(timeline: VideoFrameRenderer.Timeline, syncOffsetMs: Long): ClipWindow {
             val start = (startedAtMs - timeline.originWallClockMs + syncOffsetMs)
                 .coerceAtLeast(0L)
             return ClipWindow(start, (start + durationMs).coerceAtMost(timeline.durationMs))

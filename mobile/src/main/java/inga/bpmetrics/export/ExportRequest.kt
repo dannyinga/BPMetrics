@@ -14,7 +14,7 @@ import inga.bpmetrics.library.BpmRecordWithPoints
  * copied. A renderer reads the look from the preset and everything else from here.
  *
  * @property startMs where the export starts on the recordings' shared timeline, in ms from its
- *   origin. See [ImageExporter.timelineFor].
+ *   origin. See [VideoFrameRenderer.timelineFor].
  * @property endMs where it ends, likewise.
  * @property title the caption drawn on it, or null for none.
  * @property colours each recording's curve colour, by record id.

@@ -187,7 +187,7 @@ class BpmExportService : Service() {
                         }
                         targetUri
                     } else {
-                        ExportUtils.saveVideoToGallery(this@BpmExportService, file, nextJob.recordTitle)
+                        MediaStoreSaver.saveVideo(this@BpmExportService, file, nextJob.recordTitle)
                     }
 
                     // The render is staged in the cache and then copied to wherever it belongs.

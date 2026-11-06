@@ -86,97 +86,9 @@ object ExportUtils {
         }
     }.getOrNull()
 
-    /**
-     * Saves a video file into the public MediaStore (Movies/BPMetrics) so it appears in the device Gallery.
-     */
-    fun saveVideoToGallery(context: Context, videoFile: File, title: String): android.net.Uri? {
-        val sanitizedTitle = title.replace("[^a-zA-Z0-9_-]".toRegex(), "_")
-        val displayName = "${sanitizedTitle}_${System.currentTimeMillis()}.mp4"
-
-        val contentValues = android.content.ContentValues().apply {
-            put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, displayName)
-            put(android.provider.MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "Movies/BPMetrics")
-                put(android.provider.MediaStore.Video.Media.IS_PENDING, 1)
-            }
-        }
-
-        val resolver = context.contentResolver
-        val uri = resolver.insert(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
-
-        if (uri != null) {
-            try {
-                resolver.openOutputStream(uri)?.use { output ->
-                    videoFile.inputStream().use { input ->
-                        input.copyTo(output)
-                    }
-                }
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    contentValues.clear()
-                    contentValues.put(android.provider.MediaStore.Video.Media.IS_PENDING, 0)
-                    resolver.update(uri, contentValues, null, null)
-                }
-                android.util.Log.d("ExportUtils", "Successfully saved video to MediaStore Movies/BPMetrics: $uri")
-                return uri
-            } catch (e: Exception) {
-                android.util.Log.e("ExportUtils", "Failed to copy video to MediaStore: ${e.message}", e)
-            }
-        }
-        return null
-    }
-
-    /**
-     * Writes a graph image into the gallery.
-     *
-     * PNG rather than JPEG, and not negotiable: a graph exported at low opacity is transparent, and
-     * JPEG has no alpha to store it in. Saving one as JPEG would silently composite it onto black
-     * and destroy the only reason the opacity setting exists.
-     */
-    fun saveImageToGallery(
-        context: Context,
-        bitmap: android.graphics.Bitmap,
-        title: String
-    ): android.net.Uri? {
-        val sanitizedTitle = title.replace("[^a-zA-Z0-9_-]".toRegex(), "_")
-        val displayName = "${sanitizedTitle}_${System.currentTimeMillis()}.png"
-
-        val contentValues = android.content.ContentValues().apply {
-            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, displayName)
-            put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/BPMetrics")
-                put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
-            }
-        }
-
-        val resolver = context.contentResolver
-        val uri = resolver.insert(
-            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            contentValues
-        ) ?: return null
-
-        return try {
-            resolver.openOutputStream(uri)?.use { output ->
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                contentValues.clear()
-                contentValues.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
-                resolver.update(uri, contentValues, null, null)
-            }
-            uri
-        } catch (e: Exception) {
-            android.util.Log.e("ExportUtils", "Failed to save image to MediaStore", e)
-            // Leave nothing half-written in the gallery for the user to find and wonder about.
-            runCatching { resolver.delete(uri, null, null) }
-            null
-        }
-    }
-
     /** Stages a bitmap as a PNG in the cache, for sharing. */
     fun stageImageForShare(context: Context, bitmap: android.graphics.Bitmap, title: String): File? {
-        val sanitizedTitle = title.replace("[^a-zA-Z0-9_-]".toRegex(), "_")
+        val sanitizedTitle = FileNames.of(title)
         val file = File(context.cacheDir, "${sanitizedTitle}_${System.currentTimeMillis()}.png")
         return try {
             java.io.FileOutputStream(file).use {

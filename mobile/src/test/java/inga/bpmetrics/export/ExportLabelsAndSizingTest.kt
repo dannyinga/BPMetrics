@@ -26,7 +26,7 @@ class ExportLabelsAndSizingTest {
     fun `different people keep their plain names`() {
         assertEquals(
             listOf("Danny", "Bethany"),
-            ImageExporter.distinctLabelsOf(listOf(recording(1, "Danny"), recording(2, "Bethany")))
+            ChartKit.distinctLabels(listOf(recording(1, "Danny"), recording(2, "Bethany")))
         )
     }
 
@@ -34,7 +34,7 @@ class ExportLabelsAndSizingTest {
     fun `one person on two watches is told apart by the watch`() {
         assertEquals(
             listOf("Danny · Blue", "Danny · The OG"),
-            ImageExporter.distinctLabelsOf(
+            ChartKit.distinctLabels(
                 listOf(recording(1, "Danny", device = "Blue"), recording(2, "Danny", device = "The OG"))
             )
         )
@@ -44,7 +44,7 @@ class ExportLabelsAndSizingTest {
     fun `one person on one watch is told apart by the recording`() {
         assertEquals(
             listOf("Danny · Boogie T", "Danny · SubDocta"),
-            ImageExporter.distinctLabelsOf(
+            ChartKit.distinctLabels(
                 listOf(recording(1, "Danny", title = "Boogie T"), recording(2, "Danny", title = "SubDocta"))
             )
         )
@@ -54,7 +54,7 @@ class ExportLabelsAndSizingTest {
     fun `with nothing else to go on, a number`() {
         assertEquals(
             listOf("Danny · 1", "Danny · 2"),
-            ImageExporter.distinctLabelsOf(listOf(recording(1, "Danny"), recording(2, "Danny")))
+            ChartKit.distinctLabels(listOf(recording(1, "Danny"), recording(2, "Danny")))
         )
     }
 

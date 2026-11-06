@@ -1,6 +1,6 @@
 package inga.bpmetrics.ui.export
 
-import inga.bpmetrics.export.ImageExporter
+import inga.bpmetrics.export.VideoFrameRenderer
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.export.VideoTiming
 import inga.bpmetrics.library.BpmRecordEntity
@@ -80,7 +80,7 @@ class ClipRetimingTest {
         assertEquals(setOf(1L, 2L), fixed.recordIds)
 
         // And the graph covers exactly the stretch the footage is of.
-        val timeline = ImageExporter.Timeline(
+        val timeline = VideoFrameRenderer.Timeline(
             originWallClockMs = set.minOf { it.metadata.startTime },
             durationMs = 60 * minute
         )

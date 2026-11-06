@@ -15,7 +15,7 @@ import java.time.format.DateTimeFormatter
 /**
  * A whole timeline as a single picture.
  *
- * Separate from [ImageExporter] rather than a mode of it, because almost everything that renderer
+ * Separate from [VideoFrameRenderer] rather than a mode of it, because almost everything that renderer
  * does is organised around a playhead: a scrolling viewport, a fade over what has not happened yet,
  * a header reading the heart rate *right now*. None of that means anything in a still. "Current
  * BPM" on an image of a two-hour set is not a simplification of the truth, it is a number picked at
@@ -25,7 +25,7 @@ import java.time.format.DateTimeFormatter
  * person beside the graph rather than over it, and — where the picture covers several events — the
  * events marked out along it, so a festival day reads as a day rather than as one long squiggle.
  */
-object TimelineImageExporter {
+object ImageRenderer {
 
     /** One person's curve across the window. Timestamps are offsets from the window's start. */
     data class Series(
@@ -76,14 +76,14 @@ object TimelineImageExporter {
         val drawable = spec.series.filter { it.points.isNotEmpty() }
         if (drawable.isEmpty()) return null
 
-        val zone = runCatching { ZoneId.of(spec.timeZoneId) }.getOrDefault(ZoneId.systemDefault())
+        val zone = ChartKit.zone(spec.timeZoneId)
         val bitmap = createBitmap(spec.width, spec.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val paint = Paint().apply { isAntiAlias = true; fontFeatureSettings = inga.bpmetrics.ui.theme.MetricNumerals }
+        val paint = ChartKit.paint()
 
         // Scaled off the short edge, so a 1080×1920 story and a 1920×1080 landscape get text of
         // comparable weight rather than one of them being unreadable.
-        val scale = minOf(spec.width, spec.height) / 1080f
+        val scale = ChartKit.scale(spec.width.toFloat(), spec.height.toFloat())
 
         // Nothing is drawn under this. A fully transparent panel is the point of the setting: the
         // picture is meant to drop onto footage in something that composites.
@@ -249,7 +249,7 @@ object TimelineImageExporter {
 
             paint.alpha = 220
             paint.textSize = 22f * scale
-            val label = ellipsize(section.label, x1 - x0 - 14f * scale, paint)
+            val label = ChartKit.ellipsize(section.label, x1 - x0 - 14f * scale, paint)
             if (label.isNotEmpty()) {
                 canvas.drawText(label, x0 + 8f * scale, bandBottom - 9f * scale, paint)
             }
@@ -272,10 +272,10 @@ object TimelineImageExporter {
         scale: Float,
         paint: Paint
     ) {
-        val lines = 5
-        for (i in 0..lines) {
-            val bpm = range.min + (range.span * i / lines)
-            val y = plot.bottom - plot.height() * (i.toFloat() / lines)
+        // On round numbers from the scale both renderers share. These were five evenly spaced lines
+        // at whatever values that landed on (103, 114, 125...), against a video's 100, 110, 120.
+        ChartKit.gridLines(range.min..range.max).forEach { bpm ->
+            val y = plot.bottom - plot.height() * ((bpm - range.min) / range.span).toFloat()
 
             if (spec.look.showGrid) {
                 paint.resetForExport()
@@ -331,7 +331,7 @@ object TimelineImageExporter {
 
             // A gap in the data breaks the line rather than being bridged. Joining across a
             // dropout draws a heart rate that was never measured.
-            val isGap = lastTs != Long.MIN_VALUE && (point.timestampMs - lastTs) > GAP_THRESHOLD_MS
+            val isGap = lastTs != Long.MIN_VALUE && (point.timestampMs - lastTs) > ChartKit.GAP_MS
             if (!started || isGap) path.moveTo(x, y) else path.lineTo(x, y)
             started = true
             lastTs = point.timestampMs
@@ -426,7 +426,7 @@ object TimelineImageExporter {
             paint.color = spec.look.labelsColor
             paint.textSize = NAME_SIZE * scale
             paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            canvas.drawText(ellipsize(entry.label, layout.nameWidth, paint), x + 24f * scale, rowY, paint)
+            canvas.drawText(ChartKit.ellipsize(entry.label, layout.nameWidth, paint), x + 24f * scale, rowY, paint)
 
             // Numbers immediately after the widest name rather than pushed to the far edge. On a
             // 1920-wide canvas, right-aligning them put someone's readings the better part of a
@@ -524,39 +524,18 @@ object TimelineImageExporter {
     private const val NAME_SIZE = 26f
     private const val LABEL_SIZE = 19f
 
-    /** Trims text to fit, with an ellipsis, rather than letting it run off the canvas. */
-    private fun ellipsize(text: String, maxWidth: Float, paint: Paint): String {
-        if (maxWidth <= 0f) return ""
-        if (paint.measureText(text) <= maxWidth) return text
-        var cut = text.length
-        while (cut > 1 && paint.measureText(text.take(cut) + "…") > maxWidth) cut--
-        return if (cut <= 1) "" else text.take(cut) + "…"
-    }
-
     /** The midpoint of the ramp between two colours — the third copy of a walk that is now shared. */
     private fun blend(from: Int, to: Int): Int =
         inga.bpmetrics.core.BpmRamp.blend(from, to, 0.5f)
 
-    /** The vertical scale, padded so the curve does not touch the frame. */
+    /** The vertical scale: [ChartKit.bpmRange], the one both renderers use. */
     private class BpmRange(val min: Double, val max: Double) {
         val span: Double get() = (max - min).coerceAtLeast(1.0)
 
         companion object {
-            fun of(series: List<Series>): BpmRange {
-                val all = series.flatMap { it.points }.map { it.bpm }
-                if (all.isEmpty()) return BpmRange(60.0, 180.0)
-                val low = all.min()
-                val high = all.max()
-                // A flat recording still deserves a readable scale rather than one 2bpm tall.
-                val padded = ((high - low) * 0.12).coerceAtLeast(8.0)
-                return BpmRange(
-                    (low - padded).coerceAtLeast(30.0),
-                    (high + padded).coerceAtMost(220.0)
-                )
-            }
+            fun of(series: List<Series>): BpmRange =
+                ChartKit.bpmRange(series.flatMap { it.points }.map { it.bpm })
+                    .let { BpmRange(it.start, it.endInclusive) }
         }
     }
-
-    /** Longer than this between readings and the line breaks rather than bridging the gap. */
-    private const val GAP_THRESHOLD_MS = 10_000L
 }
