@@ -42,7 +42,7 @@ import androidx.room.PrimaryKey
 data class CollectionEntity(
     @PrimaryKey(autoGenerate = true) val collectionId: Long = 0,
     val name: String,
-    @ColumnInfo(defaultValue = "") val notes: String = "",
+    @ColumnInfo(defaultValue = "") override val notes: String = "",
     val createdAt: Long = 0L,
 
     /**
@@ -75,17 +75,12 @@ data class CollectionEntity(
      */
     @ColumnInfo(defaultValue = "NULL") val frozenAt: Long? = null,
 
-    /** See [EventEntity.coverPath]. A set has no parent, so it inherits from nothing. */
-    @ColumnInfo(defaultValue = "NULL") val coverPath: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
-    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
-    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null
-) {
-    val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled collection"
+    /** See [EventEntity.cover]. A set has no parent, so it inherits from nothing. */
+    @androidx.room.Embedded val cover: CoverColumns = CoverColumns()
+) : LibraryItem {
+    override val ref: ItemRef get() = ItemRef.Collection(collectionId)
+
+    override val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled collection"
 
     /** Whether membership answers a question rather than listing names. */
     val isSmart: Boolean get() = filterJson != null
@@ -93,10 +88,7 @@ data class CollectionEntity(
     /** Whether its numbers are kept as they were rather than recomputed. */
     val isFrozen: Boolean get() = frozenAt != null
 
-    val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
-        coverDim
-    )
+    override val ownCover: Cover? get() = cover.toCover()
 }
 
 /**

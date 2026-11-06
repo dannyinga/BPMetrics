@@ -386,6 +386,21 @@ Ambient mode and a tile are post-1.0.
 **Verify:** schema JSON unchanged; `CoverResolverTest`, `MembershipReconcileTest` and `JsonExporterTest` unchanged and green.
 **Commit:** `refactor(library): recordings, events and collections share one shape`
 
+**As built:**
+- **S10.1:** the three entities embed `CoverColumns`, which holds the seven columns under their existing names; `ownCover` is `cover.toCover()`.
+  - **Why not embed `Cover` itself (Plan §1):** `Cover` has non-null crop fields with defaults, which would have made those columns `NOT NULL` and needed a migration.
+  - **Schema is not byte-identical.** A fresh export (after setting the old file aside: Room had kept it) differs in two ways:
+    - **Field paths:** they read `cover.path` and so on.
+    - **Column order:** Room lists embedded columns last, so the seven cover columns move to the end of each `CREATE TABLE`.
+  - **Still no migration:** the `identityHash` is unchanged, and every column's name, affinity, nullability and default is identical. Room checks by name, not position.
+  - **Verified on the emulator:** the existing library opened on the new build with no integrity error, and all 70 migration tests pass against the new `31.json`.
+- **S10.2:** `LibraryItem` (ref, displayName, notes, ownCover) and `TreeItem` (parentEventId, ownLocationId) live in `LibraryItem.kt`. Records and events are `TreeItem`s; collections are `LibraryItem`s. The members are getters, so Room adds no columns.
+  - **Recordings:** a recording's notes are its description, and its displayName is `RecordNameFormatter.displayName` without the live wearer name.
+- **S10.3:** `ItemRef` replaces `LibraryRepository.CoverOwner` everywhere, and `ItemRef.scope` maps to `ScopeRef`.
+- **S10.4:** `createEvent(name, createdAt)` lost `groupId`, and the column is documented as unread.
+  - **Old backups:** restoring a pre-nesting backup used to write the event's `groupName` into that dead column, so the event lost its place in the tree. It now parents the event under its group, as the 23→24 migration does for a live library.
+- **Tests:** `BackupCoverageTest`'s excuses now name `cover` once instead of seven columns three times. All unit tests pass.
+
 ### S11 — One inheritance walk
 
 | Ticket | Work | Plan |

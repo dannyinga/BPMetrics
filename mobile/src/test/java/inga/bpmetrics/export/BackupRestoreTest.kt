@@ -82,16 +82,40 @@ class BackupRestoreTest {
         )
 
         coVerify {
-            repository.restoreCover(context, LibraryRepository.CoverOwner.Event(9L), any(), any(), any())
+            repository.restoreCover(context, inga.bpmetrics.library.ItemRef.Event(9L), any(), any(), any())
         }
         coVerify(exactly = 0) {
-            repository.restoreCover(context, LibraryRepository.CoverOwner.Collection(9L), any(), any(), any())
+            repository.restoreCover(context, inga.bpmetrics.library.ItemRef.Collection(9L), any(), any(), any())
+        }
+    }
+
+    @Test
+    fun `an event from before nesting goes under the group it named`() = runTest {
+        // Written to events.groupId until S10, which nothing reads, so the event lost its place.
+        coEvery { repository.createEventGroup("Bass Canyon") } returns 9L
+        coEvery { repository.createEvent("Day 1", any()) } returns 103L
+
+        restoreBackup(
+            LibraryBackup(
+                formatVersion = 4,
+                eventGroups = listOf(EventGroupDto(name = "Bass Canyon")),
+                events = listOf(EventDto(name = "Day 1", groupName = "Bass Canyon"))
+            ),
+            repository, context
+        )
+
+        coVerify {
+            repository.restoreEventTaxonomy(
+                eventId = 103L, parentId = 9L,
+                windowStart = any(), windowEnd = any(), type = any(),
+                excludedFromParentAnalysis = any()
+            )
         }
     }
 
     @Test
     fun `a rule is translated into the library it lands in`() = runTest {
-        coEvery { repository.createEvent("Bass Canyon", any(), any()) } returns 103L
+        coEvery { repository.createEvent("Bass Canyon", any()) } returns 103L
         coEvery { repository.restoreCollection(any(), any(), any(), any(), any()) } returns 400L
         val written = slot<String>()
         coEvery { repository.setCollectionRule(400L, capture(written)) } returns true
@@ -123,7 +147,7 @@ class BackupRestoreTest {
 
     @Test
     fun `a rule from an older file is reported, and matches nothing it can't identify`() = runTest {
-        coEvery { repository.createEvent("Bass Canyon", any(), any()) } returns 103L
+        coEvery { repository.createEvent("Bass Canyon", any()) } returns 103L
         coEvery { repository.restoreCollection(any(), any(), any(), any(), any()) } returns 400L
         val written = slot<String>()
         coEvery { repository.setCollectionRule(400L, capture(written)) } returns true
@@ -226,14 +250,14 @@ class BackupRestoreTest {
             repository, context
         )
 
-        coVerify(exactly = 0) { repository.createEvent(any(), any(), any()) }
+        coVerify(exactly = 0) { repository.createEvent(any(), any()) }
         coVerify { repository.assignRecordsToEvent(listOf(77L), 70L) }
         assertEquals(0, result.eventsCreated)
     }
 
     @Test
     fun `a skipped event hands its recordings to the event above it`() = runTest {
-        coEvery { repository.createEvent("Bass Canyon", any(), any()) } returns 103L
+        coEvery { repository.createEvent("Bass Canyon", any()) } returns 103L
         coEvery { repository.saveWatchRecordToLibrary(any(), any(), any(), any()) } returns 77L
 
         restoreBackup(
@@ -250,7 +274,7 @@ class BackupRestoreTest {
             choices = RestoreChoices(mapOf(RestoreChoices.id(RestoreKind.EVENT, "id:4") to RestoreChoice.SKIP))
         )
 
-        coVerify(exactly = 0) { repository.createEvent("Day 1", any(), any()) }
+        coVerify(exactly = 0) { repository.createEvent("Day 1", any()) }
         coVerify { repository.assignRecordsToEvent(listOf(77L), 103L) }
     }
 
@@ -260,7 +284,7 @@ class BackupRestoreTest {
             LibraryBackup(events = listOf(EventDto(eventId = 3, name = "Bass Canyon", createdAt = 111L))),
             repository, context
         )
-        coVerify { repository.createEvent("Bass Canyon", any(), 111L) }
+        coVerify { repository.createEvent("Bass Canyon", 111L) }
     }
 
     @Test

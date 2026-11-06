@@ -223,7 +223,7 @@ class BpmRecordViewModel(
             val hint = _record.value?.metadata?.title?.takeIf { it.isNotBlank() } ?: "recording"
             val stored = repository.setCover(
                 context = context,
-                owner = LibraryRepository.CoverOwner.Recording(recordId),
+                owner = inga.bpmetrics.library.ItemRef.Recording(recordId),
                 source = source,
                 nameHint = hint
             )
@@ -235,7 +235,7 @@ class BpmRecordViewModel(
     /** Re-frames this recording's own cover. */
     fun setOwnCoverCrop(cover: inga.bpmetrics.library.Cover) {
         launchGuarded {
-            repository.setCoverCrop(LibraryRepository.CoverOwner.Recording(recordId), cover)
+            repository.setCoverCrop(inga.bpmetrics.library.ItemRef.Recording(recordId), cover)
             loadRecord()
         }
     }
@@ -248,7 +248,7 @@ class BpmRecordViewModel(
      */
     fun clearOwnCover(context: android.content.Context) {
         launchGuarded {
-            repository.clearCover(context, LibraryRepository.CoverOwner.Recording(recordId))
+            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Recording(recordId))
             loadRecord()
         }
     }

@@ -198,11 +198,13 @@ class CoverResolverTest {
         val event = EventEntity(
             eventId = 1,
             name = "Subtronics",
-            coverPath = "subtronics.jpg",
-            coverCropLeft = 0.1f,
-            coverCropTop = 0.2f,
-            coverCropRight = 0.9f,
-            coverCropBottom = 0.8f
+            cover = CoverColumns(
+                path = "subtronics.jpg",
+                cropLeft = 0.1f,
+                cropTop = 0.2f,
+                cropRight = 0.9f,
+                cropBottom = 0.8f
+            )
         )
 
         val cover = event.ownCover!!

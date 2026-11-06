@@ -50,37 +50,16 @@ class BackupCoverageTest {
             "personId" to "Carried as wearerName; people are renumbered on import.",
             "eventId" to "Carried as eventId and eventName since format 6.",
             "locationId" to "Carried as locationName.",
-            "timeZoneId" to "Reconciled from the restored location tree.",
-            "coverPath" to "A name inside this install's storage. The image travels as bytes.",
-            "coverCropLeft" to "Carried inside cover.",
-            "coverCropTop" to "Carried inside cover.",
-            "coverCropRight" to "Carried inside cover.",
-            "coverCropBottom" to "Carried inside cover.",
-            "coverBlur" to "Carried inside cover.",
-            "coverDim" to "Carried inside cover."
+            "timeZoneId" to "Reconciled from the restored location tree."
         ),
         EventEntity::class.java to mapOf(
             "eventId" to "Reassigned on insert, and carried so references survive it.",
-            "groupId" to "Carried as groupName; ids are reassigned.",
+            "groupId" to "Not read since 23→24; restore parents the event under its group instead.",
             "parentId" to "Carried as parentEventId and parentName.",
-            "locationId" to "Carried as locationName; venues are renumbered on import.",
-            "coverPath" to "A name inside this install's storage. The image travels as bytes.",
-            "coverCropLeft" to "Carried inside cover.",
-            "coverCropTop" to "Carried inside cover.",
-            "coverCropRight" to "Carried inside cover.",
-            "coverCropBottom" to "Carried inside cover.",
-            "coverBlur" to "Carried inside cover.",
-            "coverDim" to "Carried inside cover."
+            "locationId" to "Carried as locationName; venues are renumbered on import."
         ),
         CollectionEntity::class.java to mapOf(
-            "collectionId" to "Reassigned on insert; members are re-linked through the id maps.",
-            "coverPath" to "A name inside this install's storage. The image travels as bytes.",
-            "coverCropLeft" to "Carried inside cover.",
-            "coverCropTop" to "Carried inside cover.",
-            "coverCropRight" to "Carried inside cover.",
-            "coverCropBottom" to "Carried inside cover.",
-            "coverBlur" to "Carried inside cover.",
-            "coverDim" to "Carried inside cover."
+            "collectionId" to "Reassigned on insert; members are re-linked through the id maps."
         ),
         PersonEntity::class.java to mapOf(
             "personId" to "Reassigned on insert; the backup keys people by name.",

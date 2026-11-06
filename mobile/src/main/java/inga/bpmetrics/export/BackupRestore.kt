@@ -246,7 +246,7 @@ suspend fun restoreBackup(
             // An event, because that is what a legacy group becomes (see createEventGroup). Writing
             // it as a Collection put the picture in the collections table under an event's id, so
             // it landed on whichever collection happened to share the number, or on nothing.
-            restoreCover(repository, context, LibraryRepository.CoverOwner.Event(groupId),
+            restoreCover(repository, context, inga.bpmetrics.library.ItemRef.Event(groupId),
                 group.cover, group.name)
             group.tags.filter(::tagAllowed)
                 .forEach { applyTag(repository, it) { id -> repository.addTagToGroup(groupId, id) } }
@@ -287,7 +287,6 @@ suspend fun restoreBackup(
                 }
                 else -> repository.createEvent(
                     name = event.name,
-                    groupId = event.groupName?.let { groupIdsByName[it] },
                     // Kept, so restoring this library's own backup can recognise the event again.
                     createdAt = event.createdAt.takeIf { it > 0L }
                 ).also { eventsCreated++ }
@@ -320,7 +319,11 @@ suspend fun restoreBackup(
                 eventId = eventId,
                 // An event naming itself as its parent is dropped rather than written. By id where
                 // the file has one: `parentName` is as ambiguous as any other name.
-                parentId = landedEvent(event.parentEventId, event.parentName)
+                // A backup from before events nested names a group instead. The group came in as an
+                // event, and is the parent, as the 23→24 migration made it for a live library; it
+                // used to be written to `events.groupId`, which nothing reads.
+                parentId = (landedEvent(event.parentEventId, event.parentName)
+                    ?: event.groupName?.let { groupIdsByName[it] })
                     ?.takeIf { it != eventId },
                 windowStart = event.windowStart,
                 windowEnd = event.windowEnd,
@@ -329,7 +332,7 @@ suspend fun restoreBackup(
             )
             event.locationName?.let { locationIdsByName[it] }
                 ?.let { repository.setEventLocation(eventId, it) }
-            restoreCover(repository, context, LibraryRepository.CoverOwner.Event(eventId),
+            restoreCover(repository, context, inga.bpmetrics.library.ItemRef.Event(eventId),
                 event.cover, event.name)
             // Replacing makes the event's own tags the file's; adding just gives it the file's.
             val wanted = event.tags.filter(::tagAllowed).mapNotNull { qualified ->
@@ -402,7 +405,7 @@ suspend fun restoreBackup(
             }
             dto.locationName?.let { locationIdsByName[it] }
                 ?.let { repository.setRecordLocation(newId, it) }
-            restoreCover(repository, context, LibraryRepository.CoverOwner.Recording(newId),
+            restoreCover(repository, context, inga.bpmetrics.library.ItemRef.Recording(newId),
                 dto.cover, dto.title)
             imported++
         }
@@ -428,7 +431,7 @@ suspend fun restoreBackup(
             if (set.sourceId != 0L) collectionIdsBySourceId[set.sourceId] = newId
             restoreCover(
                 repository, context,
-                LibraryRepository.CoverOwner.Collection(newId), set.cover, set.name
+                inga.bpmetrics.library.ItemRef.Collection(newId), set.cover, set.name
             )
             set to newId
         }
@@ -584,7 +587,7 @@ private suspend fun replaceRecording(
     wanted.forEach { repository.addTagToRecord(recordId, it) }
     repository.assignRecordsToEvent(listOf(recordId), eventId)
     repository.setRecordLocation(recordId, locationId)
-    restoreCover(repository, context, LibraryRepository.CoverOwner.Recording(recordId), dto.cover, dto.title)
+    restoreCover(repository, context, inga.bpmetrics.library.ItemRef.Recording(recordId), dto.cover, dto.title)
 }
 
 /**
@@ -596,7 +599,7 @@ private suspend fun replaceRecording(
 private suspend fun restoreCover(
     repository: LibraryRepository,
     context: android.content.Context,
-    owner: LibraryRepository.CoverOwner,
+    owner: inga.bpmetrics.library.ItemRef,
     dto: CoverDto?,
     nameHint: String
 ) {

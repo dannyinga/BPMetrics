@@ -898,7 +898,7 @@ fun LibraryScreen(
             coveredCount = effectiveRecordIds.size,
             // One picked event is the photo's target itself; see LibraryViewModel.coverTarget.
             hasCover = if (onlyEvent != null) {
-                filterOptions.eventTree.firstOrNull { it.eventId == onlyEvent }?.coverPath != null
+                filterOptions.eventTree.firstOrNull { it.eventId == onlyEvent }?.cover?.path != null
             } else {
                 selectedRecordsForBulk.any { coversByRecord[it.metadata.recordId] != null }
             },

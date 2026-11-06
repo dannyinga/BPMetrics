@@ -83,15 +83,7 @@ data class BpmRecordEntity (
      * time a recording arrives late from a watch — see [CoverResolver]. This is for the single
      * recording that deserves its own picture anyway.
      */
-    @ColumnInfo(defaultValue = "NULL") val coverPath: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
-    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
-    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
-    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null,
+    @androidx.room.Embedded val cover: CoverColumns = CoverColumns(),
 
     /**
      * The clock this recording is read in — an IANA id like "America/Los_Angeles".
@@ -148,13 +140,24 @@ data class BpmRecordEntity (
      * repass has to be built at the same time or the numbers quietly describe the old bands.
      */
     @ColumnInfo(defaultValue = "") val zonesEncoded: String = ""
-    ) {
+    ) : TreeItem {
+
+    override val ref: ItemRef get() = ItemRef.Recording(recordId)
+
+    /**
+     * The title, or what [RecordNameFormatter] makes of a placeholder. Without the wearer's live
+     * profile name, which only the caller has; screens that show a person pass it in.
+     */
+    override val displayName: String get() = RecordNameFormatter.displayName(this)
+
+    /** A recording's notes are its description column. */
+    override val notes: String get() = description
+
+    override val parentEventId: Long? get() = eventId
+    override val ownLocationId: Long? get() = locationId
 
     /** This recording's own cover, if it was given one. */
-    val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
-        coverDim
-    )
+    override val ownCover: Cover? get() = cover.toCover()
 
 
     /**

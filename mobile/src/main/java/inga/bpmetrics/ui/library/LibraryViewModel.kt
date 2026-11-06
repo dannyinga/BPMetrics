@@ -1126,13 +1126,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
                 is CoverTarget.Event -> target.eventId
             }
             val event = repository.getEvent(eventId)
-            if (event?.coverPath == null) {
+            if (event?.cover?.path == null) {
                 // Its recordings may still show a picture — the collection's — and removing that
                 // is a decision about the collection, made where the collection is.
                 onResult("${event?.displayName ?: "That event"} has no cover of its own.")
                 return@launchGuarded
             }
-            repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
+            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Event(eventId))
             onResult("Cover removed from ${event.displayName}")
         }
     }
@@ -1156,7 +1156,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             onResult(
                 repository.setCover(
                     context = context,
-                    owner = LibraryRepository.CoverOwner.Event(eventId),
+                    owner = inga.bpmetrics.library.ItemRef.Event(eventId),
                     source = source,
                     nameHint = hint
                 )
@@ -1167,13 +1167,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /** Re-frames the picture an event already has, leaving the file alone. */
     fun setEventCoverCrop(eventId: Long, cover: inga.bpmetrics.library.Cover) {
         launchGuarded {
-            repository.setCoverCrop(LibraryRepository.CoverOwner.Event(eventId), cover)
+            repository.setCoverCrop(inga.bpmetrics.library.ItemRef.Event(eventId), cover)
         }
     }
 
     fun clearEventCover(context: android.content.Context, eventId: Long) {
         launchGuarded {
-            repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
+            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Event(eventId))
         }
     }
 
@@ -1195,7 +1195,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             onResult(
                 repository.setCover(
                     context = context,
-                    owner = LibraryRepository.CoverOwner.Collection(groupId),
+                    owner = inga.bpmetrics.library.ItemRef.Collection(groupId),
                     source = source,
                     nameHint = hint
                 )
@@ -1206,13 +1206,13 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
     /** Re-frames the picture a collection already has, leaving the file alone. */
     fun setCollectionCoverCrop(groupId: Long, cover: inga.bpmetrics.library.Cover) {
         launchGuarded {
-            repository.setCoverCrop(LibraryRepository.CoverOwner.Collection(groupId), cover)
+            repository.setCoverCrop(inga.bpmetrics.library.ItemRef.Collection(groupId), cover)
         }
     }
 
     fun clearCollectionCover(context: android.content.Context, groupId: Long) {
         launchGuarded {
-            repository.clearCover(context, LibraryRepository.CoverOwner.Collection(groupId))
+            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Collection(groupId))
         }
     }
 
@@ -1244,7 +1244,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             val name = repository.getEvent(eventId)?.displayName ?: "cover"
             val stored = repository.setCover(
                 context = context,
-                owner = LibraryRepository.CoverOwner.Event(eventId),
+                owner = inga.bpmetrics.library.ItemRef.Event(eventId),
                 source = source,
                 nameHint = name
             )

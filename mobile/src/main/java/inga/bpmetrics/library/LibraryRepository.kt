@@ -549,9 +549,9 @@ class LibraryRepository(
      * @param createdAt when the event was made, if it's being restored. A restore used to stamp the
      *   time of the restore, and then nothing could tell the event was the same one again.
      */
-    suspend fun createEvent(name: String, groupId: Long? = null, createdAt: Long? = null): Long {
+    suspend fun createEvent(name: String, createdAt: Long? = null): Long {
         val id = eventDao.insertEvent(
-            EventEntity(name = name.trim(), groupId = groupId, createdAt = createdAt ?: System.currentTimeMillis())
+            EventEntity(name = name.trim(), createdAt = createdAt ?: System.currentTimeMillis())
         )
         Log.d(tag, "Created event '${name.trim()}' as $id")
         reconcileMembership()
@@ -1064,31 +1064,21 @@ class LibraryRepository(
 
     // --- Cover images ---
 
-    /**
-     * Where a cover can be put.
-     *
-     * One type rather than three near-identical methods, because everything around setting a cover
-     * — importing the file, deleting the one it replaces, invalidating the cache — is the same
-     * whichever of the three it lands on, and three copies of that is three chances to forget the
-     * delete and leak a file.
-     */
-    sealed interface CoverOwner {
-        data class Event(val eventId: Long) : CoverOwner
-        data class Collection(val groupId: Long) : CoverOwner
-        data class Recording(val recordId: Long) : CoverOwner
-    }
+    // Covers go on any [ItemRef]. One type rather than three near-identical methods, because
+    // everything around setting a cover (importing the file, deleting the one it replaces,
+    // invalidating the cache) is the same whichever item it lands on.
 
-    private suspend fun currentCoverPath(owner: CoverOwner): String? = when (owner) {
-        is CoverOwner.Event -> eventDao.coverPathOf(owner.eventId)
+    private suspend fun currentCoverPath(owner: ItemRef): String? = when (owner) {
+        is ItemRef.Event -> eventDao.coverPathOf(owner.eventId)
         // A collection is an event, so both go to the same table. Two calls into two tables is
         // how a cover set on a collection came to be read back from an event and found missing.
         // The collections table, not events. A set has its own row; writing this through the event
         // DAO would have stamped the cover onto whichever event happened to share the id.
-        is CoverOwner.Collection -> collectionDao.coverPathOf(owner.groupId)
-        is CoverOwner.Recording -> eventDao.recordCoverPathOf(owner.recordId)
+        is ItemRef.Collection -> collectionDao.coverPathOf(owner.collectionId)
+        is ItemRef.Recording -> eventDao.recordCoverPathOf(owner.recordId)
     }
 
-    private suspend fun writeCover(owner: CoverOwner, cover: Cover?) {
+    private suspend fun writeCover(owner: ItemRef, cover: Cover?) {
         val p = cover?.path
         val l = cover?.cropLeft
         val t = cover?.cropTop
@@ -1097,11 +1087,11 @@ class LibraryRepository(
         val blur = cover?.blur
         val dim = cover?.dim
         when (owner) {
-            is CoverOwner.Event ->
+            is ItemRef.Event ->
                 eventDao.updateCover(owner.eventId, p, l, t, r, b, blur, dim)
-            is CoverOwner.Collection ->
-                collectionDao.updateCover(owner.groupId, p, l, t, r, b, blur, dim)
-            is CoverOwner.Recording ->
+            is ItemRef.Collection ->
+                collectionDao.updateCover(owner.collectionId, p, l, t, r, b, blur, dim)
+            is ItemRef.Recording ->
                 eventDao.updateRecordCover(owner.recordId, p, l, t, r, b, blur, dim)
         }
     }
@@ -1117,14 +1107,14 @@ class LibraryRepository(
      */
     suspend fun setCover(
         context: android.content.Context,
-        owner: CoverOwner,
+        owner: ItemRef,
         source: android.net.Uri,
         nameHint: String
     ): Boolean {
         val id = when (owner) {
-            is CoverOwner.Event -> owner.eventId
-            is CoverOwner.Collection -> owner.groupId
-            is CoverOwner.Recording -> owner.recordId
+            is ItemRef.Event -> owner.eventId
+            is ItemRef.Collection -> owner.collectionId
+            is ItemRef.Recording -> owner.recordId
         }
         val previous = currentCoverPath(owner)
         val stored = CoverStore.importFrom(context, source, nameHint, id) ?: return false
@@ -1182,15 +1172,15 @@ class LibraryRepository(
      */
     suspend fun restoreCover(
         context: android.content.Context,
-        owner: CoverOwner,
+        owner: ItemRef,
         bytes: ByteArray?,
         crop: Cover,
         nameHint: String
     ) {
         val id = when (owner) {
-            is CoverOwner.Event -> owner.eventId
-            is CoverOwner.Collection -> owner.groupId
-            is CoverOwner.Recording -> owner.recordId
+            is ItemRef.Event -> owner.eventId
+            is ItemRef.Collection -> owner.collectionId
+            is ItemRef.Recording -> owner.recordId
         }
         val stored = bytes?.let { CoverStore.writeBytes(context, it, nameHint, id) }
         writeCover(owner, crop.copy(path = stored ?: ""))
@@ -1254,7 +1244,7 @@ class LibraryRepository(
     }
 
     /** Re-frames the cover already on [owner], leaving the file alone. */
-    suspend fun setCoverCrop(owner: CoverOwner, cover: Cover) {
+    suspend fun setCoverCrop(owner: ItemRef, cover: Cover) {
         writeCover(owner, cover)
         inga.bpmetrics.ui.components.invalidateCover(cover.path)
     }
@@ -1265,7 +1255,7 @@ class LibraryRepository(
      * On an event or a collection this restores inheritance rather than meaning "no picture" — the
      * one above it applies again, which is the point of storing null rather than an empty string.
      */
-    suspend fun clearCover(context: android.content.Context, owner: CoverOwner) {
+    suspend fun clearCover(context: android.content.Context, owner: ItemRef) {
         val previous = currentCoverPath(owner)
         writeCover(owner, null)
         CoverStore.delete(context, previous)
@@ -1292,7 +1282,7 @@ class LibraryRepository(
         // The whole tree, so collections are included — they are events. Reading the filtered
         // list here would leave every collection cover behind while reporting them all cleared.
         eventDao.getAllEvents().forEach {
-            if (it.coverPath != null) {
+            if (it.cover.path != null) {
                 eventDao.updateCover(it.eventId, null, null, null, null, null, null, null)
             }
         }

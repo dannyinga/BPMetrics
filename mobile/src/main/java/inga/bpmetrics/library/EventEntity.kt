@@ -17,7 +17,8 @@ import androidx.room.PrimaryKey
  * event's recordings, and storing them would leave a copy to go stale the moment a recording is
  * added, removed or re-attributed. Derive them.
  *
- * @property groupId The collection this belongs to, or null while it is unfiled.
+ * @property groupId **Not read.** The old collection link, superseded by [parentId] in 23→24. Kept
+ *   only because dropping a column needs a migration; it goes with the next real one.
  * @property createdAt When the event was made. Ordering only.
  */
 @Entity(tableName = "events")
@@ -25,7 +26,7 @@ data class EventEntity(
     @PrimaryKey(autoGenerate = true) val eventId: Long = 0,
     val name: String,
     @ColumnInfo(defaultValue = "NULL") val groupId: Long? = null,
-    @ColumnInfo(defaultValue = "") val notes: String = "",
+    @ColumnInfo(defaultValue = "") override val notes: String = "",
     val createdAt: Long = 0L,
 
     /**
@@ -76,15 +77,7 @@ data class EventEntity(
      * because the app's own files directory moves between installs and backups, and an absolute
      * path written on one device is meaningless on another.
      */
-    @ColumnInfo(defaultValue = "NULL") val coverPath: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropLeft: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropTop: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropRight: Float? = null,
-    @ColumnInfo(defaultValue = "NULL") val coverCropBottom: Float? = null,
-    /** See [Cover.blur]. For covers that are themselves made of type, like an event flyer. */
-    @ColumnInfo(defaultValue = "NULL") val coverBlur: Float? = null,
-    /** How far to darken it. See [inga.bpmetrics.library.Cover.dim]. */
-    @ColumnInfo(defaultValue = "NULL") val coverDim: Float? = null,
+    @androidx.room.Embedded val cover: CoverColumns = CoverColumns(),
 
     /**
      * Where this happened, by reference to the location registry.
@@ -98,15 +91,17 @@ data class EventEntity(
      * keeps its recordings and its times and simply stops saying where.
      */
     @ColumnInfo(defaultValue = "NULL") val locationId: Long? = null
-) {
+) : TreeItem {
+    override val ref: ItemRef get() = ItemRef.Event(eventId)
+
     /** How to refer to this event when it has somehow been left unnamed. */
-    val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled event"
+    override val displayName: String get() = name.takeIf { it.isNotBlank() } ?: "Untitled event"
+
+    override val parentEventId: Long? get() = parentId
+    override val ownLocationId: Long? get() = locationId
 
     /** This event's own cover, or null if it has none of its own to offer. */
-    val ownCover: Cover? get() = Cover.of(
-        coverPath, coverCropLeft, coverCropTop, coverCropRight, coverCropBottom, coverBlur,
-        coverDim
-    )
+    override val ownCover: Cover? get() = cover.toCover()
 
 }
 

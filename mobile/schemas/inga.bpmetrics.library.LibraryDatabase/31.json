@@ -6,7 +6,7 @@
     "entities": [
       {
         "tableName": "bpm_records",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`recordId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `description` TEXT NOT NULL, `date` INTEGER NOT NULL, `startTime` INTEGER NOT NULL, `endTime` INTEGER NOT NULL, `durationMs` INTEGER NOT NULL, `maxId` INTEGER, `avg` REAL, `minId` INTEGER, `deviceId` TEXT NOT NULL DEFAULT 'Watch', `wearerName` TEXT NOT NULL DEFAULT '', `watchId` TEXT DEFAULT NULL, `personId` INTEGER DEFAULT NULL, `eventId` INTEGER DEFAULT NULL, `coverPath` TEXT DEFAULT NULL, `coverCropLeft` REAL DEFAULT NULL, `coverCropTop` REAL DEFAULT NULL, `coverCropRight` REAL DEFAULT NULL, `coverCropBottom` REAL DEFAULT NULL, `coverBlur` REAL DEFAULT NULL, `coverDim` REAL DEFAULT NULL, `timeZoneId` TEXT DEFAULT NULL, `locationId` INTEGER DEFAULT NULL, `activeDurationMs` INTEGER DEFAULT NULL, `zonesEncoded` TEXT NOT NULL DEFAULT '')",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`recordId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `description` TEXT NOT NULL, `date` INTEGER NOT NULL, `startTime` INTEGER NOT NULL, `endTime` INTEGER NOT NULL, `durationMs` INTEGER NOT NULL, `maxId` INTEGER, `avg` REAL, `minId` INTEGER, `deviceId` TEXT NOT NULL DEFAULT 'Watch', `wearerName` TEXT NOT NULL DEFAULT '', `watchId` TEXT DEFAULT NULL, `personId` INTEGER DEFAULT NULL, `eventId` INTEGER DEFAULT NULL, `timeZoneId` TEXT DEFAULT NULL, `locationId` INTEGER DEFAULT NULL, `activeDurationMs` INTEGER DEFAULT NULL, `zonesEncoded` TEXT NOT NULL DEFAULT '', `coverPath` TEXT DEFAULT NULL, `coverCropLeft` REAL DEFAULT NULL, `coverCropTop` REAL DEFAULT NULL, `coverCropRight` REAL DEFAULT NULL, `coverCropBottom` REAL DEFAULT NULL, `coverBlur` REAL DEFAULT NULL, `coverDim` REAL DEFAULT NULL)",
         "fields": [
           {
             "fieldPath": "recordId",
@@ -98,48 +98,6 @@
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverPath",
-            "columnName": "coverPath",
-            "affinity": "TEXT",
-            "defaultValue": "NULL"
-          },
-          {
-            "fieldPath": "coverCropLeft",
-            "columnName": "coverCropLeft",
-            "affinity": "REAL",
-            "defaultValue": "NULL"
-          },
-          {
-            "fieldPath": "coverCropTop",
-            "columnName": "coverCropTop",
-            "affinity": "REAL",
-            "defaultValue": "NULL"
-          },
-          {
-            "fieldPath": "coverCropRight",
-            "columnName": "coverCropRight",
-            "affinity": "REAL",
-            "defaultValue": "NULL"
-          },
-          {
-            "fieldPath": "coverCropBottom",
-            "columnName": "coverCropBottom",
-            "affinity": "REAL",
-            "defaultValue": "NULL"
-          },
-          {
-            "fieldPath": "coverBlur",
-            "columnName": "coverBlur",
-            "affinity": "REAL",
-            "defaultValue": "NULL"
-          },
-          {
-            "fieldPath": "coverDim",
-            "columnName": "coverDim",
-            "affinity": "REAL",
-            "defaultValue": "NULL"
-          },
-          {
             "fieldPath": "timeZoneId",
             "columnName": "timeZoneId",
             "affinity": "TEXT",
@@ -163,6 +121,48 @@
             "affinity": "TEXT",
             "notNull": true,
             "defaultValue": "''"
+          },
+          {
+            "fieldPath": "cover.path",
+            "columnName": "coverPath",
+            "affinity": "TEXT",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "cover.cropLeft",
+            "columnName": "coverCropLeft",
+            "affinity": "REAL",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "cover.cropTop",
+            "columnName": "coverCropTop",
+            "affinity": "REAL",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "cover.cropRight",
+            "columnName": "coverCropRight",
+            "affinity": "REAL",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "cover.cropBottom",
+            "columnName": "coverCropBottom",
+            "affinity": "REAL",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "cover.blur",
+            "columnName": "coverBlur",
+            "affinity": "REAL",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "cover.dim",
+            "columnName": "coverDim",
+            "affinity": "REAL",
+            "defaultValue": "NULL"
           }
         ],
         "primaryKey": {
@@ -495,7 +495,7 @@
       },
       {
         "tableName": "events",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `groupId` INTEGER DEFAULT NULL, `notes` TEXT NOT NULL DEFAULT '', `createdAt` INTEGER NOT NULL, `parentId` INTEGER DEFAULT NULL, `windowStart` INTEGER DEFAULT NULL, `windowEnd` INTEGER DEFAULT NULL, `type` TEXT DEFAULT NULL, `excludedFromParentAnalysis` INTEGER NOT NULL DEFAULT 0, `coverPath` TEXT DEFAULT NULL, `coverCropLeft` REAL DEFAULT NULL, `coverCropTop` REAL DEFAULT NULL, `coverCropRight` REAL DEFAULT NULL, `coverCropBottom` REAL DEFAULT NULL, `coverBlur` REAL DEFAULT NULL, `coverDim` REAL DEFAULT NULL, `locationId` INTEGER DEFAULT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `groupId` INTEGER DEFAULT NULL, `notes` TEXT NOT NULL DEFAULT '', `createdAt` INTEGER NOT NULL, `parentId` INTEGER DEFAULT NULL, `windowStart` INTEGER DEFAULT NULL, `windowEnd` INTEGER DEFAULT NULL, `type` TEXT DEFAULT NULL, `excludedFromParentAnalysis` INTEGER NOT NULL DEFAULT 0, `locationId` INTEGER DEFAULT NULL, `coverPath` TEXT DEFAULT NULL, `coverCropLeft` REAL DEFAULT NULL, `coverCropTop` REAL DEFAULT NULL, `coverCropRight` REAL DEFAULT NULL, `coverCropBottom` REAL DEFAULT NULL, `coverBlur` REAL DEFAULT NULL, `coverDim` REAL DEFAULT NULL)",
         "fields": [
           {
             "fieldPath": "eventId",
@@ -560,51 +560,51 @@
             "defaultValue": "0"
           },
           {
-            "fieldPath": "coverPath",
+            "fieldPath": "locationId",
+            "columnName": "locationId",
+            "affinity": "INTEGER",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "cover.path",
             "columnName": "coverPath",
             "affinity": "TEXT",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverCropLeft",
+            "fieldPath": "cover.cropLeft",
             "columnName": "coverCropLeft",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverCropTop",
+            "fieldPath": "cover.cropTop",
             "columnName": "coverCropTop",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverCropRight",
+            "fieldPath": "cover.cropRight",
             "columnName": "coverCropRight",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverCropBottom",
+            "fieldPath": "cover.cropBottom",
             "columnName": "coverCropBottom",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverBlur",
+            "fieldPath": "cover.blur",
             "columnName": "coverBlur",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverDim",
+            "fieldPath": "cover.dim",
             "columnName": "coverDim",
             "affinity": "REAL",
-            "defaultValue": "NULL"
-          },
-          {
-            "fieldPath": "locationId",
-            "columnName": "locationId",
-            "affinity": "INTEGER",
             "defaultValue": "NULL"
           }
         ],
@@ -731,43 +731,43 @@
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverPath",
+            "fieldPath": "cover.path",
             "columnName": "coverPath",
             "affinity": "TEXT",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverCropLeft",
+            "fieldPath": "cover.cropLeft",
             "columnName": "coverCropLeft",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverCropTop",
+            "fieldPath": "cover.cropTop",
             "columnName": "coverCropTop",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverCropRight",
+            "fieldPath": "cover.cropRight",
             "columnName": "coverCropRight",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverCropBottom",
+            "fieldPath": "cover.cropBottom",
             "columnName": "coverCropBottom",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverBlur",
+            "fieldPath": "cover.blur",
             "columnName": "coverBlur",
             "affinity": "REAL",
             "defaultValue": "NULL"
           },
           {
-            "fieldPath": "coverDim",
+            "fieldPath": "cover.dim",
             "columnName": "coverDim",
             "affinity": "REAL",
             "defaultValue": "NULL"

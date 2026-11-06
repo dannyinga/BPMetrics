@@ -628,17 +628,17 @@ object JsonExporter {
                 // name, so tags never survived a round trip.
                 tags = record.tags.map { it.qualified(categoryNames) },
                 locationName = record.metadata.locationId?.let { locationNames[it] },
-                cover = record.metadata.coverPath
+                cover = record.metadata.cover.path
                     ?.takeIf { it.isNotBlank() }
                     ?.let {
                         Cover(
                             path = it,
-                            cropLeft = record.metadata.coverCropLeft ?: 0f,
-                            cropTop = record.metadata.coverCropTop ?: 0f,
-                            cropRight = record.metadata.coverCropRight ?: 1f,
-                            cropBottom = record.metadata.coverCropBottom ?: 1f,
-                            blur = record.metadata.coverBlur ?: 0f,
-                            dim = record.metadata.coverDim ?: 0f
+                            cropLeft = record.metadata.cover.cropLeft ?: 0f,
+                            cropTop = record.metadata.cover.cropTop ?: 0f,
+                            cropRight = record.metadata.cover.cropRight ?: 1f,
+                            cropBottom = record.metadata.cover.cropBottom ?: 1f,
+                            blur = record.metadata.cover.blur ?: 0f,
+                            dim = record.metadata.cover.dim ?: 0f
                         ).toDto(readImage)
                     },
                 dataPoints = record.dataPoints.map { BpmDataPointDto(it.timestamp, it.bpm) }

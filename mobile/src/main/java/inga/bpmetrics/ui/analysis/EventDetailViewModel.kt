@@ -190,7 +190,7 @@ class EventDetailViewModel(
             onResult(
                 repository.setCover(
                     context = context,
-                    owner = LibraryRepository.CoverOwner.Event(eventId),
+                    owner = inga.bpmetrics.library.ItemRef.Event(eventId),
                     source = source,
                     nameHint = hint
                 )
@@ -201,7 +201,7 @@ class EventDetailViewModel(
     /** Re-frames the picture this event already has, leaving the file alone. */
     fun setCoverCrop(cover: inga.bpmetrics.library.Cover) {
         launchGuarded {
-            repository.setCoverCrop(LibraryRepository.CoverOwner.Event(eventId), cover)
+            repository.setCoverCrop(inga.bpmetrics.library.ItemRef.Event(eventId), cover)
         }
     }
 
@@ -213,7 +213,7 @@ class EventDetailViewModel(
      */
     fun clearCover(context: android.content.Context) {
         launchGuarded {
-            repository.clearCover(context, LibraryRepository.CoverOwner.Event(eventId))
+            repository.clearCover(context, inga.bpmetrics.library.ItemRef.Event(eventId))
         }
     }
 
