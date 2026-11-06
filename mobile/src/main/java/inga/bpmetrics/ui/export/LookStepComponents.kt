@@ -65,6 +65,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
+import inga.bpmetrics.export.BpmScale
+import inga.bpmetrics.export.Contrast
 import inga.bpmetrics.export.ExportPreset
 import inga.bpmetrics.export.VideoFrameRenderer
 import inga.bpmetrics.export.WordmarkCorner
@@ -104,6 +106,10 @@ fun ExportPreview(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    // At the size it renders over this clip, so a canvas matched to the clip previews as the
+    // clip's shape. Everything below, the full-screen copy included, works from this.
+    @Suppress("NAME_SHADOWING")
+    val preset = clip?.canvasFor(preset) ?: preset
     val aspect = preset.width.toFloat() / preset.height.toFloat().coerceAtLeast(1f)
 
     // Saveable so a rotation, or a trip into the photo picker, does not reopen a preview someone
@@ -641,6 +647,51 @@ private fun handleAt(
  * two are in sync — a preview that drew frame zero under a curve from halfway through would be
  * showing something that will never exist.
  */
+/**
+ * Where a [frameWidth] × [frameHeight] picture goes on a [canvasWidth] × [canvasHeight] canvas:
+ * whole and centred with bars, or [fill]ing it and cropped, as Media3's `LAYOUT_SCALE_TO_FIT` and
+ * `LAYOUT_SCALE_TO_FIT_WITH_CROP` place it in the render.
+ */
+internal fun footageRect(frameWidth: Int, frameHeight: Int, canvasWidth: Int, canvasHeight: Int, fill: Boolean): RectF {
+    if (frameWidth <= 0 || frameHeight <= 0) return RectF(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat())
+    val sx = canvasWidth.toFloat() / frameWidth
+    val sy = canvasHeight.toFloat() / frameHeight
+    val s = if (fill) maxOf(sx, sy) else minOf(sx, sy)
+    val w = frameWidth * s
+    val h = frameHeight * s
+    val left = (canvasWidth - w) / 2f
+    val top = (canvasHeight - h) / 2f
+    return RectF(left, top, left + w, top + h)
+}
+
+/** A titled row of chips choosing one of [options], with a line saying what the choice does. */
+@Composable
+private fun <T> ChoiceRow(
+    title: String,
+    hint: String,
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit
+) {
+    Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        options.forEach { option ->
+            FilterChip(
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                label = { Text(label(option)) }
+            )
+        }
+    }
+    Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(8.dp))
+}
+
 /** How long the playhead rests before the preview decodes the exact frame under it. */
 private const val EXACT_FRAME_SETTLE_MS = 300L
 
@@ -743,11 +794,14 @@ private fun renderPreviewFrame(
                 )
             }
         }.getOrNull()?.let { background ->
+            // Fitted or filled the way the render does it. Stretched to the canvas, as it was, the
+            // preview never showed the bars a clip of another shape gets in the export.
+            canvas.drawColor(android.graphics.Color.BLACK)
             canvas.drawBitmap(
                 background,
                 null,
-                RectF(0f, 0f, previewWidth.toFloat(), previewHeight.toFloat()),
-                null
+                footageRect(background.width, background.height, previewWidth, previewHeight, preset.fillCanvas),
+                android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
             )
         }
     }
@@ -820,24 +874,42 @@ fun LookSections(
                 "1:1" to (1080 to 1080),
                 "4:5" to (1080 to 1350)
             )
+            val matching = preset.matchClip && !isImage
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // A still has no clip to match.
+                if (!isImage) {
+                    FilterChip(
+                        selected = matching,
+                        onClick = { onChange(preset.copy(matchClip = true)) },
+                        label = { Text("Match the clip") }
+                    )
+                }
                 presets.forEach { (label, size) ->
                     FilterChip(
-                        selected = preset.width == size.first && preset.height == size.second,
+                        selected = !matching && preset.width == size.first && preset.height == size.second,
                         onClick = {
                             // Placement is fractional, so switching aspect keeps the graph on
                             // canvas instead of leaving it off the bottom — EXP-4.2.
-                            onChange(preset.copy(width = size.first, height = size.second))
+                            onChange(preset.copy(width = size.first, height = size.second, matchClip = false))
                         },
                         label = { Text(label) }
                     )
                 }
             }
             Spacer(Modifier.height(8.dp))
+            if (matching) {
+                Text(
+                    "Each video takes its clip's shape, upright or sideways, at up to " +
+                        "${minOf(preset.width, preset.height)} px on the short side.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                return@SettingsSection
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 NumberField(
                     value = preset.width,
@@ -876,6 +948,17 @@ fun LookSections(
             // the height (Audit §3 Export). Now it does.
             SwitchRow("Lock aspect ratio", preset.lockAspectRatio) {
                 onChange(preset.copy(lockAspectRatio = it))
+            }
+            if (!isImage) {
+                SwitchRow("Fill the frame", preset.fillCanvas) {
+                    onChange(preset.copy(fillCanvas = it))
+                }
+                Text(
+                    if (preset.fillCanvas) "Footage of another shape is cropped to fill the video."
+                    else "Footage of another shape is shown whole, with bars at the sides or top.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
@@ -999,6 +1082,34 @@ fun LookSections(
                 value = preset.backgroundOpacity / 100f,
                 onValue = { onChange(preset.copy(backgroundOpacity = (it * 100).toInt())) }
             )
+            if (!isImage) {
+                Spacer(Modifier.height(8.dp))
+                ChoiceRow(
+                    title = "Scale",
+                    hint = when (preset.bpmScale) {
+                        BpmScale.ON_SCREEN -> "Fits the heart rates in view, so the curves have room to move."
+                        BpmScale.RECORDING -> "The same scale throughout, for comparing levels across a set."
+                    },
+                    options = BpmScale.entries,
+                    selected = preset.bpmScale,
+                    label = { it.label },
+                    onSelect = { onChange(preset.copy(bpmScale = it)) }
+                )
+                ChoiceRow(
+                    title = "Contrast",
+                    hint = when (preset.contrast) {
+                        Contrast.AUTO -> "A soft shadow behind the curves and text when the panel is under " +
+                            "${Contrast.AUTO_PANEL_THRESHOLD}%, so they hold up over bright footage."
+                        Contrast.OFF -> "Nothing behind the curves and text but the panel."
+                        Contrast.SHADOW -> "A soft shadow behind the curves and text."
+                        Contrast.OUTLINE -> "A dark edge round the curves and text. Holds up over anything."
+                    },
+                    options = Contrast.entries,
+                    selected = preset.contrast,
+                    label = { it.label },
+                    onSelect = { onChange(preset.copy(contrast = it)) }
+                )
+            }
             if (isImage) {
                 Text(
                     // The reason the setting matters more here than on a video: nothing is

@@ -954,7 +954,10 @@ class ExportUtilityViewModel(
         // for this many curves (one curve and one readout per record). A clip framed by hand still
         // wins: `placement` is that override, and a pin is only ever a better default.
         val framing = placement ?: GraphPlacement.of(_preset.value, forRecords.size)
+        // At the size it renders over this clip: a canvas matched to the clip takes its shape here,
+        // so the render and the queue only ever see a real width and height.
         val look = framing.into(_preset.value).copy(framesByLaneCount = emptyMap())
+            .let { clip?.canvasFor(it) ?: it }
 
         return inga.bpmetrics.export.ExportRequest.Video(
             content = content,
@@ -1302,19 +1305,20 @@ class ExportUtilityViewModel(
         // Each video sized by the render's own sum. A clip that takes its frame rate from the
         // footage is sized at 60, which no phone clip exceeds in practice: an estimate that's too
         // high only asks for room it may not need, one that's too low fails a render.
-        fun sized(hasOverlay: Boolean, durationMs: Long) = inga.bpmetrics.export.VideoExporter.sizing(
-            preset.width, preset.height,
+        // At each clip's own canvas, which differs from the preset's when it matches the clip.
+        fun sized(canvas: ExportPreset, hasOverlay: Boolean, durationMs: Long) = inga.bpmetrics.export.VideoExporter.sizing(
+            canvas.width, canvas.height,
             if (hasOverlay && preset.matchSourceFrameRate) 60 else preset.frameRate,
             hasOverlay, durationMs
         )
         val items = if (jobs.isEmpty()) {
-            listOf(EstimateItem(fallbackTitle, fallbackDurationMs, sized(false, fallbackDurationMs).bytes))
+            listOf(EstimateItem(fallbackTitle, fallbackDurationMs, sized(preset, false, fallbackDurationMs).bytes))
         } else {
             jobs.map {
                 EstimateItem(
                     titles[it.clip.uri.toString()] ?: it.clip.displayName,
                     it.clip.durationMs,
-                    sized(true, it.clip.durationMs).bytes
+                    sized(it.clip.canvasFor(preset), true, it.clip.durationMs).bytes
                 )
             }
         }

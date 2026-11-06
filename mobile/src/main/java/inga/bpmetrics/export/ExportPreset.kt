@@ -110,11 +110,15 @@ data class ExportPreset(
      * covering the entire video hides the thing it is annotating — the footage is the subject and
      * the curve is the caption. Inset from all four edges on purpose: a default flush to the sides
      * leaves its resize handles on the boundary of the preview, where they cannot be grabbed.
+     *
+     * Nearly the full width since S14A. Half the width left axis labels about 15 px tall at 1080p,
+     * unreadable on the phone these clips are watched on, while the same renderer given room was
+     * clear (UX Audit O6).
      */
-    val graphLeft: Float = 0.25f,
+    val graphLeft: Float = 0.06f,
     val graphTop: Float = 0.58f,
-    val graphRight: Float = 0.75f,
-    val graphBottom: Float = 0.91f,
+    val graphRight: Float = 0.94f,
+    val graphBottom: Float = 0.93f,
 
     /**
      * The frame to use when a clip has a particular number of people on it.
@@ -232,9 +236,43 @@ data class ExportPreset(
      * Defaulted well below full. A credit, not a watermark — the footage and the curve are the
      * subject, and a mark competing with them is one someone will crop out.
      */
-    val wordmarkOpacity: Int = 55
+    val wordmarkOpacity: Int = 55,
+
+    // Fitting the footage
+    /** What the vertical scale covers. See [BpmScale]. */
+    val bpmScale: BpmScale = BpmScale.ON_SCREEN,
+    /** What keeps the curves and text readable over footage. See [Contrast]. */
+    val contrast: Contrast = Contrast.AUTO,
+    /**
+     * Whether a video takes its clip's own shape instead of [width] × [height].
+     *
+     * A portrait clip exported at a landscape size came out as a strip between two black bars (UX
+     * Audit O7). Matched, the canvas is the clip's shape, with its short edge at this preset's short
+     * edge or the clip's own, whichever is smaller. See [forClip].
+     */
+    val matchClip: Boolean = false,
+    /**
+     * Whether footage of a different shape fills the canvas, cropped, instead of fitting inside it
+     * with bars. Only matters when the canvas isn't matched to the clip.
+     */
+    val fillCanvas: Boolean = false
 ) {
     fun toJson(): String = BpmGson.instance.toJson(this)
+
+    /**
+     * This look at the size it renders over a clip [clipWidth] × [clipHeight], as it plays.
+     *
+     * Only [matchClip] changes anything, and only for a clip whose size is known. Everything that
+     * sizes a video goes through this, so the preview, the estimate and the render agree.
+     */
+    fun forClip(clipWidth: Int, clipHeight: Int): ExportPreset {
+        if (!matchClip || clipWidth <= 0 || clipHeight <= 0) return this
+        val shortEdge = minOf(minOf(width, height), minOf(clipWidth, clipHeight))
+        val ratio = shortEdge.toDouble() / minOf(clipWidth, clipHeight)
+        // Even, because the encoders refuse odd dimensions for 4:2:0 video.
+        fun even(px: Double) = (kotlin.math.round(px / 2.0) * 2).toInt().coerceAtLeast(2)
+        return copy(width = even(clipWidth * ratio), height = even(clipHeight * ratio))
+    }
 
     /** The framing this preset carries, replaced. Framing is part of a look, not of a clip. */
     fun withFraming(left: Float, top: Float, right: Float, bottom: Float): ExportPreset =
@@ -367,7 +405,11 @@ data class ExportPreset(
             pillBpmScale = pillBpmScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f)
                 ?: shipped.pillBpmScale,
             pillNameScale = pillNameScale.takeIf { it > 0.05f }?.coerceIn(0.5f, 2f)
-                ?: shipped.pillNameScale
+                ?: shipped.pillNameScale,
+            // Absent from every preset written before 5, and those get what a new one does: the
+            // whole point of these is fixing how the old ones rendered.
+            bpmScale = bpmScale ?: shipped.bpmScale,
+            contrast = contrast ?: shipped.contrast
         )
     }
 
@@ -379,6 +421,7 @@ data class ExportPreset(
          * silently ignoring fields it does not understand would produce an export that looks
          * nothing like the one it was shared from.
          *
+         * 5 adds the vertical scale, contrast, and matching or filling the clip's shape.
          * 4 adds the live readout settings: what a pill carries and how large it is.
          * 3 adds the wordmark.
          * 2 covers graph framing, the sync offset, match-source frame rate, and the removal of the
@@ -387,7 +430,7 @@ data class ExportPreset(
          * Files written at 1 still load: the check is one-directional, so raising this only stops
          * *older* builds reading what they cannot render.
          */
-        const val CURRENT_VERSION = 4
+        const val CURRENT_VERSION = 5
 
         /**
          * Graph framings that shipped as the default in some earlier build.
@@ -402,7 +445,8 @@ data class ExportPreset(
         val SUPERSEDED_FRAMINGS: List<List<Float>> = listOf(
             listOf(0f, 0f, 1f, 1f),
             listOf(0.04f, 0.62f, 0.96f, 0.97f),
-            listOf(0.14f, 0.58f, 0.86f, 0.90f)
+            listOf(0.14f, 0.58f, 0.86f, 0.90f),
+            listOf(0.25f, 0.58f, 0.75f, 0.91f)
         )
 
         /**
@@ -440,9 +484,13 @@ data class ExportPreset(
          * added here would only ever reach a fresh install. Compared against what the install has
          * been offered, and offered exactly once — see `LibraryRepository.offerNewBuiltInPresets`.
          */
-        const val BUILT_IN_REVISION = 2
+        const val BUILT_IN_REVISION = 3
 
         val BUILT_IN: List<ExportPreset> = listOf(
+            // First, so it is the default on a fresh install. Most clips are filmed on the phone
+            // they are exported from, upright or sideways, and either way the video should be the
+            // clip's shape rather than a strip between bars (UX Audit O7). 1080 on the short edge.
+            ExportPreset(name = "Match the clip", width = 1920, height = 1080, matchClip = true),
             ExportPreset(name = "Landscape 1080p", width = 1920, height = 1080),
             ExportPreset(name = "Story 9:16", width = 1080, height = 1920),
             ExportPreset(name = "Square 1:1", width = 1080, height = 1080),
@@ -475,7 +523,9 @@ data class ExportPreset(
                 backgroundOpacity = 35,
                 showGrid = false,
                 graphLeft = 0.06f,
-                graphTop = 0.68f,
+                // A third rather than a quarter: at a quarter, the title and axis took nearly all of
+                // it and the plot was a line (UX Audit O3).
+                graphTop = 0.64f,
                 graphRight = 0.94f,
                 graphBottom = 0.93f,
                 windowSizeMs = 20_000L

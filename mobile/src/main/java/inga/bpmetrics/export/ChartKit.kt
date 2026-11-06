@@ -46,6 +46,81 @@ object ChartKit {
         )
     }
 
+    /**
+     * The vertical scale for what is on screen: the readings within [windowMs] of [playheadMs].
+     *
+     * Eased, so the scale glides rather than jumping when a new reading pushes the range to the next
+     * gridline. Each frame is drawn on its own and not necessarily in order, so the easing can't be
+     * remembered between frames: it is the snapped range averaged over the [EASE_MS] around the
+     * playhead, which gives the same motion from nothing but the playhead, and the same frame
+     * twice. Centred rather than trailing, so a spike arriving at the right edge has already
+     * started making room when it gets there.
+     *
+     * @param series each curve's readings in time order, on one shared timeline.
+     * @param fallback what to use when no reading falls near the window at all.
+     */
+    fun windowRange(
+        series: List<List<inga.bpmetrics.library.BpmDataPointEntity>>,
+        playheadMs: Double,
+        windowMs: Long,
+        fallback: ClosedFloatingPointRange<Double>
+    ): ClosedFloatingPointRange<Double> {
+        var low = 0.0
+        var high = 0.0
+        var weights = 0.0
+        val half = windowMs / 2.0
+        repeat(EASE_SAMPLES) { step ->
+            val age = (step + 0.5) / EASE_SAMPLES
+            // Smoothstep's derivative, so the glide eases in and out.
+            val weight = 6.0 * age * (1.0 - age)
+            val at = playheadMs + (age - 0.5) * EASE_MS
+            val readings = series.flatMap { readingsBetween(it, at - half, at + half) }
+            if (readings.isEmpty()) return@repeat
+            val range = bpmRange(readings)
+            low += weight * range.start
+            high += weight * range.endInclusive
+            weights += weight
+        }
+        return if (weights > 0.0) (low / weights)..(high / weights) else fallback
+    }
+
+    /** The readings in [points], which are in time order, from [from] to [to] inclusive. */
+    private fun readingsBetween(
+        points: List<inga.bpmetrics.library.BpmDataPointEntity>,
+        from: Double,
+        to: Double
+    ): List<Double> {
+        // The first at or after [from], by binary search: this runs several times a frame.
+        var lo = 0
+        var hi = points.size
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (points[mid].timestamp < from) lo = mid + 1 else hi = mid
+        }
+        val out = ArrayList<Double>()
+        var i = lo
+        while (i < points.size && points[i].timestamp <= to) {
+            out += points[i].bpm
+            i++
+        }
+        return out
+    }
+
+    /** How long the on-screen scale takes to settle on a new range, in playhead milliseconds. */
+    const val EASE_MS = 1_000.0
+
+    /** How finely the easing is read. Fewer stair-step; more is smoother than a frame shows. */
+    private const val EASE_SAMPLES = 8
+
+    /**
+     * The smallest text worth drawing on a canvas [width] × [height]: 2% of its short edge.
+     *
+     * About 22 px on a 1080p video, which is legible on the phone it is watched on. Scaling text
+     * with the panel took axis labels to about 15 px on the default frame (UX Audit O6), so every
+     * size the renderer works out is held at least to this.
+     */
+    fun readableText(width: Float, height: Float): Float = minOf(width, height) * 0.02f
+
     /** The gridline values inside [range], on round numbers. */
     fun gridLines(range: ClosedFloatingPointRange<Double>): List<Double> = GraphAxes.bpmGridLines(range)
 

@@ -103,6 +103,49 @@ class RendererReferenceTest {
         assertMatchesReference("image", bitmap!!)
     }
 
+    /** Three more people, for the casts the built-ins have to fit. */
+    private val crowd = records + listOf(
+        recording(3, "Stina", "Pixel Watch") { minute -> 95.0 + 20.0 * kotlin.math.sin(minute / 2.0) },
+        recording(4, "Alexandra", "Galaxy 6") { minute -> 120.0 - minute },
+        recording(5, "Colin", "Venu") { minute -> 64.0 + minute * 0.5 }
+    )
+    private val crowdColours = colours + mapOf(3L to 0xFF66BB6A.toInt(), 4L to 0xFFAB47BC.toInt(), 5L to 0xFFFFCA28.toInt())
+
+    /**
+     * Every built-in at one, three and five people (S14A).
+     *
+     * The failures the overlay audit found were all of this kind: readouts running off the panel
+     * at five, a lower third with no plot, names cut on a story. Each was visible in exactly one
+     * preset at one cast size, so each pairing gets a picture. At half size, which keeps the
+     * references small; text is sized off the canvas, so the layout is the same.
+     */
+    @Test
+    fun everyBuiltInDrawsWhatItDrewBeforeAtOneThreeAndFive() {
+        val problems = mutableListOf<String>()
+        ExportPreset.BUILT_IN.forEach { preset ->
+            listOf(1, 3, 5).forEach { n ->
+                val cast = crowd.take(n)
+                val look = preset.copy(width = preset.width / 2, height = preset.height / 2)
+                val content = ExportContent(
+                    records = cast, startMs = startMs, endMs = startMs + 20 * 60_000L,
+                    title = "Excision B2B SLANDER · Bass Canyon", colours = crowdColours, clipZoneId = "UTC"
+                )
+                val bitmap = Bitmap.createBitmap(look.width, look.height, Bitmap.Config.ARGB_8888)
+                bitmap.eraseColor(Color.BLACK)
+                VideoFrameRenderer.renderAlignedRecordsOnCanvas(
+                    Canvas(bitmap), VideoFrameRenderer.alignRecords(cast), content, look,
+                    currentTimeMs = 14 * 60_000.0
+                )
+                val slug = preset.name.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+                runCatching { assertMatchesReference("builtin_${slug}_$n", bitmap) }
+                    .exceptionOrNull()?.let { problems += it.message.orEmpty() }
+            }
+        }
+        // All of them, rather than stopping at the first: a change to the renderer usually moves
+        // several, and recording them one run at a time is eighteen runs.
+        if (problems.isNotEmpty()) fail(problems.joinToString("\n"))
+    }
+
     /** The same input drawn twice comes out the same, before any reference comes into it. */
     @Test
     fun drawingIsRepeatable() {

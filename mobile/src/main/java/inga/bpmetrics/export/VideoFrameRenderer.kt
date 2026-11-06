@@ -270,40 +270,54 @@ object VideoFrameRenderer {
         /** When the session began, for the clock. */
         timelineOriginMs: Long = 0L
     ) {
-        val labelSize = 28f * dims.scaleFactor
+        val contrast = contrastOf(config)
 
         // Gridlines on values a person counts in — 5s, 10s, 20s, 25s — rather than the data range
         // cut into six. That produced labels like 154 and 167, which are true and useless: an axis
         // is read by landing on a value, and nobody lands on 167.
-        GraphAxes.bpmGridLines(ranges.uiMin..ranges.uiMax).forEach { bpm ->
-            val y = dims.getY(bpm, ranges)
-            if (y !in dims.graphTop..dims.graphBottom) return@forEach
+        val lines = GraphAxes.bpmGridLines(ranges.uiMin..ranges.uiMax)
+        val spacing = if (lines.size >= 2) {
+            abs(dims.getY(lines[0], ranges) - dims.getY(lines[1], ranges))
+        } else {
+            dims.graphHeight
+        }
+        // On a short plot, every other label, or every third, rather than all of them piled into
+        // one smudge (UX Audit O3). Gridlines thin the same way once they would be a hatching.
+        val labelEvery = kotlin.math.ceil(dims.axisText * 1.3f / spacing.coerceAtLeast(1f)).toInt().coerceAtLeast(1)
+        val gridEvery = kotlin.math.ceil(dims.axisText * 0.5f / spacing.coerceAtLeast(1f)).toInt().coerceAtLeast(1)
+        // Fewer than two labels is not a scale, and one alone reads as a value.
+        val showLabels = config.look.showLabels && lines.size >= 2 * labelEvery
 
-            if (config.look.showGrid) {
+        lines.forEachIndexed { index, bpm ->
+            val y = dims.getY(bpm, ranges)
+            if (y !in dims.graphTop..dims.graphBottom) return@forEachIndexed
+
+            if (config.look.showGrid && index % gridEvery == 0) {
                 paint.resetForExport()
                 paint.color = config.look.gridColor
                 paint.strokeWidth = 2f
                 canvas.drawLine(dims.graphLeft, y, dims.graphRight, y, paint)
             }
-            if (config.look.showLabels) {
+            if (showLabels && index % labelEvery == 0) {
                 paint.resetForExport()
                 paint.color = config.look.labelsColor
-                paint.textSize = labelSize
+                paint.textSize = dims.axisText
                 paint.textAlign = Paint.Align.RIGHT
-                canvas.drawText(
-                    GraphAxes.bpmLabel(bpm),
-                    dims.graphLeft - 15f * dims.scaleFactor,
-                    y + 10f * dims.scaleFactor,
-                    paint
+                drawText(
+                    canvas, GraphAxes.bpmLabel(bpm),
+                    dims.graphLeft - 12f * dims.scaleFactor,
+                    // Centred on its line: a cap height is about 0.7 of the size.
+                    y + dims.axisText * 0.35f,
+                    paint, contrast, dims
                 )
             }
         }
 
-        if (viewport != null) {
-            drawTimeAxis(canvas, dims, viewport, config, paint, labelSize)
+        if (viewport != null && dims.showTimeAxis) {
+            drawTimeAxis(canvas, dims, viewport, config, paint, contrast)
         }
 
-        drawHeader(canvas, dims, ranges, config, paint, viewport, timelineOriginMs)
+        drawHeader(canvas, dims, ranges, config, paint, viewport, timelineOriginMs, contrast)
     }
 
     /**
@@ -322,7 +336,7 @@ object VideoFrameRenderer {
         viewport: Viewport,
         config: Frame,
         paint: Paint,
-        labelSize: Float
+        contrast: Contrast
     ) {
         val spanMs = viewport.duration.roundToLong()
         if (spanMs <= 0L) return
@@ -339,13 +353,8 @@ object VideoFrameRenderer {
             // The label stays, because the offsets either side are measured from it.
             if (config.look.showGrid && !isNow) {
                 paint.resetForExport()
-                // The grid colour as it is, dimmed further — not an alpha of its own.
-                //
-                // These were drawn at alpha 90 while `gridColor` is itself only alpha 31, which
-                // made every vertical line about three times the weight of the horizontals beside
-                // it. A time axis is a reference, not a subject: it should be found when looked for
-                // and invisible when not, and anything louder than the heart rate lines is reading
-                // as a feature of the data.
+                // The grid colour, dimmed further. A time axis is a reference, not a subject: it
+                // should be found when looked for and invisible when not.
                 paint.color = config.look.gridColor
                 paint.alpha = (Color.alpha(config.look.gridColor) * 0.7f).roundToInt()
                 paint.strokeWidth = 2f
@@ -356,15 +365,16 @@ object VideoFrameRenderer {
                 paint.resetForExport()
                 paint.color = config.look.labelsColor
                 paint.alpha = if (isNow) 255 else 180
-                paint.textSize = labelSize * 0.82f
+                paint.textSize = dims.timeText
                 paint.isFakeBoldText = isNow
                 paint.textAlign = Paint.Align.CENTER
-                canvas.drawText(
+                drawText(
+                    canvas,
                     GraphAxes.offsetLabel(offset),
                     // Kept inside the plot, so the first and last labels are not half off the frame.
-                    x.coerceIn(dims.graphLeft + labelSize, dims.graphRight - labelSize),
-                    dims.graphBottom + labelSize * 1.15f,
-                    paint
+                    x.coerceIn(dims.graphLeft + dims.timeText * 1.2f, dims.graphRight - dims.timeText * 1.2f),
+                    dims.graphBottom + dims.timeText * 1.2f,
+                    paint, contrast, dims
                 )
             }
         }
@@ -385,10 +395,11 @@ object VideoFrameRenderer {
         config: Frame,
         paint: Paint,
         viewport: Viewport?,
-        timelineOriginMs: Long
+        timelineOriginMs: Long,
+        contrast: Contrast
     ) {
         val clock = viewport?.let { clockTextFor(config, it, timelineOriginMs) }
-        val baseline = dims.drawAreaTop + 60f * dims.scaleFactor
+        val baseline = dims.headerBaseline
 
         val centreX = dims.graphLeft + dims.graphWidth / 2f
         val gap = 24f * dims.scaleFactor
@@ -400,7 +411,7 @@ object VideoFrameRenderer {
         var clockWidth = 0f
         if (clock != null) {
             paint.resetForExport()
-            paint.textSize = 40f * dims.scaleFactor
+            paint.textSize = dims.clockText
             paint.isFakeBoldText = true
             clockWidth = paint.measureText(clock)
         }
@@ -408,29 +419,84 @@ object VideoFrameRenderer {
         if (config.look.showTitle) {
             paint.resetForExport()
             paint.color = config.look.labelsColor
-            paint.textSize = 48f * dims.scaleFactor
             paint.isFakeBoldText = true
             paint.textAlign = Paint.Align.CENTER
 
             val room = (dims.graphWidth - (clockWidth + gap) * 2f).coerceAtLeast(0f)
-            canvas.drawText(ChartKit.ellipsize(ranges.title, room, paint), centreX, baseline, paint)
+            // Smaller before shorter. A title is usually an artist and a venue, and "Excision B2B
+            // SLA…" loses the part that says who; a title a size down loses nothing (UX Audit O4).
+            val floor = maxOf(dims.readableText, dims.titleText * 0.7f)
+            paint.textSize = dims.titleText
+            while (paint.measureText(ranges.title) > room && paint.textSize * 0.92f >= floor) {
+                paint.textSize *= 0.92f
+            }
+            drawText(canvas, ChartKit.ellipsize(ranges.title, room, paint), centreX, baseline, paint, contrast, dims)
         }
 
         if (clock != null) {
             paint.resetForExport()
             paint.color = config.look.labelsColor
-            paint.textSize = 40f * dims.scaleFactor
+            paint.textSize = dims.clockText
             paint.isFakeBoldText = true
             // To the right where it shares the band, centred where it has the band to itself.
             if (config.look.showTitle) {
                 paint.textAlign = Paint.Align.RIGHT
-                canvas.drawText(clock, dims.graphRight, baseline, paint)
+                drawText(canvas, clock, dims.graphRight, baseline, paint, contrast, dims)
             } else {
                 paint.textAlign = Paint.Align.CENTER
-                canvas.drawText(clock, centreX, baseline, paint)
+                drawText(canvas, clock, centreX, baseline, paint, contrast, dims)
             }
         }
     }
+
+    /** What keeps this frame's curves and text readable over footage. */
+    private fun contrastOf(config: Frame): Contrast =
+        config.look.contrast.resolvedFor(config.look.backgroundOpacity)
+
+    /**
+     * Text with whatever [contrast] puts behind it.
+     *
+     * A soft shadow is enough over most footage; an outline holds over anything, sky and stage
+     * lights included, at the cost of looking heavier.
+     */
+    private fun drawText(
+        canvas: Canvas,
+        text: String,
+        x: Float,
+        y: Float,
+        paint: Paint,
+        contrast: Contrast,
+        dims: RenderingDimensions
+    ) {
+        when (contrast) {
+            Contrast.SHADOW -> {
+                paint.setShadowLayer(
+                    maxOf(5f * dims.scaleFactor, 3f), 0f, 1.5f * dims.scaleFactor, CONTRAST_SHADOW
+                )
+                canvas.drawText(text, x, y, paint)
+                paint.clearShadowLayer()
+            }
+            Contrast.OUTLINE -> {
+                val fill = paint.color
+                val style = paint.style
+                paint.style = Paint.Style.STROKE
+                paint.strokeJoin = Paint.Join.ROUND
+                paint.strokeWidth = maxOf(paint.textSize * 0.14f, 2f)
+                // As faded as the text it outlines, so a dimmed label keeps a dimmed edge.
+                paint.color = (CONTRAST_OUTLINE and 0x00FFFFFF) or
+                    ((Color.alpha(CONTRAST_OUTLINE) * Color.alpha(fill) / 255) shl 24)
+                canvas.drawText(text, x, y, paint)
+                paint.style = style
+                paint.color = fill
+                canvas.drawText(text, x, y, paint)
+            }
+            else -> canvas.drawText(text, x, y, paint)
+        }
+    }
+
+    /** What sits behind text and curves for [Contrast.SHADOW] and [Contrast.OUTLINE]. */
+    private const val CONTRAST_SHADOW = 0xE6000000.toInt()
+    private const val CONTRAST_OUTLINE = 0xE6000000.toInt()
 
     /** What the clock says, or null when it is switched off. */
     private fun clockTextFor(
@@ -673,6 +739,39 @@ object VideoFrameRenderer {
         paint.style = Paint.Style.FILL
         canvas.drawPath(fill, paint)
 
+        // --- 3b. CONTRAST, UNDER BOTH LINES ---
+        // The same paths, wider and dark, faded by the same masks so the halo ends where the line
+        // does. Without it a thin coloured line over bright footage disappears (UX Audit O5).
+        val contrast = contrastOf(config)
+        if (contrast != Contrast.OFF) {
+            val haloColour = if (contrast == Contrast.SHADOW) CONTRAST_SHADOW else CONTRAST_OUTLINE
+            val solid = LinearGradient(0f, 0f, 1f, 0f, haloColour, haloColour, Shader.TileMode.CLAMP)
+            val halo = ChartKit.paint().apply {
+                style = Paint.Style.STROKE
+                strokeJoin = Paint.Join.ROUND
+                strokeCap = Paint.Cap.ROUND
+                if (contrast == Contrast.SHADOW) {
+                    maskFilter = android.graphics.BlurMaskFilter(
+                        5f * dims.scaleFactor, android.graphics.BlurMaskFilter.Blur.NORMAL
+                    )
+                }
+            }
+            val extra = (if (contrast == Contrast.SHADOW) 6f else 4f) * dims.scaleFactor
+            val dash = android.graphics.DashPathEffect(floatArrayOf(15f * dims.scaleFactor, 15f * dims.scaleFactor), 0f)
+            listOf(
+                Triple(futureSolid, futureAlphaMask, 4f) to null,
+                Triple(futureDashed, futureAlphaMask, 4f) to dash,
+                Triple(pastSolid, pastAlphaMask, 7f) to null,
+                Triple(pastDashed, pastAlphaMask, 7f) to dash
+            ).forEach { (line, effect) ->
+                val (path, mask, width) = line
+                halo.shader = ComposeShader(solid, mask, PorterDuff.Mode.DST_IN)
+                halo.strokeWidth = width * dims.scaleFactor + extra
+                halo.pathEffect = effect
+                canvas.drawPath(path, halo)
+            }
+        }
+
         // --- 4. RENDER FUTURE LINE ---
         paint.shader = ComposeShader(colorGradient, futureAlphaMask, PorterDuff.Mode.DST_IN)
         paint.style = Paint.Style.STROKE
@@ -762,8 +861,14 @@ object VideoFrameRenderer {
         paint.setShadowLayer(22f * dims.scaleFactor * pulseScale, 0f, 0f, headColor)
         canvas.drawCircle(headX, headY, 8f * dims.scaleFactor * pulseScale, paint)
 
-        // Core
+        // Core, on a dark ring where the footage needs one: the glow is the head's own colour, so
+        // over a bright frame it vanishes along with the line.
         paint.clearShadowLayer()
+        val contrast = contrastOf(config)
+        if (contrast != Contrast.OFF) {
+            paint.color = if (contrast == Contrast.SHADOW) CONTRAST_SHADOW else CONTRAST_OUTLINE
+            canvas.drawCircle(headX, headY, 8.5f * dims.scaleFactor, paint)
+        }
         paint.color = headColor
         canvas.drawCircle(headX, headY, 6f * dims.scaleFactor, paint)
 
@@ -774,7 +879,14 @@ object VideoFrameRenderer {
         canvas.drawCircle(headX, headY, 2.5f * dims.scaleFactor, paint)
     }
 
-    // Helper Classes to clean up variable passing
+    /**
+     * Where everything goes on the panel, worked out once per frame.
+     *
+     * Text is sized from the panel and held to [readableText], and each band is sized from the text
+     * in it. The bands used to be fixed allowances (120 for a 48-unit title, 140 for three-digit
+     * labels), which on a short panel left a plot a few pixels tall (UX Audit O3). When the plot
+     * would still come out shorter than [MIN_PLOT_LINES] axis labels, the time axis gives way first.
+     */
     private class RenderingDimensions(
         canvas: Canvas,
         rect: RectF,
@@ -794,15 +906,39 @@ object VideoFrameRenderer {
         val scaleFactor = (canvasScale * drawAreaWidth / fullWidth).coerceAtLeast(0.5f * canvasScale)
         val outerRect = RectF(drawAreaLeft, drawAreaTop, drawAreaRight, drawAreaBottom)
 
-        // UPDATED: Standardized padding
-        val paddingLeft = (if (config.look.showLabels) 140f else 60f) * scaleFactor
-        val paddingRight = 60f * scaleFactor // Fixed padding instead of a variable buffer
-        val paddingTop = (if (config.look.showTitle) 120f else 60f) * scaleFactor
-        val paddingBottom = (if (config.look.showLabels) 100f else 40f) * scaleFactor
+        /** The smallest text drawn anywhere on this frame. See [ChartKit.readableText]. */
+        val readableText = ChartKit.readableText(fullWidth, fullHeight)
 
-        // UPDATED: Graph now takes full width minus standard padding
-        val graphWidth = drawAreaWidth - paddingLeft - paddingRight
-        val graphHeight = drawAreaHeight - paddingTop - paddingBottom
+        val axisText = maxOf(28f * scaleFactor, readableText)
+        val timeText = maxOf(23f * scaleFactor, readableText)
+        val titleText = maxOf(48f * scaleFactor, readableText * 1.4f)
+        val clockText = maxOf(40f * scaleFactor, readableText * 1.2f)
+
+        /** Kept clear inside the panel's edge. */
+        val edge = 16f * scaleFactor
+
+        private val hasHeader = config.look.showTitle || config.look.clockMode != ClockMode.NONE
+        private val headerText = if (config.look.showTitle) titleText else clockText
+
+        /** Where the title and clock sit, a line of [headerText] below the panel's top edge. */
+        val headerBaseline = drawAreaTop + edge + headerText
+
+        private val paddingTop = if (hasHeader) edge + headerText * 1.45f else edge
+        // Room for "200" right-aligned against the plot, and the gap before it.
+        private val paddingLeft = if (config.look.showLabels) axisText * 1.9f + 12f * scaleFactor else edge
+        private val paddingRight = edge * 1.5f
+        private val timeBand = if (config.look.showLabels) timeText * 1.6f + 6f * scaleFactor else edge
+
+        /**
+         * Whether the time axis is drawn. Off when keeping its band would leave a plot shorter than
+         * a few axis labels: of everything round the plot, the time axis is what the graph can best
+         * do without, since the clock in the header already says where in time it is.
+         */
+        val showTimeAxis = drawAreaHeight - paddingTop - timeBand >= axisText * MIN_PLOT_LINES
+        private val paddingBottom = if (showTimeAxis) timeBand else edge
+
+        val graphWidth = (drawAreaWidth - paddingLeft - paddingRight).coerceAtLeast(1f)
+        val graphHeight = (drawAreaHeight - paddingTop - paddingBottom).coerceAtLeast(1f)
 
         val graphLeft = drawAreaLeft + paddingLeft
         val graphRight = graphLeft + graphWidth
@@ -811,6 +947,11 @@ object VideoFrameRenderer {
 
         fun getY(bpm: Double, ranges: BpmRanges): Float = graphTop + (1f - (bpm - ranges.uiMin).toFloat() / ranges.uiRange.toFloat()) * graphHeight
         fun getX(ts: Double, vp: Viewport): Float = graphLeft + ((ts - vp.start) / vp.duration * graphWidth).toFloat()
+
+        companion object {
+            /** The shortest plot worth drawing, in axis-label heights. */
+            const val MIN_PLOT_LINES = 3.5f
+        }
     }
 
     private class BpmRanges(val uiMin: Double, val uiMax: Double, val title: String) {
@@ -956,11 +1097,7 @@ object VideoFrameRenderer {
         if (allPoints.isEmpty()) return
         // The one scale both renderers use, so a picture and a video of the same recordings read
         // against the same gridlines.
-        val bpmRange = ChartKit.bpmRange(allPoints.map { it.bpm })
-        val ranges = BpmRanges(
-            bpmRange.start, bpmRange.endInclusive,
-            config.content.title?.takeIf { it.isNotBlank() } ?: "Multi-Watch Session"
-        )
+        val wholeRange = ChartKit.bpmRange(allPoints.map { it.bpm })
 
         // The crop is chosen against the shared timeline, so it is honoured as-is. A caller may
         // supply none at all, which falls back to the whole timeline.
@@ -975,6 +1112,19 @@ object VideoFrameRenderer {
         }
 
         val viewport = calculateViewport(currentTimeMs, windowSizeMs, multiConfig, primaryRecord)
+
+        // What's on screen, by default: thirty seconds of a heart rate against the whole
+        // recording's range is a flat line (UX Audit O2). Only where there is a moving window; a
+        // still of a whole stretch already shows everything its range covers.
+        val bpmRange = if (config.look.bpmScale == BpmScale.ON_SCREEN && windowSizeMs != null && currentTimeMs != null) {
+            ChartKit.windowRange(processedRecords.map { it.dataPoints }, viewport.playhead, windowSizeMs, wholeRange)
+        } else {
+            wholeRange
+        }
+        val ranges = BpmRanges(
+            bpmRange.start, bpmRange.endInclusive,
+            config.content.title?.takeIf { it.isNotBlank() } ?: "Multi-Watch Session"
+        )
 
         drawContainer(canvas, dims, config, paint)
         drawGridAndAxes(
@@ -1053,10 +1203,9 @@ object VideoFrameRenderer {
      * Clock and elapsed time belong to the shared timeline, so they are drawn once underneath
      * rather than repeated in every pill.
      */
-    /** Everything about a readout column that both measuring and drawing need to agree on. */
+    /** Everything about a readout pill that both measuring and drawing need to agree on. */
     private class ReadoutMetrics(
         val rowHeight: Float,
-        val rowGap: Float,
         val digitSize: Float,
         val labelSize: Float,
         val gap: Float,
@@ -1069,9 +1218,19 @@ object VideoFrameRenderer {
         val pillWidth: Float,
         val shownLabels: List<String>,
         /** Whether the name sits under the reading rather than beside it. */
-        val stacked: Boolean
+        val stacked: Boolean,
+        /** Where each place in the ranking goes. Null only while measuring, before there is one. */
+        val plan: ReadoutLayout.Plan? = null
     )
 
+    /**
+     * The readouts' layout for this frame: the plan (see [ReadoutLayout]) and the pill it settled on.
+     *
+     * Inside the plot, so the pills never sit on the title, the axis labels or the time axis, and
+     * sized against the plot too. They were sized against the whole panel and then stacked from the
+     * top of the plot, which is how a column the panel's height ran off the bottom of the plot below
+     * it (UX Audit O1).
+     */
     private fun measureReadouts(
         dims: RenderingDimensions,
         records: List<BpmRecordWithPoints>,
@@ -1079,94 +1238,120 @@ object VideoFrameRenderer {
         paint: Paint
     ): ReadoutMetrics {
         val scale = dims.scaleFactor
-        val edgeMargin = 20f * scale
-        val rowGap = 8f * scale
+        val plan = ReadoutLayout.plan(
+            count = records.size,
+            areaLeft = dims.graphLeft,
+            areaTop = dims.graphTop,
+            areaRight = dims.graphRight,
+            areaBottom = dims.graphBottom,
+            onLeft = config.look.pillCorner == PillCorner.TOP_LEFT,
+            margin = 16f * scale,
+            gap = 8f * scale,
+            maxRowHeight = 190f * scale,
+            // The reading is under half the row, so this keeps it at the readable floor.
+            minRowHeight = dims.readableText / DIGIT_SHARE_STACKED,
+            sizeScale = config.look.pillScale,
+            // The width whole names need, so the plan makes room for them before anything is cut.
+            measure = { rowHeight, _ -> wholeNamesWidth(dims, rowHeight, records, config, paint) }
+        )
+        val pill = pillAt(dims, plan.rowHeight, plan.allowance, records, config, paint)
+        // Anchored to the pill actually drawn. The plan measured the narrowest pill that keeps the
+        // names whole; the one drawn may be wider, laid flat because that fits the allowance too,
+        // and a block anchored right at the narrower width would run off the plot.
+        val drawn = pill.pillWidth.coerceAtMost(plan.allowance)
+        val onLeft = config.look.pillCorner == PillCorner.TOP_LEFT
+        val blockWidth = plan.columns * drawn + (plan.columns - 1) * plan.gap
+        val placed = plan.copy(
+            pillWidth = drawn,
+            left = if (onLeft) plan.left else dims.graphRight - 16f * scale - blockWidth
+        )
+        return ReadoutMetrics(
+            rowHeight = pill.rowHeight,
+            digitSize = pill.digitSize,
+            labelSize = pill.labelSize,
+            gap = pill.gap,
+            padH = pill.padH,
+            cornerRadius = pill.cornerRadius,
+            avatarSize = pill.avatarSize,
+            digitWidth = pill.digitWidth,
+            textBlockWidth = pill.textBlockWidth,
+            labelWidth = pill.labelWidth,
+            pillWidth = drawn,
+            shownLabels = pill.shownLabels,
+            stacked = pill.stacked,
+            plan = placed
+        )
+    }
 
-        // Pills are sized to fill the height rather than fixed small, so a two-wearer session
-        // gets large readable numbers instead of the same cramped rows as a six-wearer one. The
-        // ceiling stops a single pill becoming a slab; the floor keeps a crowded session legible
-        // even if the column then runs slightly past the graph.
-        //
-        // Nothing is reserved at the bottom any more. The clock used to hang off the end of this
-        // column and took a row's worth of height out of it; now it sits in the opposite corner and
-        // the pills have the full run.
-        // Against the whole panel, not the plot inside it.
-        //
-        // The plot has the title band taken off the top and the time axis off the bottom, and on a
-        // lower-third framing that leaves very little: five wearers on a 1920-wide canvas were
-        // getting about forty pixels of row each, which is a readout nobody can read. The pills are
-        // a HUD drawn on the frame, not marks on the chart, so the space they get should be the
-        // panel's — the title is centred and the axis labels are on the left, so a column down the
-        // right has no quarrel with either.
-        val available = dims.drawAreaHeight - (edgeMargin * 2)
+    /**
+     * How wide a pill at [rowHeight] is with every name whole: beside the reading or under it,
+     * whichever is narrower.
+     */
+    private fun wholeNamesWidth(
+        dims: RenderingDimensions,
+        rowHeight: Float,
+        records: List<BpmRecordWithPoints>,
+        config: Frame,
+        paint: Paint
+    ): Float {
+        // Flat, with nothing cut: what the pill measures with all the room in the world.
+        val flat = pillAt(dims, rowHeight, Float.MAX_VALUE, records, config, paint)
+        if (!config.look.pillShowName || flat.labelWidth <= 0f) return flat.pillWidth
+        val padH = rowHeight * 0.15f
+        val gap = rowHeight * 0.075f
+        paint.resetForExport()
+        paint.isFakeBoldText = true
+        paint.textSize = rowHeight * DIGIT_SHARE_STACKED * config.look.pillBpmScale
+        val stackedDigits = paint.measureText("888")
+        val face = if (flat.avatarSize > 0f) flat.avatarSize + gap else 0f
+        val stacked = padH * 2 + face + maxOf(stackedDigits, flat.labelWidth)
+        return minOf(flat.pillWidth, stacked)
+    }
 
-        // Measured against the *draw area*, not the plot — and that is load-bearing rather than a
-        // detail. The plot's width now depends on how wide this column turns out to be, so sizing
-        // the column from the plot would be circular: a wider pill narrows the plot, which narrows
-        // the cap, which narrows the pill. Against the frame it settles in one pass, and the width
-        // worked out here is the width the gutter was reserved at.
-        val widthCap = dims.drawAreaWidth * 0.16f
+    /** The reading's share of a pill's height with the name beside it, and with it underneath. */
+    private const val DIGIT_SHARE_FLAT = 0.50f
+    private const val DIGIT_SHARE_STACKED = 0.44f
 
-        // The preset scales what the renderer works out rather than replacing it, so no setting can
-        // produce pills that do not fit the graph they are drawn on. The bounds still bind.
-        val rowHeight = ((available - rowGap * (records.size - 1)) / records.size * config.look.pillScale)
-            .coerceIn(48f * scale, minOf(190f * scale, widthCap * 1.4f))
-
-        // Everything else follows the row height, so the proportions hold at any size.
-        // Tighter than they were. Every millimetre of pill is a millimetre of curve not visible,
-        // and on a graph whose whole purpose is showing a climb arriving, that is not a neutral
-        // trade — the readouts were claiming space from the thing they are annotating.
-        //
-        // The name sits under the reading rather than beside it. In a row, every character of a
-        // name was another millimetre of width, so "Kyle" was fine and "Alexandra" was a pill
-        // halfway across the graph — and the fix for that, ellipsis, threw away the name. Stacked,
-        // the two share a column as wide as the wider of them, and since three digits are already
-        // reserved, most names cost nothing at all.
-        // Whether the name sits beside the reading or under it, decided by what fits rather than
-        // fixed. The two trade the same space in opposite directions: side by side is short and
-        // wide, stacked is tall and narrow.
-        //
-        // Which is right depends entirely on how many people are on the frame, and stacking
-        // unconditionally got that backwards for the common case. Five wearers on a landscape clip
-        // have almost no vertical room and a great deal of horizontal, so cramming two lines into
-        // each of five short rows made every one of them unreadable while most of the width sat
-        // empty. Laid out flat the same rows carry a larger number and a legible name.
-        //
-        // Decided below, once both arrangements have been measured; the sizes here are the ones
-        // both are measured at.
-        // Tight. This sits between the face, the name and the reading, and at the previous 0.11 the
-        // pill read as three separate things that happened to share a background rather than one
-        // readout.
+    /**
+     * One pill at [rowHeight], with names cut to fit [allowance].
+     *
+     * Whether the name sits beside the reading or under it is decided by what fits. Side by side is
+     * short and wide, stacked is tall and narrow; flat is preferred because it keeps the reading at
+     * full size and the name at full length, and the name only folds underneath when flat would
+     * pass the allowance.
+     *
+     * Nothing collapses when a part is switched off: widths are summed from the parts actually
+     * present, so hiding the name closes the gap rather than leaving a hole.
+     */
+    private fun pillAt(
+        dims: RenderingDimensions,
+        rowHeight: Float,
+        allowance: Float,
+        records: List<BpmRecordWithPoints>,
+        config: Frame,
+        paint: Paint
+    ): ReadoutMetrics {
+        // Tight. This sits between the face, the name and the reading, and any looser reads as three
+        // things sharing a background rather than one readout.
         val gap = rowHeight * 0.075f
         val padH = rowHeight * 0.15f
         val cornerRadius = rowHeight * 0.24f
 
-        // A face and a number, and whatever else the preset asks for.
-        //
-        // Nothing here collapses when a part is switched off: the widths are summed from the parts
-        // that are actually present, so hiding the name closes the gap rather than leaving a hole
-        // where it used to be.
         val avatarSize = if (config.look.pillShowPhoto) {
             rowHeight * 0.58f * config.look.pillPhotoScale
         } else {
             0f
         }
 
-        // How much of the frame the column may claim, and therefore the point at which the name
-        // folds under the reading instead of sitting beside it.
-        //
-        // A fifth. A third was too generous: a readout is an annotation on the footage, and past
-        // about this much it stops annotating and starts competing. Because flat is preferred and
-        // stacking is the fallback, this number *is* the rule — the pill lays out flat while it
-        // fits inside a fifth of the frame and stacks the moment it would not.
-        val widthBudget = dims.drawAreaWidth * 0.22f
-        val labelSize = rowHeight * 0.24f * config.look.pillNameScale
+        // Held to the readable floor. Sized off the row alone, a name on a crowded panel
+        // came out about half the size of the smallest text anywhere else on the frame.
+        val labelSize = maxOf(rowHeight * 0.28f * config.look.pillNameScale, dims.readableText)
 
         paint.resetForExport()
         paint.isFakeBoldText = true
-        paint.textSize = rowHeight * 0.50f * config.look.pillBpmScale
-        // Reserve the width of the widest plausible reading so pills share one width. Without it a
-        // wearer crossing from 99 to 100 would widen their pill mid-render and break the column.
+        paint.textSize = rowHeight * DIGIT_SHARE_FLAT * config.look.pillBpmScale
+        // The widest plausible reading, so every pill is one width and a wearer crossing from 99 to
+        // 100 doesn't widen theirs mid-render.
         val flatDigitWidth = paint.measureText("888")
 
         paint.isFakeBoldText = false
@@ -1178,27 +1363,22 @@ object VideoFrameRenderer {
             0f
         }
 
-        // Flat is preferred and stacking is the fallback, rather than the other way round. Side by
-        // side keeps the reading at full size and the name at full length; it is only worth folding
-        // the name underneath when laying it out would push the column past its share of the frame.
         val flatWidth = padH * 2 + avatarSize + gap + flatDigitWidth +
             (if (fullNameWidth > 0f) gap + fullNameWidth else 0f)
-        val stacked = config.look.pillShowName && flatWidth > widthBudget
+        val stacked = config.look.pillShowName && flatWidth > allowance
 
-        val digitSize = rowHeight * (if (stacked) 0.44f else 0.50f) * config.look.pillBpmScale
+        val digitSize = rowHeight * (if (stacked) DIGIT_SHARE_STACKED else DIGIT_SHARE_FLAT) *
+            config.look.pillBpmScale
 
         paint.resetForExport()
         paint.isFakeBoldText = true
         paint.textSize = digitSize
         val digitWidth = paint.measureText("888")
-        val digitMetrics = paint.fontMetrics
-        val digitBaselineOffset = (abs(digitMetrics.ascent) - digitMetrics.descent) / 2f
 
         paint.isFakeBoldText = false
         paint.textSize = labelSize
-        val labelMetrics = paint.fontMetrics
 
-        val maxLabelWidth = widthBudget - (padH * 2 + avatarSize + gap) -
+        val maxLabelWidth = allowance - (padH * 2 + avatarSize + gap) -
             (if (stacked) 0f else gap + digitWidth)
         val shownLabels = if (config.look.pillShowName && maxLabelWidth > labelSize) {
             labels.map { ChartKit.ellipsize(it, maxLabelWidth, paint) }
@@ -1214,16 +1394,10 @@ object VideoFrameRenderer {
         } else {
             digitWidth + (if (labelWidth > 0f) gap + labelWidth else 0f)
         }
-        val contentWidth = if (avatarSize > 0f) {
-            avatarSize + gap + textBlockWidth
-        } else {
-            textBlockWidth
-        }
-        val pillWidth = contentWidth + padH * 2
+        val contentWidth = if (avatarSize > 0f) avatarSize + gap + textBlockWidth else textBlockWidth
 
         return ReadoutMetrics(
             rowHeight = rowHeight,
-            rowGap = rowGap,
             digitSize = digitSize,
             labelSize = labelSize,
             gap = gap,
@@ -1233,7 +1407,7 @@ object VideoFrameRenderer {
             digitWidth = digitWidth,
             textBlockWidth = textBlockWidth,
             labelWidth = labelWidth,
-            pillWidth = pillWidth,
+            pillWidth = contentWidth + padH * 2,
             shownLabels = shownLabels,
             stacked = stacked
         )
@@ -1250,18 +1424,15 @@ object VideoFrameRenderer {
         timelineOriginMs: Long,
         paint: Paint
     ) {
-        val scale = dims.scaleFactor
-        val edgeMargin = 20f * scale
         val m = measureReadouts(dims, records, config, paint)
+        val plan = m.plan ?: return
         val rowHeight = m.rowHeight
-        val rowGap = m.rowGap
         val digitSize = m.digitSize
         val labelSize = m.labelSize
         val gap = m.gap
         val padH = m.padH
         val cornerRadius = m.cornerRadius
         val avatarSize = m.avatarSize
-        val digitWidth = m.digitWidth
         val textBlockWidth = m.textBlockWidth
         val labelWidth = m.labelWidth
         val pillWidth = m.pillWidth
@@ -1281,22 +1452,9 @@ object VideoFrameRenderer {
         paint.textSize = labelSize
         val labelMetrics = paint.fontMetrics
 
-        // Inside the plot, against whichever edge the preset chose.
-        //
-        // Over the curve rather than beside it, and on the right that is a deliberately cheap place
-        // to be: the playhead is centred and everything past it is drawn at `futureOpacity`, so the
-        // right of the plot is already the faded half. The pills sit on the part of the graph that
-        // is deliberately quiet, and the solid, full-strength past stays clear.
-        val onLeft = config.look.pillCorner == PillCorner.TOP_LEFT
-        val pillLeft = if (onLeft) {
-            dims.graphLeft + edgeMargin
-        } else {
-            dims.graphRight - edgeMargin - pillWidth
-        }
-        val pillRight = pillLeft + pillWidth
-        val blockTop = dims.graphTop + edgeMargin
-        val slotPitch = rowHeight + rowGap
-
+        // Inside the plot, against whichever edge the preset chose. On the right that is a cheap
+        // place to be: the playhead is centred and everything past it is drawn at `futureOpacity`,
+        // so the pills sit on the part of the graph that is deliberately quiet.
         val slots = animatedRankSlots(records, viewport.playhead)
 
         // Pills mid-slide are drawn last so one passes *over* the pill it is overtaking. Two
@@ -1307,8 +1465,8 @@ object VideoFrameRenderer {
             val record = records[index]
             val bpm = getInterpolatedBpm(record.dataPoints, viewport.playhead)
             val recordColor = colorForRecord(record, index, config)
-            val rowTop = blockTop + slots[index] * slotPitch
-            val rect = RectF(pillLeft, rowTop, pillRight, rowTop + rowHeight)
+            val (pillLeft, rowTop) = plan.corner(slots[index])
+            val rect = RectF(pillLeft, rowTop, pillLeft + pillWidth, rowTop + rowHeight)
 
             paint.resetForExport()
             // Denser than the single-record HUD: these sit over whatever the video is showing,
@@ -1316,20 +1474,20 @@ object VideoFrameRenderer {
             paint.color = 0xD9000000.toInt()
             canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)
 
-            // A rim in the wearer's colour — but only where there is more than one wearer.
+            // A rim on every pill, so one person and five look like the same design (UX Audit O8).
             //
-            // It does two jobs, and both are about telling people apart: it ties a pill to its
-            // curve, and it keeps the edge legible while two pills overlap mid-swap. With one
-            // person there is nobody to distinguish and no swap to survive, so it is decoration
-            // that also happens to be misleading — a lone recording's curve is drawn as the
-            // blue-to-red ramp, not in their colour, so a coloured rim points at a colour the graph
-            // is not using. The avatar keeps its ring, which is about them rather than the curve.
-            if (records.size > 1) {
-                paint.style = Paint.Style.STROKE
-                paint.strokeWidth = rowHeight * 0.035f
-                paint.color = (recordColor and 0x00FFFFFF) or 0xCC000000.toInt()
-                canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)
+            // In the wearer's colour where there is more than one: it ties a pill to its curve and
+            // keeps the edge legible while two pills cross mid-swap. With one, a coloured rim would
+            // point at a colour the graph isn't using, since a lone curve is drawn as the
+            // blue-to-red ramp, so the rim is the label colour, quietly.
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = rowHeight * 0.035f
+            paint.color = if (records.size > 1) {
+                (recordColor and 0x00FFFFFF) or 0xCC000000.toInt()
+            } else {
+                (config.look.labelsColor and 0x00FFFFFF) or 0x55000000
             }
+            canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)
 
             val contentLeft = pillLeft + padH
             val centerY = rect.centerY()
@@ -1532,7 +1690,7 @@ object VideoFrameRenderer {
             canvas.drawCircle(legendLeft + 10f * dims.scaleFactor, legendTop + 12f * dims.scaleFactor, 8f * dims.scaleFactor, paint)
 
             paint.color = config.look.labelsColor
-            paint.textSize = 20f * dims.scaleFactor
+            paint.textSize = maxOf(20f * dims.scaleFactor, dims.readableText)
             paint.isFakeBoldText = true
             canvas.drawText(wearerLabel, legendLeft + 28f * dims.scaleFactor, legendTop + 18f * dims.scaleFactor, paint)
 

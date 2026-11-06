@@ -295,7 +295,10 @@ object VideoExporter {
         effectList.add(Presentation.createForWidthAndHeight(
             request.preset.width,
             request.preset.height,
-            Presentation.LAYOUT_SCALE_TO_FIT
+            // Filling crops footage of another shape to the canvas; fitting keeps all of it, with
+            // bars. A plain-background export's backdrop is the canvas's shape either way.
+            if (request.preset.fillCanvas) Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
+            else Presentation.LAYOUT_SCALE_TO_FIT
         ))
         effectList.add(OverlayEffect(listOf(canvasOverlay)))
 
@@ -478,7 +481,10 @@ object VideoExporter {
         // No stamp at all is not a reason to refuse the file. It still has a length, and its start
         // is about to be set by hand anyway — so it starts where it ends, now.
         val stamp = resolveStamp(context, uri)
+        val (width, height) = shapeOf(context, uri) ?: (0 to 0)
         return VideoClip(
+            widthPx = width,
+            heightPx = height,
             uri = uri,
             startedAtMs = stamp?.startedAtMs ?: (System.currentTimeMillis() - durationMs),
             durationMs = durationMs,
@@ -486,6 +492,29 @@ object VideoExporter {
             basis = stamp?.basis ?: VideoTiming.Basis.ASSUMED,
             zoneId = ClipZone.of(context, uri)
         )
+    }
+
+    /**
+     * A video's picture size as it plays: width and height with its rotation applied, so a phone
+     * clip filmed upright is taller than it is wide even though it's stored sideways.
+     *
+     * @return null for something that has no picture, or can't be opened.
+     */
+    fun shapeOf(context: Context, uri: Uri): Pair<Int, Int>? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+            val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            if (w == null || h == null || w <= 0 || h <= 0) null
+            else if (rotation % 180 != 0) h to w else w to h
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not read the size of $uri", e)
+            null
+        } finally {
+            retriever.release()
+        }
     }
 
     /**
@@ -585,9 +614,18 @@ object VideoExporter {
          */
         val basis: VideoTiming.Basis = VideoTiming.Basis.ASSUMED,
         /** The UTC offset the file says it was filmed at, if it says. See [ClipZone]. */
-        val zoneId: String? = null
+        val zoneId: String? = null,
+        /**
+         * The picture's size as it plays, rotation applied, or 0 when unknown. For a canvas that
+         * matches the clip (see [ExportPreset.forClip]).
+         */
+        val widthPx: Int = 0,
+        val heightPx: Int = 0
     ) {
         val endedAtMs: Long get() = startedAtMs + durationMs
+
+        /** [preset] at the size it renders over this clip. */
+        fun canvasFor(preset: ExportPreset): ExportPreset = preset.forClip(widthPx, heightPx)
 
         /** Whether a recording was running at any point while this was filming. */
         fun overlaps(record: BpmRecordWithPoints): Boolean {
@@ -708,7 +746,10 @@ object VideoExporter {
             .filter { clip -> records.any { clip.overlaps(it) } }
             .sortedBy { it.startedAtMs }
             // Only for the clips that matched, since it opens each file.
-            .map { it.copy(zoneId = ClipZone.of(context, it.uri)) }
+            .map { clip ->
+                val (width, height) = shapeOf(context, clip.uri) ?: (0 to 0)
+                clip.copy(zoneId = ClipZone.of(context, clip.uri), widthPx = width, heightPx = height)
+            }
     }
 
     /**

@@ -187,7 +187,9 @@ class ExportPresetTest {
         // puts its own resize handles on the boundary where they cannot be grabbed.
         val shipped = ExportPreset()
 
-        assertTrue("must not span the full width", shipped.graphRight - shipped.graphLeft <= 0.6f)
+        // Wide since S14A: half the width left the text too small to read (UX Audit O6). Still not
+        // edge to edge, for the handles.
+        assertTrue("must not span the full width", shipped.graphRight - shipped.graphLeft <= 0.9f)
         assertTrue("must not span the full height", shipped.graphBottom - shipped.graphTop <= 0.45f)
         assertTrue("must sit in the lower half", shipped.graphTop >= 0.5f)
         // Centred across, so it reads as deliberate rather than nudged.
@@ -216,12 +218,15 @@ class ExportPresetTest {
     }
 
     @Test
-    fun `the built-ins are the three shapes worth having, plus two looks`() {
+    fun `the built-ins are the clip's own shape, the three worth having, and two looks`() {
         val builtIn = ExportPreset.BUILT_IN
 
-        assertEquals(5, builtIn.size)
+        assertEquals(6, builtIn.size)
+        // First, so a fresh install's default takes the clip's shape (UX Audit O7).
+        assertTrue(builtIn.first().matchClip)
+        assertTrue(builtIn.drop(1).none { it.matchClip })
         assertEquals(
-            listOf(1920 to 1080, 1080 to 1920, 1080 to 1080, 1080 to 1920, 1920 to 1080),
+            listOf(1920 to 1080, 1920 to 1080, 1080 to 1920, 1080 to 1080, 1080 to 1920, 1920 to 1080),
             builtIn.map { it.width to it.height }
         )
         // All at the current version, or seeding would write presets the app refuses to read back.
@@ -239,8 +244,8 @@ class ExportPresetTest {
         // Not asserted on area: the lower third is a wide band and covers more of the frame than
         // the default panel does. What makes it quieter is that it is dim, gridless and out of the
         // way, which is what this checks.
-        val shapes = ExportPreset.BUILT_IN.take(3)
-        val looks = ExportPreset.BUILT_IN.drop(3)
+        val shapes = ExportPreset.BUILT_IN.take(4)
+        val looks = ExportPreset.BUILT_IN.drop(4)
 
         looks.forEach { look ->
             assertFalse("${look.name} still draws a grid", look.showGrid)
@@ -268,7 +273,70 @@ class ExportPresetTest {
     fun `the built-in revision is bumped whenever the list grows`() {
         // The guard on the top-up for existing installs: without a bump, presets added to the list
         // reach a fresh install and nothing else.
-        assertTrue(ExportPreset.BUILT_IN_REVISION >= 2)
+        assertTrue(ExportPreset.BUILT_IN_REVISION >= 3)
+    }
+
+    // --- Fitting the footage (S14A) ---
+
+    @Test
+    fun `a canvas matching the clip takes an upright clip's shape`() {
+        val matched = ExportPreset(width = 1920, height = 1080, matchClip = true)
+
+        // A 4K phone clip filmed upright: 1080 on the short side, the clip's own shape.
+        val upright = matched.forClip(2160, 3840)
+        assertEquals(1080 to 1920, upright.width to upright.height)
+
+        // Sideways, the same.
+        val sideways = matched.forClip(3840, 2160)
+        assertEquals(1920 to 1080, sideways.width to sideways.height)
+    }
+
+    @Test
+    fun `a matched canvas is never bigger than the clip`() {
+        val matched = ExportPreset(width = 1920, height = 1080, matchClip = true)
+        val small = matched.forClip(640, 360)
+        assertEquals(640 to 360, small.width to small.height)
+    }
+
+    @Test
+    fun `a matched canvas has even sides, which the encoder needs`() {
+        val matched = ExportPreset(width = 1920, height = 1080, matchClip = true)
+        val odd = matched.forClip(1081, 1921)
+        assertEquals(0, odd.width % 2)
+        assertEquals(0, odd.height % 2)
+    }
+
+    @Test
+    fun `a fixed canvas, or a clip of unknown size, keeps the preset's size`() {
+        val fixed = ExportPreset(width = 1920, height = 1080)
+        assertEquals(fixed, fixed.forClip(2160, 3840))
+
+        val matched = ExportPreset(width = 1920, height = 1080, matchClip = true)
+        assertEquals(matched, matched.forClip(0, 0))
+    }
+
+    @Test
+    fun `a preset saved before S14A follows the screen and gets contrast where it needs it`() {
+        // A version 4 preset, written before these fields existed. Gson leaves the enums null.
+        val old = """{"version":4,"name":"Mine","width":1920,"height":1080,"backgroundOpacity":0}"""
+        val read = ExportPreset.fromJson(old)
+
+        assertNotNull(read)
+        assertEquals(BpmScale.ON_SCREEN, read!!.bpmScale)
+        assertEquals(Contrast.AUTO, read.contrast)
+        assertFalse(read.matchClip)
+        assertFalse(read.fillCanvas)
+    }
+
+    @Test
+    fun `automatic contrast adds a shadow only where the panel is too faint`() {
+        assertEquals(Contrast.SHADOW, Contrast.AUTO.resolvedFor(0))
+        assertEquals(Contrast.SHADOW, Contrast.AUTO.resolvedFor(29))
+        assertEquals(Contrast.OFF, Contrast.AUTO.resolvedFor(30))
+        assertEquals(Contrast.OFF, Contrast.AUTO.resolvedFor(100))
+        // A choice made by hand is kept whatever the panel.
+        assertEquals(Contrast.OUTLINE, Contrast.OUTLINE.resolvedFor(100))
+        assertEquals(Contrast.OFF, Contrast.OFF.resolvedFor(0))
     }
 
     @Test

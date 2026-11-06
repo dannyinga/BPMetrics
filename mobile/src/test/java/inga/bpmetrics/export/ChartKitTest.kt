@@ -24,6 +24,61 @@ class ChartKitTest {
             maxDataPoint = null
         )
 
+    // --- The scale for what's on screen (UX Audit O2) ---
+
+    private fun points(vararg bpmEverySecond: Double) = bpmEverySecond.mapIndexed { i, bpm ->
+        inga.bpmetrics.library.BpmDataPointEntity(recordOwnerId = 1, timestamp = i * 1_000L, bpm = bpm)
+    }
+
+    /** A quiet minute at about 100, then a climb to 170. */
+    private val evening = points(*(DoubleArray(60) { 98.0 + it % 5 } + DoubleArray(60) { 110.0 + it }))
+
+    @Test
+    fun `the on-screen scale fits the window, not the whole recording`() {
+        val whole = ChartKit.bpmRange(evening.map { it.bpm })
+        val quiet = ChartKit.windowRange(listOf(evening), 30_000.0, 30_000L, whole)
+
+        assertTrue("the quiet stretch should get a tighter scale", quiet.endInclusive - quiet.start < whole.endInclusive - whole.start)
+        assertTrue(quiet.start <= 98.0)
+        assertTrue(quiet.endInclusive >= 102.0)
+    }
+
+    @Test
+    fun `the on-screen scale glides rather than jumping`() {
+        val whole = ChartKit.bpmRange(evening.map { it.bpm })
+        // One frame apart at 30 fps, across the climb that pushes the range up.
+        var previous = ChartKit.windowRange(listOf(evening), 60_000.0, 30_000L, whole)
+        var t = 60_000.0
+        while (t < 90_000.0) {
+            t += 33.0
+            val next = ChartKit.windowRange(listOf(evening), t, 30_000L, whole)
+            assertTrue("top jumped at $t", kotlin.math.abs(next.endInclusive - previous.endInclusive) < 3.0)
+            assertTrue("bottom jumped at $t", kotlin.math.abs(next.start - previous.start) < 3.0)
+            previous = next
+        }
+    }
+
+    @Test
+    fun `the same moment always gets the same scale`() {
+        val whole = ChartKit.bpmRange(evening.map { it.bpm })
+        assertEquals(
+            ChartKit.windowRange(listOf(evening), 75_500.0, 30_000L, whole),
+            ChartKit.windowRange(listOf(evening), 75_500.0, 30_000L, whole)
+        )
+    }
+
+    @Test
+    fun `a window with no readings near it keeps the whole recording's scale`() {
+        val whole = ChartKit.bpmRange(evening.map { it.bpm })
+        assertEquals(whole, ChartKit.windowRange(listOf(evening), 10_000_000.0, 30_000L, whole))
+    }
+
+    @Test
+    fun `text is never smaller than 2 percent of the short side`() {
+        assertEquals(21.6f, ChartKit.readableText(1920f, 1080f), 0.01f)
+        assertEquals(21.6f, ChartKit.readableText(1080f, 1920f), 0.01f)
+    }
+
     @Test
     fun `the scale holds every reading, with room above and below`() {
         val range = ChartKit.bpmRange(listOf(72.0, 151.0))

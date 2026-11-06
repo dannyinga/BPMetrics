@@ -520,6 +520,50 @@ Ambient mode and a tile are post-1.0.
 - **Note for later: readout names on narrow frames.** At the corrected square scale, a half-width frame gives the pill's name about 29 px, so "Danny" shows as "D…" and "Bethany" not at all. A portrait canvas with the same frame was already doing this. The pill's width budget (22% of the frame) doesn't grow with its height cap.
 - **Verified:** all unit tests and both apps build, and 5 device tests pass on the emulator.
 
+### S14A — An overlay that fits what it's given *(Video Overlay and Exporter UX Audit)*
+
+| Ticket | Work | Audit |
+|---|---|---|
+| **S14A.1** | The pills always fit: more columns or smaller pills before they overflow, never dropping a person. Pill width from what it says, so names show on 9:16. | O1, O4 |
+| **S14A.2** | The vertical scale follows what's on screen (eased), with the whole recording as a choice. | O2 |
+| **S14A.3** | Labels and gridlines thin, then the time axis drops, instead of overlapping. Titles shrink before they're cut. A readable floor for all text. | O3, O4, O6 |
+| **S14A.4** | Contrast for curves and text over footage. | O5 |
+| **S14A.5** | "Match the clip" canvas, fill or fit for fixed shapes, a bigger default frame, one pill style. | O6, O7, O8 |
+
+**Commit:** `feat(export): an overlay that fits what it's given`
+
+**As built:**
+- **Before the sprint,** two fixes from checking the audit against real footage landed on their own:
+  - `a7c21cb`: clips start from the camera's file name. Samsung stamps when saving ends, about 0.8 s late.
+  - `e307412`: the preview skips footage from before the press, as the render does, shows the exact frame once the playhead rests, and its length matches the render's.
+- **S14A.1:** `export/ReadoutLayout.kt`, a pure plan.
+  - **The rule:** the fewest columns whose rows stay readable; past that, the tallest rows shrunk until they fit. Places fill column by column, so the fastest heart is top left of the block, and a pill changing places slides between them.
+  - **Sized against the plot.** The pills used to be sized against the whole panel and stacked from the top of the plot, which is how they ran off the bottom.
+  - **Names:** the plan measures the width whole names need, flat or stacked, and shrinks rows to fit them; names are only cut when that would go below readable. Name text is held to the readable floor.
+  - **`ReadoutLayoutTest`:** 1–8 people fit, a short lower third fits five, the switch to two columns, shrinking instead of dropping, anchoring, and sliding between places.
+- **S14A.2:** `ChartKit.windowRange`, the snapped range of the readings in the window, averaged over the second around the playhead.
+  - **Smooth and repeatable:** the range glides, and the same frame always gets the same scale, which the render needs since frames are drawn out of order.
+  - **The setting:** `ExportPreset.bpmScale`, "What's on screen" (default) or "Whole recording". Stills keep the whole range.
+- **S14A.3:** the panel's bands are sized from the text in them. They were fixed allowances: 120 for a 48-unit title, 140 for three-digit labels.
+  - **The readable floor:** all text is at least 2% of the canvas's short edge (`ChartKit.readableText`).
+  - **What gives way first:** labels thin to every second or third line when they'd touch, and gridlines thin the same way. The time axis goes first when keeping it would leave a plot under 3.5 label heights. A title shrinks to 70% before it's cut.
+- **S14A.4:** `ExportPreset.contrast`: Auto, Off, Soft shadow or Outline. Auto means a shadow when the panel is under 30%.
+  - **What gets it:** a dark halo under the curves (faded with them), a ring behind the playhead dot, and a shadow or edge on the title, clock and axis labels.
+  - **Existing presets:** they pick up Auto and "What's on screen" (version 5; missing values are filled in on read).
+- **S14A.5:**
+  - **"Match the clip":** `ExportPreset.matchClip` and `forClip`. A video takes its clip's shape, rotation applied, with its short edge at the preset's or the clip's, whichever is smaller. Resolved once each in the request, the preview and the estimate, so the render and the queue only see real sizes.
+    - It's the first built-in, so it's the default on a fresh install. An upgrade offers it but doesn't change the default (`BUILT_IN_REVISION` 3).
+    - Clips carry their size (`VideoExporter.shapeOf`).
+  - **Fill or fit:** `fillCanvas` crops footage of another shape instead of adding bars.
+    - The preview now fits or fills the way the render does. It used to stretch the frame over the whole canvas, so the bars only showed up in the export.
+  - **Default frame:** 0.06–0.94 across, 0.58–0.93 down; the old default is added to `SUPERSEDED_FRAMINGS`. "Landscape · lower third" starts at 0.64, not 0.68, for new installs.
+  - **One pill style:** every pill has a rim, in the wearer's colour with several people and quietly in the label colour with one.
+  - **Controls:** "Match the clip" with the Canvas chips, a Fill switch, and Scale and Contrast choices in Graph (video only).
+- **References:** `RendererReferenceTest` now draws every built-in at 1, 3 and 5 people (half size, 18 images), and the video-frame reference is re-recorded. All recorded on Pixel_7_Pro and checked by eye.
+- **Checked against real footage:** the Granada clip at five people on every built-in, the Gorge, laser and arena clips on the story looks, and a portrait clip rendered matched, which came out 540×960 and upright.
+- **Verified:** all unit tests pass. The export device tests pass on the emulator. Lint shows nothing new (the three `RenderFailure.kt` errors predate this).
+- **Left for S14B:** a text size control, colour controls for the grid, labels and ramp, and the editor itself. Title wrapping was skipped: a title shrinks, then is cut.
+
 ---
 
 ## Phase F — One component per job

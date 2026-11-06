@@ -633,7 +633,7 @@ fun ExportUtilityScreen(
                                 runCatching { context.cacheDir.usableSpace }.getOrNull()
                             }
                         ),
-                        format = "MP4 · ${preset.width}×${preset.height} · " +
+                        format = "MP4 · ${canvasSummary(preset, pendingJobs.map { it.clip })} · " +
                             if (preset.matchSourceFrameRate && pendingJobs.isNotEmpty()) "the clips' frame rate"
                             else "${preset.frameRate} fps",
                         queued = queuedBatch == batch,
@@ -1252,5 +1252,21 @@ private fun ExportKindToggle(kind: ExportKind, onSelect: (ExportKind) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/**
+ * The size the videos come out at: the preset's, or, with a canvas that matches the clip, the one
+ * size the clips share, or "each clip's shape" when they differ.
+ */
+internal fun canvasSummary(
+    preset: inga.bpmetrics.export.ExportPreset,
+    clips: List<inga.bpmetrics.export.VideoExporter.VideoClip>
+): String {
+    val sizes = clips.map { it.canvasFor(preset) }.map { it.width to it.height }.distinct()
+    return when {
+        sizes.isEmpty() -> "${preset.width}×${preset.height}"
+        sizes.size == 1 -> "${sizes[0].first}×${sizes[0].second}"
+        else -> "each clip's shape"
     }
 }
