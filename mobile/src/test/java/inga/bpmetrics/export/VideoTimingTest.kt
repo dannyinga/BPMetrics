@@ -199,6 +199,32 @@ class VideoTimingTest {
         assertTrue(clamped.spanMs > 0L)
     }
 
+    /**
+     * Filming began before the watch did, as it did at the Gorge: 1.755 s before the press.
+     *
+     * The footage from before the press has no curve, so the window starts at the press and the
+     * first 1.755 s of the file are skipped. The preview used to start from the top of the file
+     * anyway, drawing every frame against the curve from 1.755 s later.
+     */
+    @Test
+    fun `footage from before the recording began is skipped, not slid along`() {
+        val timeline = VideoFrameRenderer.Timeline(originWallClockMs = noon, durationMs = 10 * minute)
+
+        val window = clip(noon - 1_755L, 37_535L).windowOn(timeline, syncOffsetMs = 0L)
+
+        assertEquals(0L, window.startMs)
+        assertEquals(1_755L, window.intoClipMs)
+        // It ends where the footage does, not 1.755 s after.
+        assertEquals(37_535L - 1_755L, window.endMs)
+    }
+
+    @Test
+    fun `a clip inside the timeline starts at the top of its file`() {
+        val timeline = VideoFrameRenderer.Timeline(originWallClockMs = noon, durationMs = 10 * minute)
+
+        assertEquals(0L, clip(noon + minute, minute).windowOn(timeline, 0L).intoClipMs)
+    }
+
     @Test
     fun `the picker and the exporter cannot disagree`() {
         // The defect this exists to prevent: the clip list read DATE_TAKEN as the first frame while

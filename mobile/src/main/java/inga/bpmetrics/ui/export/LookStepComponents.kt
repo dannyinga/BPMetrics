@@ -74,6 +74,7 @@ import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.ui.components.ExpandableSection
 import inga.bpmetrics.ui.components.FlowRow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -127,6 +128,14 @@ fun ExportPreview(
         if (!visible) return@produceState
         value = withContext(Dispatchers.Default) {
             renderPreviewFrame(context, records, preset, clip, overlay, colours, photos, title, at, placement)
+        }
+        if (overlay == null) return@produceState
+        delay(EXACT_FRAME_SETTLE_MS)
+        value = withContext(Dispatchers.Default) {
+            renderPreviewFrame(
+                context, records, preset, clip, overlay, colours, photos, title, at, placement,
+                exact = true
+            )
         }
     }
 
@@ -231,7 +240,7 @@ fun ExportPreview(
 
         ScrubTimeline(
             at = at,
-            durationMs = clip?.durationMs ?: 0L,
+            durationMs = playableMs(records, clip, preset),
             onScrub = onScrub,
             modifier = Modifier.fillMaxWidth()
         )
@@ -276,12 +285,22 @@ private fun FullScreenPreview(
         initialValue = null,
         records, preset, overlay, at, colours, photos, title, clip, placement
     ) {
+        // Capped rather than the export's full width: a 4K preset would decode a 4K frame per
+        // scrub, and no phone screen can show the difference.
+        val renderWidth = preset.width.coerceAtMost(1920)
         value = withContext(Dispatchers.Default) {
             renderPreviewFrame(
                 context, records, preset, clip, overlay, colours, photos, title, at, placement,
-                // Capped rather than the export's full width: a 4K preset would decode a 4K frame
-                // per scrub, and no phone screen can show the difference.
-                renderWidth = preset.width.coerceAtMost(1920)
+                renderWidth = renderWidth
+            )
+        }
+        if (overlay == null) return@produceState
+        delay(EXACT_FRAME_SETTLE_MS)
+        value = withContext(Dispatchers.Default) {
+            renderPreviewFrame(
+                context, records, preset, clip, overlay, colours, photos, title, at, placement,
+                renderWidth = renderWidth,
+                exact = true
             )
         }
     }
@@ -347,7 +366,7 @@ private fun FullScreenPreview(
                 // letterbox, not out of the picture.
                 ScrubTimeline(
                     at = at,
-                    durationMs = clip?.durationMs ?: 0L,
+                    durationMs = playableMs(records, clip, preset),
                     onScrub = onScrub,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -622,6 +641,23 @@ private fun handleAt(
  * two are in sync — a preview that drew frame zero under a curve from halfway through would be
  * showing something that will never exist.
  */
+/** How long the playhead rests before the preview decodes the exact frame under it. */
+private const val EXACT_FRAME_SETTLE_MS = 300L
+
+/**
+ * How long the preview's clip plays for: its window on the recording, which is what the render
+ * makes. Footage filmed before the watch started is skipped, so this can be shorter than the file.
+ */
+private fun playableMs(
+    records: List<BpmRecordWithPoints>,
+    clip: VideoExporter.VideoClip?,
+    preset: ExportPreset
+): Long {
+    if (clip == null) return 0L
+    if (records.isEmpty()) return clip.durationMs
+    return clip.windowOn(VideoFrameRenderer.timelineFor(records), preset.syncOffsetMs).spanMs
+}
+
 private fun renderPreviewFrame(
     context: android.content.Context,
     records: List<BpmRecordWithPoints>,
@@ -641,7 +677,16 @@ private fun renderPreviewFrame(
      * opening it is to read text that was too small, and enlarging the small render would enlarge
      * its blur along with it.
      */
-    renderWidth: Int = 720
+    renderWidth: Int = 720,
+    /**
+     * Whether to decode the exact frame under the playhead rather than the nearest keyframe.
+     *
+     * Keyframes are a second apart in a phone's footage, so the nearest one can be half a second
+     * from the curve drawn over it: too coarse to judge sync by. The exact frame means decoding
+     * forward from the keyframe before it, which is slow on 4K, so it is only asked for once the
+     * playhead has come to rest.
+     */
+    exact: Boolean = false
 ): Bitmap? {
     if (records.isEmpty()) return null
 
@@ -668,7 +713,8 @@ private fun renderPreviewFrame(
     // the whole point of the setting, and it is why the preview shows it working.
     val playheadMs = windowStartMs + spanMs * at.toDouble()
     // Where in the video file that instant falls, which is not the same number.
-    val intoClipMs = (spanMs * at).toLong()
+    // Past any footage filmed before the recording began, which the render skips too.
+    val intoClipMs = (window?.intoClipMs ?: 0L) + (spanMs * at).toLong()
 
     // The same content and look the render gets, at preview size.
     val content = inga.bpmetrics.export.ExportContent(
@@ -692,7 +738,8 @@ private fun renderPreviewFrame(
                 retriever.setDataSource(context, uri)
                 retriever.getFrameAtTime(
                     intoClipMs * 1000,
-                    android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                    if (exact) android.media.MediaMetadataRetriever.OPTION_CLOSEST
+                    else android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC
                 )
             }
         }.getOrNull()?.let { background ->

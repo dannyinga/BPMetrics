@@ -604,18 +604,32 @@ object VideoExporter {
          * showing the old alignment — the preview's copy of the arithmetic simply did not have the
          * offset in it. Two places computing the same number is how they come to disagree.
          *
+         * A clip that began before the timeline (filming started a second before the watch did)
+         * has its window start at the timeline's origin, and the footage before then is skipped,
+         * not slid along: [ClipWindow.intoClipMs] says how much. The render has always skipped it.
+         * The preview didn't, so it drew each frame against the curve from that much later.
+         *
          * @param syncOffsetMs nudges the clip along the timeline, so a positive value runs the
          *   curves ahead of the footage.
          */
         fun windowOn(timeline: VideoFrameRenderer.Timeline, syncOffsetMs: Long): ClipWindow {
-            val start = (startedAtMs - timeline.originWallClockMs + syncOffsetMs)
-                .coerceAtLeast(0L)
-            return ClipWindow(start, (start + durationMs).coerceAtMost(timeline.durationMs))
+            val placed = startedAtMs - timeline.originWallClockMs + syncOffsetMs
+            val start = placed.coerceAtLeast(0L)
+            return ClipWindow(
+                startMs = start,
+                endMs = (placed + durationMs).coerceAtMost(timeline.durationMs).coerceAtLeast(start),
+                intoClipMs = start - placed
+            )
         }
     }
 
-    /** A span of a recording timeline, in milliseconds from its origin. */
-    data class ClipWindow(val startMs: Long, val endMs: Long) {
+    /**
+     * A span of a recording timeline, in milliseconds from its origin.
+     *
+     * @property intoClipMs how far into the clip's file the window begins: the footage filmed
+     *   before the timeline started, which has no curve to go with it.
+     */
+    data class ClipWindow(val startMs: Long, val endMs: Long, val intoClipMs: Long = 0L) {
         /** Never zero: an export of no duration is a file nobody can play. */
         val spanMs: Long get() = (endMs - startMs).coerceAtLeast(1L)
     }
