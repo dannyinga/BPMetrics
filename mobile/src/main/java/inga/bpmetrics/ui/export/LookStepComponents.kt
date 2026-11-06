@@ -1440,8 +1440,8 @@ private val WINDOW_RANGE = 1..600
  */
 @Composable
 fun ClipSelectorStrip(
-    /** The recordings' clock — see ClipCard. */
-    clock: java.time.ZoneId,
+    /** The clock each clip's time is shown in — see [ClipRetiming.clockFor]. */
+    clockFor: (inga.bpmetrics.export.VideoExporter.VideoClip) -> java.time.ZoneId,
     clips: List<ClipSelection>,
     selectedUri: Uri?,
     onSelect: (Uri) -> Unit
@@ -1476,7 +1476,7 @@ fun ClipSelectorStrip(
                 Text(
                     inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString(
                         selection.clip.startedAtMs,
-                        clock
+                        clockFor(selection.clip)
                     ),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = if (chosen) FontWeight.Bold else null,

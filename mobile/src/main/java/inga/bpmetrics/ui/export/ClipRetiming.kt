@@ -80,6 +80,18 @@ object ClipRetiming {
     }
 
     /**
+     * The clock [clip]'s times are shown in: the one its render prints. The venue's, else the
+     * offset the file was filmed at, else the phone's ([inga.bpmetrics.library.exportZoneOf]).
+     *
+     * The clip card and "Filmed at" used to skip the file's offset and fall to the phone's zone, so
+     * a clip filmed at 8:03 PM at the Gorge, edited on a phone set to Central time, said 10:03 PM
+     * while the render printed 8:03. The time underneath was right; the label invited a "fix" that
+     * moved the clip two hours off its own recordings.
+     */
+    fun clockFor(clip: VideoExporter.VideoClip, records: List<BpmRecordWithPoints>): java.time.ZoneId =
+        java.time.ZoneId.of(inga.bpmetrics.library.exportZoneOf(records.map { it.metadata }, clip.zoneId))
+
+    /**
      * Where a video picked by hand should start before anyone corrects it.
      *
      * Its own time where that lands on a recording — a clip filmed at the event by someone else's

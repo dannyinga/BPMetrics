@@ -30,16 +30,28 @@ class VideoTimingTest {
     }
 
     @Test
-    fun `a stamp corroborated as the last frame is wound back by the duration`() {
-        // An encoder that stamps at finalisation: taken == last frame, and so does the mtime.
+    fun `a stamp corroborated as the last frame is wound back by the duration and the save`() {
+        // An encoder that stamps at finalisation: taken == end of saving, and so does the mtime.
+        // Saving took 0.8 s on average; cut to the second, the stamp has already lost 0.5 of it.
         val stamp = VideoTiming.resolve(
             dateTakenMs = noon + 3 * minute,
             durationMs = 3 * minute,
             dateModifiedMs = noon + 3 * minute
         )
 
-        assertEquals(noon, stamp?.startedAtMs)
+        assertEquals(noon - 300L, stamp?.startedAtMs)
         assertEquals(VideoTiming.Basis.FINISHED, stamp?.basis)
+    }
+
+    @Test
+    fun `a stamp to the millisecond is wound back by the whole save`() {
+        val stamp = VideoTiming.resolve(
+            dateTakenMs = noon + 3 * minute + 250L,
+            durationMs = 3 * minute,
+            dateModifiedMs = noon + 3 * minute
+        )
+
+        assertEquals(noon + 250L - 800L, stamp?.startedAtMs)
     }
 
     @Test
@@ -200,6 +212,142 @@ class VideoTimingTest {
         val forExport = VideoTiming.resolve(taken, duration, modified)
 
         assertEquals(forPicker?.startedAtMs, forExport?.startedAtMs)
-        assertEquals(noon, forPicker?.startedAtMs)
+        assertEquals(noon - 300L, forPicker?.startedAtMs)
+    }
+
+    // --- The camera's file name ---
+    //
+    // Real rows from the Galaxy S23 Ultra's gallery. Samsung stamps when saving finishes, to the
+    // second; the name is local time at the press, also to the second.
+
+    /** 2026-11-05, when the test clips were copied back onto the phone. */
+    private val copiedBack = 1_793_935_803_000L
+
+    /**
+     * The Gorge clip, whose watch frame showed the curve running a second ahead of the footage.
+     *
+     * The watch on screen reads 1 s at 3.1–3.7 s into the clip, so the press (03:03:39.255 UTC,
+     * from the recording) came 1.6–2.1 s in. The name puts it 1.755 s in.
+     */
+    @Test
+    fun `the Gorge clip starts when its name says, which is where its watch frame puts it`() {
+        val stamp = VideoTiming.resolve(
+            dateTakenMs = 1_779_678_256_000L, // 03:04:16 UTC, saving finished
+            durationMs = 37_535L,
+            dateModifiedMs = 1_779_678_256_000L,
+            fileName = "20260524_200337.mp4" // 20:03:37 at -07:00
+        )
+
+        assertEquals(VideoTiming.Basis.NAMED, stamp?.basis)
+        assertEquals(1_779_678_217_500L, stamp?.startedAtMs)
+        val pressAt = 1_779_678_219_255L - stamp!!.startedAtMs
+        assertTrue("watch press $pressAt ms in", pressAt in 1_600L..2_100L)
+    }
+
+    /**
+     * A clip copied back onto a phone still starts in the right place.
+     *
+     * Its mtime is the day it was copied, which corroborates neither reading of the stamp, so on its
+     * own it would be taken as starting when it actually finished — a whole clip out.
+     */
+    @Test
+    fun `a clip copied onto the phone later is placed by its name`() {
+        val withoutName = VideoTiming.resolve(1_779_678_256_000L, 37_535L, copiedBack)
+        assertEquals(VideoTiming.Basis.ASSUMED, withoutName?.basis)
+
+        val stamp = VideoTiming.resolve(1_779_678_256_000L, 37_535L, copiedBack, "20260524_200337.mp4")
+
+        assertEquals(VideoTiming.Basis.NAMED, stamp?.basis)
+        assertEquals(1_779_678_217_500L, stamp?.startedAtMs)
+    }
+
+    @Test
+    fun `the other test clips are placed by their names in their own zones`() {
+        // Central daylight time, Pacific daylight time, Central again.
+        data class Row(val name: String, val taken: Long, val length: Long, val start: Long)
+        listOf(
+            Row("20260313_235545.mp4", 1_773_464_178_000L, 32_005L, 1_773_464_145_500L),
+            Row("20260524_235354.mp4", 1_779_692_063_000L, 27_343L, 1_779_692_034_500L),
+            Row("20261017_002335.mp4", 1_792_214_652_000L, 36_565L, 1_792_214_615_500L)
+        ).forEach { row ->
+            val stamp = VideoTiming.resolve(row.taken, row.length, copiedBack, row.name)
+            assertEquals(row.name, VideoTiming.Basis.NAMED, stamp?.basis)
+            assertEquals(row.name, row.start, stamp?.startedAtMs)
+        }
+    }
+
+    /**
+     * A clip trimmed in the gallery keeps its name and gets a new stamp, 22 s apart here.
+     *
+     * The name now describes footage that was cut away, so the stamp is the better witness.
+     */
+    @Test
+    fun `a trimmed clip's name is not believed`() {
+        val stamp = VideoTiming.resolve(
+            dateTakenMs = 1_789_877_653_000L,
+            durationMs = 43_212L,
+            dateModifiedMs = 1_789_877_714_000L,
+            fileName = "20260919_231308.mp4"
+        )
+
+        assertTrue(stamp?.basis != VideoTiming.Basis.NAMED)
+        assertEquals(1_789_877_653_000L, stamp?.startedAtMs)
+    }
+
+    @Test
+    fun `a renamed clip falls back to its stamp`() {
+        val stamp = VideoTiming.resolve(1_779_678_256_000L, 37_535L, 1_779_678_256_000L, "Gorge.mp4")
+
+        assertEquals(VideoTiming.Basis.FINISHED, stamp?.basis)
+        assertEquals(1_779_678_256_000L - 37_535L - 300L, stamp?.startedAtMs)
+    }
+
+    @Test
+    fun `a name a day out is not mistaken for a timezone`() {
+        val stamp = VideoTiming.resolve(1_779_678_256_000L, 37_535L, 1_779_678_256_000L, "20260523_200337.mp4")
+
+        assertEquals(VideoTiming.Basis.FINISHED, stamp?.basis)
+    }
+
+    @Test
+    fun `only names that start with a camera's date are read`() {
+        listOf(
+            "Screen_Recording_20260524-200337_Instagram.mp4",
+            "edit_20260524_200337.mp4",
+            "20261399_250000.mp4",
+            "20260524_2003371.mp4"
+        ).forEach { name ->
+            val stamp = VideoTiming.resolve(1_779_678_256_000L, 37_535L, 1_779_678_256_000L, name)
+            assertEquals(name, VideoTiming.Basis.FINISHED, stamp?.basis)
+        }
+    }
+
+    @Test
+    fun `duplicate and older camera names are read`() {
+        listOf("20260524_200337(1).mp4", "20260524_200337_01.mp4", "VID_20260524_200337.mp4").forEach { name ->
+            val stamp = VideoTiming.resolve(1_779_678_256_000L, 37_535L, 1_779_678_256_000L, name)
+            assertEquals(name, 1_779_678_217_500L, stamp?.startedAtMs)
+        }
+    }
+
+    @Test
+    fun `a Pixel name to the millisecond is taken to the millisecond`() {
+        // Pixels name files in UTC; the quarter-hour comparison does not care which zone it is.
+        val stamp = VideoTiming.resolve(1_779_678_256_000L, 37_535L, 1_779_678_256_000L, "PXL_20260525_030337123.mp4")
+
+        assertEquals(1_779_678_217_123L, stamp?.startedAtMs)
+    }
+
+    @Test
+    fun `a name for a stamp that marks the first frame is read as well`() {
+        val stamp = VideoTiming.resolve(
+            dateTakenMs = 1_779_678_217_000L,
+            durationMs = 37_535L,
+            dateModifiedMs = 1_779_678_256_000L,
+            fileName = "20260524_200337.mp4"
+        )
+
+        assertEquals(VideoTiming.Basis.NAMED, stamp?.basis)
+        assertEquals(1_779_678_217_500L, stamp?.startedAtMs)
     }
 }

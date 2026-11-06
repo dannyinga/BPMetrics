@@ -1012,7 +1012,7 @@ private fun LookStep(
             // because both are decided once rather than watched.
             if (!isImage && records.isNotEmpty() && ticked.size > 1) {
                 ClipSelectorStrip(
-                    clock = records.clock,
+                    clockFor = { ClipRetiming.clockFor(it, records) },
                     clips = ticked,
                     selectedUri = previewing?.clip?.uri,
                     onSelect = onSelectClip
@@ -1061,10 +1061,10 @@ private fun LookStep(
             if (!isImage && previewing != null && records.isNotEmpty()) {
                 FilmedAtControl(
                     clip = previewing,
-                    // The venue's clock, by the same rule the chart and the render use.
-                    zone = remember(records) {
-                        (inga.bpmetrics.library.resolvedZoneOf(records.map { it.metadata })
-                            ?: records.clock.id).let { java.time.ZoneId.of(it) }
+                    // The clock the render prints, file offset included. Without the offset this
+                    // showed the phone's zone and invited a "correction" of hours.
+                    zone = remember(records, previewing.clip) {
+                        ClipRetiming.clockFor(previewing.clip, records)
                     },
                     recordingStartMs = records.minOfOrNull { it.metadata.startTime },
                     onSet = { onSetFilmedAt(previewing.clip.uri, it) },

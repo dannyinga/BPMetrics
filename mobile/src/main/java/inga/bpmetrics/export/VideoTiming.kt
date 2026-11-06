@@ -23,6 +23,11 @@ import kotlin.math.roundToLong
  * filesystem says the file was finished. That is a per-file measurement, so it needs no model
  * names and it keeps working on a phone nobody has tested.
  *
+ * When the camera named the file after the moment filming began (`20260524_200337.mp4`), that name
+ * is better evidence than any stamp, and it is preferred whenever it agrees with one. A Samsung
+ * stamp marks the end of saving rather than the last frame, so a stamp alone lands a clip late by
+ * however long saving took; the name was written at the press and does not have that problem.
+ *
  * Deliberately free of Android types: the judgement is arithmetic, and arithmetic is worth testing
  * without a device.
  */
@@ -53,6 +58,43 @@ object VideoTiming {
     /** The largest real UTC offset, so an unrelated gap is never mistaken for one. */
     private const val MAX_ZONE_SHIFT_MS = 14 * 60 * 60_000L
 
+    /**
+     * How long after the last frame a camera that stamps at the end writes that stamp.
+     *
+     * Measured on 88 clips from a Galaxy S23 Ultra: the stamp less the clip's length landed 0.8 s
+     * after the time in the file's name on average, the same for a 5 second clip as a 5 minute one
+     * and the same at 1080p as at 4K. It is the time the phone takes to finish the file, not
+     * something that grows with it.
+     */
+    private const val SAVE_DELAY_MS = 800L
+
+    /**
+     * Where in its second a time written to the whole second really fell, on average.
+     *
+     * Stamps and file names are both cut to the second, so the instant they describe is anywhere up
+     * to a second after what they say: half a second later is the best single guess.
+     */
+    private const val WITHIN_SECOND_MS = 500L
+
+    /**
+     * How far a file name may disagree with the stamp and still be believed.
+     *
+     * Honest disagreement is the save delay and rounding — under three seconds in everything
+     * measured. A name further out than this describes some other moment: the clip was trimmed
+     * after filming (which keeps the name and rewrites the stamp), or the file was renamed.
+     */
+    private const val NAME_TOLERANCE_MS = 5_000L
+
+    /**
+     * A camera's file name: the date and time filming began, to the second or the millisecond.
+     *
+     * Samsung writes `20260524_200337.mp4` (and `…(1).mp4`, `…_01.mp4` for duplicates), older
+     * Android `VID_20260524_200337.mp4`, Pixels `PXL_20260524_200337123.mp4`. Anchored at the start,
+     * so a name that merely contains a date somewhere — a screen recording, an edit — is not read
+     * as one.
+     */
+    private val CAMERA_NAME = Regex("""^(?:VID_|PXL_)?(\d{8})_(\d{6})(\d{3})?(?!\d)""")
+
     /** What the stamp on a file turned out to mean. */
     enum class Basis {
         /** It marked the first frame, corroborated by the file's mtime. */
@@ -60,6 +102,14 @@ object VideoTiming {
 
         /** It marked the last frame, so filming began a duration earlier. */
         FINISHED,
+
+        /**
+         * The camera's file name said when filming began, and the stamp agreed with it.
+         *
+         * Preferred over either reading of the stamp, because the name was written at the press and
+         * the stamp only when saving finished.
+         */
+        NAMED,
 
         /** Nothing corroborated it, and it was taken at face value. */
         ASSUMED,
@@ -96,9 +146,58 @@ object VideoTiming {
      * @param durationMs how long the clip runs.
      * @param dateModifiedMs when the file was last written, or 0 if unknown. Milliseconds —
      *   `MediaStore` reports this column in *seconds*, so callers must scale it.
+     * @param fileName the file's display name, if known, for cameras that name a file after when
+     *   filming began.
      * @return the resolved start, or null when there is no stamp to work from at all.
      */
-    fun resolve(dateTakenMs: Long, durationMs: Long, dateModifiedMs: Long): Stamp? {
+    fun resolve(
+        dateTakenMs: Long,
+        durationMs: Long,
+        dateModifiedMs: Long,
+        fileName: String? = null
+    ): Stamp? {
+        val fromStamp = resolveStamp(dateTakenMs, durationMs, dateModifiedMs) ?: return null
+        return fileName?.let { named(it, dateTakenMs, durationMs, fromStamp) } ?: fromStamp
+    }
+
+    /**
+     * The start the camera's file name gives, if it has one and the stamp backs it up.
+     *
+     * The name is local time in a zone nobody wrote down, so it is only ever compared within a
+     * quarter hour: the whole quarter hours between it and the stamp are the zone, and what is left
+     * over is how far apart they really are. The stamp supplies the date and the zone; the name
+     * supplies the second.
+     *
+     * It is checked against both readings of the stamp, not only the one the file's mtime chose.
+     * A clip copied back onto a phone has an mtime of the day it was copied, which corroborates
+     * neither reading; the name can still say which one is right.
+     */
+    private fun named(fileName: String, dateTakenMs: Long, durationMs: Long, fromStamp: Stamp): Stamp? {
+        val match = CAMERA_NAME.find(fileName) ?: return null
+        val (date, time, millis) = match.destructured
+        val local = runCatching {
+            java.time.LocalDateTime.parse(
+                date + time,
+                java.time.format.DateTimeFormatter.ofPattern("uuuuMMddHHmmss")
+                    .withResolverStyle(java.time.format.ResolverStyle.STRICT)
+            )
+        }.getOrNull() ?: return null
+        val pressed = local.toInstant(java.time.ZoneOffset.UTC).toEpochMilli() +
+            (millis.toLongOrNull() ?: WITHIN_SECOND_MS)
+
+        val stamp = dateTakenMs - fromStamp.zoneShiftMs
+        val readings = listOf(stamp, stamp - durationMs.coerceAtLeast(0L))
+        return readings.firstNotNullOfOrNull { reading ->
+            val zone = ((pressed - reading).toDouble() / ZONE_STEP_MS).roundToLong() * ZONE_STEP_MS
+            val apart = pressed - zone - reading
+            if (abs(zone) <= MAX_ZONE_SHIFT_MS && abs(apart) <= NAME_TOLERANCE_MS) {
+                Stamp(reading + apart, Basis.NAMED, fromStamp.zoneShiftMs)
+            } else null
+        }
+    }
+
+    /** [resolve] from the stamp and mtime alone. */
+    private fun resolveStamp(dateTakenMs: Long, durationMs: Long, dateModifiedMs: Long): Stamp? {
         if (dateTakenMs <= 0L) return null
         val duration = durationMs.coerceAtLeast(0L)
 
@@ -130,11 +229,17 @@ object VideoTiming {
             }
         }
 
-        return candidates
+        val chosen = candidates
             .filter { (_, error, tolerance) -> error <= tolerance }
             .minByOrNull { it.second }
             ?.first
-            ?: assumed
+            ?: return assumed
+
+        // A stamp written when saving finished is late by the save as well as the clip. Cut to the
+        // second, it has also lost half a second on average, which partly makes up for that.
+        if (chosen.basis != Basis.FINISHED) return chosen
+        val rounding = if (dateTakenMs % 1000L == 0L) WITHIN_SECOND_MS else 0L
+        return chosen.copy(startedAtMs = chosen.startedAtMs - SAVE_DELAY_MS + rounding)
     }
 
     /**

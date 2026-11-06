@@ -222,4 +222,18 @@ class ClipRetimingTest {
             ClipRetiming.startingPoint(screenRecording(), set)
         )
     }
+
+    @Test
+    fun `a clip's time is shown in the offset it was filmed at when the venue has no zone`() {
+        // The Gorge clip: Samsung says -07:00, nobody set a place, and the phone is in Central.
+        val gorge = screenRecording(startedAt = setStart).copy(zoneId = "-07:00")
+        assertEquals(java.time.ZoneId.of("-07:00"), ClipRetiming.clockFor(gorge, set))
+    }
+
+    @Test
+    fun `a venue's zone wins over the file's offset`() {
+        val atVenue = set.map { it.copy(metadata = it.metadata.copy(timeZoneId = "America/Los_Angeles")) }
+        val clip = screenRecording(startedAt = setStart).copy(zoneId = "-05:00")
+        assertEquals(java.time.ZoneId.of("America/Los_Angeles"), ClipRetiming.clockFor(clip, atVenue))
+    }
 }

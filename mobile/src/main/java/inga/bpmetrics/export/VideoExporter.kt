@@ -393,7 +393,8 @@ object VideoExporter {
             val projection = arrayOf(
                 android.provider.MediaStore.Video.VideoColumns.DATE_TAKEN,
                 android.provider.MediaStore.Video.VideoColumns.DURATION,
-                android.provider.MediaStore.Video.VideoColumns.DATE_MODIFIED
+                android.provider.MediaStore.Video.VideoColumns.DATE_MODIFIED,
+                android.provider.MediaStore.Video.VideoColumns.DISPLAY_NAME
             )
             try {
                 context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
@@ -402,7 +403,8 @@ object VideoExporter {
                             dateTakenMs = cursor.getLong(0),
                             durationMs = cursor.getLong(1),
                             // Seconds in MediaStore, milliseconds everywhere else here.
-                            dateModifiedMs = cursor.getLong(2) * 1000L
+                            dateModifiedMs = cursor.getLong(2) * 1000L,
+                            fileName = cursor.getString(3)
                         )
                         if (stamp != null) return stamp
                     }
@@ -667,7 +669,8 @@ object VideoExporter {
                         dateTakenMs = cursor.getLong(takenCol),
                         durationMs = durationMs,
                         // MediaStore keeps this column in seconds; everything else here is millis.
-                        dateModifiedMs = cursor.getLong(modifiedCol) * 1000L
+                        dateModifiedMs = cursor.getLong(modifiedCol) * 1000L,
+                        fileName = cursor.getString(nameCol)
                     ) ?: continue
                     clips.add(
                         VideoClip(

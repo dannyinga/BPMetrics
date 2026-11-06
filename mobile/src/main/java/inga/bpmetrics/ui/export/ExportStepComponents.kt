@@ -634,7 +634,7 @@ fun ContentsStep(
                     title = titles[selection.clip.uri.toString()].orEmpty(),
                     // Only people who were actually recording during this clip. Offering the rest
                     // would let someone tick a curve that has no data for the footage.
-                    clock = records.clock,
+                    clock = ClipRetiming.clockFor(selection.clip, records),
                     candidates = records.filter { selection.clip.overlaps(it) },
                     recordsById = recordsById,
                     peopleById = peopleById,
