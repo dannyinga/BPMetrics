@@ -44,6 +44,8 @@ fun FilmedAtControl(
     zone: java.time.ZoneId,
     /** Where the recordings in scope begin, for lining a clip up with the start of the set. */
     recordingStartMs: Long?,
+    /** Whether anyone on the clip was recording while it was filmed. */
+    drawsSomething: Boolean,
     onSet: (Long) -> Unit,
     onReset: () -> Unit
 ) {
@@ -93,9 +95,34 @@ fun FilmedAtControl(
             }
         }
 
+        // The fine adjustment, here beside the time it adjusts. It was a look-wide "sync offset" at
+        // the bottom of the last section, while this was per clip at the top (UX Audit E7). Both
+        // answer "when was this filmed", for this clip.
+        Spacer(Modifier.height(8.dp))
+        Text("Nudge", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        Text(
+            "Curve ahead of the footage? Nudge earlier. Behind it? Later." +
+                (clip.originalClip?.let { original ->
+                    val delta = startedAt - original.startedAtMs
+                    // Only while it's a nudge: a clip set to another evening isn't "0.3 s off".
+                    if (delta != 0L && kotlin.math.abs(delta) < 60_000L) {
+                        " Now ${"%+.1f".format(delta / 1000f)} s from the file's time."
+                    } else ""
+                } ?: ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(-1_000L to "−1 s", -100L to "−0.1 s", 100L to "+0.1 s", 1_000L to "+1 s").forEach { (step, label) ->
+                OutlinedButton(onClick = { onSet(startedAt + step) }, modifier = Modifier.weight(1f)) {
+                    Text(label, maxLines = 1)
+                }
+            }
+        }
+
         // Only where nothing lines up. A clip that overlaps no recording has no one to draw, and the
         // preview above would show an empty graph with no hint that the time is what is wrong.
-        if (clip.recordIds.isEmpty()) {
+        if (!drawsSomething) {
             Text(
                 "Nobody was recording at this time. Set when the video was really filmed.",
                 style = MaterialTheme.typography.bodySmall,

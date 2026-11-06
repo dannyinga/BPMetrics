@@ -56,7 +56,6 @@ fun PresetBar(
     onApply: (ExportPresetEntity) -> Unit,
     onSaveAs: (String) -> Unit,
     onUpdate: (ExportPresetEntity) -> Unit,
-    onSetDefault: (ExportPresetEntity) -> Unit,
     onDelete: (ExportPresetEntity) -> Unit,
     onExportFile: (ExportPresetEntity) -> Unit,
     onImportFile: () -> Unit
@@ -90,22 +89,11 @@ fun PresetBar(
                     FilterChip(
                         selected = preset.presetId == selectedId,
                         onClick = { if (edited) confirmApply = preset else onApply(preset) },
-                        leadingIcon = if (preset.isDefault) {
-                            {
-                                Icon(
-                                    Icons.Default.Star,
-                                    contentDescription = "Default",
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        } else null,
                         label = { Text(preset.name) }
                     )
                     Box {
-                        IconButton(
-                            onClick = { menuFor = preset },
-                            modifier = Modifier.size(32.dp)
-                        ) {
+                        // The full 48 dp target. At 32 dp with a 16 dp icon it was a hard tap (UX Audit E8).
+                        IconButton(onClick = { menuFor = preset }) {
                             Icon(
                                 Icons.Default.MoreVert,
                                 contentDescription = "${preset.name} options",
@@ -116,12 +104,6 @@ fun PresetBar(
                             expanded = menuFor?.presetId == preset.presetId,
                             onDismissRequest = { menuFor = null }
                         ) {
-                            if (!preset.isDefault) {
-                                DropdownMenuItem(
-                                    text = { Text("Make default") },
-                                    onClick = { menuFor = null; onSetDefault(preset) }
-                                )
-                            }
                             // On the preset the settings started from, edited or not. It used to
                             // vanish at the first edit, which was the one time it was wanted.
                             if (preset.presetId == selectedId && !preset.isBuiltIn) {
@@ -203,7 +185,7 @@ fun PresetBar(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Saves how the export looks — canvas, graph, colours. Never which " +
+                        "Saves how the export looks — canvas, graph, colors. Never which " +
                             "recordings or what time range, so it stays usable on anything.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

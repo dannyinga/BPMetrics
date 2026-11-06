@@ -62,22 +62,79 @@ object ClipRetiming {
     }
 
     /**
-     * Who was recording while [clip] was filming, keeping a deliberate choice where it still holds.
+     * How far from a clip someone's recording may be and still put them on it: the same show, not
+     * the festival. Two hours either side covers a set someone joined late, and leaves out another
+     * day's recordings when a whole festival is the source.
+     */
+    const val CAST_MARGIN_MS = 2 * 60 * 60_000L
+
+    /**
+     * Everyone who could be on [clip] (S14B.6).
      *
-     * The people ticked before a correction are kept if any of them still overlap — so nudging a
-     * time by a few seconds does not throw away someone having been unticked on purpose. Where none
-     * of them do, the clip now covers a different stretch entirely, and everyone recording during it
-     * is the right starting point.
+     * Every recording running while it was filmed, and for each other person at the show, their
+     * recording nearest to it, within [CAST_MARGIN_MS]. Only people who were recording used to be
+     * offered, so a clip filmed before Tyler started at Boogie T offered four of the five. Someone
+     * offered without readings for the clip is shown as such (see [hasReadings]); ticked, their
+     * pill reads "--" and their curve starts when their watch does.
+     *
+     * Ordered with the people who were recording first, then by recording.
+     */
+    fun candidatesFor(
+        clip: VideoExporter.VideoClip,
+        records: List<BpmRecordWithPoints>
+    ): List<BpmRecordWithPoints> {
+        val during = records.filter { clip.overlaps(it) }
+        val covered = during.map(::personKey).toSet()
+        val others = records
+            .filter { !clip.overlaps(it) && personKey(it) !in covered && distanceMs(clip, it) <= CAST_MARGIN_MS }
+            .groupBy(::personKey)
+            .values
+            .map { theirs -> theirs.minBy { distanceMs(clip, it) } }
+            .sortedBy { it.metadata.startTime }
+        return during + others
+    }
+
+    /** Whether [record] has readings while [clip] was filming. */
+    fun hasReadings(clip: VideoExporter.VideoClip, record: BpmRecordWithPoints): Boolean = clip.overlaps(record)
+
+    /** Who [record] belongs to, so one person with three recordings that night is offered once. */
+    private fun personKey(record: BpmRecordWithPoints): String =
+        record.metadata.personId?.let { "person:$it" }
+            ?: record.metadata.wearerName.trim().lowercase().takeIf { it.isNotEmpty() }?.let { "name:$it" }
+            ?: "record:${record.metadata.recordId}"
+
+    /** How far apart [clip] and [record] are in time: zero when they overlap. */
+    private fun distanceMs(clip: VideoExporter.VideoClip, record: BpmRecordWithPoints): Long {
+        val start = record.metadata.startTime
+        val end = start + record.metadata.durationMs
+        return maxOf(0L, start - clip.endedAtMs, clip.startedAtMs - end)
+    }
+
+    /**
+     * Who is on [clip], keeping a deliberate choice where it still holds.
+     *
+     * Everyone offered (see [candidatesFor]) to begin with. The people ticked before a correction
+     * are kept if any of them are still offered, so nudging a time by a few seconds doesn't throw
+     * away someone having been unticked on purpose. Where none are, the clip now covers a
+     * different stretch entirely, and everyone offered is the right starting point.
      */
     fun castFor(
         clip: VideoExporter.VideoClip,
         records: List<BpmRecordWithPoints>,
         previous: Set<Long>
     ): Set<Long> {
-        val overlapping = records.filter { clip.overlaps(it) }.map { it.metadata.recordId }.toSet()
-        val kept = previous intersect overlapping
-        return kept.ifEmpty { overlapping }
+        val offered = candidatesFor(clip, records).map { it.metadata.recordId }.toSet()
+        val kept = previous intersect offered
+        return kept.ifEmpty { offered }
     }
+
+    /**
+     * Whether a clip with this cast has anything to draw: at least one person on it was recording
+     * while it was filmed. A clip that only has people offered from either side of it would render
+     * footage under an empty graph, so it can't be ticked.
+     */
+    fun drawsSomething(clip: VideoExporter.VideoClip, cast: Set<Long>, records: List<BpmRecordWithPoints>): Boolean =
+        records.any { it.metadata.recordId in cast && clip.overlaps(it) }
 
     /**
      * The clock [clip]'s times are shown in: the one its render prints. The venue's, else the
@@ -114,6 +171,7 @@ object ClipRetiming {
     ): ClipSelection {
         val cast = castFor(clip, records, selection.recordIds)
         val wanted = selection.selected || selection.untickedByTime
+        val draws = drawsSomething(clip, cast, records)
         return selection.copy(
             clip = clip,
             originalClip = originalClip,
@@ -121,8 +179,8 @@ object ClipRetiming {
             // A clip nobody was recording during cannot be exported with a graph, so it cannot
             // stay ticked — the same rule the Contents step already applies. Remembered, so a
             // correction back into range ticks it again.
-            selected = wanted && cast.isNotEmpty(),
-            untickedByTime = wanted && cast.isEmpty(),
+            selected = wanted && draws,
+            untickedByTime = wanted && !draws,
             sparks = emptyList(),
             bpmScale = null
         )

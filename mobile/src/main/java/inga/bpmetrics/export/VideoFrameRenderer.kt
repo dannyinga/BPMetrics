@@ -888,12 +888,11 @@ object VideoFrameRenderer {
      * would still come out shorter than [MIN_PLOT_LINES] axis labels, the time axis gives way first.
      */
     private class RenderingDimensions(
-        canvas: Canvas,
+        val fullWidth: Float,
+        val fullHeight: Float,
         rect: RectF,
         config: Frame
     ) {
-        val fullWidth = canvas.width.toFloat()
-        val fullHeight = canvas.height.toFloat()
         val drawAreaLeft = rect.left * fullWidth
         val drawAreaTop = rect.top * fullHeight
         val drawAreaRight = rect.right * fullWidth
@@ -909,10 +908,11 @@ object VideoFrameRenderer {
         /** The smallest text drawn anywhere on this frame. See [ChartKit.readableText]. */
         val readableText = ChartKit.readableText(fullWidth, fullHeight)
 
-        val axisText = maxOf(28f * scaleFactor, readableText)
-        val timeText = maxOf(23f * scaleFactor, readableText)
-        val titleText = maxOf(48f * scaleFactor, readableText * 1.4f)
-        val clockText = maxOf(40f * scaleFactor, readableText * 1.2f)
+        private val textScale = config.look.textScale
+        val axisText = maxOf(28f * scaleFactor * textScale, readableText)
+        val timeText = maxOf(23f * scaleFactor * textScale, readableText)
+        val titleText = maxOf(48f * scaleFactor * textScale, readableText * 1.4f)
+        val clockText = maxOf(40f * scaleFactor * textScale, readableText * 1.2f)
 
         /** Kept clear inside the panel's edge. */
         val edge = 16f * scaleFactor
@@ -1059,6 +1059,55 @@ object VideoFrameRenderer {
     private fun lastTimestampOf(record: BpmRecordWithPoints): Long =
         record.dataPoints.lastOrNull()?.timestamp ?: record.metadata.durationMs
 
+    /** The parts of a frame someone can point at, to open their settings (S14B.2). */
+    enum class Region { READOUTS, TITLE, CLOCK, PLOT, WORDMARK }
+
+    /**
+     * What is drawn at ([x], [y]) on a [width] × [height] frame, or null outside the panel.
+     *
+     * Worked out from the same layout the frame is drawn with, so a tap on a pill finds the pills
+     * wherever this cast and this panel put them.
+     */
+    fun regionAt(
+        width: Int,
+        height: Int,
+        aligned: AlignedRecords,
+        content: ExportContent,
+        look: ExportPreset,
+        graphRect: RectF,
+        x: Float,
+        y: Float
+    ): Region? {
+        val config = Frame.of(content, look, aligned.records.map { it.metadata })
+        val dims = RenderingDimensions(width.toFloat(), height.toFloat(), graphRect, config)
+        if (!dims.outerRect.contains(x, y)) return null
+
+        if (look.showCurrentStats && aligned.records.isNotEmpty()) {
+            measureReadouts(dims, aligned.records, config, ChartKit.paint()).plan?.let { plan ->
+                if (x in plan.left..(plan.left + plan.blockWidth) && y in plan.top..(plan.top + plan.blockHeight)) {
+                    return Region.READOUTS
+                }
+            }
+        }
+        if (look.showWordmark) {
+            // The mark is one short line in a corner: the corner's last fifth across, sixth down.
+            val nearRight = look.wordmarkCorner == WordmarkCorner.TOP_RIGHT || look.wordmarkCorner == WordmarkCorner.BOTTOM_RIGHT
+            val nearBottom = look.wordmarkCorner == WordmarkCorner.BOTTOM_LEFT || look.wordmarkCorner == WordmarkCorner.BOTTOM_RIGHT
+            val inX = if (nearRight) x > dims.drawAreaRight - dims.drawAreaWidth * 0.2f else x < dims.drawAreaLeft + dims.drawAreaWidth * 0.2f
+            val inY = if (nearBottom) y > dims.drawAreaBottom - dims.drawAreaHeight / 6f else y < dims.drawAreaTop + dims.drawAreaHeight / 6f
+            if (inX && inY) return Region.WORDMARK
+        }
+        if (y < dims.graphTop) {
+            val clockShown = look.clockMode != ClockMode.NONE
+            // The clock is right-aligned beside a title, or the whole band without one.
+            return when {
+                clockShown && (!look.showTitle || x > dims.graphLeft + dims.graphWidth * 0.7f) -> Region.CLOCK
+                else -> Region.TITLE
+            }
+        }
+        return Region.PLOT
+    }
+
     /**
      * Renders records that have already been placed on a shared timeline by [alignRecords].
      *
@@ -1090,7 +1139,7 @@ object VideoFrameRenderer {
 
         val primaryRecord = processedRecords.first()
 
-        val dims = RenderingDimensions(canvas, graphRect, config)
+        val dims = RenderingDimensions(canvas.width.toFloat(), canvas.height.toFloat(), graphRect, config)
         val paint = ChartKit.paint()
 
         val allPoints = processedRecords.flatMap { it.dataPoints }

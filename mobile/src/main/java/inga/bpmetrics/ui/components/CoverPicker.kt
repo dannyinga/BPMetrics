@@ -226,7 +226,7 @@ fun CoverCropDialog(
                         // The case this exists for, named — because it is not obvious that a
                         // setting called "soften" is the answer to "my cover is a poster".
                         "For a cover that is itself made of type — an event flyer, a poster. " +
-                            "Blurring keeps its colour and lets the writing above it be read.",
+                            "Blurring keeps its color and lets the writing above it be read.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

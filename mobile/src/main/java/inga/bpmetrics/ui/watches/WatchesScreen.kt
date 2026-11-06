@@ -404,7 +404,7 @@ private fun WatchEditDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    "Names the device itself. Use something you will recognise when handing it out.",
+                    "Names the device itself. Use something you will recognize when handing it out.",
                     style = MaterialTheme.typography.bodySmall
                 )
 

@@ -108,7 +108,7 @@ fun CollectionsScreen(
                         }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(
-                                text = { Text("Analyse everything") },
+                                text = { Text("Analyze everything") },
                                 onClick = { menu = false; onAnalyseEverything() }
                             )
                             DropdownMenuItem(

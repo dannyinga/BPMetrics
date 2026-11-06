@@ -267,7 +267,7 @@ fun RenderStatsPanel(
                 }
                 if (cancelled > 0) {
                     StatItem(
-                        label = "Cancelled",
+                        label = "Canceled",
                         value = cancelled.toString(),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -419,7 +419,7 @@ fun RenderJobCard(
                             RenderStatus.QUEUED -> "Waiting its turn"
                             RenderStatus.COMPLETED -> "Saved to ${location ?: "Movies/BPMetrics"}"
                             RenderStatus.FAILED -> "Failed"
-                            RenderStatus.CANCELLED -> "Cancelled"
+                            RenderStatus.CANCELLED -> "Canceled"
                         },
                         style = if (job.status == RenderStatus.COMPLETED) MaterialTheme.typography.bodySmall
                             else MaterialTheme.typography.labelSmall,

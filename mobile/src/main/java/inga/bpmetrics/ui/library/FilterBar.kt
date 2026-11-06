@@ -126,7 +126,7 @@ fun FilterBar(
                 }
                 AssistChip(
                     onClick = onAnalyse,
-                    label = { Text("Analyse") },
+                    label = { Text("Analyze") },
                     leadingIcon = {
                         Icon(
                             Icons.Default.Insights,

@@ -103,7 +103,7 @@ Severity is how much of a real export it spoils: **High** breaks or hides conten
 
 ![No panel, bright footage](Overlay%20Audit/04-no-panel-bright-footage.png)
 
-- **What happens:** the pills survive because they have their own backgrounds. The curves are thin coloured lines with nothing behind them, so they vanish over sky and bokeh.
+- **What happens:** the pills survive because they have their own backgrounds. The curves are thin colored lines with nothing behind them, so they vanish over sky and bokeh.
 - **Who it affects:** "Story · minimal" ships exactly this setup, with no panel.
 - **Fix:** a **contrast outline** setting (off / soft shadow / outline) on curves, playhead dots, the clock and the title, defaulting to soft shadow when panel opacity is under about 30%.
 
@@ -112,7 +112,7 @@ Severity is how much of a real export it spoils: **High** breaks or hides conten
 ![Given room](Overlay%20Audit/05-given-room.png)
 
 - **The defaults:**
-  - The panel is centred, half the width, in the lower third.
+  - The panel is centered, half the width, in the lower third.
   - At 1080p the axis labels are about 15 px tall and the time ticks ("−10s / now / +10s") smaller still.
   - On a phone, where these clips are watched, both are unreadable.
 - **With room:** the same renderer at nearly full frame (above) is clear and good-looking.
@@ -130,9 +130,9 @@ Severity is how much of a real export it spoils: **High** breaks or hides conten
 
 ### O8. Smaller things *(Low)*
 
-- **The single-person pill has a different style:** a black background with no coloured border, while multi-person pills have one.
+- **The single-person pill has a different style:** a black background with no colored border, while multi-person pills have one.
 - **The wordmark is tiny,** at the panel's bottom-right corner (variation renders).
-- **Fixed colours:** gridlines, axis labels and the low/high ramp colours are stored on the preset, but nothing in the UI edits them.
+- **Fixed colors:** gridlines, axis labels and the low/high ramp colors are stored on the preset, but nothing in the UI edits them.
 - **The clock** is always in the header. The Readouts hint says it "takes the other side" from the pills (it doesn't; see E6).
 
 ## Part 2. The export utility and preset menus
@@ -152,7 +152,7 @@ Severity is how much of a real export it spoils: **High** breaks or hides conten
 
 ### E2. The controls don't say whether they edit the preset or this one clip *(High)*
 
-- **Framing writes to the clip:** while a clip is previewed, which is almost always, the drag, the placement chips, Centre and Width write *that clip's* override. They still sit inside the preset's Graph section, and nothing on screen says so.
+- **Framing writes to the clip:** while a clip is previewed, which is almost always, the drag, the placement chips, Center and Width write *that clip's* override. They still sit inside the preset's Graph section, and nothing on screen says so.
 - **The override leaks into presets:** "Save as…" and "Update" then bake the clip's frame into the preset.
 - **Per-person-count frames are invisible:** frames saved with "Use this framing for N-person clips" have no list and no way to clear them. The Settings editor only edits the base frame, so those edits may never reach some exports.
 
@@ -213,7 +213,7 @@ Each clip only offers people whose recording **overlaps that clip's own time**. 
 
 So any clip filmed before 04:49 offers 4. That's deliberate: a person with no readings during the clip would draw nothing. It doesn't fit "the footage should have the option of up to 5", though.
 
-Two directions, not decided yet:
+**Decided (2026-11-06): (a).** Built in S14B.6, limited to people with a recording within two hours of the clip, so a festival source doesn't offer another day's recordings. The two directions were:
 - **(a)** Show everyone in the event on every clip. People who weren't recording at that point appear greyed, with "No readings during this clip", and can still be ticked. Their curve starts when their watch does.
 - **(b)** Keep it as is, but say why someone is missing.
 
@@ -245,12 +245,14 @@ One sprint for the renderer and one for the editor, before S15. Each would get a
 
 ### S14B: One look editor with room to work
 
+**Built** (see "S14B" in the Release 1.0 Work Plan). Presets as looks only (E5) is the part not done.
+
 | Ticket | Work | Findings |
 |---|---|---|
-| **S14B.1** | One editor, used by both the export flow and Settings. A large preview on top, and a bottom panel of short tabs (*Layout, Graph, Readouts, Text & colour, Time, Signature*) in place of six accordions. | E1, E3 |
+| **S14B.1** | One editor, used by both the export flow and Settings. A large preview on top, and a bottom panel of short tabs (*Layout, Graph, Readouts, Text & color, Time, Signature*) in place of six accordions. | E1, E3 |
 | **S14B.2** | Tap something in the preview (the pills, the title, the clock, the wordmark) to jump to its settings. | E1 |
 | **S14B.3** | A visible scope switch: "This look" vs "Only this clip". Per-person-count frames are listed and can be cleared. | E2 |
-| **S14B.4** | Colour controls for the fields that already exist (grid, labels, low/high ramp), plus text size and contrast outline. | O8, "fully customizable" |
+| **S14B.4** | Color controls for the fields that already exist (grid, labels, low/high ramp), plus text size and contrast outline. | O8, "fully customizable" |
 | **S14B.5** | Sync in one place, per clip. Honest labels (E6). The default preset reworded or made to win. Presets become looks only. | E4–E8 |
 | **S14B.6** | The Boogie T cast fix, in whichever direction Danny picks (Part 3). | Part 3 |
 
@@ -260,4 +262,4 @@ One sprint for the renderer and one for the editor, before S15. Each would get a
 2. **Where they get posted** (Stories, Reels, TikTok, YouTube, kept private). That decides the default canvas and frame, and the safe areas to keep clear of platform buttons.
 3. **One or two overlays you like** from other apps (screenshots are enough), for direction on density and style. They'd only be a reference; the result stays BPMetrics' own design.
 4. **Your look.** If there's a look you keep coming back to, export it as a `.bpmpreset` and it can become a built-in.
-5. **Decisions:** the Boogie T direction (Part 3), whether the default preset should beat last-used (E4), and whether "Match the clip" should be the default canvas (O7).
+5. **Decisions:** the Boogie T direction (Part 3), whether the default preset should beat last-used (E4), and whether "Match the clip" should be the default canvas (O7). **Decided 2026-11-06:** everyone at the show (a), the last look wins, and "Match the clip" is the default canvas on a fresh install.

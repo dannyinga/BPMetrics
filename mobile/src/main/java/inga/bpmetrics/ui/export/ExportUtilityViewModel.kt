@@ -401,7 +401,7 @@ data class GraphPlacement(
             "Bottom left" to GraphPlacement(0.04f, 0.60f, 0.52f, 0.94f),
             "Bottom right" to GraphPlacement(0.48f, 0.60f, 0.96f, 0.94f),
             "Upper band" to GraphPlacement(0.25f, 0.06f, 0.75f, 0.39f),
-            "Centred" to GraphPlacement(0.18f, 0.33f, 0.82f, 0.67f),
+            "Centered" to GraphPlacement(0.18f, 0.33f, 0.82f, 0.67f),
             "Full frame" to GraphPlacement(0f, 0f, 1f, 1f)
         )
 
@@ -825,18 +825,37 @@ class ExportUtilityViewModel(
      * previewed the framing on screen is that clip's override — and that is the one the user means
      * when they save.
      */
-    fun savePresetAs(name: String, framing: GraphPlacement) {
+    /**
+     * Sets the look's own frame and makes every clip use it (S14B.3, "Every clip").
+     *
+     * Frames pinned for a number of people and frames set on single clips are cleared, so the one
+     * frame really is every clip's. Leaving them would be "every clip but the ones you framed".
+     */
+    fun setFrameForEveryClip(placement: GraphPlacement) {
+        _preset.value = placement.into(_preset.value).copy(framesByLaneCount = emptyMap())
+        _presetTouched.value = true
+        _clips.value = _clips.value.map { it.copy(graph = null) }
+    }
+
+    /**
+     * Saves the look as it stands.
+     *
+     * Not with the previewed clip's frame folded in, as it was: a frame set for one clip ended up
+     * in the preset nobody had changed (UX Audit E2). Framing reaches the look through the scope
+     * switch, "Every clip" or "Same number of people".
+     */
+    fun savePresetAs(name: String) {
         launchGuarded {
-            val toSave = framing.into(_preset.value).copy(name = name)
+            val toSave = _preset.value.copy(name = name)
             _preset.value = toSave
             _selectedPresetId.value = repository.saveExportPreset(name, toSave.toJson())
             _presetTouched.value = false
         }
     }
 
-    fun updatePreset(entity: ExportPresetEntity, framing: GraphPlacement) {
+    fun updatePreset(entity: ExportPresetEntity) {
         launchGuarded {
-            val toSave = framing.into(_preset.value).copy(name = entity.name)
+            val toSave = _preset.value.copy(name = entity.name)
             _preset.value = toSave
             repository.updateExportPreset(entity.presetId, entity.name, toSave.toJson())
             _selectedPresetId.value = entity.presetId
@@ -879,9 +898,21 @@ class ExportUtilityViewModel(
         launchGuarded {
             val name = imported.name.ifBlank { "Imported preset" }
             val id = repository.saveExportPreset(name, imported.copy(name = name).toJson())
-            _preset.value = imported.copy(name = name)
-            _selectedPresetId.value = id
-            _presetTouched.value = false
+            // Saved either way, and only put to use when that loses nothing. It used to replace
+            // the look straight away, unsaved changes and all (UX Audit E3); with changes in hand
+            // it waits in the list, like choosing any other preset would ask first.
+            val edited = isPresetEdited(
+                presets.value.firstOrNull { it.presetId == _selectedPresetId.value },
+                _preset.value,
+                _presetTouched.value
+            )
+            if (!edited) {
+                _preset.value = imported.copy(name = name)
+                _selectedPresetId.value = id
+                _presetTouched.value = false
+            } else {
+                inga.bpmetrics.ui.feedback.Feedback.say("Imported $name. Your changes are still here; choose it to use it.")
+            }
             onDone(true)
         }
     }
@@ -1198,7 +1229,7 @@ class ExportUtilityViewModel(
             val placed = if (start == fileClip.startedAtMs) found
                 else ClipRetiming.retime(found, start, inScope)
 
-            _clips.value = _clips.value + placed.copy(selected = placed.recordIds.isNotEmpty())
+            _clips.value = _clips.value + placed.copy(selected = ClipRetiming.drawsSomething(placed.clip, placed.recordIds, inScope))
             onAdded(uri)
             refreshSparks(uri)
         }
@@ -1240,16 +1271,6 @@ class ExportUtilityViewModel(
         }
     }
 
-    /**
-     * Gives every clip the placement one of them has.
-     *
-     * The scrub position is deliberately not copied — it points at a moment inside one particular
-     * clip, and the same fraction of a different shot is a different moment.
-     */
-    fun applyGraphToAll(from: android.net.Uri) {
-        val source = _clips.value.firstOrNull { it.clip.uri == from }?.graph ?: return
-        _clips.value = _clips.value.map { it.copy(graph = source) }
-    }
 
     /**
      * Remembers this framing as the one for clips with this many people on them.
@@ -1454,11 +1475,9 @@ class ExportUtilityViewModel(
         _clips.value = found.map { clip ->
             kept[clip.uri] ?: ClipSelection(
                 clip = clip,
-                // Whoever was recording while *this clip* was filming. Defaulting to the event's
-                // whole cast would offer a curve for someone whose watch had already stopped.
-                recordIds = sourceRecords.filter { clip.overlaps(it) }
-                    .map { it.metadata.recordId }
-                    .toSet(),
+                // Everyone at the show, the people not recording during it included (S14B.6):
+                // they were there, and the person exporting decides whether they're on it.
+                recordIds = ClipRetiming.castFor(clip, sourceRecords, emptySet()),
                 // Nothing is ticked to begin with. Choosing what to export is the question this
                 // step asks, and pre-answering it means a stray tap on Next queues renders nobody
                 // asked for — expensive, and on a phone that has already been filled once.
@@ -1553,7 +1572,7 @@ class ExportUtilityViewModel(
      */
     fun setAllClipsSelected(selected: Boolean) {
         _clips.value = _clips.value.map {
-            it.copy(selected = selected && it.recordIds.isNotEmpty(), untickedByTime = false)
+            it.copy(selected = selected && ClipRetiming.drawsSomething(it.clip, it.recordIds, records.value), untickedByTime = false)
         }
     }
 
@@ -1588,7 +1607,7 @@ class ExportUtilityViewModel(
         // Derived from the sorted list rather than the raw one, so jobs enter the queue in the
         // order they were shown in — a queue that disagrees with the list above it is confusing
         // for no benefit.
-        .map { list -> list.filter { it.selected && it.recordIds.isNotEmpty() } }
+        .map { list -> list.filter { it.selected && ClipRetiming.drawsSomething(it.clip, it.recordIds, records.value) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _mediaAccessRefused = MutableStateFlow(false)

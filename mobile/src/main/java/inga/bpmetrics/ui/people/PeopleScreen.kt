@@ -211,8 +211,8 @@ private fun EmptyPeople(modifier: Modifier = Modifier) {
         Text("Nobody yet", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Add the people you hand watches to. Each gets a colour, so you can tell their " +
-                "recordings apart at a glance and their curve keeps that colour in every chart " +
+            "Add the people you hand watches to. Each gets a color, so you can tell their " +
+                "recordings apart at a glance and their curve keeps that color in every chart " +
                 "and video.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -318,7 +318,7 @@ private fun PersonEditDialog(
                             Text(
                                 // Not an apology for a missing photo. The colour is how a wearer
                                 // is identified on every chart in the app already.
-                                "Their colour and initial otherwise.",
+                                "Their color and initial otherwise.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(start = 12.dp)

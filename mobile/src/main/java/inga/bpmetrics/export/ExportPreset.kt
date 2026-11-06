@@ -255,7 +255,12 @@ data class ExportPreset(
      * Whether footage of a different shape fills the canvas, cropped, instead of fitting inside it
      * with bars. Only matters when the canvas isn't matched to the clip.
      */
-    val fillCanvas: Boolean = false
+    val fillCanvas: Boolean = false,
+    /**
+     * The title, clock and axis text's size, as a multiplier on what the renderer works out. The
+     * readable floor still holds below it (UX Audit O6: only the pills had a size control).
+     */
+    val textScale: Float = 1f
 ) {
     fun toJson(): String = BpmGson.instance.toJson(this)
 
@@ -409,7 +414,8 @@ data class ExportPreset(
             // Absent from every preset written before 5, and those get what a new one does: the
             // whole point of these is fixing how the old ones rendered.
             bpmScale = bpmScale ?: shipped.bpmScale,
-            contrast = contrast ?: shipped.contrast
+            contrast = contrast ?: shipped.contrast,
+            textScale = textScale.takeIf { it > 0.05f }?.coerceIn(0.75f, 2f) ?: shipped.textScale
         )
     }
 

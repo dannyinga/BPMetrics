@@ -329,6 +329,17 @@ class ExportPresetTest {
     }
 
     @Test
+    fun `text size comes back at 100 percent for an older preset, and stays in bounds`() {
+        val old = ExportPreset.fromJson("""{"version":5,"name":"Mine"}""")
+        assertEquals(1f, old!!.textScale, 0.0001f)
+
+        val huge = ExportPreset(textScale = 9f).sanitised()
+        assertEquals(2f, huge.textScale, 0.0001f)
+        val tiny = ExportPreset(textScale = 0.3f).sanitised()
+        assertEquals(0.75f, tiny.textScale, 0.0001f)
+    }
+
+    @Test
     fun `automatic contrast adds a shadow only where the panel is too faint`() {
         assertEquals(Contrast.SHADOW, Contrast.AUTO.resolvedFor(0))
         assertEquals(Contrast.SHADOW, Contrast.AUTO.resolvedFor(29))

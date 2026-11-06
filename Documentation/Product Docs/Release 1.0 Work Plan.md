@@ -24,7 +24,7 @@ Everything left before 1.0, in order. It covers bug fixes, the consolidation ref
 | D1 | Personal resting/max heart rate, the sync retry interval and the export time zone do nothing (Audit #7). Should they be wired up or removed? | **Decided: remove all three for 1.0.** Personal zones would make the stored `zonesEncoded` column stale, so they need a recompute pass; that's post-1.0 work. | S5 |
 | D2 | "Register a watch" makes an entry no real watch can match (Audit #15). Should it be fixed or removed? | **Decided: remove it.** Watches register themselves when they first sync. | S18 |
 | D3 | A brand typeface, or the system font? | *Open.* Decide during the theme phase. Taxonomy Sprint 6 called it a deliberate non-goal. | S25 |
-| D4 | The launcher glyph and brand colour. | *Open.* Danny's call. S26 needs the artwork or a direction. | S26 |
+| D4 | The launcher glyph and brand color. | *Open.* Danny's call. S26 needs the artwork or a direction. | S26 |
 | D5 | Hosting for the privacy policy (GitHub Pages, or a Play-hosted page). | **Decided: GitHub Pages from the repo.** | S28 |
 | D6 | How is a B2B set tagged? | **Decided: one tag for each artist, plus one for the B2B itself,** all in the Artist category. | S16A |
 
@@ -97,7 +97,7 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 | **S3.6** | Settings restore: give the two "Restore" buttons distinct names and descriptions, confirm deleting a database backup, and label the pre-restore copy. | §3 Settings (High) |
 | **S3.7** | The startup guard forces the database open, so a library that can't be migrated reaches the Recovery screen instead of crashing. Add a test using a schema-2 file. | #29 |
 | **S3.8** | Restore remaps the ids inside smart-collection rules (events by their old id, people/tags/venues by name, watches by watch id) instead of copying the rule verbatim. Drop references it can't resolve and report them in the restore summary. Add a test that restores into a library that already has items. | #30 |
-| **S3.9** | The backup carries each watch's wearer (by person name), colour, and first/last-seen dates, and restore applies them. Restore never sets "last seen" to the restore time. Bump the backup format version, and keep old files readable. | #36 |
+| **S3.9** | The backup carries each watch's wearer (by person name), color, and first/last-seen dates, and restore applies them. Restore never sets "last seen" to the restore time. Bump the backup format version, and keep old files readable. | #36 |
 
 **Verify:** add unit tests for S3.2 and S3.5, and do a manual round trip of a legacy backup on the emulator.
 
@@ -108,7 +108,7 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 - **S3.4:** "Apply to past" also saves the wearer picked in the dialog; before, it changed the past and silently left the future.
 - **S3.6:** "Roll back" and "Restore from file". Fixing it turned up a data-loss bug: a roll back copied only the `.db` and dropped the backup's `-wal`, so it lost whatever the library last did. The pre-roll-back copy of the live database had the same problem. Both now copy the companions.
 - **S3.7:** `LibraryRepository.ensureOpen()`. The instrumented test `UnmigratableLibraryTest` builds a version-2 file and asserts that opening it fails; it passes on API 36.
-- **S3.8 + S3.9:** backup format **7**. Collections carry `sourceId` and `ruleNames`; watches carry their wearer, colour and dates; and people named by a watch or a rule travel too. Restore remaps through `RuleRemap`. An id it can't translate matches nothing rather than everything, and `RestoreResult.rulesNeedingAttention` names the affected collections. **Every rule from a format 6 file (Danny's current backups) is reported, because those files don't say what their people, tag and venue ids meant.** Events still resolve.
+- **S3.8 + S3.9:** backup format **7**. Collections carry `sourceId` and `ruleNames`; watches carry their wearer, color and dates; and people named by a watch or a rule travel too. Restore remaps through `RuleRemap`. An id it can't translate matches nothing rather than everything, and `RestoreResult.rulesNeedingAttention` names the affected collections. **Every rule from a format 6 file (Danny's current backups) is reported, because those files don't say what their people, tag and venue ids meant.** Events still resolve.
 - **Tests:** `AutoTitleTest`, `RuleRemapTest`, `BackupRestoreTest` (legacy cover, rule remap into a library that already has the person, old-file reporting, and watch details), plus `BackupCoverageTest`, which now also asserts every `WatchEntity` column.
 **Commit:** `fix: stop losing tags, titles, rules and covers without asking`
 
@@ -144,7 +144,7 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 | **S5.3** | Restoring a backup file confirms first and says plainly what it does. It doesn't overwrite settings it shouldn't, such as id-valued keys from another database. While it runs, progress shows on Restore itself (with a count), and both buttons are disabled. Back up suggests a dated name with no doubled `.json`. | §3 Settings, #33, #34 |
 | **S5.4** | Open the most-used settings group by default and move Sync status higher. | §3 Settings |
 | **S5.5** | The People edit dialog gets Cancel, a scrolling body, and a warning that removing a person unlinks their watches. | §3 Settings |
-| **S5.6** | **One entry per watch, whatever build it runs.** (a) `resolveWatch` also matches on the Data Layer node that sent the record. A watch id it hasn't seen, from a node an existing entry already has as `lastKnownNodeId`, files the recording under that entry, which keeps its name, wearer and colour. The entry remembers the new id as an alias so later syncs match directly; that's a schema change, so diff the schema first. This also covers pre-id builds keyed by model name. (b) `WatchDto` carries `lastKnownNodeId` (still format 7, which hasn't shipped), and restore matches on it the same way. Take it out of `BackupCoverageTest`'s excuses. (c) A real "Merge into…" action on a watch, using the existing `WatchesViewModel.merge`, with a confirm that gives the count. (d) The Watches screen suggests "This looks like the same watch as X" for entries with the same model whose first-to-last-seen ranges don't overlap. It's a suggestion that opens the merge confirm, never an automatic merge. No change on the watch, so watches already in use benefit. A factory reset gives a watch a new node, and that case is left to (c). **Verify:** a unit test where a reinstalled watch (new id, same node) lands on its old entry; one where two watches of the same model on different nodes stay apart; and a backup round trip that keeps the node. | #39 |
+| **S5.6** | **One entry per watch, whatever build it runs.** (a) `resolveWatch` also matches on the Data Layer node that sent the record. A watch id it hasn't seen, from a node an existing entry already has as `lastKnownNodeId`, files the recording under that entry, which keeps its name, wearer and color. The entry remembers the new id as an alias so later syncs match directly; that's a schema change, so diff the schema first. This also covers pre-id builds keyed by model name. (b) `WatchDto` carries `lastKnownNodeId` (still format 7, which hasn't shipped), and restore matches on it the same way. Take it out of `BackupCoverageTest`'s excuses. (c) A real "Merge into…" action on a watch, using the existing `WatchesViewModel.merge`, with a confirm that gives the count. (d) The Watches screen suggests "This looks like the same watch as X" for entries with the same model whose first-to-last-seen ranges don't overlap. It's a suggestion that opens the merge confirm, never an automatic merge. No change on the watch, so watches already in use benefit. A factory reset gives a watch a new node, and that case is left to (c). **Verify:** a unit test where a reinstalled watch (new id, same node) lands on its old entry; one where two watches of the same model on different nodes stay apart; and a backup round trip that keeps the node. | #39 |
 
 **Commit:** `fix(settings): fields you can type in, settings that exist, and one entry per watch`
 
@@ -164,7 +164,7 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
     - **Shared rules:** `RestoreKeys` and `EventMatcher` are used by both the preview and the restore, so the two agree.
   - **Event matching:** events are matched by `EventMatcher`, and a restore now keeps an event's `createdAt`; before, it stamped the time of the restore. Restoring a library's own backup therefore does nothing by default. A library that was itself restored before this build (the emulator copy) still has restore-time stamps, so its events show as new.
   - **Collections** match by name and `createdAt`. Replacing one keeps its id, so other rules that name it still work.
-  - **Settings** are per item: Keep mine or Use the file's. Only `SettingsRepository.RESTORABLE_KEYS` are offered (wallpaper colours, 24-hour clock, date format, library order), never id-valued or bookkeeping keys.
+  - **Settings** are per item: Keep mine or Use the file's. Only `SettingsRepository.RESTORABLE_KEYS` are offered (wallpaper colors, 24-hour clock, date format, library order), never id-valued or bookkeeping keys.
   - **Progress:** shown as a count in the dialog and on the Restore button, with both buttons disabled.
   - **CSVs** get the same screen: Add or Skip for new recordings, and Skip or Replace (title, notes, tags) for ones already here. Before, every import of the same CSV added it again.
   - **Duplicates within a file:** a recording that appears twice in one file is now saved once.
@@ -250,9 +250,9 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
   - **Crop fields:** they show and read times in the 12/24-hour setting, through `ClockEntry`. They accept either clock, pick AM or PM from the recording's span, and give a reason under the field: can't read it, outside the recording, needs the date, needs AM/PM. "From has to be before To" shows under the pair.
   - **Next waits:** on an image's Contents step, Next waits for any of these problems to be fixed.
 - **S7.5:**
-  - **Cancel and Clear finished:** Cancel asks first. "Clear finished" removes saved and cancelled jobs and keeps failed ones, with their reason and Retry.
+  - **Cancel and Clear finished:** Cancel asks first. "Clear finished" removes saved and canceled jobs and keeps failed ones, with their reason and Retry.
   - **Locations:** a finished job shows where it was saved, read from the media store, e.g. "Saved to Movies/BPMetrics/Mr_Amsterdam_….mp4".
-  - **Stats:** count Failed and Cancelled separately.
+  - **Stats:** count Failed and Canceled separately.
   - **Failure reasons:** shown inline in body text, written by `RenderFailure.describe`.
   - **Retry:** runs `VideoExporter.preflightProblem()` first (clip readable, free space), which the render itself now runs too, and refuses with the up-to-date reason.
   - **Notifications:**
@@ -337,7 +337,7 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 |---|---|---|
 | **S9.1** | Use Wear `Scaffold` + `TimeText` + `ScalingLazyColumn` with rotary input on every screen. | §3 Watch |
 | **S9.2** | Recording and idle look clearly different at a glance. Show BPM in a different style when not recording. | §3 Watch (High) |
-| **S9.3** | The Start/Stop button keeps its position and width. Warnings ("no signal", "off wrist") use larger, coloured type. | §3 Watch |
+| **S9.3** | The Start/Stop button keeps its position and width. Warnings ("no signal", "off wrist") use larger, colored type. | §3 Watch |
 | **S9.4** | Sync chips wrap instead of cutting words off. "Could not reach the phone" stays until it's dismissed and offers a retry. | §3 Watch |
 | **S9.5** | Timer format ("1h 0m 5s"), a heart icon that survives tinting, and an ongoing activity that shows the timer and uses a monochrome icon. | §3 Watch |
 | **S9.6** | Start uses a record symbol and not a heart. The permission screen's button fits inside the round screen. The layout doesn't jump when the "not on phone yet" line appears. | §6 Watch |
@@ -465,7 +465,7 @@ Ambient mode and a tile are post-1.0.
 
 | Ticket | Work | Plan / Audit |
 |---|---|---|
-| **S13.1** | Add `ExportContent` (records, window, title, colours, photos, time zone) and the sealed `ExportRequest` with `Image` and `Video`. | Plan §6 |
+| **S13.1** | Add `ExportContent` (records, window, title, colors, photos, time zone) and the sealed `ExportRequest` with `Image` and `Video`. | Plan §6 |
 | **S13.2** | Renderers take `(ExportContent, ExportPreset)`. Delete the look fields of `ImageExportConfig` and `VideoExportConfig`, `TimelineImageExporter.Spec`, `applyTo`, `ExportPreset.from`, and the 3 separate config builders. | Plan §6 |
 | **S13.3** | A render job stores `preset.toJson()` plus the content, so nothing is lost across process death. Add a round-trip test. | #25 |
 | **S13.4** | Delete `headerXPercent`, the unreachable elapsed-time alignment, and the bit-rate fields if the encoder keeps choosing its own rate. Old preset JSON still reads, because Gson ignores unknown fields. Add a test for that. The render service takes its primary record from the request instead of re-fetching it with `getRecordWithId`. | Plan §6 |
@@ -473,7 +473,7 @@ Ambient mode and a tile are post-1.0.
 **Commit:** `refactor(export): one look, one content, two kinds of request`
 
 **As built:**
-- **S13.1:** `export/ExportRequest.kt` holds `ExportContent` (records, window, title, colours, photos, the clip's zone) and `ExportRequest.Video` (content, preset, clip, clip start).
+- **S13.1:** `export/ExportRequest.kt` holds `ExportContent` (records, window, title, colors, photos, the clip's zone) and `ExportRequest.Video` (content, preset, clip, clip start).
   - **Departure: no `ExportRequest.Image`.** The timeline image's content is already-laid-out series, built by the view model per image, so its `Spec` keeps its content fields and takes the preset as `look` (below).
 - **S13.2:** `ImageExportConfig` and `VideoExportConfig` are gone, and so are `ExportPreset.applyTo` and `ExportPreset.from`.
   - **Video-frame renderer:** takes `(content, look)`. Inside, a small `Frame(content, look, zoneId)` carries them and the resolved zone; nothing is copied.
@@ -498,7 +498,7 @@ Ambient mode and a tile are post-1.0.
 | Ticket | Work | Plan / Audit |
 |---|---|---|
 | **S14.1** | Rename `ImageExporter` → `VideoFrameRenderer` and `TimelineImageExporter` → `ImageRenderer`. | Plan §6 |
-| **S14.2** | Add `ChartKit`, one place for the BPM range, grid lines, person colour, wearer label, `ellipsize`, paint setup, scale factor, gap constant and zone resolution. Both renderers use it. | Plan §6 |
+| **S14.2** | Add `ChartKit`, one place for the BPM range, grid lines, person color, wearer label, `ellipsize`, paint setup, scale factor, gap constant and zone resolution. Both renderers use it. | Plan §6 |
 | **S14.3** | Single-recording video uses the caption and the shared range, so the render matches the preview. Fix the pixel-vs-ms gap check. | #26, #27 |
 | **S14.4** | One `MediaStoreSaver` for images and video, which cleans up after a failed save. One filename sanitiser. | Plan §6 |
 | **S14.5** | Add a reference-bitmap check per renderer: the same input gives the same pixels within tolerance. | Plan §6 |
@@ -507,16 +507,16 @@ Ambient mode and a tile are post-1.0.
 
 **As built:**
 - **S14.1:** `VideoFrameRenderer` and `ImageRenderer`, renamed with history kept, and their tests with them (`VideoFrameAlignmentTest`, `VideoFrameRankingTest`, `ImageRendererSpecTest`).
-- **S14.2:** `export/ChartKit.kt` holds the BPM range, gridlines, colour, wearer label and distinct labels, `ellipsize`, paint, scale, zone and gap constant. Each renderer's private copy is deleted.
+- **S14.2:** `export/ChartKit.kt` holds the BPM range, gridlines, color, wearer label and distinct labels, `ellipsize`, paint, scale, zone and gap constant. Each renderer's private copy is deleted.
   - **One range:** padded, at least 20 bpm tall, padding kept within 30–220, then widened to whole gridline steps. The picture's gridlines are now round numbers, as the video's already were.
-  - **Colours:** the image builder uses `ChartKit.colourFor`, so a recording nobody is assigned to gets a palette colour by position in a picture too.
+  - **Colors:** the image builder uses `ChartKit.colourFor`, so a recording nobody is assigned to gets a palette color by position in a picture too.
   - **Scale:** off the short edge, 1 at 1080. A square video used to measure itself against a 1920 width and drew at 0.28× in a half-width frame, against 0.5× for portrait. It now matches portrait (see the note below).
 - **S14.3:** the single-recording video path (`renderOnCanvas` and its own range) is deleted. Every video goes through the aligned path, so one recording is drawn exactly as the preview draws it (Audit #27).
   - **Gap check (#26):** the line to the end of the plot compared pixels with milliseconds. It now converts the pixels to time first.
 - **S14.4:** `export/MediaStoreSaver.kt`, `saveVideo` and `saveImage` over one `save`. Both now delete their gallery entry if writing fails; the video saver used to leave a hidden pending one behind.
   - **One file name rule:** `FileNames.of(title)` keeps letters in any language ("Café Tacvba", which the old ASCII rule turned into "Caf__Tacvba"), digits, `-` and `_`, and caps the length at 80. It replaced five copies in two variants, plus the suggested names for CSV and preset saves.
 - **S14.5:** `RendererReferenceTest` (androidTest) draws a fixed two-person input with each renderer and compares it with `src/androidTest/assets/reference/`. A pixel counts as different past 8 steps in any channel, and the test fails past 0.5% of pixels. The references were recorded on Pixel_7_Pro, checked by eye, and the test re-records a missing one.
-  - **Also:** `MediaStoreSaverTest` checks that a picture saves and that a failed video copy leaves nothing behind, and `ChartKitTest` covers the range, colours, labels and file names.
+  - **Also:** `MediaStoreSaverTest` checks that a picture saves and that a failed video copy leaves nothing behind, and `ChartKitTest` covers the range, colors, labels and file names.
 - **Note for later: readout names on narrow frames.** At the corrected square scale, a half-width frame gives the pill's name about 29 px, so "Danny" shows as "D…" and "Bethany" not at all. A portrait canvas with the same frame was already doing this. The pill's width budget (22% of the frame) doesn't grow with its height cap.
 - **Verified:** all unit tests and both apps build, and 5 device tests pass on the emulator.
 
@@ -557,12 +557,51 @@ Ambient mode and a tile are post-1.0.
   - **Fill or fit:** `fillCanvas` crops footage of another shape instead of adding bars.
     - The preview now fits or fills the way the render does. It used to stretch the frame over the whole canvas, so the bars only showed up in the export.
   - **Default frame:** 0.06–0.94 across, 0.58–0.93 down; the old default is added to `SUPERSEDED_FRAMINGS`. "Landscape · lower third" starts at 0.64, not 0.68, for new installs.
-  - **One pill style:** every pill has a rim, in the wearer's colour with several people and quietly in the label colour with one.
+  - **One pill style:** every pill has a rim, in the wearer's color with several people and quietly in the label color with one.
   - **Controls:** "Match the clip" with the Canvas chips, a Fill switch, and Scale and Contrast choices in Graph (video only).
 - **References:** `RendererReferenceTest` now draws every built-in at 1, 3 and 5 people (half size, 18 images), and the video-frame reference is re-recorded. All recorded on Pixel_7_Pro and checked by eye.
 - **Checked against real footage:** the Granada clip at five people on every built-in, the Gorge, laser and arena clips on the story looks, and a portrait clip rendered matched, which came out 540×960 and upright.
 - **Verified:** all unit tests pass. The export device tests pass on the emulator. Lint shows nothing new (the three `RenderFailure.kt` errors predate this).
-- **Left for S14B:** a text size control, colour controls for the grid, labels and ramp, and the editor itself. Title wrapping was skipped: a title shrinks, then is cut.
+- **Left for S14B:** a text size control, color controls for the grid, labels and ramp, and the editor itself. Title wrapping was skipped: a title shrinks, then is cut.
+
+### S14B — One look editor with room to work *(Video Overlay and Exporter UX Audit)*
+
+| Ticket | Work | Audit |
+|---|---|---|
+| **S14B.1** | One editor for the export flow and Settings: the preview on top, tabs below in place of six accordions. | E1, E3 |
+| **S14B.2** | Tap something in the preview to open its settings. | E1 |
+| **S14B.3** | A visible scope switch for the frame. Per-person-count frames listed and clearable. | E2 |
+| **S14B.4** | Color controls for the fields that already exist, and a text size. | O8, "fully customizable" |
+| **S14B.5** | Sync in one place, per clip. Honest labels. "Last look wins" said plainly. | E4–E8 |
+| **S14B.6** | The Boogie T cast: everyone at the show on every clip (Danny, 2026-11-06). | Part 3 |
+
+**Commit:** `feat(export): one look editor, and everyone at the show on every clip`
+
+**As built:**
+- **S14B.1:** `LookSections` is a tabbed editor: Presets (export flow only), Layout, Graph, Readouts, Text & color, Time, Signature. Stills get Layout, Graph, Text & color and Signature.
+  - **One editor:** the Look step and Settings' preset editor both use it, with the preview pinned and the tab row fixed above a scrolling tab. Settings used to scroll the preview away with everything else.
+  - **Full screen:** a landscape video's full-screen preview turns the screen, and the orientation is restored on close. The original is kept across the recreation the rotation causes, so it doesn't bounce.
+  - **Handles:** the frame has corner handles only, set just outside it. The edge knobs sat on the title and the axis numbers; the edges still drag from their middles.
+- **S14B.2:** `VideoFrameRenderer.regionAt` answers what's at a point from the same layout the frame is drawn with. A tap opens its tab: the pills open Readouts, the title Text & color, the clock Time, the plot Graph, the wordmark Signature, and outside the panel Layout. `FrameRegionTest` (device) covers each.
+- **S14B.3:** "Changes apply to: This clip / N-person clips / Every clip", above the frame controls in Layout, says before a drag where it goes.
+  - **Every clip** sets the look's frame and clears pins and clip frames (`setFrameForEveryClip`).
+  - **Saving:** "Save as" and "Update" save the look as it stands. They used to fold in the previewed clip's frame.
+  - **Pins:** frames pinned for a number of people are listed under Layout, each with Clear.
+- **S14B.4:** "Text & color": text size (75–200%, the readable floor still holds; `ExportPreset.textScale`), and swatches for text, gridlines, and the low and high ends of a lone curve's ramp.
+- **S14B.5:**
+  - **Sync:** "Filmed at" and a nudge (−1, −0.1, +0.1, +1 s, saying how far it is from the file's time) are together under Time, per clip. The look-wide sync offset is no longer offered; a preset still carrying one shows it under Time with Clear, rather than applying it unseen.
+  - **Labels:** "Heart rate numbers" and "Gridlines" (were "Labels", "Grid"), "Fade what's ahead" (was "Trailing opacity"), "Panel width" (was "Width of the frame"). "Show readouts" moved into Readouts, where the rest of its section was. The Side hint no longer claims the clock moves. "Heading" is "Title", as on Contents, and says every video in the batch gets it.
+  - **Last look wins:** "Make default" and its star are gone from the export flow. Settings says a new export starts from the look used last, and the one picked there is for a first export.
+  - **Settings matches the export flow:** a built-in edited there saves as a new preset instead of being overwritten, Export writes the same sanitised `.bpmpreset` file, Back with changes asks first, and "Choose a video" is gone from there.
+  - **Import:** importing in the export flow saves the preset, and only puts it to use when that loses no unsaved changes.
+  - **Smaller things:** a canvas size no chip names shows as its own chip, the preset menu button is the full 48 dp, Next on Source says why it's greyed out, and the dead "Video: … / Remove" block is gone.
+- **S14B.6:** `ClipRetiming.candidatesFor`: every recording running during the clip, plus, for each other person with a recording within two hours of it (the same show, not the festival), their nearest one.
+  - **Display:** people without readings for the clip are offered once each and ticked, greyed as "not recording", with a line saying their readout shows "--" until their watch starts.
+  - **What can be ticked:** a clip can only be ticked when someone on it was recording (`drawsSomething`).
+  - **Tests:** `ClipRetimingTest` covers Tyler at Boogie T, one entry per person, no other days, and a clip with only absent people.
+  - **On the emulator,** the Gorge clip offers Danny, with Toby and Stina as not recording.
+- **Not done:** presets as looks only (E5). The canvas is still part of a preset; with "Match the clip" as the default it rarely matters. Title wrapping is still skipped.
+- **Verified:** 791 unit tests and 11 export device tests pass; both apps build; lint shows nothing new. On the emulator: each tab, tap-to-tab for pills, title and outside, the scope switch, the nudge, text size and swatches, the landscape full screen turning and turning back, and the Settings editor's discard prompt.
 
 ---
 
@@ -619,7 +658,7 @@ Most Concert events are already named after their artist, but only some carry an
 
 | Ticket | Work | Audit |
 |---|---|---|
-| **S17.1** | One `LibraryCard` skeleton. The record, event and collection cards fill its slots. Collection text gets the over-cover colour. Stats are labelled the same way on every card (no colour-only hearts). Dates use a compact form that drops the current year and doesn't truncate. Covers blur enough that flyer lettering doesn't compete with the title. The "Smart — whatever matches…" line becomes a small badge. | Plan §5, §3 Library, §6 |
+| **S17.1** | One `LibraryCard` skeleton. The record, event and collection cards fill its slots. Collection text gets the over-cover color. Stats are labelled the same way on every card (no color-only hearts). Dates use a compact form that drops the current year and doesn't truncate. Covers blur enough that flyer lettering doesn't compete with the title. The "Smart — whatever matches…" line becomes a small badge. | Plan §5, §3 Library, §6 |
 | **S17.2** | Deleting an event says what really happens to its recordings and child events. "Add to an event" with an event selected nests it. | §3 Library |
 | **S17.3** | "New event…" and "New collection…" inside pickers finish the move or add the user started. | §3 Library |
 | **S17.4** | First-run copy and the copy for expanded empty events. The awaiting-selection card can be dismissed and points at the right control. Select All respects collapsed events. | §3 Library |
@@ -667,7 +706,7 @@ Most Concert events are already named after their artist, but only some carry an
 |---|---|---|
 | **S21.1** | Size the timeline in dp/sp and respect font scale. Show a scrub readout with time and BPM. Give the shaded band a legend. Make zoomed time labels distinct. Multi-day axes show dates, and ticks fall on round times. Moments name the day when the scope spans more than one. | §2 Charts, §6 |
 | **S21.2** | Let vertical drags scroll the page over a chart. Collapse the analysis header on small phones. | §2 Charts |
-| **S21.3** | Pair every colour-only state with a second cue. Name sliders and switches, and add semantics to canvas controls. Make touch targets at least 48dp. The drawer button has a single content description (there are three today). | §2 Accessibility, §6 |
+| **S21.3** | Pair every color-only state with a second cue. Name sliders and switches, and add semantics to canvas controls. Make touch targets at least 48dp. The drawer button has a single content description (there are three today). | §2 Accessibility, §6 |
 
 **Commit:** `feat(a11y): readable charts and controls that announce themselves`
 
@@ -685,7 +724,7 @@ Most Concert events are already named after their artist, but only some carry an
 
 ## Phase H — Theme and branding
 
-### S23 — A complete colour scheme
+### S23 — A complete color scheme
 
 | Ticket | Work | Audit |
 |---|---|---|
@@ -693,17 +732,17 @@ Most Concert events are already named after their artist, but only some carry an
 | **S23.2** | Replace the 11 `surfaceVariant.copy(alpha)` sites with container roles. | §4 step 1 |
 | **S23.3** | Status bar and navigation bar icons are light on the dark theme. | #32 |
 
-**Commit:** `feat(theme): every colour role set, and no more purple-grey`
+**Commit:** `feat(theme): every color role set, and no more purple-gray`
 
-### S24 — Extended colours
+### S24 — Extended colors
 
 | Ticket | Work | Audit |
 |---|---|---|
 | **S24.1** | An `ExtendedColors` `CompositionLocal` holding the heart-rate ramp and zones (shared with exports), chart grid, cover scrim, `onCover` text, and status tokens (success, queued, running, failed, attention). | §4 step 2 |
 | **S24.2** | UI code stops importing `BpmHigh`, `BpmLow` and `BpmAccent`. That's 61 uses, 26 of them in the render queue. | §4 |
-| **S24.3** | Separate the person palette from the warning red and the brand teal, and make neighbouring person colours clearly distinct. Teal vs cyan and red vs orange are indistinguishable on the timeline today. | §4, §6 |
+| **S24.3** | Separate the person palette from the warning red and the brand teal, and make neighbouring person colors clearly distinct. Teal vs cyan and red vs orange are indistinguishable on the timeline today. | §4, §6 |
 
-**Commit:** `feat(theme): extended colours, and brand colours only where they mean something`
+**Commit:** `feat(theme): extended colors, and brand colors only where they mean something`
 
 ### S25 — Type and spacing
 

@@ -223,6 +223,59 @@ class ClipRetimingTest {
         )
     }
 
+    // --- Everyone at the show (S14B.6) ---
+
+    private fun worn(id: Long, by: String, startedAt: Long, lengthMs: Long) =
+        recording(id, startedAt, lengthMs).let { it.copy(metadata = it.metadata.copy(wearerName = by)) }
+
+    /** Boogie T: four from the start, Tyler forty minutes in. */
+    private val boogieT = listOf(
+        worn(1, "Danny", setStart, 120 * minute),
+        worn(2, "Colin", setStart, 120 * minute),
+        worn(3, "Stina", setStart, 120 * minute),
+        worn(4, "Bethany", setStart, 120 * minute),
+        worn(5, "Tyler", setStart + 40 * minute, 80 * minute)
+    )
+
+    private fun clipAt(startedAt: Long) = screenRecording(startedAt = startedAt, lengthMs = minute)
+
+    @Test
+    fun `a clip filmed before someone started recording still offers them`() {
+        val early = clipAt(setStart + 10 * minute)
+
+        val offered = ClipRetiming.candidatesFor(early, boogieT).map { it.metadata.wearerName }
+        assertEquals(listOf("Danny", "Colin", "Stina", "Bethany", "Tyler"), offered)
+        assertFalse(ClipRetiming.hasReadings(early, boogieT[4]))
+        // And ticked by default, all five.
+        assertEquals(setOf(1L, 2L, 3L, 4L, 5L), ClipRetiming.castFor(early, boogieT, emptySet()))
+    }
+
+    @Test
+    fun `someone with several recordings that night is offered once`() {
+        val night = boogieT + worn(6, "Tyler", setStart - 30 * minute, 20 * minute)
+        val early = clipAt(setStart + 10 * minute)
+
+        val tylers = ClipRetiming.candidatesFor(early, night).filter { it.metadata.wearerName == "Tyler" }
+        assertEquals(1, tylers.size)
+        // The nearer of the two: the one that ended twenty minutes before, not the one starting thirty after.
+        assertEquals(6L, tylers.single().metadata.recordId)
+    }
+
+    @Test
+    fun `another day's recordings are not offered`() {
+        val festival = boogieT + worn(7, "Kyle", setStart - 24 * 60 * minute, 60 * minute)
+        val clip = clipAt(setStart + 50 * minute)
+
+        assertTrue(ClipRetiming.candidatesFor(clip, festival).none { it.metadata.wearerName == "Kyle" })
+    }
+
+    @Test
+    fun `a clip with only people who weren't recording draws nothing, so it can't be ticked`() {
+        val clip = clipAt(setStart + 10 * minute)
+        assertFalse(ClipRetiming.drawsSomething(clip, setOf(5L), boogieT))
+        assertTrue(ClipRetiming.drawsSomething(clip, setOf(1L, 5L), boogieT))
+    }
+
     @Test
     fun `a clip's time is shown in the offset it was filmed at when the venue has no zone`() {
         // The Gorge clip: Samsung says -07:00, nobody set a place, and the phone is in Central.

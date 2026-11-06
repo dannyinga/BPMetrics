@@ -632,10 +632,10 @@ fun ContentsStep(
                 ClipCard(
                     selection = selection,
                     title = titles[selection.clip.uri.toString()].orEmpty(),
-                    // Only people who were actually recording during this clip. Offering the rest
-                    // would let someone tick a curve that has no data for the footage.
                     clock = ClipRetiming.clockFor(selection.clip, records),
-                    candidates = records.filter { selection.clip.overlaps(it) },
+                    // Everyone at the show, with the people not recording during this clip marked
+                    // as such (S14B.6).
+                    candidates = ClipRetiming.candidatesFor(selection.clip, records),
                     recordsById = recordsById,
                     peopleById = peopleById,
                     onToggleClip = { onToggleClip(selection.clip.uri) },
@@ -733,7 +733,7 @@ private fun ClipCard(
                 )
             }
 
-            if (candidates.isEmpty()) {
+            if (candidates.none { ClipRetiming.hasReadings(selection.clip, it) }) {
                 Text(
                     "Nobody was recording during this clip.",
                     style = MaterialTheme.typography.bodySmall,
@@ -752,6 +752,7 @@ private fun ClipCard(
                 candidates.forEach { record ->
                     val id = record.metadata.recordId
                     val person = record.metadata.personId?.let { peopleById[it] }
+                    val recording = ClipRetiming.hasReadings(selection.clip, record)
                     FilterChip(
                         selected = id in selection.recordIds,
                         enabled = selection.selected,
@@ -762,14 +763,28 @@ private fun ClipCard(
                         // faster than reading it.
                         leadingIcon = person?.let { { PersonAvatar(it, size = 20.dp) } },
                         label = {
+                            val name = person?.displayName
+                                ?: recordsById[id]?.metadata?.wearerName?.takeIf { it.isNotBlank() }
+                                ?: "Unknown"
+                            // Still offered, and still ticked by default, but greyed with the
+                            // reason, so a "--" in the export isn't a surprise.
                             Text(
-                                person?.displayName
-                                    ?: recordsById[id]?.metadata?.wearerName?.takeIf { it.isNotBlank() }
-                                    ?: "Unknown"
+                                if (recording) name else "$name · not recording",
+                                color = if (recording) androidx.compose.ui.graphics.Color.Unspecified
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
                     )
                 }
+            }
+            if (candidates.any { !ClipRetiming.hasReadings(selection.clip, it) }) {
+                Text(
+                    "People marked \"not recording\" were at the show but their watch wasn't " +
+                        "recording during this clip. Their readout shows \"--\" until it starts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 12.dp, top = 4.dp)
+                )
             }
         }
     }

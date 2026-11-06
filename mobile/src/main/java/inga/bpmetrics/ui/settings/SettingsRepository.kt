@@ -352,7 +352,7 @@ class SettingsRepository(context: Context) {
          * built-ins someone deleted); and some are retired and read by nothing.
          */
         val RESTORABLE_KEYS: Map<String, String> = mapOf(
-            "dynamic_colour" to "Wallpaper colours",
+            "dynamic_colour" to "Wallpaper colors",
             "use_24_hour" to "24-hour clock",
             "date_format" to "Date format",
             "default_sort" to "Library order"

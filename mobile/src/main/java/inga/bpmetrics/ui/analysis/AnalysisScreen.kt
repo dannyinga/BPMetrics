@@ -1109,7 +1109,7 @@ private fun EmptyAnalysis(uiState: AnalysisUiState, modifier: Modifier = Modifie
             is AnalysisScope.Saved ->
                 "It was saved without any, or its recordings have since been deleted."
             else ->
-                "Narrow or widen the filter in the Library and analyse again."
+                "Narrow or widen the filter in the Library and analyze again."
         }
     )
 }

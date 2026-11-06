@@ -6,7 +6,9 @@ import android.graphics.RectF
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -103,7 +105,12 @@ fun ExportPreview(
     title: String?,
     at: Float,
     onScrub: (Float) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * A tap on the preview, with what was tapped: null outside the panel. Lets the editor open the
+     * settings for the thing pointed at (S14B.2).
+     */
+    onTapRegion: ((VideoFrameRenderer.Region?) -> Unit)? = null
 ) {
     val context = LocalContext.current
     // At the size it renders over this clip, so a canvas matched to the clip previews as the
@@ -215,12 +222,33 @@ fun ExportPreview(
             val cap = (screenHeight * 0.32f).coerceIn(140.dp, 260.dp)
             val previewHeight = minOf(maxWidth / safeAspect, cap)
 
+            val tapModifier = if (onTapRegion == null || records.isEmpty()) Modifier else {
+                Modifier.pointerInput(records, preset, placement, title) {
+                    // Underneath the framing overlay, so a drag of the frame never reads as a tap.
+                    detectTapGestures { offset ->
+                        val x = offset.x / size.width * preset.width
+                        val y = offset.y / size.height * preset.height
+                        onTapRegion(
+                            VideoFrameRenderer.regionAt(
+                                preset.width, preset.height,
+                                VideoFrameRenderer.alignRecords(records),
+                                inga.bpmetrics.export.ExportContent(
+                                    records = records, startMs = 0L, endMs = 1L, title = title,
+                                    colours = colours, photos = photos
+                                ),
+                                preset, placement.toRectF(), x, y
+                            )
+                        )
+                    }
+                }
+            }
             Box(
                 modifier = Modifier
                     .height(previewHeight)
                     .width(previewHeight * safeAspect)
                     .clip(MaterialTheme.shapes.medium)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .then(tapModifier),
                 contentAlignment = Alignment.Center
             ) {
                 frame?.let {
@@ -286,6 +314,29 @@ private fun FullScreenPreview(
 ) {
     val context = LocalContext.current
     val aspect = preset.width.toFloat() / preset.height.toFloat().coerceAtLeast(1f)
+
+    // A landscape video turns the screen with it. Held upright, a 16:9 preview used a quarter of
+    // the screen with black above and below, which is no better than the inline one (UX Audit E1).
+    // Rotating recreates the activity, so the orientation to go back to is kept across that, and
+    // only restored when the preview is closed, not when the rotation itself tears this down.
+    val activity = remember(context) {
+        generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }
+            .filterIsInstance<android.app.Activity>()
+            .firstOrNull()
+    }
+    val originalOrientation = androidx.compose.runtime.saveable.rememberSaveable {
+        activity?.requestedOrientation ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    androidx.compose.runtime.DisposableEffect(activity, aspect > 1f) {
+        if (aspect > 1f) {
+            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
+        onDispose {
+            if (activity != null && !activity.isChangingConfigurations) {
+                activity.requestedOrientation = originalOrientation
+            }
+        }
+    }
 
     val frame by produceState<Bitmap?>(
         initialValue = null,
@@ -579,17 +630,17 @@ private fun GraphFramingOverlay(
                 style = Stroke(width = 2.dp.toPx())
             )
 
-            // Handles pulled inside the frame edge rather than centred on it, so one dragged flush
-            // to the border stays wholly visible — and wholly grabbable — instead of being half
-            // clipped away by the preview's own bounds.
+            // Corners only, set just outside the frame where the preview has room. Knobs on the
+            // edges sat on what the frame holds: the top one covered the centre of the title, the
+            // left one the axis numbers (UX Audit E1). The edges still drag from their middles.
+            // Kept inside the preview's own bounds, so a frame flush to the border keeps its knobs.
             val radius = 7.dp.toPx()
             val inset = radius + 1.dp.toPx()
-            val midX = (left + right) / 2f
-            val midY = (top + bottom) / 2f
+            val out = radius * 0.6f
 
             listOf(
-                left to top, right to top, left to bottom, right to bottom,
-                left to midY, right to midY, midX to top, midX to bottom
+                left - out to top - out, right + out to top - out,
+                left - out to bottom + out, right + out to bottom + out
             ).forEach { (x, y) ->
                 val centre = Offset(
                     x.coerceIn(inset, (size.width - inset).coerceAtLeast(inset)),
@@ -820,581 +871,596 @@ private fun renderPreviewFrame(
     return bitmap
 }
 
+/** The editor's tabs, in the order they're offered (S14B.1). */
+enum class LookTab(val label: String) {
+    // Only where there are presets to choose: the export flow. Settings is where they are managed.
+    PRESETS("Presets"),
+    LAYOUT("Layout"),
+    GRAPH("Graph"),
+    READOUTS("Readouts"),
+    TEXT("Text & color"),
+    TIME("Time"),
+    SIGNATURE("Signature");
+
+    companion object {
+        /** The tabs a still offers: it has no live readouts and no playhead. */
+        val FOR_IMAGES = listOf(LAYOUT, GRAPH, TEXT, SIGNATURE)
+    }
+}
+
 /**
- * Step 3's settings, in four sections.
+ * Who a change to the graph's frame applies to (S14B.3). The frame used to be written to the clip
+ * being previewed without saying so, and saving a preset then baked that clip's frame into it.
+ */
+enum class FramingScope(val label: String) {
+    CLIP("This clip"),
+    CAST("Same number of people"),
+    EVERY("Every clip")
+}
+
+/**
+ * How an export looks: one editor, used by the export flow and by Settings (S14B.1).
  *
- * The old dialog asked everything at once in one scroll — canvas size beside which recordings
- * beside where the graph sits — so finding one option meant reading all of them. Grouping by what
- * the option is *about* is the whole change: same options, findable.
+ * Tabs, where there were six accordions holding about 35 settings: the preview stays on screen
+ * above, and each tab's controls get the rest of it, rather than a quarter of the screen between
+ * the preview and the step bar (UX Audit E1). The tab is the caller's, so tapping something in
+ * the preview can open its settings (S14B.2).
+ *
+ * Takes a bounded height: the tab row stays put and the tab's contents scroll under it.
  */
 @Composable
 fun LookSections(
     preset: ExportPreset,
     onChange: (ExportPreset) -> Unit,
-    overlay: Uri?,
-    onPickOverlay: () -> Unit,
-    onClearOverlay: () -> Unit,
-    hasClips: Boolean,
-    syncOffsetMs: Long,
-    onSyncOffsetChange: (Long) -> Unit,
+    tab: LookTab,
+    onTab: (LookTab) -> Unit,
     framing: GraphPlacement,
     onFramingChange: (GraphPlacement) -> Unit,
+    modifier: Modifier = Modifier,
     isImage: Boolean = false,
     /** False where the graph frame cannot be dragged, so the hint offers the chips instead. */
     hasPreview: Boolean = true,
     /**
-     * Whether to offer switching to a different preset.
-     *
-     * False in the Settings editor, where the preset *is* the subject and a control for swapping
-     * it out would only be a way to lose your work.
-     */
-    /**
-     * The heading drawn on the export, and a way to change it.
-     *
-     * Null where there is nothing to name — the preset editor in Settings previews a made-up
-     * subject, so a title field there would be editing a caption for a recording that does not
-     * exist.
+     * The heading drawn on the export, and a way to change it. Null where there is nothing to name:
+     * the Settings editor previews a made-up subject.
      */
     title: String? = null,
     onTitleChange: ((String) -> Unit)? = null,
-    showPresetBar: Boolean = true,
-    presetBar: @Composable () -> Unit = {}
+    /** Who a frame change applies to, at the top of Layout. Null where there's no clip. */
+    framingScope: (@Composable () -> Unit)? = null,
+    /** When this clip was filmed, and the nudge, at the top of Time. Null where there's no clip. */
+    clipTime: (@Composable () -> Unit)? = null,
+    /** Lays curves over a video picked by hand. Null where nothing can be picked. */
+    onPickVideo: (() -> Unit)? = null,
+    /** The saved looks, as a tab of their own. Null where they are managed elsewhere. */
+    presets: (@Composable () -> Unit)? = null
 ) {
-    Column(Modifier.fillMaxWidth()) {
-        if (showPresetBar) {
-            SettingsSection("Presets", "Saved looks to apply, update or share") {
-                presetBar()
-            }
-        }
+    val base = if (isImage) LookTab.FOR_IMAGES else LookTab.entries.filter { it != LookTab.PRESETS }
+    val tabs = if (presets != null) listOf(LookTab.PRESETS) + base else base
+    val shown = if (tab in tabs) tab else tabs.first()
 
-        SettingsSection("Canvas", "The shape and size of the finished video") {
-            val presets = listOf(
-                "16:9" to (1920 to 1080),
-                "9:16" to (1080 to 1920),
-                "1:1" to (1080 to 1080),
-                "4:5" to (1080 to 1350)
-            )
-            val matching = preset.matchClip && !isImage
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                // A still has no clip to match.
-                if (!isImage) {
-                    FilterChip(
-                        selected = matching,
-                        onClick = { onChange(preset.copy(matchClip = true)) },
-                        label = { Text("Match the clip") }
-                    )
-                }
-                presets.forEach { (label, size) ->
-                    FilterChip(
-                        selected = !matching && preset.width == size.first && preset.height == size.second,
-                        onClick = {
-                            // Placement is fractional, so switching aspect keeps the graph on
-                            // canvas instead of leaving it off the bottom — EXP-4.2.
-                            onChange(preset.copy(width = size.first, height = size.second, matchClip = false))
-                        },
-                        label = { Text(label) }
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            if (matching) {
-                Text(
-                    "Each video takes its clip's shape, upright or sideways, at up to " +
-                        "${minOf(preset.width, preset.height)} px on the short side.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                return@SettingsSection
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField(
-                    value = preset.width,
-                    label = "Width",
-                    range = DIMENSION_RANGE,
-                    modifier = Modifier.weight(1f),
-                    onValue = { width ->
-                        onChange(
-                            if (preset.lockAspectRatio) {
-                                preset.copy(
-                                    width = width,
-                                    height = CanvasSize.follow(preset.height, preset.width, width, DIMENSION_RANGE)
-                                )
-                            } else preset.copy(width = width)
-                        )
-                    }
-                )
-                NumberField(
-                    value = preset.height,
-                    label = "Height",
-                    range = DIMENSION_RANGE,
-                    modifier = Modifier.weight(1f),
-                    onValue = { height ->
-                        onChange(
-                            if (preset.lockAspectRatio) {
-                                preset.copy(
-                                    height = height,
-                                    width = CanvasSize.follow(preset.width, preset.height, height, DIMENSION_RANGE)
-                                )
-                            } else preset.copy(height = height)
-                        )
-                    }
-                )
-            }
-            // It was saved with every preset and read by nothing, so typing a width never moved
-            // the height (Audit §3 Export). Now it does.
-            SwitchRow("Lock aspect ratio", preset.lockAspectRatio) {
-                onChange(preset.copy(lockAspectRatio = it))
-            }
-            if (!isImage) {
-                SwitchRow("Fill the frame", preset.fillCanvas) {
-                    onChange(preset.copy(fillCanvas = it))
-                }
-                Text(
-                    if (preset.fillCanvas) "Footage of another shape is cropped to fill the video."
-                    else "Footage of another shape is shown whole, with bars at the sides or top.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(modifier) {
+        androidx.compose.material3.SecondaryScrollableTabRow(
+            selectedTabIndex = tabs.indexOf(shown),
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            edgePadding = 12.dp
+        ) {
+            tabs.forEach { entry ->
+                androidx.compose.material3.Tab(
+                    selected = entry == shown,
+                    onClick = { onTab(entry) },
+                    text = { Text(entry.label) }
                 )
             }
         }
-
-        SettingsSection("Graph", "Where the chart sits, and what is drawn on it") {
-            // Placement is a video question. An image *is* the graph, so insetting it would leave a
-            // border of nothing around the only thing in the frame.
-            if (!isImage) {
-                Text(
-                    "Placement",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    if (hasPreview) {
-                        "Drag the outline on the preview, or start from one of these."
-                    } else {
-                        "Pick a starting arrangement. Fine-tune it against footage in the export."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    GraphPlacement.PRESETS.forEach { (label, placement) ->
-                        FilterChip(
-                            selected = framing.matches(placement),
-                            onClick = { onFramingChange(placement) },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-                Row {
-                    // Centring by eye is guesswork that never quite lands, and "nearly centred" is
-                    // more obviously wrong than off-centre on purpose.
-                    TextButton(onClick = { onFramingChange(framing.centredHorizontally()) }) {
-                        Text("Center across", style = MaterialTheme.typography.labelSmall)
-                    }
-                    TextButton(onClick = { onFramingChange(framing.centredVertically()) }) {
-                        Text("Center down", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Size",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    // What it is for, since "size" alone does not say that it holds the shape.
-                    "Keeps the shape and the position. Get the framing right once, then make it " +
-                        "as large or small as you want.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
-                // Absolute, not a nudge: the value *is* how wide the graph is, so the slider always
-                // reads where the graph actually is. A relative control would have to snap back to
-                // the middle after every drag, and could not answer "how big is it now" at all.
-                SliderRow(
-                    label = "Width of the frame",
-                    value = framing.width,
-                    onValue = { onFramingChange(framing.scaledTo(it)) }
-                )
-
-                Spacer(Modifier.height(12.dp))
+        Column(
+            Modifier
+                .weight(1f, fill = false)
+                .fillMaxWidth()
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .padding(16.dp)
+        ) {
+            when (shown) {
+                LookTab.PRESETS -> presets?.invoke()
+                LookTab.LAYOUT -> LayoutTab(preset, onChange, framing, onFramingChange, isImage, hasPreview, framingScope, onPickVideo)
+                LookTab.GRAPH -> GraphTab(preset, onChange, isImage)
+                LookTab.READOUTS -> ReadoutsTab(preset, onChange)
+                LookTab.TEXT -> TextTab(preset, onChange, title, onTitleChange)
+                LookTab.TIME -> TimeTab(preset, onChange, clipTime)
+                LookTab.SIGNATURE -> SignatureTab(preset, onChange)
             }
-
-            SwitchRow("Labels", preset.showLabels) { onChange(preset.copy(showLabels = it)) }
-            SwitchRow("Grid", preset.showGrid) { onChange(preset.copy(showGrid = it)) }
-            SwitchRow("Title", preset.showTitle) { onChange(preset.copy(showTitle = it)) }
-
-            // Only where there is something to name, and only when it will be drawn — a field
-            // editing text that the switch above has just turned off is a control over nothing.
-            if (onTitleChange != null && preset.showTitle) {
-                Spacer(Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = title.orEmpty(),
-                    onValueChange = onTitleChange,
-                    label = { Text("Heading") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    // The default is the source's own name, so an empty field is not "no title".
-                    "Leave blank to use the name of what is being exported.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
-            }
-            SwitchRow(
-                // The same field means different things either side of this: a running readout on
-                // a video, and everyone's summary for the whole span on a still. Both are "the
-                // numbers beside the curve", which is why one switch is right for both.
-                if (isImage) "Summary" else "Live stats",
-                preset.showCurrentStats
-            ) {
-                onChange(preset.copy(showCurrentStats = it))
-            }
-            Spacer(Modifier.height(8.dp))
-
-            // Trailing opacity fades what has not happened yet, which needs a "yet". A still has
-            // no playhead, so every curve on it is drawn at full strength and this would do
-            // nothing but confuse.
-            if (!isImage) {
-                SliderRow(
-                    label = "Trailing opacity",
-                    value = preset.futureOpacity,
-                    onValue = { onChange(preset.copy(futureOpacity = it)) }
-                )
-            }
-            // Opacity of the panel the graph sits on, which is a property of the graph rather than
-            // of the video behind it — it lives here rather than in a section of its own.
-            SliderRow(
-                label = "Panel opacity",
-                value = preset.backgroundOpacity / 100f,
-                onValue = { onChange(preset.copy(backgroundOpacity = (it * 100).toInt())) }
-            )
-            if (!isImage) {
-                Spacer(Modifier.height(8.dp))
-                ChoiceRow(
-                    title = "Scale",
-                    hint = when (preset.bpmScale) {
-                        BpmScale.ON_SCREEN -> "Fits the heart rates in view, so the curves have room to move."
-                        BpmScale.RECORDING -> "The same scale throughout, for comparing levels across a set."
-                    },
-                    options = BpmScale.entries,
-                    selected = preset.bpmScale,
-                    label = { it.label },
-                    onSelect = { onChange(preset.copy(bpmScale = it)) }
-                )
-                ChoiceRow(
-                    title = "Contrast",
-                    hint = when (preset.contrast) {
-                        Contrast.AUTO -> "A soft shadow behind the curves and text when the panel is under " +
-                            "${Contrast.AUTO_PANEL_THRESHOLD}%, so they hold up over bright footage."
-                        Contrast.OFF -> "Nothing behind the curves and text but the panel."
-                        Contrast.SHADOW -> "A soft shadow behind the curves and text."
-                        Contrast.OUTLINE -> "A dark edge round the curves and text. Holds up over anything."
-                    },
-                    options = Contrast.entries,
-                    selected = preset.contrast,
-                    label = { it.label },
-                    onSelect = { onChange(preset.copy(contrast = it)) }
-                )
-            }
-            if (isImage) {
-                Text(
-                    // The reason the setting matters more here than on a video: nothing is
-                    // composited in this app, so the alpha is for whatever does the compositing.
-                    "At 0% the saved PNG is transparent behind the curve, ready to lay over " +
-                        "footage in another app.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (!hasClips) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    overlay?.lastPathSegment?.let { "Video: $it" }
-                        ?: "No video — the curves are drawn on a plain canvas.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onPickOverlay) { Text("Choose a video") }
-                    if (overlay != null) {
-                        OutlinedButton(onClick = onClearOverlay) { Text("Remove") }
-                    }
-                }
-            }
-        }
-
-        // Video only: a still has no playhead, so there is no live reading for a pill to show.
-        if (!isImage) {
-            SettingsSection("Readouts", "The live pill for each person, over the footage") {
-                Text(
-                    // The reason this is a setting rather than one fixed design. Both answers are
-                    // right, for different exports.
-                    "Two people on a story clip can carry faces and names. Six on a landscape " +
-                        "shot cannot — the column would take a third of the frame.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(8.dp))
-
-                SwitchRow("Photo", preset.pillShowPhoto) {
-                    onChange(preset.copy(pillShowPhoto = it))
-                }
-                SwitchRow("Name", preset.pillShowName) {
-                    onChange(preset.copy(pillShowName = it))
-                }
-                SwitchRow("Reading in their colour", preset.pillBpmInPersonColor) {
-                    onChange(preset.copy(pillBpmInPersonColor = it))
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Text("Side", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    // Worth saying, because the reason is not visible from the setting: the
-                    // playhead sits in the middle, so the right of the graph is what has not
-                    // happened yet — and is drawn faded, which is why the readouts sit there.
-                    "Right sits over the faded part of the graph. The clock takes the other side.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    PillCorner.entries.forEach { corner ->
-                        FilterChip(
-                            selected = preset.pillCorner == corner,
-                            onClick = { onChange(preset.copy(pillCorner = corner)) },
-                            label = { Text(corner.label) }
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-                // Multipliers on what the renderer works out for the graph, so no combination of
-                // these can produce pills that do not fit.
-                ScaleRow("Pill size", preset.pillScale) {
-                    onChange(preset.copy(pillScale = it))
-                }
-                if (preset.pillShowPhoto) {
-                    ScaleRow("Photo size", preset.pillPhotoScale) {
-                        onChange(preset.copy(pillPhotoScale = it))
-                    }
-                }
-                ScaleRow("Reading size", preset.pillBpmScale) {
-                    onChange(preset.copy(pillBpmScale = it))
-                }
-                if (preset.pillShowName) {
-                    ScaleRow("Name size", preset.pillNameScale) {
-                        onChange(preset.copy(pillNameScale = it))
-                    }
-                }
-            }
-        }
-
-        // Above the video-only cut-off: a still is signed the same way a video is.
-        SettingsSection("Signature", "A small credit linking the export back to the app") {
-            SwitchRow("Show wordmark", preset.showWordmark) {
-                onChange(preset.copy(showWordmark = it))
-            }
-            if (preset.showWordmark) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Corner",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(Modifier.height(6.dp))
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    WordmarkCorner.entries.forEach { corner ->
-                        FilterChip(
-                            selected = preset.wordmarkCorner == corner,
-                            onClick = { onChange(preset.copy(wordmarkCorner = corner)) },
-                            label = { Text(corner.label) }
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                SliderRow(
-                    label = "Wordmark opacity",
-                    value = preset.wordmarkOpacity / 100f,
-                    onValue = { onChange(preset.copy(wordmarkOpacity = (it * 100).toInt())) }
-                )
-            }
-        }
-
-        // Every option in here describes motion against footage — a visible window, a frame rate, a
-        // sync offset. An image has none of those: it shows the whole timeline in one frame, at
-        // once, over nothing.
-        if (isImage) return@Column
-
-        SettingsSection("Time", "How the graph is placed against the footage") {
-            NumberField(
-                value = (preset.windowSizeMs / 1000).toInt(),
-                label = "Visible window (seconds)",
-                range = WINDOW_RANGE,
-                modifier = Modifier.fillMaxWidth(),
-                onValue = { onChange(preset.copy(windowSizeMs = it * 1000L)) }
-            )
-            Text(
-                // What the number actually buys, which is not obvious from "visible window": the
-                // playhead is centred, so half of it is what you can see coming.
-                "The playhead sits in the middle, so this shows " +
-                    "${(preset.windowSizeMs / 2000).toInt()} seconds of what is coming.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "Clock",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                "Drawn in the header beside the title, where it costs no room on the graph.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(6.dp))
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                inga.bpmetrics.export.ClockMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = preset.clockMode == mode,
-                        onClick = { onChange(preset.copy(clockMode = mode)) },
-                        label = { Text(mode.label) }
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "Frame rate",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                // Resolved per clip rather than once for the batch: a set of clips off one phone
-                // can still mix 30 and 60, and re-encoding 60fps footage to 30 throws away half
-                // the frames it was filmed for.
-                "Match source keeps each clip at the rate it was filmed at.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(6.dp))
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                FilterChip(
-                    selected = preset.matchSourceFrameRate,
-                    onClick = { onChange(preset.copy(matchSourceFrameRate = true)) },
-                    label = { Text("Match source") }
-                )
-                // The rates footage actually comes in: film, PAL, the two Android defaults, and
-                // the two the slow-motion modes record at.
-                listOf(24, 25, 30, 50, 60).forEach { rate ->
-                    FilterChip(
-                        selected = !preset.matchSourceFrameRate && preset.frameRate == rate,
-                        onClick = {
-                            onChange(preset.copy(frameRate = rate, matchSourceFrameRate = false))
-                        },
-                        label = { Text("$rate") }
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "Sync offset",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                // The escape hatch for the cases the automatic correction cannot settle. A phone
-                // that stamps its videos in local time, a watch whose clock had drifted — both
-                // show up as a constant shift, and a constant shift is what this cancels.
-                "Nudge the curves if they run ahead of or behind the footage. Watch the preview " +
-                    "while you change it.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Slider(
-                    value = syncOffsetMs.toFloat().coerceIn(-30_000f, 30_000f),
-                    valueRange = -30_000f..30_000f,
-                    // To the tenth of a second. A frame is 33ms, so finer than this is below what
-                    // the export can act on, and the field is there for anyone who disagrees.
-                    onValueChange = { onSyncOffsetChange((it / 100f).toLong() * 100L) },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                TypedValueField(
-                    text = "%.1f".format(syncOffsetMs / 1000f),
-                    suffix = "s",
-                    width = 88.dp,
-                    onCommit = { typed ->
-                        typed.toFloatOrNull()?.let { onSyncOffsetChange((it * 1000f).toLong()) }
-                    }
-                )
-            }
-            if (syncOffsetMs != 0L) {
-                TextButton(onClick = { onSyncOffsetChange(0L) }) { Text("Reset to automatic") }
-            }
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
 @Composable
-private fun SettingsSection(
-    title: String,
-    subtitle: String,
-    content: @Composable () -> Unit
+private fun SectionLabel(text: String, hint: String? = null) {
+    Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    hint?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    Spacer(Modifier.height(6.dp))
+}
+
+@Composable
+private fun LayoutTab(
+    preset: ExportPreset,
+    onChange: (ExportPreset) -> Unit,
+    framing: GraphPlacement,
+    onFramingChange: (GraphPlacement) -> Unit,
+    isImage: Boolean,
+    hasPreview: Boolean,
+    framingScope: (@Composable () -> Unit)?,
+    onPickVideo: (() -> Unit)?
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        ExpandableSection(
-            title = title,
-            isExpanded = expanded,
-            onToggle = { expanded = !expanded },
-            titleStyle = MaterialTheme.typography.titleSmall
-        ) {
-            Column {
+    SectionLabel("Canvas", "The shape and size of the finished " + if (isImage) "picture." else "video.")
+    val sizes = listOf(
+        "16:9" to (1920 to 1080),
+        "9:16" to (1080 to 1920),
+        "1:1" to (1080 to 1080),
+        "4:5" to (1080 to 1350)
+    )
+    val matching = preset.matchClip && !isImage
+    val named = sizes.any { it.second == (preset.width to preset.height) }
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // A still has no clip to match.
+        if (!isImage) {
+            FilterChip(
+                selected = matching,
+                onClick = { onChange(preset.copy(matchClip = true)) },
+                label = { Text("Match the clip") }
+            )
+        }
+        sizes.forEach { (label, size) ->
+            FilterChip(
+                selected = !matching && preset.width == size.first && preset.height == size.second,
+                // Placement is fractional, so switching aspect keeps the graph on canvas.
+                onClick = { onChange(preset.copy(width = size.first, height = size.second, matchClip = false)) },
+                label = { Text(label) }
+            )
+        }
+        // A size no chip names still shows as chosen, rather than leaving nothing selected (E8).
+        if (!matching && !named) {
+            FilterChip(selected = true, onClick = {}, label = { Text("${preset.width}×${preset.height}") })
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    if (matching) {
+        Text(
+            "Each video takes its clip's shape, upright or sideways, at up to " +
+                "${minOf(preset.width, preset.height)} px on the short side.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumberField(
+                value = preset.width,
+                label = "Width",
+                range = DIMENSION_RANGE,
+                modifier = Modifier.weight(1f),
+                onValue = { width ->
+                    onChange(
+                        if (preset.lockAspectRatio) {
+                            preset.copy(width = width, height = CanvasSize.follow(preset.height, preset.width, width, DIMENSION_RANGE))
+                        } else preset.copy(width = width)
+                    )
+                }
+            )
+            NumberField(
+                value = preset.height,
+                label = "Height",
+                range = DIMENSION_RANGE,
+                modifier = Modifier.weight(1f),
+                onValue = { height ->
+                    onChange(
+                        if (preset.lockAspectRatio) {
+                            preset.copy(height = height, width = CanvasSize.follow(preset.width, preset.height, height, DIMENSION_RANGE))
+                        } else preset.copy(height = height)
+                    )
+                }
+            )
+        }
+        SwitchRow("Lock aspect ratio", preset.lockAspectRatio) { onChange(preset.copy(lockAspectRatio = it)) }
+        if (!isImage) {
+            SwitchRow("Fill the frame", preset.fillCanvas) { onChange(preset.copy(fillCanvas = it)) }
+            Text(
+                if (preset.fillCanvas) "Footage of another shape is cropped to fill the video."
+                else "Footage of another shape is shown whole, with bars at the sides or top.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    // Placement is a video question. An image *is* the graph, so insetting it would leave a border
+    // of nothing around the only thing in the frame.
+    if (isImage) return
+
+    Spacer(Modifier.height(16.dp))
+    SectionLabel(
+        "Where the graph sits",
+        if (hasPreview) "Drag the outline on the preview, or start from one of these."
+        else "Pick a starting arrangement. Fine-tune it against footage in the export."
+    )
+    framingScope?.invoke()
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        GraphPlacement.PRESETS.forEach { (label, placement) ->
+            FilterChip(
+                selected = framing.matches(placement),
+                onClick = { onFramingChange(placement) },
+                label = { Text(label) }
+            )
+        }
+    }
+    Row {
+        // Centring by eye is guesswork that never quite lands.
+        TextButton(onClick = { onFramingChange(framing.centredHorizontally()) }) { Text("Center across") }
+        TextButton(onClick = { onFramingChange(framing.centredVertically()) }) { Text("Center down") }
+    }
+    // Absolute, not a nudge: the value *is* how wide the panel is, so the slider always reads where
+    // the panel actually is.
+    SliderRow(label = "Panel width", value = framing.width, onValue = { onFramingChange(framing.scaledTo(it)) })
+    Text(
+        "Keeps the shape and the position. Get the framing right once, then make it as large or " +
+            "small as you want.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    // Frames pinned for a number of people were saved with the look and had no list and no way to
+    // be cleared (UX Audit E2).
+    if (preset.framesByLaneCount.isNotEmpty()) {
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("Frames for a number of people", "These win over the look's own frame for clips with that many people.")
+        preset.framesByLaneCount.keys.sorted().forEach { count ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    if (count == 1) "1 person" else "$count people",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
                 )
-                Spacer(Modifier.height(8.dp))
-                content()
+                TextButton(onClick = { onChange(preset.copy(framesByLaneCount = preset.framesByLaneCount - count)) }) {
+                    Text("Clear")
+                }
             }
         }
     }
+
+    onPickVideo?.let { pick ->
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "No clips: the curves are drawn on a plain background.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedButton(onClick = pick) { Text("Choose a video") }
+    }
+}
+
+@Composable
+private fun GraphTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit, isImage: Boolean) {
+    // Named for what they draw: "Labels" was the axis numbers, and read as names (UX Audit E6).
+    SwitchRow("Heart rate numbers", preset.showLabels) { onChange(preset.copy(showLabels = it)) }
+    SwitchRow("Gridlines", preset.showGrid) { onChange(preset.copy(showGrid = it)) }
+    if (isImage) {
+        // On a still, the same field is everyone's summary for the whole span.
+        SwitchRow("Summary", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
+    }
+    Spacer(Modifier.height(8.dp))
+
+    // Opacity of the panel the graph sits on, which is a property of the graph.
+    SliderRow(
+        label = "Panel opacity",
+        value = preset.backgroundOpacity / 100f,
+        onValue = { onChange(preset.copy(backgroundOpacity = (it * 100).toInt())) }
+    )
+    if (isImage) {
+        Text(
+            "At 0% the saved PNG is transparent behind the curve, ready to lay over footage in " +
+                "another app.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+
+    // It fades what *hasn't happened yet*, which "trailing" said backwards (UX Audit E6).
+    SliderRow(
+        label = "Fade what's ahead",
+        value = preset.futureOpacity,
+        onValue = { onChange(preset.copy(futureOpacity = it)) }
+    )
+    Spacer(Modifier.height(8.dp))
+    ChoiceRow(
+        title = "Scale",
+        hint = when (preset.bpmScale) {
+            BpmScale.ON_SCREEN -> "Fits the heart rates in view, so the curves have room to move."
+            BpmScale.RECORDING -> "The same scale throughout, for comparing levels across a set."
+        },
+        options = BpmScale.entries,
+        selected = preset.bpmScale,
+        label = { it.label },
+        onSelect = { onChange(preset.copy(bpmScale = it)) }
+    )
+    ChoiceRow(
+        title = "Contrast",
+        hint = when (preset.contrast) {
+            Contrast.AUTO -> "A soft shadow behind the curves and text when the panel is under " +
+                "${Contrast.AUTO_PANEL_THRESHOLD}%, so they hold up over bright footage."
+            Contrast.OFF -> "Nothing behind the curves and text but the panel."
+            Contrast.SHADOW -> "A soft shadow behind the curves and text."
+            Contrast.OUTLINE -> "A dark edge round the curves and text. Holds up over anything."
+        },
+        options = Contrast.entries,
+        selected = preset.contrast,
+        label = { it.label },
+        onSelect = { onChange(preset.copy(contrast = it)) }
+    )
+}
+
+@Composable
+private fun ReadoutsTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit) {
+    // The switch lives with what it switches. It sat in Graph, turning off this whole section while
+    // the section stayed fully editable (UX Audit E6).
+    SwitchRow("Show readouts", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
+    Text(
+        if (preset.showCurrentStats) "A live pill for each person over the footage. Two people on a " +
+            "story can carry faces and names; six on a landscape shot read better as numbers."
+        else "Off: each person's name is listed in the corner instead.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (!preset.showCurrentStats) return
+    Spacer(Modifier.height(8.dp))
+
+    SwitchRow("Photo", preset.pillShowPhoto) { onChange(preset.copy(pillShowPhoto = it)) }
+    SwitchRow("Name", preset.pillShowName) { onChange(preset.copy(pillShowName = it)) }
+    SwitchRow("Reading in their color", preset.pillBpmInPersonColor) {
+        onChange(preset.copy(pillBpmInPersonColor = it))
+    }
+
+    Spacer(Modifier.height(8.dp))
+    // The clock is in the header whichever side this is; the hint used to say it took the other side.
+    SectionLabel("Side", "Right sits over the faded part of the graph, what hasn't happened yet.")
+    FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        PillCorner.entries.forEach { corner ->
+            FilterChip(
+                selected = preset.pillCorner == corner,
+                onClick = { onChange(preset.copy(pillCorner = corner)) },
+                label = { Text(corner.label) }
+            )
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    // Multipliers on what the renderer works out, so no combination can produce pills that don't fit.
+    ScaleRow("Pill size", preset.pillScale) { onChange(preset.copy(pillScale = it)) }
+    if (preset.pillShowPhoto) {
+        ScaleRow("Photo size", preset.pillPhotoScale) { onChange(preset.copy(pillPhotoScale = it)) }
+    }
+    ScaleRow("Reading size", preset.pillBpmScale) { onChange(preset.copy(pillBpmScale = it)) }
+    if (preset.pillShowName) {
+        ScaleRow("Name size", preset.pillNameScale) { onChange(preset.copy(pillNameScale = it)) }
+    }
+}
+
+@Composable
+private fun TextTab(
+    preset: ExportPreset,
+    onChange: (ExportPreset) -> Unit,
+    title: String?,
+    onTitleChange: ((String) -> Unit)?
+) {
+    SwitchRow("Title", preset.showTitle) { onChange(preset.copy(showTitle = it)) }
+    // Only where there is something to name, and only when it will be drawn.
+    if (onTitleChange != null && preset.showTitle) {
+        OutlinedTextField(
+            value = title.orEmpty(),
+            onValueChange = onTitleChange,
+            // "Title" here and on the Contents step: they are the same field (UX Audit E8).
+            label = { Text("Title") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            "Leave blank to use the name of what's being exported. Every video in this batch " +
+                "gets this title.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+    Spacer(Modifier.height(12.dp))
+    ScaleRow("Text size", preset.textScale, range = 0.75f..2f) { onChange(preset.copy(textScale = it)) }
+    Text(
+        "The title, clock and axis numbers. Never smaller than what reads on a phone.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    Spacer(Modifier.height(12.dp))
+    val shipped = ExportPreset()
+    ColourRow(
+        "Text and numbers",
+        preset.labelsColor,
+        listOf(shipped.labelsColor, 0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFFFFD54F.toInt()),
+        onPick = { onChange(preset.copy(labelsColor = it)) }
+    )
+    ColourRow(
+        "Gridlines",
+        preset.gridColor,
+        listOf(shipped.gridColor, 0x33FFFFFF, 0x40000000, 0x3300DCC2),
+        onPick = { onChange(preset.copy(gridColor = it)) }
+    )
+    Text(
+        "One person's curve shades from the first color to the second as their heart rate climbs. " +
+            "With several people, each is drawn in their own color.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(Modifier.height(6.dp))
+    ColourRow(
+        "Low",
+        preset.lowBpmColor,
+        listOf(shipped.lowBpmColor) + inga.bpmetrics.library.PersonColors.PALETTE,
+        onPick = { onChange(preset.copy(lowBpmColor = it)) }
+    )
+    ColourRow(
+        "High",
+        preset.highBpmColor,
+        listOf(shipped.highBpmColor) + inga.bpmetrics.library.PersonColors.PALETTE,
+        onPick = { onChange(preset.copy(highBpmColor = it)) }
+    )
+}
+
+/** A row of swatches choosing one colour, the first being the app's own. */
+@Composable
+private fun ColourRow(label: String, value: Int, options: List<Int>, onPick: (Int) -> Unit) {
+    Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    Spacer(Modifier.height(4.dp))
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        options.distinct().forEachIndexed { index, colour ->
+            val selected = colour == value
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    // A checkerboard-free stand-in for transparency: faint colours are shown over
+                    // the panel's own surface, which is what they'll be drawn over.
+                    .background(androidx.compose.ui.graphics.Color(inga.bpmetrics.core.BpmPalette.SURFACE))
+                    .background(androidx.compose.ui.graphics.Color(colour))
+                    .border(
+                        width = if (selected) 3.dp else 1.dp,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+                    .clickable(onClickLabel = if (index == 0) "App default" else null) { onPick(colour) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimeTab(
+    preset: ExportPreset,
+    onChange: (ExportPreset) -> Unit,
+    clipTime: (@Composable () -> Unit)?
+) {
+    // When the clip was filmed and the nudge, together, per clip (UX Audit E7).
+    clipTime?.let {
+        it()
+        Spacer(Modifier.height(16.dp))
+    }
+
+    NumberField(
+        value = (preset.windowSizeMs / 1000).toInt(),
+        label = "Visible window (seconds)",
+        range = WINDOW_RANGE,
+        modifier = Modifier.fillMaxWidth(),
+        onValue = { onChange(preset.copy(windowSizeMs = it * 1000L)) }
+    )
+    Text(
+        // The playhead is centred, so half of it is what you can see coming.
+        "The playhead sits in the middle, so this shows ${(preset.windowSizeMs / 2000).toInt()} " +
+            "seconds of what's coming.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    Spacer(Modifier.height(12.dp))
+    SectionLabel("Clock", "In the header beside the title, where it costs no room on the graph.")
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        inga.bpmetrics.export.ClockMode.entries.forEach { mode ->
+            FilterChip(
+                selected = preset.clockMode == mode,
+                onClick = { onChange(preset.copy(clockMode = mode)) },
+                label = { Text(mode.label) }
+            )
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    SectionLabel("Frame rate", "Match source keeps each clip at the rate it was filmed at.")
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        FilterChip(
+            selected = preset.matchSourceFrameRate,
+            onClick = { onChange(preset.copy(matchSourceFrameRate = true)) },
+            label = { Text("Match source") }
+        )
+        listOf(24, 25, 30, 50, 60).forEach { rate ->
+            FilterChip(
+                selected = !preset.matchSourceFrameRate && preset.frameRate == rate,
+                onClick = { onChange(preset.copy(frameRate = rate, matchSourceFrameRate = false)) },
+                label = { Text("$rate") }
+            )
+        }
+    }
+
+    // The look-wide offset that clip-by-clip timing replaced. Not offered any more, but a preset
+    // saved with one still applies it, so it is shown, with a way out, rather than acting unseen.
+    if (preset.syncOffsetMs != 0L) {
+        Spacer(Modifier.height(16.dp))
+        SectionLabel(
+            "Older sync offset",
+            "This look also moves every clip by ${"%+.1f".format(preset.syncOffsetMs / 1000f)} s, from " +
+                "an earlier version. Clips now line up on their own; nudge one under its time if it's off."
+        )
+        TextButton(onClick = { onChange(preset.copy(syncOffsetMs = 0L)) }) { Text("Clear it") }
+    }
+}
+
+@Composable
+private fun SignatureTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit) {
+    SwitchRow("Show wordmark", preset.showWordmark) { onChange(preset.copy(showWordmark = it)) }
+    Text(
+        "A small credit linking the export back to the app.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (!preset.showWordmark) return
+    Spacer(Modifier.height(8.dp))
+    SectionLabel("Corner")
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        WordmarkCorner.entries.forEach { corner ->
+            FilterChip(
+                selected = preset.wordmarkCorner == corner,
+                onClick = { onChange(preset.copy(wordmarkCorner = corner)) },
+                label = { Text(corner.label) }
+            )
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    SliderRow(
+        label = "Wordmark opacity",
+        value = preset.wordmarkOpacity / 100f,
+        onValue = { onChange(preset.copy(wordmarkOpacity = (it * 100).toInt())) }
+    )
 }
 
 @Composable
@@ -1418,7 +1484,12 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
  * meant a slider whose centre meant something different depending on which row it was.
  */
 @Composable
-private fun ScaleRow(label: String, value: Float, onValue: (Float) -> Unit) {
+private fun ScaleRow(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float> = SCALE_MIN..SCALE_MAX,
+    onValue: (Float) -> Unit
+) {
     Column(Modifier.padding(vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -1429,9 +1500,9 @@ private fun ScaleRow(label: String, value: Float, onValue: (Float) -> Unit) {
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Slider(
-                value = value.coerceIn(SCALE_MIN, SCALE_MAX),
+                value = value.coerceIn(range.start, range.endInclusive),
                 onValueChange = onValue,
-                valueRange = SCALE_MIN..SCALE_MAX,
+                valueRange = range,
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(8.dp))
@@ -1440,7 +1511,7 @@ private fun ScaleRow(label: String, value: Float, onValue: (Float) -> Unit) {
                 suffix = "%",
                 onCommit = { typed ->
                     typed.toIntOrNull()?.let {
-                        onValue((it / 100f).coerceIn(SCALE_MIN, SCALE_MAX))
+                        onValue((it / 100f).coerceIn(range.start, range.endInclusive))
                     }
                 }
             )

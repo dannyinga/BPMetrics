@@ -124,16 +124,16 @@ private fun AppearanceSection(viewModel: SettingsViewModel) {
     val use24 by viewModel.use24Hour.collectAsStateWithLifecycle()
     val dateFormat by viewModel.dateFormat.collectAsStateWithLifecycle()
 
-    SettingsGroup("Appearance", "Colour, and how times are written") {
+    SettingsGroup("Appearance", "Color, and how times are written") {
         // No theme choice: the app is dark, deliberately. The charts, the export panel and the
         // metric ramp are designed against it, and offering light and system when only one of the
         // three is supported is worse than not offering the choice.
         SwitchRow(
-            "Wallpaper colours",
+            "Wallpaper colors",
             // Android 12 is where the platform gained this. Below it the toggle would be a
             // control over nothing, so it says so rather than pretending.
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                "Take the app's colours from your wallpaper"
+                "Take the app's colors from your wallpaper"
             } else {
                 "Not available on this version of Android"
             },
@@ -660,8 +660,10 @@ private fun ExportSection(viewModel: SettingsViewModel) {
     }
 
     SettingsGroup("Export", "Presets, and what a new export starts from") {
-        Label("Default preset")
-        Hint("What a new export opens with. The look itself is edited in the export utility.")
+        Label("Presets")
+        // Honest about what the choice does (UX Audit E4): a new export opens with the look used
+        // last, and this only answers before there is one.
+        Hint("A new export starts from the look you used last. The one picked here is for your first export.")
         Spacer(Modifier.height(6.dp))
 
         if (presets.isEmpty()) {
@@ -681,10 +683,12 @@ private fun ExportSection(viewModel: SettingsViewModel) {
                         if (preset.isBuiltIn) Hint("Shipped with the app")
                     }
                     TextButton(onClick = { editing = preset }) { Text("Edit") }
+                    // "Export", and the same file the export flow writes: it was "Share" for what is a
+                    // save dialog, with an unsanitised name and a different extension (UX Audit E3).
                     TextButton(onClick = {
                         viewModel.stagePresetForExport(preset)
-                        exportLauncher.launch("${preset.name}.bpmpreset.json")
-                    }) { Text("Share") }
+                        exportLauncher.launch("${inga.bpmetrics.export.FileNames.of(preset.name)}.bpmpreset")
+                    }) { Text("Export") }
                     // Built-ins are protected in the DAO as well as here: a preset the app relies
                     // on being present is not something a stray tap should be able to remove.
                     if (!preset.isBuiltIn) {
@@ -709,15 +713,18 @@ private fun ExportSection(viewModel: SettingsViewModel) {
     editing?.let { entity ->
         val loaded = inga.bpmetrics.export.ExportPreset.fromJson(entity.configJson)
             ?: inga.bpmetrics.export.ExportPreset(name = entity.name)
+        // A built-in is kept as shipped and its changes are saved as a new preset, as the export
+        // flow already did. Here they could be overwritten and renamed (UX Audit E3).
         PresetEditorDialog(
-            initial = loaded.copy(name = entity.name),
-            heading = "Edit preset",
+            initial = loaded.copy(name = if (entity.isBuiltIn) "${entity.name} (mine)" else entity.name),
+            heading = if (entity.isBuiltIn) "New preset from ${entity.name}" else "Edit preset",
             onePerson = previewSubjects.first,
             severalPeople = previewSubjects.second,
             people = peopleById,
             onDismiss = { editing = null },
             onSave = { newName, preset ->
-                viewModel.updatePreset(entity, newName, preset)
+                if (entity.isBuiltIn) viewModel.createPreset(newName, preset)
+                else viewModel.updatePreset(entity, newName, preset)
                 editing = null
             }
         )
@@ -793,21 +800,24 @@ private fun PresetEditorDialog(
     var name by rememberSaveable { mutableStateOf(initial.name) }
     var showSeveral by rememberSaveable { mutableStateOf(false) }
     var scrubAt by rememberSaveable { mutableStateOf(0.45f) }
+    var tab by rememberSaveable { mutableStateOf(inga.bpmetrics.ui.export.LookTab.LAYOUT) }
+    var confirmDiscard by rememberSaveable { mutableStateOf(false) }
 
     val subject = if (showSeveral) severalPeople else onePerson
+    // Back with changes asks first. It used to drop them without a word (UX Audit E3).
+    val changed = draft != initial || name != initial.name
+    val leave = { if (changed) confirmDiscard = true else onDismiss() }
 
     androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = leave,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        // Full screen rather than a boxed dialog: this is a form with six collapsible sections in
-        // it, and the cramped Split dialog was the lesson about putting one of those in a box.
         Scaffold(
             topBar = {
                 TopAppBar(
                     title = { Text(heading) },
                     navigationIcon = {
-                        IconButton(onClick = onDismiss) {
+                        IconButton(onClick = leave) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Cancel"
@@ -823,81 +833,99 @@ private fun PresetEditorDialog(
                 )
             }
         ) { padding ->
+            // The same editor as the export flow, tabs and all (S14B.1): the preview and the name
+            // stay put, and the tabs take the rest of the screen.
             Column(
                 modifier = Modifier
                     .padding(padding)
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp)
             ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Preset name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-
-                // Something to judge it against. Without this the placement chips, the panel
-                // opacity and the colours all describe a picture nobody can see.
-                if (subject.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        FilterChip(
-                            selected = !showSeveral,
-                            onClick = { showSeveral = false },
-                            label = { Text("One person") }
-                        )
-                        FilterChip(
-                            selected = showSeveral,
-                            onClick = { showSeveral = true },
-                            // The two look genuinely different: a lone curve is a blue-to-red
-                            // gradient, several take a colour each. A preset that reads well for
-                            // one can be unreadable for the other.
-                            label = { Text("Several people") }
-                        )
-                    }
-
-                    inga.bpmetrics.ui.export.ExportPreview(
-                        records = subject,
-                        preset = draft,
-                        // No clip and no footage: the curves are drawn on the canvas alone, which
-                        // is what an export with nothing behind it looks like anyway.
-                        clip = null,
-                        placement = inga.bpmetrics.ui.export.GraphPlacement.of(draft),
-                        onPlacementChange = { draft = it.into(draft) },
-                        overlay = null,
-                        colours = PreviewSubjects.coloursFor(subject, people),
-                        title = name.ifBlank { "Preview" },
-                        at = scrubAt,
-                        onScrub = { scrubAt = it },
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Preset name") },
+                        singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(8.dp))
+
+                    // Something to judge it against. Without this the placement chips, the panel
+                    // opacity and the colours all describe a picture nobody can see.
+                    if (subject.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = !showSeveral,
+                                onClick = { showSeveral = false },
+                                label = { Text("One person") }
+                            )
+                            FilterChip(
+                                selected = showSeveral,
+                                onClick = { showSeveral = true },
+                                // A lone curve is a blue-to-red gradient, several take a colour
+                                // each. A preset that reads well for one can fail the other.
+                                label = { Text("Several people") }
+                            )
+                        }
+
+                        inga.bpmetrics.ui.export.ExportPreview(
+                            records = subject,
+                            preset = draft,
+                            // No clip and no footage: the curves on the canvas alone.
+                            clip = null,
+                            placement = inga.bpmetrics.ui.export.GraphPlacement.of(draft),
+                            onPlacementChange = { draft = it.into(draft) },
+                            overlay = null,
+                            colours = PreviewSubjects.coloursFor(subject, people),
+                            title = name.ifBlank { "Preview" },
+                            at = scrubAt,
+                            onScrub = { scrubAt = it },
+                            onTapRegion = { region ->
+                                tab = when (region) {
+                                    inga.bpmetrics.export.VideoFrameRenderer.Region.READOUTS -> inga.bpmetrics.ui.export.LookTab.READOUTS
+                                    inga.bpmetrics.export.VideoFrameRenderer.Region.TITLE -> inga.bpmetrics.ui.export.LookTab.TEXT
+                                    inga.bpmetrics.export.VideoFrameRenderer.Region.CLOCK -> inga.bpmetrics.ui.export.LookTab.TIME
+                                    inga.bpmetrics.export.VideoFrameRenderer.Region.PLOT -> inga.bpmetrics.ui.export.LookTab.GRAPH
+                                    inga.bpmetrics.export.VideoFrameRenderer.Region.WORDMARK -> inga.bpmetrics.ui.export.LookTab.SIGNATURE
+                                    null -> inga.bpmetrics.ui.export.LookTab.LAYOUT
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
 
                 inga.bpmetrics.ui.export.LookSections(
                     preset = draft,
                     onChange = { draft = it },
-                    overlay = null,
-                    onPickOverlay = {},
-                    onClearOverlay = {},
-                    // No clips here, and no preview to judge them against. Both of those belong to
-                    // an export; a preset is the part that outlives one.
-                    hasClips = false,
-                    syncOffsetMs = draft.syncOffsetMs,
-                    onSyncOffsetChange = { draft = draft.copy(syncOffsetMs = it) },
+                    tab = tab,
+                    onTab = { tab = it },
                     framing = inga.bpmetrics.ui.export.GraphPlacement.of(draft),
                     onFramingChange = { draft = it.into(draft) },
-                    hasPreview = subject.isNotEmpty(),
-                    showPresetBar = false
+                    modifier = Modifier.weight(1f),
+                    hasPreview = subject.isNotEmpty()
                 )
-                Spacer(Modifier.height(32.dp))
             }
         }
+    }
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Discard your changes?") },
+            text = { Text("Nothing you changed here is saved yet.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDiscard = false; onDismiss() }) {
+                    Text("Discard", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
+            }
+        )
     }
 }
 

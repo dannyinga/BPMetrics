@@ -153,7 +153,7 @@ fun ColorPicker(
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("Colour", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                Text("Color", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                 Text(
                     text = "#%06X".format(colorArgb and 0xFFFFFF),
                     style = MaterialTheme.typography.bodySmall,
@@ -187,7 +187,7 @@ fun ColorPicker(
         }
 
         Text(
-            text = if (showSliders) "Hide custom colour" else "Custom colour…",
+            text = if (showSliders) "Hide custom color" else "Custom color…",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier

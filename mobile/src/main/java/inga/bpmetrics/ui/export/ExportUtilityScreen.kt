@@ -416,15 +416,15 @@ fun ExportUtilityScreen(
                     }
                     // The reason beside a disabled Next, so it never just doesn't respond.
                     if (step != ExportStep.MAKE) Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (step != ExportStep.SOURCE) {
-                            nextBlockedReason?.let {
-                                Text(
-                                    it,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(end = 8.dp)
-                                )
-                            }
+                        // On every step, Source included: Next greyed out there with no reason
+                        // given (UX Audit E8).
+                        nextBlockedReason?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
                         }
                         Button(onClick = { viewModel.next() }, enabled = canAdvance) {
                             Text("Next")
@@ -557,17 +557,14 @@ fun ExportUtilityScreen(
                     onSelectClip = { previewingUri = it },
                     onPlacementChange = { uri, placement -> viewModel.setClipGraph(uri, placement) },
                     onScrubClip = { uri, at -> viewModel.scrubClip(uri, at) },
-                    onApplyToAll = { viewModel.applyGraphToAll(it) },
+                    onFrameEveryClip = { viewModel.setFrameForEveryClip(it) },
                     onPinForCast = { viewModel.pinGraphForCast(it) },
                     onSetFilmedAt = { uri, at -> viewModel.setClipFilmedAt(uri, at) },
                     onResetFilmedAt = { viewModel.resetClipFilmedAt(it) },
-                    overlay = manualOverlay,
                     onPickOverlay = { pickOverlayLauncher.launch(arrayOf("video/*")) },
-                    onClearOverlay = { viewModel.setManualOverlay(null) },
                     onApplyPreset = { viewModel.applyPreset(it) },
-                    onSaveAs = { viewModel.savePresetAs(it, currentFraming) },
-                    onUpdatePreset = { viewModel.updatePreset(it, currentFraming) },
-                    onSetDefault = { viewModel.setDefaultPreset(it) },
+                    onSaveAs = { viewModel.savePresetAs(it) },
+                    onUpdatePreset = { viewModel.updatePreset(it) },
                     onDeletePreset = { viewModel.deletePreset(it) },
                     onExportPresetFile = { presetToExport = it },
                     onImportPresetFile = { importPresetLauncher.launch(arrayOf("*/*")) }
@@ -900,9 +897,9 @@ private fun formatMinutes(ms: Long): String {
 /**
  * Step 3 — how the export looks.
  *
- * The preview sits at the top and is scrubable, because the whole point of previewing is judging
- * the settings against the moment that will be hard to read, not against frame zero. Presets next,
- * then the options in four sections.
+ * The preview is pinned at the top and the editor's tabs take the rest of the screen, rather than
+ * six accordions in whatever a pinned preview, a step bar and a bottom bar left over (UX Audit E1).
+ * Tapping something in the preview opens its tab (S14B.2).
  */
 @Composable
 private fun LookStep(
@@ -930,32 +927,42 @@ private fun LookStep(
     onSelectClip: (Uri) -> Unit,
     onPlacementChange: (Uri, GraphPlacement) -> Unit,
     onScrubClip: (Uri, Float) -> Unit,
-    onApplyToAll: (Uri) -> Unit,
     /** Pins this clip's framing on the preset, for every clip with the same number of people. */
     onPinForCast: (Uri) -> Unit,
+    /** Sets the look's frame and makes every clip use it. */
+    onFrameEveryClip: (GraphPlacement) -> Unit,
     /** Says when a clip was really filmed. See [ClipRetiming]. */
     onSetFilmedAt: (Uri, Long) -> Unit,
     onResetFilmedAt: (Uri) -> Unit,
-    overlay: Uri?,
     onPickOverlay: () -> Unit,
-    onClearOverlay: () -> Unit,
     onApplyPreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onSaveAs: (String) -> Unit,
     onUpdatePreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
-    onSetDefault: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onDeletePreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onExportPresetFile: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onImportPresetFile: () -> Unit
 ) {
+    var tab by rememberSaveable { mutableStateOf(LookTab.PRESETS) }
+    var scope by rememberSaveable { mutableStateOf(FramingScope.CLIP) }
+
+    // Where a change to the frame goes, said on screen by the scope switch rather than decided out
+    // of sight (S14B.3). With no clip in hand there is only the look to change.
+    val applyFraming: (GraphPlacement) -> Unit = { placement ->
+        when {
+            previewing == null -> onPresetChange(placement.into(preset))
+            scope == FramingScope.CLIP -> onPlacementChange(previewing.clip.uri, placement)
+            scope == FramingScope.CAST -> {
+                onPlacementChange(previewing.clip.uri, placement)
+                onPinForCast(previewing.clip.uri)
+            }
+            else -> onFrameEveryClip(placement)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-        // Pinned, and nothing else is. Every control below changes what this shows, so scrolling it
-        // away would mean adjusting a setting and having to scroll back to see what it did. The
-        // clip strip is deliberately *not* here: it is picked once and then not looked at, and
-        // pinning it spent a third of the screen on a row that had already done its job.
         if (isImage) {
-            // The image preview is the image, at whatever the settings currently say — there is no
-            // clip to scrub through and no playhead to choose, so the scrubbing preview has nothing
-            // to offer here.
+            // The image preview is the image, at whatever the settings currently say. There is no
+            // clip to scrub through and no playhead to choose.
             ImageLookPreview(
                 preset = preset,
                 render = renderImagePreview,
@@ -969,25 +976,17 @@ private fun LookStep(
             Column(
                 modifier = Modifier
                     .background(MaterialTheme.colorScheme.surface)
-                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp)
+                    .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp)
             ) {
                 ExportPreview(
+                    // The people on this clip, which is what its export draws.
                     records = previewing?.let { selection ->
-                        // Only the people who were recording during this clip, which is what its
-                        // export will draw. Previewing the whole cast would show curves the
-                        // finished video will not have.
                         records.filter { it.metadata.recordId in selection.recordIds }
                     } ?: records,
                     preset = preset,
                     clip = previewing?.clip,
                     placement = framing,
-                    onPlacementChange = { placement ->
-                        // Framing a clip overrides the preset for that clip only. With no clip
-                        // being previewed there is nothing to override, so it edits the preset —
-                        // which is where framing lives when it is not clip-specific.
-                        previewing?.let { onPlacementChange(it.clip.uri, placement) }
-                            ?: onPresetChange(placement.into(preset))
-                    },
+                    onPlacementChange = applyFraming,
                     overlay = previewing?.clip?.uri ?: previewOverlay,
                     colours = previewColours,
                     photos = previewPhotos,
@@ -996,120 +995,162 @@ private fun LookStep(
                     onScrub = { at ->
                         previewing?.let { onScrubClip(it.clip.uri, at) } ?: onScrub(at)
                     },
+                    onTapRegion = { region ->
+                        tab = when (region) {
+                            inga.bpmetrics.export.VideoFrameRenderer.Region.READOUTS -> LookTab.READOUTS
+                            inga.bpmetrics.export.VideoFrameRenderer.Region.TITLE -> LookTab.TEXT
+                            inga.bpmetrics.export.VideoFrameRenderer.Region.CLOCK -> LookTab.TIME
+                            inga.bpmetrics.export.VideoFrameRenderer.Region.PLOT -> LookTab.GRAPH
+                            inga.bpmetrics.export.VideoFrameRenderer.Region.WORDMARK -> LookTab.SIGNATURE
+                            null -> LookTab.LAYOUT
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
             HorizontalDivider()
         }
 
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-        ) {
-            // Which clip is being framed, and the way to copy that framing across — both scroll,
-            // because both are decided once rather than watched.
-            if (!isImage && records.isNotEmpty() && ticked.size > 1) {
+        // Which clip is being previewed, when there's more than one. It decides what every tab
+        // below shows, so it sits above them.
+        if (!isImage && records.isNotEmpty() && ticked.size > 1) {
+            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ClipSelectorStrip(
                     clockFor = { ClipRetiming.clockFor(it, records) },
                     clips = ticked,
                     selectedUri = previewing?.clip?.uri,
                     onSelect = onSelectClip
                 )
-                if (previewing != null) {
-                    val cast = previewing.recordIds.size
-                    val sameCast = ticked.count { it.recordIds.size == cast }
-
-                    // Two buttons, because they are two different intentions and the old single one
-                    // silently did the wrong one. "Apply to all" copied this rectangle onto every
-                    // clip whatever its cast — which is how a frame drawn around two readouts ended
-                    // up squeezing four and stranding one.
-                    TextButton(onClick = { onPinForCast(previewing.clip.uri) }) {
-                        Text(
-                            "Use this framing for " +
-                                (if (cast == 1) "1-person clips" else "$cast-person clips") +
-                                " ($sameCast here)"
-                        )
-                    }
-                    if (sameCast < ticked.size) {
-                        TextButton(onClick = { onApplyToAll(previewing.clip.uri) }) {
-                            Text("Apply to all ${ticked.size} clips regardless of cast")
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
             }
+        }
 
-            // The preview must not look like a render that won't happen. A clip whose corrected
-            // time lands where nobody was recording is still shown, so it can be corrected back,
-            // and says plainly that it is left out until then (Audit #19).
-            if (!isImage && previewing != null && !previewing.selected) {
-                Text(
-                    if (previewing.recordIds.isEmpty()) {
-                        "Not exported: nobody was recording at this clip's time. Correct the time " +
-                            "below and it's ticked again."
-                    } else {
-                        "Not exported: this clip isn't ticked."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
+        // The preview must not look like a render that won't happen (Audit #19).
+        if (!isImage && previewing != null && !previewing.selected) {
+            Text(
+                if (!ClipRetiming.drawsSomething(previewing.clip, previewing.recordIds, records)) {
+                    "Not exported: nobody was recording at this clip's time. Correct it under Time " +
+                        "and it's ticked again."
+                } else {
+                    "Not exported: this clip isn't ticked."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+        }
+
+        LookSections(
+            preset = preset,
+            onChange = onPresetChange,
+            tab = tab,
+            onTab = { tab = it },
+            framing = framing,
+            onFramingChange = applyFraming,
+            modifier = Modifier.weight(1f),
+            isImage = isImage,
+            title = graphTitle,
+            onTitleChange = onGraphTitleChange,
+            presets = {
+                PresetBar(
+                    presets = presets,
+                    selectedId = selectedPresetId,
+                    edited = presetEdited,
+                    onApply = onApplyPreset,
+                    onSaveAs = onSaveAs,
+                    onUpdate = onUpdatePreset,
+                    onDelete = onDeletePreset,
+                    onExportFile = onExportPresetFile,
+                    onImportFile = onImportPresetFile
                 )
                 Spacer(Modifier.height(8.dp))
-            }
-
-            if (!isImage && previewing != null && records.isNotEmpty()) {
-                FilmedAtControl(
-                    clip = previewing,
-                    // The clock the render prints, file offset included. Without the offset this
-                    // showed the phone's zone and invited a "correction" of hours.
-                    zone = remember(records, previewing.clip) {
-                        ClipRetiming.clockFor(previewing.clip, records)
-                    },
-                    recordingStartMs = records.minOfOrNull { it.metadata.startTime },
-                    onSet = { onSetFilmedAt(previewing.clip.uri, it) },
-                    onReset = { onResetFilmedAt(previewing.clip.uri) }
+                Text(
+                    // Said here because nothing else does: there is no "default" to set any more.
+                    "A new export starts from the look you used last.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(12.dp))
-            }
+            },
+            framingScope = if (!isImage && previewing != null) {
+                {
+                    val cast = previewing.recordIds.size.coerceAtLeast(1)
+                    val sameCast = ticked.count { it.recordIds.size.coerceAtLeast(1) == cast }
+                    FramingScopeRow(
+                        scope = scope,
+                        onScope = { scope = it },
+                        cast = cast,
+                        sameCast = sameCast,
+                        clips = ticked.size
+                    )
+                }
+            } else null,
+            clipTime = if (!isImage && previewing != null && records.isNotEmpty()) {
+                {
+                    FilmedAtControl(
+                        clip = previewing,
+                        // The clock the render prints, file offset included.
+                        zone = remember(records, previewing.clip) {
+                            ClipRetiming.clockFor(previewing.clip, records)
+                        },
+                        recordingStartMs = records.minOfOrNull { it.metadata.startTime },
+                        drawsSomething = ClipRetiming.drawsSomething(previewing.clip, previewing.recordIds, records),
+                        onSet = { onSetFilmedAt(previewing.clip.uri, it) },
+                        onReset = { onResetFilmedAt(previewing.clip.uri) }
+                    )
+                }
+            } else null,
+            onPickVideo = if (!isImage && jobCount == 0) onPickOverlay else null
+        )
+    }
+}
 
-            LookSections(
-                preset = preset,
-                onChange = onPresetChange,
-                title = graphTitle,
-                onTitleChange = onGraphTitleChange,
-                overlay = overlay,
-                onPickOverlay = onPickOverlay,
-                onClearOverlay = onClearOverlay,
-                hasClips = jobCount > 0,
-                isImage = isImage,
-                syncOffsetMs = preset.syncOffsetMs,
-                onSyncOffsetChange = { onPresetChange(preset.copy(syncOffsetMs = it)) },
-                framing = framing,
-                onFramingChange = { placement ->
-                    previewing?.let { onPlacementChange(it.clip.uri, placement) }
-                        ?: onPresetChange(placement.into(preset))
-                },
-                // Folded in as a section of its own rather than standing above them. A preset is
-                // one more thing about how the export looks, and a permanently open bar over four
-                // collapsed sections claimed a priority it does not have.
-                presetBar = {
-                    PresetBar(
-                        presets = presets,
-                        selectedId = selectedPresetId,
-                        edited = presetEdited,
-                        onApply = onApplyPreset,
-                        onSaveAs = onSaveAs,
-                        onUpdate = onUpdatePreset,
-                        onSetDefault = onSetDefault,
-                        onDelete = onDeletePreset,
-                        onExportFile = onExportPresetFile,
-                        onImportFile = onImportPresetFile
+/**
+ * Who a change to the frame applies to, said before it's made (S14B.3).
+ *
+ * Framing a previewed clip used to write that clip's own frame with nothing on screen saying so,
+ * from inside a section about the look.
+ */
+@Composable
+private fun FramingScopeRow(
+    scope: FramingScope,
+    onScope: (FramingScope) -> Unit,
+    cast: Int,
+    sameCast: Int,
+    clips: Int
+) {
+    Text("Changes apply to", style = MaterialTheme.typography.labelMedium)
+    inga.bpmetrics.ui.components.FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        FramingScope.entries.forEach { entry ->
+            androidx.compose.material3.FilterChip(
+                selected = scope == entry,
+                onClick = { onScope(entry) },
+                label = {
+                    Text(
+                        when (entry) {
+                            FramingScope.CLIP -> "This clip"
+                            FramingScope.CAST -> if (cast == 1) "1-person clips" else "$cast-person clips"
+                            FramingScope.EVERY -> "Every clip"
+                        }
                     )
                 }
             )
         }
     }
+    Text(
+        when (scope) {
+            FramingScope.CLIP -> "Only this clip. The look and the other clips keep their frame."
+            FramingScope.CAST -> "Every clip with $cast ${if (cast == 1) "person" else "people"} " +
+                "($sameCast of $clips here), and saved with the look for next time."
+            FramingScope.EVERY -> "The look's own frame, for all $clips clips, replacing any set for " +
+                "one clip or a number of people."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(Modifier.height(8.dp))
 }
 
 /**

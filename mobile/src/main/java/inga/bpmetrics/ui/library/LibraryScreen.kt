@@ -377,7 +377,7 @@ fun LibraryScreen(
                         // overlapped went with the screen that needed it.
                         if (hasSelection) {
                             IconButton(onClick = { onAnalyseSelection(effectiveRecordIds) }) {
-                                Icon(Icons.Default.Insights, contentDescription = "Analyse")
+                                Icon(Icons.Default.Insights, contentDescription = "Analyze")
                             }
                         }
 
@@ -690,7 +690,7 @@ fun LibraryScreen(
                 ) {
                     Text(
                         "Tap Select in the bar above — or press and hold a recording — to pick " +
-                            "the ones you want to compare, then tap Analyse.",
+                            "the ones you want to compare, then tap Analyze.",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(12.dp)
                     )
