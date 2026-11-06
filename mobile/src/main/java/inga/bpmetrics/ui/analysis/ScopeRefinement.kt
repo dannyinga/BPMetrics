@@ -24,6 +24,31 @@ data class ScopeExclusions(
         get() = excludedEventIds.isEmpty() &&
             excludedRecordIds.isEmpty() &&
             includedDespiteFlag.isEmpty()
+
+    /** How many things are left out, for the notice that says the page is refined. */
+    val leftOutCount: Int get() = excludedEventIds.size + excludedRecordIds.size
+
+    /** "e:1,2;r:7;i:3", for keeping between visits. Empty when nothing is refined. */
+    fun encode(): String = if (isEmpty) "" else listOf(
+        "e" to excludedEventIds, "r" to excludedRecordIds, "i" to includedDespiteFlag
+    ).joinToString(";") { (tag, ids) -> "$tag:" + ids.sorted().joinToString(",") }
+
+    companion object {
+        /** Reads [encode]'s form back. Anything unreadable is nothing left out, never an error. */
+        fun decode(text: String?): ScopeExclusions {
+            if (text.isNullOrBlank()) return ScopeExclusions()
+            val parts = text.split(';').mapNotNull { part ->
+                val tag = part.substringBefore(':', "")
+                val ids = part.substringAfter(':', "").split(',').mapNotNull { it.trim().toLongOrNull() }.toSet()
+                if (tag.isEmpty()) null else tag to ids
+            }.toMap()
+            return ScopeExclusions(
+                excludedEventIds = parts["e"].orEmpty(),
+                excludedRecordIds = parts["r"].orEmpty(),
+                includedDespiteFlag = parts["i"].orEmpty()
+            )
+        }
+    }
 }
 
 /** One row of "what is in this analysis", for the screen to list and let you untick. */

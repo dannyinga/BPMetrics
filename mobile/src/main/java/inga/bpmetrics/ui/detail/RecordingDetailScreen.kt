@@ -1,8 +1,5 @@
 package inga.bpmetrics.ui.detail
 
-import inga.bpmetrics.ui.components.setCoverOn
-import inga.bpmetrics.ui.components.cropCoverOn
-import inga.bpmetrics.ui.components.clearCoverOn
 import inga.bpmetrics.library.location
 import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.foundation.layout.Arrangement
@@ -96,16 +93,7 @@ fun RecordingDetailScreen(
     val place by subject.place.collectAsStateWithLifecycle()
     val knownLocations by subject.locations.collectAsStateWithLifecycle()
 
-    // Registered once for the screen: a launcher outlives the dialog that starts it, so it cannot
-    // live inside the editor.
     var framingCover by remember { mutableStateOf(false) }
-    val pickCover = inga.bpmetrics.ui.components.rememberCoverPicker { uri ->
-        subject.setCoverOn(repository, context, inga.bpmetrics.library.ItemRef.Recording(recordId), uri, then = subject::reloadNow) { ok ->
-            // Straight into framing, while the choice is fresh.
-            if (ok) framingCover = true
-            else Feedback.failed("That image couldn't be read.")
-        }
-    }
 
     // One recording's readings as a file, from the page that recording is on. It was in the old
     // app bar and the fold dropped it; the library's multi-select still has the bulk version.
@@ -156,29 +144,25 @@ fun RecordingDetailScreen(
                 val uiState by analysis.uiState.collectAsStateWithLifecycle()
                 SubjectHeader(
                     title = r.displayName(wearer?.displayName, watchName),
-                    subtitle = buildString {
-                        append(getDateString(r.metadata.date, r.clock))
-                        append(" · ")
-                        append(getTimeString(r.metadata.startTime, r.clock))
-                        // Named only where it differs from the reader's. Stamping the zone on
-                        // every time in a library that never leaves one is noise; omitting it on
-                        // the one made three zones away is a wrong number with no warning.
-                        if (r.metadata.clockDiffersFromReader) {
-                            append(" ")
-                            append(r.clock.id.substringAfterLast('/').replace('_', ' '))
-                        }
-                        wearer?.let { append(" · ${it.displayName}") }
-                        place?.location?.displayName?.let { append(" · $it") }
-                    },
+                    subtitle = SubjectText.recording(
+                        startMs = r.metadata.startTime,
+                        zone = r.clock,
+                        reader = inga.bpmetrics.ui.util.ReaderClock,
+                        wearer = wearer?.displayName,
+                        place = place?.location?.displayName
+                    ),
                     cover = cover,
                     trail = placement.trail(),
-                    lowBpm = uiState.minTrio.takeIf { !uiState.isEmpty },
-                    avgBpm = uiState.avgTrio.takeIf { !uiState.isEmpty },
-                    highBpm = uiState.maxTrio.takeIf { !uiState.isEmpty },
-                    // How long it ran. It used to head the zone breakdown further down the page;
-                    // it belongs with the other figures for the same recording.
-                    counts = if (uiState.isEmpty) null else {
-                        inga.bpmetrics.ui.analysis.shortDuration(uiState.totalActiveDurationMs)
+                    // "No readings" rather than Low 0 / Avg 0 / High 0 for one with nothing in it
+                    // (S15.5): a zero reads as a heart that stopped, not as nothing measured.
+                    lowBpm = uiState.minTrio.takeIf { uiState.hasReadings },
+                    avgBpm = uiState.avgTrio.takeIf { uiState.hasReadings },
+                    highBpm = uiState.maxTrio.takeIf { uiState.hasReadings },
+                    // How long it ran, with the other figures for the same recording.
+                    counts = when {
+                        uiState.isEmpty -> null
+                        !uiState.hasReadings -> "No readings"
+                        else -> inga.bpmetrics.ui.analysis.shortDuration(uiState.totalActiveDurationMs)
                     },
                     onOpenAncestor = onOpenEvent,
                     tags = effectiveTags,
@@ -237,16 +221,14 @@ fun RecordingDetailScreen(
     )
 
     // Opened from the corner of the cover rather than from the editor. See [SubjectHeader].
-    if (framingCover && r != null) {
-        inga.bpmetrics.ui.components.CoverCropDialog(
-            cover = r.metadata.ownCover,
-            onPick = pickCover,
+    if (r != null) {
+        CoverEditing(
+            viewModel = subject,
+            ownCover = r.metadata.ownCover,
             title = "Frame this recording",
-            previewContent = {},
-            onDismiss = { framingCover = false },
-            onConfirm = { subject.cropCoverOn(repository, inga.bpmetrics.library.ItemRef.Recording(recordId), it, then = subject::reloadNow); framingCover = false },
-            // Stays open: removing is usually the first half of replacing.
-            onRemove = { subject.clearCoverOn(repository, context, inga.bpmetrics.library.ItemRef.Recording(recordId), then = subject::reloadNow) }
+            previewName = null,
+            framing = framingCover,
+            onFraming = { framingCover = it }
         )
     }
 

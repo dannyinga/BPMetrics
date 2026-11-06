@@ -47,6 +47,11 @@ data class AnalysisRecord(
     val maxBpm: Double?,
     val activeDurationMs: Long,
     val tags: List<AnalysisTag> = emptyList(),
+    /**
+     * When it ended, for a scope's length (S15.4). Null in a snapshot saved before this existed,
+     * which falls back to its start plus the time it measured; see [endedAt].
+     */
+    val endMs: Long? = null,
     /** Who was wearing the watch, as frozen onto the record when it arrived. */
     val wearerName: String = "",
     /** The watch it came from, by its device name. */
@@ -139,6 +144,7 @@ data class AnalysisRecord(
                 // at all — see §9. Zero for the seconds between migrating and the backfill
                 // finishing, which is honest: it has not been worked out yet.
                 activeDurationMs = record.activeDurationMs,
+                endMs = record.metadata.endTime,
                 tags = (effectiveTags?.map { it.tag } ?: record.tags).map { tag ->
                     AnalysisTag(
                         tagName = tag.name,

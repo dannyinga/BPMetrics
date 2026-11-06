@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -99,6 +100,11 @@ fun SplitLanes(
      * by a metric — that is to say, a comparison, drawn a second way.
      */
     onOpenRecord: ((Long) -> (() -> Unit)?)? = null,
+    /**
+     * Opens the event a lane is, where the lanes are events (S15.3). They were the one kind of lane
+     * that went nowhere when tapped.
+     */
+    onOpenEvent: ((Long) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (lanes.isEmpty()) return
@@ -123,9 +129,12 @@ fun SplitLanes(
                 ceiling = ceiling,
                 // Null where that recording is the page we are already on, so the row does not
                 // offer to navigate to itself.
-                onOpen = lane.records.singleOrNull()
-                    ?.recordId
-                    ?.let { id -> onOpenRecord?.invoke(id) }
+                onOpen = lane.key.toLongOrNull()
+                    ?.takeIf { onOpenEvent != null && !lane.isUnlabelled }
+                    ?.let { eventId -> { onOpenEvent!!(eventId) } }
+                    ?: lane.records.singleOrNull()
+                        ?.recordId
+                        ?.let { id -> onOpenRecord?.invoke(id) }
             )
         }
     }
@@ -208,6 +217,15 @@ private fun LaneRow(
                         .copy(fontFeatureSettings = MetricNumerals),
                     fontWeight = FontWeight.Bold,
                     color = tone.copy(alpha = alpha)
+                )
+            }
+            // Said, where a lane opens something. Recording lanes always did and nothing showed it.
+            if (onOpen != null) {
+                Spacer(Modifier.width(4.dp))
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

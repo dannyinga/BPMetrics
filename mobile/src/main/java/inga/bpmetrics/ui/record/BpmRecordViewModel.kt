@@ -42,9 +42,9 @@ data class RecordPlacement(
  * and description, managing assigned tags, and deleting the record.
  */
 class BpmRecordViewModel(
-    private val repository: LibraryRepository,
+    repository: LibraryRepository,
     private val recordId: Long
-) : ViewModel() {
+) : inga.bpmetrics.ui.detail.ItemDetailViewModel(repository, inga.bpmetrics.library.ItemRef.Recording(recordId)) {
 
     private val _record = MutableStateFlow<BpmRecordWithPoints?>(null)
     /**
@@ -205,6 +205,8 @@ class BpmRecordViewModel(
     }
 
     /** Reads the record again now, for a change made from the page (a new cover, say). */
+    override suspend fun afterCoverChange() = reloadNow()
+
     suspend fun reloadNow() {
         _record.value = repository.getRecordWithId(recordId)
     }
@@ -286,7 +288,7 @@ class BpmRecordViewModel(
      *
      * @param tagId The ID of the tag to remove.
      */
-    fun removeTag(tagId: Long) {
+    override fun removeTag(tagId: Long) {
         launchGuarded(failure = "Couldn't remove that tag.") {
             val name = repository.getTag(tagId)?.name ?: "Tag"
             repository.removeTag(inga.bpmetrics.library.ItemRef.Recording(recordId), tagId)

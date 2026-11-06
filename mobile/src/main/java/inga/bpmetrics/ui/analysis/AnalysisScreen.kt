@@ -57,7 +57,9 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -171,7 +173,12 @@ fun AnalysisScreen(
      * Only a recording can be split, so this is null everywhere else. Times leave as wall-clock
      * instants — the chart works in those — and the subject rebases them.
      */
-    onSplitFromTimeline: ((startMs: Long, endMs: Long) -> Unit)? = null
+    onSplitFromTimeline: ((startMs: Long, endMs: Long) -> Unit)? = null,
+    /**
+     * Opens an event's page. Lanes comparing events go there when tapped (S15.3); they used to be
+     * the one kind of lane that went nowhere. Null where there is nowhere to open.
+     */
+    onOpenEvent: ((Long) -> Unit)? = null
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
     var saveName by remember { mutableStateOf("") }
@@ -230,187 +237,212 @@ fun AnalysisScreen(
     // People, and the screen would otherwise keep rendering a section that is no longer listed.
     if (section !in sections) section = sections.firstOrNull() ?: AnalysisSection.SUMMARY
 
-    Scaffold(
-        topBar = {
-            Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {
-                TopAppBar(
-                    title = {
-                        // Two lines, because one was not enough to say what was being analysed.
-                        // A scope title is a collection or event name — "Coachella Day 1" — and at
-                        // headlineSmall on a 5-inch phone those clipped against the action icons
-                        // with no ellipsis, so the header silently stopped naming its subject at
-                        // exactly the widths where naming it mattered most.
-                        //
-                        // The kind line underneath is the guarantee: even when the name truncates,
-                        // the header still says what this is and how much of it there is.
-                        Column {
-                            Text(
-                                title ?: uiState.scope.title,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                uiState.scopeSubtitle(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        if (onBack != null) {
-                            IconButton(onClick = onBack) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Back"
+    // The header can ask for the Events tab: a collection folds its list of nights into "and N
+    // more", and the whole list is that tab. Provided rather than passed, because the header is a
+    // slot this screen invokes in four places and only one kind of subject needs it.
+    CompositionLocalProvider(LocalOpenSubjectChildren provides { section = AnalysisSection.EVENTS }) {
+        Scaffold(
+            topBar = {
+                Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {
+                    TopAppBar(
+                        title = {
+                            // Nothing where the page has a header of its own: the name is over the
+                            // cover, and it was in the bar as well (S15.4). The fallback to the scope's
+                            // title put it back whenever a page passed none.
+                            if (subjectHeader != null) return@TopAppBar
+                            // Two lines, because one was not enough to say what was being analysed.
+                            // A scope title is a collection or event name — "Coachella Day 1" — and at
+                            // headlineSmall on a 5-inch phone those clipped against the action icons
+                            // with no ellipsis, so the header silently stopped naming its subject at
+                            // exactly the widths where naming it mattered most.
+                            //
+                            // The kind line underneath is the guarantee: even when the name truncates,
+                            // the header still says what this is and how much of it there is.
+                            Column {
+                                Text(
+                                    title ?: uiState.scope.title,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    uiState.scopeSubtitle(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                        } else {
-                            IconButton(onClick = onOpenDrawer) {
-                                Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
+                        },
+                        navigationIcon = {
+                            if (onBack != null) {
+                                IconButton(onClick = onBack) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back"
+                                    )
+                                }
+                            } else {
+                                IconButton(onClick = onOpenDrawer) {
+                                    Icon(Icons.Default.Menu, contentDescription = "Open navigation menu")
+                                }
                             }
-                        }
-                    },
-                    actions = {
-                        // Order is deliberate: the subject's own verb, then the one thing every
-                        // page can do, then the overflow — which sits rightmost because that is
-                        // where an overflow lives on every other Android screen.
-                        subjectActions?.invoke(this)
+                        },
+                        actions = {
+                            // Order is deliberate: the subject's own verb, then the one thing every
+                            // page can do, then the overflow — which sits rightmost because that is
+                            // where an overflow lives on every other Android screen.
+                            subjectActions?.invoke(this)
 
-                        // Whose recordings to read. Beside Export because it changes what an
-                        // export would contain, and not gated on the analysis having anything in
-                        // it: a filter that narrows to nobody empties the page, and hiding the
-                        // button then would leave no way back out.
-                        if (peopleInScope.size > 1) {
-                            PersonFilterButton(
-                                selectedCount = personFilter.size,
-                                onClick = { choosingPeople = true }
-                            )
-                        }
-
-                        if (onExport != null && !uiState.isEmpty) {
-                            IconButton(onClick = onExport) {
-                                Icon(
-                                    Icons.Default.FileUpload,
-                                    contentDescription = "Export"
+                            // Whose recordings to read. Beside Export because it changes what an
+                            // export would contain, and not gated on the analysis having anything in
+                            // it: a filter that narrows to nobody empties the page, and hiding the
+                            // button then would leave no way back out.
+                            if (peopleInScope.size > 1) {
+                                PersonFilterButton(
+                                    selectedCount = personFilter.size,
+                                    onClick = { choosingPeople = true }
                                 )
                             }
-                        }
-                        // A stored analysis is already frozen; only a live one can be captured.
-                        if (onSave != null && !uiState.isEmpty && !uiState.isFrozen) {
-                            IconButton(onClick = { showSaveDialog = true }) {
-                                Icon(Icons.Default.Save, contentDescription = "Save this analysis")
+
+                            if (onExport != null && !uiState.isEmpty) {
+                                IconButton(onClick = onExport) {
+                                    Icon(
+                                        Icons.Default.FileUpload,
+                                        contentDescription = "Export"
+                                    )
+                                }
                             }
+                            // A stored analysis is already frozen; only a live one can be captured.
+                            if (onSave != null && !uiState.isEmpty && !uiState.isFrozen) {
+                                IconButton(onClick = { showSaveDialog = true }) {
+                                    Icon(Icons.Default.Save, contentDescription = "Save this analysis")
+                                }
+                            }
+
+                            subjectOverflow?.invoke(this)
                         }
-
-                        subjectOverflow?.invoke(this)
-                    }
-                )
-                // The metric selector used to be pinned here, on every page, above everything. It
-                // is a *sort* control — it decides whether a comparison is ranked by peak,
-                // average or low — so it now sits with the comparisons it sorts. Its three
-                // numbers survive as a line in the subject header, where they are information
-                // rather than a control taking the top of the screen.
-            }
-        }
-    ) { paddingValues ->
-        // Shown on every tab and in the empty state alike. Filtering to someone whose recordings
-        // are all left out empties the page, and an empty page that does not say it is filtered
-        // reads as an event with nothing in it.
-        val filterNotice: @Composable () -> Unit = {
-            if (personFilter.isNotEmpty()) {
-                PersonFilterNotice(
-                    chosen = personFilter.mapNotNull { peopleById[it] }
-                        .sortedBy { it.displayName.lowercase() },
-                    ofTotal = peopleInScope.size,
-                    onEdit = { choosingPeople = true },
-                    onClear = { viewModel.clearPersonFilter() }
-                )
-            }
-        }
-
-        // Loading is not empty. The page used to say "Nothing matches this filter" until the
-        // first result arrived, on every page, including ones with hundreds of recordings.
-        if (uiState.isLoading) {
-            Column(Modifier.padding(paddingValues).fillMaxSize()) {
-                subjectHeader?.invoke()
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    androidx.compose.material3.CircularProgressIndicator()
+                    )
+                    // The metric selector used to be pinned here, on every page, above everything. It
+                    // is a *sort* control — it decides whether a comparison is ranked by peak,
+                    // average or low — so it now sits with the comparisons it sorts. Its three
+                    // numbers survive as a line in the subject header, where they are information
+                    // rather than a control taking the top of the screen.
                 }
             }
-            return@Scaffold
-        }
-
-        if (uiState.isEmpty) {
-            Column(Modifier.padding(paddingValues).fillMaxSize()) {
-                // An event with nothing recorded yet is still an event: its cover, its name, and
-                // the Events tab, which is the only way down to the days and sets inside it.
-                subjectHeader?.invoke()
-                filterNotice()
-                SectionBar(sections = sections, selected = section, onSelect = { section = it })
-                if (section == AnalysisSection.EVENTS) subjectChildren?.invoke()
-                else EmptyAnalysis(uiState, Modifier.fillMaxSize())
+        ) { paddingValues ->
+            // Shown on every tab and in the empty state alike. Filtering to someone whose recordings
+            // are all left out empties the page, and an empty page that does not say it is filtered
+            // reads as an event with nothing in it.
+            val filterNotice: @Composable () -> Unit = {
+                if (personFilter.isNotEmpty()) {
+                    PersonFilterNotice(
+                        chosen = personFilter.mapNotNull { peopleById[it] }
+                            .sortedBy { it.displayName.lowercase() },
+                        ofTotal = peopleInScope.size,
+                        onEdit = { choosingPeople = true },
+                        onClear = { viewModel.clearPersonFilter() }
+                    )
+                }
+                // A refinement says so on the page (S15.5). Leaving parts out from the editor used to
+                // leave no sign, so the figures quietly described less than the page's title.
+                if (exclusions.leftOutCount > 0) {
+                    RefinedScopeNotice(
+                        leftOut = exclusions.leftOutCount,
+                        onEdit = { showScopeRefinement = true },
+                        onClear = { viewModel.clearExclusions() }
+                    )
+                }
             }
-            return@Scaffold
-        }
 
-        Column(Modifier.padding(paddingValues).fillMaxSize()) {
-            // Above the section bar: the sections are ways of reading the analysis, and the
-            // subject is what is being analysed. Switching from Summary to Compare must not
-            // change which thing you are looking at, so the subject sits outside the switch.
-            subjectHeader?.invoke()
+            // Loading is not empty. The page used to say "Nothing matches this filter" until the
+            // first result arrived, on every page, including ones with hundreds of recordings.
+            if (uiState.isLoading) {
+                Column(Modifier.padding(paddingValues).fillMaxSize()) {
+                    subjectHeader?.invoke()
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        androidx.compose.material3.CircularProgressIndicator()
+                    }
+                }
+                return@Scaffold
+            }
 
-            // Beneath the subject and above the tabs: it qualifies every tab, not one of them.
-            filterNotice()
+            if (uiState.isEmpty) {
+                Column(Modifier.padding(paddingValues).fillMaxSize()) {
+                    // An event with nothing recorded yet is still an event: its cover, its name, and
+                    // the Events tab, which is the only way down to the days and sets inside it.
+                    subjectHeader?.invoke()
+                    filterNotice()
+                    SectionBar(sections = sections, selected = section, onSelect = { section = it })
+                    if (section == AnalysisSection.EVENTS) subjectChildren?.invoke()
+                    else EmptyAnalysis(uiState, Modifier.fillMaxSize())
+                }
+                return@Scaffold
+            }
 
-            SectionBar(
-                sections = sections,
-                selected = section,
-                onSelect = { section = it }
-            )
+            Column(Modifier.padding(paddingValues).fillMaxSize()) {
+                // Above the section bar: the sections are ways of reading the analysis, and the
+                // subject is what is being analysed. Switching from Summary to Compare must not
+                // change which thing you are looking at, so the subject sits outside the switch.
+                subjectHeader?.invoke()
 
-            when (section) {
-                AnalysisSection.SUMMARY -> SummarySection(
-                    uiState = uiState,
-                    subjectHeader = subjectHeader,
-                    peopleById = peopleById,
-                    isolatedPersonId = isolatedPersonId,
-                    onIsolate = { viewModel.isolatePerson(it) },
-                    onRefineScope = if (subjectEditor != null) null else {
-                        { showScopeRefinement = true }
-                    },
-                    isRefined = !exclusions.isEmpty,
-                    extra = summaryExtra,
-                    onOpenRecord = openRecord
+                // Beneath the subject and above the tabs: it qualifies every tab, not one of them.
+                filterNotice()
+
+                SectionBar(
+                    sections = sections,
+                    selected = section,
+                    onSelect = { section = it }
                 )
 
-                AnalysisSection.TIMELINE -> TimelineSection(
-                    uiState = uiState,
-                    curves = curves,
-                    drawsChart = drawsChart,
-                    onDrawChart = { viewModel.requestChart() },
-                    peopleById = peopleById,
-                    onSplit = onSplitFromTimeline
-                )
+                when (section) {
+                    AnalysisSection.SUMMARY -> SummarySection(
+                        uiState = uiState,
+                        subjectHeader = subjectHeader,
+                        peopleById = peopleById,
+                        isolatedPersonId = isolatedPersonId,
+                        onIsolate = { viewModel.isolatePerson(it) },
+                        onRefineScope = if (subjectEditor != null) null else {
+                            { showScopeRefinement = true }
+                        },
+                        isRefined = !exclusions.isEmpty,
+                        extra = summaryExtra,
+                        onOpenRecord = openRecord,
+                        onShowRecordings = if (availableAxes.any { it is SplitAxis.Recording }) {
+                            {
+                                viewModel.setSplitAxis(SplitAxis.Recording.key)
+                                section = AnalysisSection.COMPARE
+                            }
+                        } else null
+                    )
 
-                AnalysisSection.EVENTS -> subjectChildren?.invoke()
+                    AnalysisSection.TIMELINE -> TimelineSection(
+                        uiState = uiState,
+                        curves = curves,
+                        drawsChart = drawsChart,
+                        onDrawChart = { viewModel.requestChart() },
+                        peopleById = peopleById,
+                        onSplit = onSplitFromTimeline
+                    )
 
-                AnalysisSection.COMPARE -> CompareSection(
-                    axes = availableAxes,
-                    selectedAxis = selectedAxis,
-                    onSelectAxis = { viewModel.setSplitAxis(it) },
-                    lanes = lanes,
-                    measure = compareMeasure,
-                    onSelectMeasure = { viewModel.setCompareMeasure(it) },
-                    metric = selectedMetric,
-                    onSelectMetric = { viewModel.setSelectedMetric(it) },
-                    isReversed = isReversed,
-                    onToggleReverse = { viewModel.toggleRecordsReverse() },
-                    onOpenRecord = openRecord
-                )
+                    AnalysisSection.EVENTS -> subjectChildren?.invoke()
+
+                    AnalysisSection.COMPARE -> CompareSection(
+                        axes = availableAxes,
+                        selectedAxis = selectedAxis,
+                        onSelectAxis = { viewModel.setSplitAxis(it) },
+                        lanes = lanes,
+                        measure = compareMeasure,
+                        onSelectMeasure = { viewModel.setCompareMeasure(it) },
+                        metric = selectedMetric,
+                        onSelectMetric = { viewModel.setSelectedMetric(it) },
+                        isReversed = isReversed,
+                        onToggleReverse = { viewModel.toggleRecordsReverse() },
+                        onOpenRecord = openRecord,
+                        onOpenEvent = onOpenEvent
+                    )
+                }
             }
         }
     }
@@ -590,7 +622,9 @@ private fun SummarySection(
     /** Whatever the subject wants to add here. See [AnalysisScreen]. */
     extra: (@Composable () -> Unit)? = null,
     /** Given a record, the way to open it — or null where that is the page we are on. */
-    onOpenRecord: (Long) -> (() -> Unit)?
+    onOpenRecord: (Long) -> (() -> Unit)?,
+    /** Opens the recordings side by side. Null where there's no Compare to open. */
+    onShowRecordings: (() -> Unit)? = null
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -606,11 +640,14 @@ private fun SummarySection(
         // time was spent. The bands used to open the page under a heading carrying the duration —
         // a figure that belongs in the header with the other figures — and the standout moments
         // sat below a chart of coloured bars nobody had asked for yet.
-        item { Highlights(uiState, onOpenRecord) }
+        // Only with more than one recording. With one, every highlight restates the header: its
+        // peak is the header's high, and it came from itself (S15.5).
+        if (uiState.recordCount > 1) item { Highlights(uiState, onOpenRecord) }
 
         extra?.let { block -> item { block() } }
 
-        if (uiState.people.isNotEmpty()) {
+        // The same: one recording's one person is the header again.
+        if (uiState.people.isNotEmpty() && uiState.recordCount > 1) {
             item {
                 SectionTitle(
                     "Who was there",
@@ -631,14 +668,50 @@ private fun SummarySection(
             }
         }
 
+        // The way to the recordings themselves, said on the page (S15.3). It was Compare, then the
+        // Recording chip, then lane rows with no sign they could be tapped.
+        if (uiState.recordCount > 1 && onShowRecordings != null) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onShowRecordings)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp).fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "See all ${uiState.recordCount} recordings",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "Side by side, and each one opens",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
         // Last. It is the most detailed thing on the page and the least likely to be what someone
         // came for — and its heading no longer carries the duration, which moved up into the
         // subject header where the low, average and high already were.
         item { SectionTitle("Where the time went", null) }
         item { ZoneBreakdown(uiState.zoneTimes, showDurations = true) }
 
-        // Only for a scope whose subject has no editor to hold it. See [AnalysisScreen].
-        onRefineScope?.let { refine ->
+        // Only for a scope whose subject has no editor to hold it, and with something to leave out:
+        // one recording has nothing. A refined scope keeps its way back in the notice up top.
+        onRefineScope?.takeIf { uiState.recordCount > 1 }?.let { refine ->
             item {
                 TextButton(onClick = refine) {
                     Text(if (isRefined) "Scope — refined" else "Refine scope")
@@ -714,7 +787,8 @@ private fun CompareSection(
     onSelectMetric: (AnalysisViewModel.MetricType) -> Unit,
     isReversed: Boolean,
     onToggleReverse: () -> Unit,
-    onOpenRecord: (Long) -> (() -> Unit)?
+    onOpenRecord: (Long) -> (() -> Unit)?,
+    onOpenEvent: ((Long) -> Unit)? = null
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -749,7 +823,9 @@ private fun CompareSection(
                     lanes = lanes,
                     measure = measure,
                     metric = metric,
-                    onOpenRecord = onOpenRecord
+                    onOpenRecord = onOpenRecord,
+                    // Lanes of events are keyed by the event's id; they open its page.
+                    onOpenEvent = if (selectedAxis is SplitAxis.ChildEvent) onOpenEvent else null
                 )
             }
         }
@@ -1444,9 +1520,8 @@ private fun MomentRow(
 private fun Highlights(uiState: AnalysisUiState, onOpenRecord: (Long) -> (() -> Unit)?) {
     val hardest = uiState.people.maxByOrNull { it.maxBpm }
     val longest = uiState.people.maxByOrNull { it.activeDurationMs }
-    val peak = uiState.records.maxByOrNull { it.maxBpm ?: 0.0 }
 
-    if (hardest == null && peak == null) return
+    if (hardest == null) return
 
     // The recording each claim came out of. A highlight is a statement about one moment, and the
     // moment is in a recording — saying "Kyle hit 186" and giving no way to go and look at it made
@@ -1464,36 +1539,30 @@ private fun Highlights(uiState: AnalysisUiState, onOpenRecord: (Long) -> (() -> 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionTitle("Highlights", null)
 
-        hardest?.let {
-            HighlightRow(
-                "Highest peak",
-                it.name,
-                "${it.maxBpm.toInt()} bpm",
-                it.colorArgb?.let { argb -> Color(argb) },
-                onOpen = hardestRecord?.let { r -> onOpenRecord(r.recordId) }
-            )
-        }
+        // One card for the peak: who, and where it came from. "Highest peak · Danny 184" and "Peak
+        // came from · Inzo 184" were two cards about one number (S15.5).
+        // Where it came from only where there's a choice of places: on one event's page, naming
+        // that event is naming the page.
+        val manyEvents = uiState.records.mapNotNull { it.eventId }.distinct().size > 1
+        HighlightRow(
+            "Highest peak",
+            hardest.name + (hardestRecord?.eventName?.takeIf { manyEvents && it.isNotBlank() }?.let { " · $it" } ?: ""),
+            "${hardest.maxBpm.toInt()} bpm",
+            hardest.colorArgb?.let { argb -> Color(argb) },
+            onOpen = hardestRecord?.let { r -> onOpenRecord(r.recordId) }
+        )
         // Only worth saying when it is not the same person again — repeating one name twice
         // reads as a bug in the screen rather than as a fact about the weekend.
         //
         // Not a link: a total across eleven recordings is not any one of them, and picking the
         // longest to open would be answering a question nobody asked.
-        longest?.takeIf { it.name != hardest?.name }?.let {
+        longest?.takeIf { it.name != hardest.name }?.let {
             HighlightRow(
                 "Most time recorded",
                 it.name,
                 shortDuration(it.activeDurationMs),
                 it.colorArgb?.let { argb -> Color(argb) },
                 onOpen = null
-            )
-        }
-        peak?.takeIf { it.eventName.isNotBlank() }?.let {
-            HighlightRow(
-                "Peak came from",
-                it.eventName,
-                "${it.maxBpm?.toInt() ?: 0} bpm",
-                null,
-                onOpen = onOpenRecord(it.recordId)
             )
         }
     }
@@ -1543,3 +1612,9 @@ private fun HighlightRow(
         }
     }
 }
+
+/**
+ * Switches an [AnalysisScreen] to its Events tab, for its header to call. Does nothing outside one,
+ * or on a page whose subject has nothing to list there.
+ */
+val LocalOpenSubjectChildren = staticCompositionLocalOf<() -> Unit> { {} }

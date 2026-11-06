@@ -232,3 +232,45 @@ fun PersonFilterDialog(
         }
     )
 }
+
+/**
+ * Says the page leaves parts of its scope out, with the way to change it and the way back (S15.5).
+ *
+ * The same band as [PersonFilterNotice], because it does the same job: the figures describe less
+ * than the title says, and the page has to admit it.
+ */
+@Composable
+fun RefinedScopeNotice(
+    leftOut: Int,
+    onEdit: () -> Unit,
+    onClear: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .clickable(onClick = onEdit)
+                .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.FilterAlt,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Leaving out $leftOut " + if (leftOut == 1) "part" else "parts",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onClear) { Text("Include everything") }
+        }
+    }
+}

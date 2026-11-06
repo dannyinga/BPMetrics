@@ -1794,6 +1794,24 @@ class LibraryRepository(
     suspend fun getSettingsForBackup() = settingsRepository.exportPreferences()
 
     /**
+     * What an event's or a collection's page leaves out, kept between visits (S15.5). Null for any
+     * other scope: a recording has nothing to leave out, and a filter or a saved analysis isn't a
+     * place to come back to.
+     */
+    fun scopeExclusions(ref: ScopeRef): Flow<String?> =
+        scopeKey(ref)?.let { settingsRepository.scopeExclusions(it) } ?: kotlinx.coroutines.flow.flowOf(null)
+
+    suspend fun setScopeExclusions(ref: ScopeRef, encoded: String?) {
+        scopeKey(ref)?.let { settingsRepository.setScopeExclusions(it, encoded) }
+    }
+
+    private fun scopeKey(ref: ScopeRef): String? = when (ref) {
+        is ScopeRef.Event -> "event_${ref.eventId}"
+        is ScopeRef.Collection -> "collection_${ref.collectionId}"
+        else -> null
+    }
+
+    /**
      * The tags applied to each event, keyed by event id.
      *
      * A backup carried record tags from the beginning and never carried these, so a restore returned

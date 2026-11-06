@@ -18,6 +18,8 @@ import inga.bpmetrics.library.Source
 import inga.bpmetrics.library.BpmZones
 import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.ui.library.LibraryViewModel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 
@@ -73,13 +75,33 @@ class AnalysisViewModel(
      * highest peak came from itself — and the link went to the page it was already on, pushing a
      * fresh copy onto the back stack every tap.
      */
-    private val rootRecordId: Long? = null
+    private val rootRecordId: Long? = null,
+    /**
+     * What this page left out last time, encoded (see [ScopeExclusions.encode]), and where to keep
+     * it. A refinement used to be lost on leaving the page (S15.5). An event and a collection keep
+     * theirs; everything else gets the defaults, which keep nothing.
+     */
+    savedExclusions: Flow<String?> = flowOf(null),
+    private val saveExclusions: suspend (String?) -> Unit = {}
 ) : ViewModel() {
 
     // --- What this analysis leaves out (TX-3.6 to 3.8) ---
 
     private val _exclusions = MutableStateFlow(ScopeExclusions())
     val exclusions: StateFlow<ScopeExclusions> = _exclusions.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            val saved = ScopeExclusions.decode(savedExclusions.first())
+            // Unless something was already changed in the moment it took to read.
+            if (_exclusions.value.isEmpty) _exclusions.value = saved
+        }
+    }
+
+    private fun keepExclusions() {
+        val now = _exclusions.value
+        viewModelScope.launch { saveExclusions(now.encode().ifEmpty { null }) }
+    }
 
     /**
      * The rows the refinement sheet lists, derived from the whole scope rather than the refined
@@ -112,9 +134,13 @@ class AnalysisViewModel(
 
     fun toggleScopeEntry(entry: ScopeEntry, include: Boolean) {
         _exclusions.value = ScopeRefinement.toggle(_exclusions.value, entry, include)
+        keepExclusions()
     }
 
-    fun clearExclusions() { _exclusions.value = ScopeExclusions() }
+    fun clearExclusions() {
+        _exclusions.value = ScopeExclusions()
+        keepExclusions()
+    }
 
     /**
      * The scope after exclusions, which is what everything below analyses.
@@ -678,7 +704,9 @@ class AnalysisViewModel(
                 chartContext = combine(
                     repository.getAllWatches(),
                     repository.getAllPeople()
-                ) { watches, people -> ChartContext(watches, people) }
+                ) { watches, people -> ChartContext(watches, people) },
+                savedExclusions = repository.scopeExclusions(ref),
+                saveExclusions = { repository.setScopeExclusions(ref, it) }
             ) as T
         }
     }
@@ -971,7 +999,23 @@ data class AnalysisUiState(
     val isFrozen: Boolean = false
 ) {
     val recordCount: Int get() = records.size
+
+    /**
+     * From the first start to the last end of what's in view: an event's length (S15.4).
+     *
+     * The header used to give the time measured, summed across everyone, which read like the
+     * event's length and wasn't (72h 33m for a festival the timeline showed as 75h 16m).
+     */
+    val lengthMs: Long
+        get() = if (records.isEmpty()) 0L
+        else (records.maxOf { it.endedAt } - records.minOf { it.date }).coerceAtLeast(0L)
+
+    /** Whether anything here has a reading, rather than recordings with nothing in them. */
+    val hasReadings: Boolean get() = records.any { (it.maxBpm ?: 0.0) > 0.0 }
 }
+
+/** When [AnalysisRecord] ended, or its start plus what it measured for a snapshot without one. */
+val AnalysisRecord.endedAt: Long get() = endMs ?: (date + activeDurationMs)
 
 /**
  * One person's numbers across everything in scope.

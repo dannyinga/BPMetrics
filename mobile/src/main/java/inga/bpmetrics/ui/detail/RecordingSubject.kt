@@ -83,15 +83,13 @@ internal fun RecordInsightsSection(
             Spacer(Modifier.height(12.dp))
         }
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            InsightStat("Measured", shortDuration(insights.activeDurationMs), Modifier.weight(1f))
-            insights.longestClimb?.let { climb ->
-                InsightStat(
-                    "Biggest climb",
-                    "+${climb.riseBpm.roundToInt()} in ${shortDuration(climb.durationMs)}",
-                    Modifier.weight(1.4f)
-                )
-            }
+        // How long it measured is in the header, with the other figures; this was its second
+        // telling (S15.5).
+        insights.longestClimb?.let { climb ->
+            InsightStat(
+                "Biggest climb",
+                "+${climb.riseBpm.roundToInt()} in ${shortDuration(climb.durationMs)}"
+            )
         }
 
         // Said plainly rather than drawn as an unbroken line. A recording with a dropout is not a
@@ -106,33 +104,8 @@ internal fun RecordInsightsSection(
             )
         }
 
-        val zones = insights.zoneTimes.filter { it.durationMs > 0L }
-        if (zones.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Time in range",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(8.dp))
-            zones.forEach { zone ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        "${zone.zone.name} (${zone.zone.lowerBpm}" +
-                            (zone.zone.upperBpm?.let { "-$it" } ?: "+") + ")",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        "${shortDuration(zone.durationMs)}  ${(zone.share * 100).roundToInt()}%",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
+        // The time in each zone was listed here as "Time in range" and again below as "Where the
+        // time went", the page's own breakdown, which every scope has (S15.5).
 
         if (insights.peaks.isNotEmpty()) {
             Spacer(Modifier.height(16.dp))

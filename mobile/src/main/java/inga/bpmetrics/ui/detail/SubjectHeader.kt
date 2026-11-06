@@ -97,6 +97,21 @@ fun SubjectHeader(
      * header that is reliably empty.
      */
     onEditCover: (() -> Unit)? = null,
+    /**
+     * Whether [trail] is a path, each step inside the one before (an event's ancestors), rather
+     * than a list of separate things (the events a collection holds). A path is joined with "›" on
+     * one line; a list is separated by commas and wraps, so unrelated events don't read as nested.
+     */
+    trailIsPath: Boolean = true,
+    /**
+     * How many steps of a list [trail] shows before the rest are folded into "+N more". A path is
+     * never folded: every step of it is a level you might want to walk up to.
+     */
+    trailShown: Int = Int.MAX_VALUE,
+    /**
+     * Where "+N more" goes. Null expands the list in place, as the tags do.
+     */
+    onShowWholeTrail: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     // Over a photo, flat text disappears into whatever is behind it. The same shadow the library
@@ -106,7 +121,43 @@ fun SubjectHeader(
 
     val content: @Composable () -> Unit = {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-            if (trail.isNotEmpty()) {
+            if (trail.isNotEmpty() && !trailIsPath) {
+                var wholeTrail by rememberSaveable { mutableStateOf(false) }
+                val shownTrail = if (wholeTrail) trail else trail.take(trailShown)
+                val folded = trail.size - shownTrail.size
+                inga.bpmetrics.ui.components.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                ) {
+                    shownTrail.forEachIndexed { index, (id, name) ->
+                        Text(
+                            name + if (index < shownTrail.lastIndex) "," else "",
+                            style = MaterialTheme.typography.labelMedium.overCover(over),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable { onOpenAncestor(id) }
+                                .padding(vertical = 2.dp, horizontal = 3.dp)
+                        )
+                    }
+                    // A header is a fixed amount of space, and a collection can hold seventy
+                    // nights: listing them all pushed the analysis off the screen (S15.6).
+                    if (folded > 0 || wholeTrail) {
+                        Text(
+                            if (wholeTrail) "Show fewer" else "and $folded more",
+                            style = MaterialTheme.typography.labelMedium.overCover(over),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clickable {
+                                    val whole = onShowWholeTrail
+                                    if (whole != null && !wholeTrail) whole() else wholeTrail = !wholeTrail
+                                }
+                                .padding(vertical = 2.dp, horizontal = 3.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+            } else if (trail.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     trail.forEachIndexed { index, (id, name) ->
                         if (index > 0) {

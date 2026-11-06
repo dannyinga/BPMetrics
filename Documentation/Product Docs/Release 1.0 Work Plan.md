@@ -616,8 +616,43 @@ Ambient mode and a tile are post-1.0.
 | **S15.3** | A visible route from an event to its recordings, and tappable event lanes. | §3 Detail (High) |
 | **S15.4** | Event subtitles show the full date span and name the venue's time zone. Counts respect the person filter and exclusions. Duration reads as the event's length, and the header and timeline agree on it (72h 33m vs 75h 16m today). The title isn't repeated in both the app bar and the header. | §3 Detail, §6 |
 | **S15.5** | A refined scope ("What's included") shows on the page and survives leaving it. A recording with no readings shows "No readings", not 0/0/0. The recording Summary stops repeating the zones and the peak. Highlights are hidden when they can only restate the header (a single recording), and the two peak cards are merged into one. | §3 Detail, §6 |
+| **S15.6** | *(Danny, 2026-11-06)* A collection's header lists only a few of its events, alphabetically, and the rest fold away. Collections get an Events tab like the one parent events have. | Review |
 
 **Commit:** `refactor(detail): one detail view model, one cover flow`
+
+**As built:**
+- **S15.1:** `ui/detail/ItemDetailViewModel(ref)` holds what the three pages share: the header's subject (`DetailSubject`: title, own and shown cover, trail, clock, venue, and the event or collection itself), an event's tags with removal, and the cover.
+  - `BpmRecordViewModel` now builds on it, keeping what only a recording has: readings, editing, splitting, insights.
+  - `EventDetailViewModel` is deleted.
+  - The collection page no longer searches `LibraryViewModel.collections` for itself. Editing an event or collection still goes through the library's editor until S16.
+- **S15.2:**
+  - **Cover:** `CoverEditing` is the one picker, crop and clear flow for all three pages, over `ItemDetailViewModel.setCover`, `cropCover` and `clearCover`.
+  - **Text:** `SubjectText` is the one builder for subtitles and counts. `SubjectTextTest` covers it.
+- **S15.3:**
+  - **"See all N recordings":** a row in the Summary opens Compare split by recording.
+  - **Event lanes** in Compare open their event.
+  - **Chevrons:** every lane that opens something shows one; recording lanes always opened and showed nothing.
+- **S15.4:**
+  - **Dates:** an event's subtitle gives both ends of a multi-day span ("May 23, 2026, 9:11 PM – May 25, 2026, 5:18 AM"). Any time not in the reader's clock is named ("Los Angeles time"), by the rule recordings already used.
+  - **Counts and length** come from the analysis, so they follow the person filter and anything left out. An event's length is first start to last end ("1d 8h long"), matching the Timeline. It used to be the time measured, summed across people.
+  - **Collections** say "recorded" instead of giving a length. Their events come from what they hold when they name none (smart collections), and are listed with commas, wrapping, instead of "›" as if nested.
+  - **Durations** of a day or more read in days ("3d 3h").
+  - **Title:** the app bar shows nothing when the page has a header, so the title isn't there twice.
+- **S15.5:**
+  - **Exclusions:** "What's included" is kept per event and collection in settings (`ScopeExclusions.encode`/`decode`). The page shows "Leaving out N parts · Include everything" whenever something is left out.
+  - **No readings:** a recording with none says "No readings" instead of 0/0/0.
+  - **Single-recording pages:** Highlights and "Who was there" show only with more than one recording, and "Refine scope" only where there's something to leave out. The recording's Summary block no longer repeats the zones ("Time in range") or its length ("Measured").
+  - **One peak card**, naming the event only where the page spans several.
+- **S15.6:**
+  - **Header:** a collection names its first three events alphabetically, then "and N more". That link opens the Events tab; without a tab it would expand in place.
+  - **Events tab:** `CollectionEvents` lists the events its recordings are filed in (for "Concerts", the concerts), newest first, on the same `EventCard`s as an event's Events tab, and each one expands into whatever is inside it. The logic is in `CollectionEventRows`, which `CollectionEventRowsTest` covers. `EventChildren` and the new list share one `EventCards` composable.
+  - **Opening the tab:** the header reaches `AnalysisScreen` through `LocalOpenSubjectChildren`.
+- **Verified:** 809 unit tests pass, the app builds, and lint shows nothing new.
+  - **On the emulator, the collection "Bethany":** subtitle, events and counts, "See all 7 recordings" into Compare with chevrons, and an event lane opening its event.
+  - **"Mr Amsterdam":** leaving a recording out showed the notice and the counts followed; it was still there after leaving and coming back.
+  - **Griztronics:** the multi-day subtitle and length, and the header following a filter to one person.
+  - **A recording:** no Highlights, no repeated zones or length, and no "Refine scope".
+  - **"Concerts" (76 events):** three names and "and 73 more", which opened the Events tab. A concert there opened its page, and Back returned to the collection.
 
 ### S16 — Editors
 

@@ -342,6 +342,22 @@ class SettingsRepository(context: Context) {
         dataStore.edit { it[PreferencesKeys.BUILT_IN_PRESET_REVISION] = revision }
     }
 
+    /**
+     * What an event's or collection's page leaves out ("What's included"), encoded, under [scopeKey].
+     *
+     * Kept so a refinement survives leaving the page (S15.5). It was in memory only, so it was lost
+     * the moment you went back, and nothing on the page said it had been made.
+     */
+    fun scopeExclusions(scopeKey: String): Flow<String?> =
+        dataStore.data.map { it[stringPreferencesKey("scope_exclusions_$scopeKey")] }
+
+    suspend fun setScopeExclusions(scopeKey: String, encoded: String?) {
+        dataStore.edit {
+            val key = stringPreferencesKey("scope_exclusions_$scopeKey")
+            if (encoded.isNullOrEmpty()) it.remove(key) else it[key] = encoded
+        }
+    }
+
     companion object {
         /**
          * The settings a restore may change, by key, with what Settings calls them.

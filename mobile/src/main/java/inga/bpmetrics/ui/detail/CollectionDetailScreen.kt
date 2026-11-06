@@ -1,46 +1,37 @@
 package inga.bpmetrics.ui.detail
 
-import inga.bpmetrics.ui.feedback.Feedback
-import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import inga.bpmetrics.library.ItemRef
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.ScopeRef
 import inga.bpmetrics.ui.Routes
 import inga.bpmetrics.ui.analysis.AnalysisScreen
 import inga.bpmetrics.ui.analysis.AnalysisViewModel
+import inga.bpmetrics.ui.analysis.LocalOpenSubjectChildren
 import inga.bpmetrics.ui.analysis.shortDuration
 import inga.bpmetrics.ui.components.DeleteConfirmDialog
-import inga.bpmetrics.ui.components.rememberCoverPicker
-import inga.bpmetrics.ui.library.CollectionSummary
+import inga.bpmetrics.ui.feedback.Feedback
 import inga.bpmetrics.ui.library.LibraryViewModel
 
 /**
  * A collection, and its analysis.
  *
- * The third subject, and the one that was left behind: events and recordings got their cover as a
- * header while this still showed the counts card every scope falls back to. It is the same kind of
- * thing as the other two — §8.5 — and looking different said it was not.
+ * Its subject comes from [ItemDetailViewModel], like the other two pages. It used to borrow the
+ * library's view model and search its list of every collection, built with every rule resolved,
+ * for this one (S15.1). Editing still goes through the library's editor until S16.
  *
- * What a collection's header says is genuinely shorter, because a set has less to be: no window, no
- * venue, no clock of its own. What it does have is the events it names, which is also the way out
- * of the page — §2.4, no page is a dead end.
+ * What a collection's header says is shorter, because a collection has less to be: no window,
+ * venue or clock of its own. What it does have is the events it names, which is also the way out.
  */
 @Composable
 fun CollectionDetailScreen(
@@ -52,152 +43,127 @@ fun CollectionDetailScreen(
     onSave: (name: String, records: List<inga.bpmetrics.ui.analysis.AnalysisRecord>) -> Unit,
     onExport: () -> Unit
 ) {
-    val context = LocalContext.current
-
+    val subject: ItemDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        key = "collection-subject-$collectionId",
+        factory = ItemDetailViewModel.Factory(repository, ItemRef.Collection(collectionId))
+    )
     val analysis: AnalysisViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         key = "collection-$collectionId",
         factory = AnalysisViewModel.forScope(repository, ScopeRef.Collection(collectionId))
     )
 
-    val collections by libraryViewModel.collections.collectAsStateWithLifecycle()
-    val summary: CollectionSummary? = remember(collections, collectionId) {
-        collections.firstOrNull { it.collection.collectionId == collectionId }
-    }
+    val state by subject.subject.collectAsStateWithLifecycle()
+    val uiState by analysis.uiState.collectAsStateWithLifecycle()
+    val set = state.collection
 
-    var renaming by remember { mutableStateOf(false) }
-    var deleting by remember { mutableStateOf(false) }
-
-    var framingCover by remember { mutableStateOf(false) }
-    val pickCover = rememberCoverPicker { uri ->
-        libraryViewModel.setCover(context, inga.bpmetrics.library.ItemRef.Collection(collectionId), uri) { ok ->
-            // Straight into framing, while the choice is fresh.
-            if (ok) framingCover = true
-            else Feedback.failed("That image couldn't be read.")
+    // The events it names, else the events its recordings are in. A smart collection names none:
+    // its rule picks recordings, and the events are wherever they were filed.
+    val events = remember(state.trail, uiState.records) {
+        state.trail.ifEmpty {
+            uiState.records
+                .mapNotNull { r -> r.eventId?.let { it to r.eventName.ifBlank { r.eventLabel } } }
+                .distinctBy { it.first }
         }
     }
+
+    var editing by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    var framingCover by remember { mutableStateOf(false) }
 
     AnalysisScreen(
         navController = navController,
         viewModel = analysis,
         onOpenDrawer = {},
         onBack = onBack,
-        title = null,
         onSave = onSave,
         onExport = onExport,
+        onOpenEvent = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
         subjectHeader = {
-            if (summary != null) {
-                val uiState by analysis.uiState.collectAsStateWithLifecycle()
-                val set = summary.collection
+            if (set != null) {
                 SubjectHeader(
-                    title = set.displayName,
-                    subtitle = buildString {
-                        when {
-                            set.isFrozen -> append("Frozen — these numbers stay as they were")
-                            set.isSmart -> append("Smart — whatever matches, whenever you look")
-                            else -> append("A set you assembled")
-                        }
-                        if (uiState.totalActiveDurationMs > 0) {
-                            append(" · ${shortDuration(uiState.totalActiveDurationMs)}")
-                        }
-                    },
-                    cover = set.ownCover,
-                    // The events it names, which is also the way into them. A set has nothing
-                    // *above* it — it does not nest — so its trail points downward instead.
-                    trail = summary.events.map { it.eventId to it.displayName },
-                    lowBpm = uiState.minTrio.takeIf { !uiState.isEmpty },
-                    avgBpm = uiState.avgTrio.takeIf { !uiState.isEmpty },
-                    highBpm = uiState.maxTrio.takeIf { !uiState.isEmpty },
-                    counts = buildString {
-                        if (summary.eventCount > 0) {
-                            append("${summary.eventCount} event")
-                            if (summary.eventCount != 1) append("s")
-                            append(" · ")
-                        }
-                        append("${summary.recordCount} recording")
-                        if (summary.recordCount != 1) append("s")
-                        // The figure that used to head the zone breakdown. A total like the counts
-                        // beside it, not a heading for a chart.
-                        if (!uiState.isEmpty) {
-                            append(
-                                " · " +
-                                    inga.bpmetrics.ui.analysis.shortDuration(
-                                        uiState.totalActiveDurationMs
-                                    )
-                            )
-                        }
-                    },
+                    title = state.title,
+                    subtitle = SubjectText.collection(isFrozen = set.isFrozen, isSmart = set.isSmart),
+                    cover = state.cover,
+                    // The events it names, which is also the way into them: alphabetical, so a
+                    // name can be looked for, and only the first few. The whole list is the
+                    // Events tab, which "and N more" opens.
+                    trail = events.sortedBy { it.second.lowercase() },
+                    trailShown = HEADER_EVENTS,
+                    onShowWholeTrail = LocalOpenSubjectChildren.current,
+                    lowBpm = uiState.minTrio.takeIf { uiState.hasReadings },
+                    avgBpm = uiState.avgTrio.takeIf { uiState.hasReadings },
+                    highBpm = uiState.maxTrio.takeIf { uiState.hasReadings },
+                    counts = if (uiState.isEmpty) null else SubjectText.counts(
+                        recordings = uiState.recordCount,
+                        people = uiState.people.size,
+                        events = events.size,
+                        // Time recorded, not a length: a collection can span months of unrelated
+                        // nights, and "8 months long" would describe the gaps.
+                        length = "${shortDuration(uiState.totalActiveDurationMs)} recorded"
+                    ),
                     onOpenAncestor = { navController.navigate("${Routes.EVENT_DETAIL}/$it") },
+                    trailIsPath = false,
                     onEditCover = { framingCover = true }
                 )
             }
         },
         subjectActions = {
-            IconButton(onClick = { renaming = true }) {
-                Icon(Icons.Default.Edit, contentDescription = "Rename collection")
+            IconButton(onClick = { editing = true }) {
+                Icon(Icons.Default.Edit, contentDescription = "Edit collection")
             }
         },
-        // No overflow. Everything that was in it — the photo, pinning, deleting — is in the
-        // editor, which is where the rest of what a collection *is* already lives.
+        // The events it holds, as the same cards an event lists what is inside it with.
+        subjectChildren = if (events.isEmpty()) null else {
+            {
+                CollectionEvents(
+                    collectionId = collectionId,
+                    eventIds = events.map { it.first },
+                    libraryViewModel = libraryViewModel,
+                    onOpen = { navController.navigate("${Routes.EVENT_DETAIL}/$it") }
+                )
+            }
+        }
     )
 
-    if (framingCover && summary != null) {
-        inga.bpmetrics.ui.components.CoverCropDialog(
-            cover = summary.collection.ownCover,
-            onPick = pickCover,
-            title = "Frame ${summary.collection.displayName}",
-            previewContent = {
-                Text(
-                    summary.collection.displayName,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                    color = androidx.compose.ui.graphics.Color.White
-                )
-            },
-            onDismiss = { framingCover = false },
-            onConfirm = {
-                libraryViewModel.setCoverCrop(inga.bpmetrics.library.ItemRef.Collection(collectionId), it)
-                framingCover = false
-            },
-            // Stays open: removing is usually the first half of replacing.
-            onRemove = { libraryViewModel.clearCover(context, inga.bpmetrics.library.ItemRef.Collection(collectionId)) }
+    if (set != null) {
+        CoverEditing(
+            viewModel = subject,
+            ownCover = state.ownCover,
+            title = "Frame ${state.title}",
+            previewName = state.title,
+            framing = framingCover,
+            onFraming = { framingCover = it }
         )
     }
 
-    if (renaming && summary != null) {
+    if (editing && set != null) {
         val filterOptions by libraryViewModel.filterOptions.collectAsStateWithLifecycle()
         inga.bpmetrics.ui.library.CollectionEditorDialog(
-            collection = summary.collection,
-            recordCount = summary.recordCount,
+            collection = set,
+            recordCount = uiState.recordCount,
             filterOptions = filterOptions,
             chipsOf = { libraryViewModel.chipsOf(it, filterOptions) },
             onRename = { libraryViewModel.renameCollection(collectionId, it) },
             onSetRule = { libraryViewModel.setCollectionRule(collectionId, it) },
             onMakeStatic = {
-                libraryViewModel.materialiseCollection(collectionId) { message ->
-                    Feedback.say(message)
-                }
+                libraryViewModel.materialiseCollection(collectionId) { message -> Feedback.say(message) }
             },
-            onThaw = if (!summary.collection.isFrozen) null else {
-                {
-                    libraryViewModel.thawCollection(collectionId) { message ->
-                        Feedback.say(message)
-                    }
-                }
+            onThaw = if (!set.isFrozen) null else {
+                { libraryViewModel.thawCollection(collectionId) { message -> Feedback.say(message) } }
             },
             onTogglePin = { libraryViewModel.setCollectionPinned(collectionId, it) },
-            onDelete = { renaming = false; deleting = true },
-            onDismiss = { renaming = false }
+            onDelete = { editing = false; deleting = true },
+            onDismiss = { editing = false }
         )
     }
 
-    if (deleting && summary != null) {
+    if (deleting && set != null) {
+        val count = uiState.recordCount
         DeleteConfirmDialog(
-            title = "Delete ${summary.collection.displayName}?",
-            // The one delete in the app that removes no data, and people reasonably assume
-            // otherwise from every other one.
-            message = "This removes the grouping only. Its ${summary.recordCount} recording" +
-                "${if (summary.recordCount == 1) "" else "s"} stay exactly where they are on the " +
-                "timeline.",
+            title = "Delete ${state.title}?",
+            // The one delete in the app that removes no data, and people reasonably assume otherwise.
+            message = "This removes the grouping only. Its $count recording" +
+                "${if (count == 1) "" else "s"} stay exactly where they are on the timeline.",
             onDismiss = { deleting = false },
             onConfirm = {
                 deleting = false
@@ -207,3 +173,6 @@ fun CollectionDetailScreen(
         )
     }
 }
+
+/** How many of a collection's events its header names before "and N more". */
+private const val HEADER_EVENTS = 3
