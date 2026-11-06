@@ -15,7 +15,7 @@ class RenderQueueReportingTest {
         val job = RenderQueueManager.addJob(
             recordId = 1,
             recordTitle = title,
-            config = VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig()),
+            request = ExportRequest.Video(ExportContent(emptyList(), 0L, 60_000L), ExportPreset()),
             targetUri = null,
             recordIds = listOf(1L)
         )

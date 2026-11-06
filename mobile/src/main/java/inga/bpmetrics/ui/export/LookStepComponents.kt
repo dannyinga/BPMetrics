@@ -654,7 +654,7 @@ private fun renderPreviewFrame(
     // Clock-aligned whenever there is footage, matching what the export will do. Elapsed alignment
     // starts every recording at 0:00, which is only right when there is no video to agree with.
     // Always clock-aligned, matching the export.
-    val aligned = ImageExporter.alignRecords(records, false)
+    val aligned = ImageExporter.alignRecords(records)
 
     // The clip's own window on the shared timeline, worked out by the clip itself so this and the
     // render cannot reach different answers. Scrubbing moves through the *clip*, not through the
@@ -670,25 +670,18 @@ private fun renderPreviewFrame(
     // Where in the video file that instant falls, which is not the same number.
     val intoClipMs = (spanMs * at).toLong()
 
-    val config = preset.applyTo(
-        VideoExporter.VideoExportConfig(
-            imageConfig = ImageExporter.ImageExportConfig(
-                startTimeMs = windowStartMs,
-                endTimeMs = windowEndMs.coerceAtLeast(windowStartMs + 1000L),
-                customRecordColors = colours,
-                recordPhotos = photos,
-                graphTitle = title,
-                alignByElapsedTime = false,
-                // The footage's own clock, as the render reads it.
-                clipZoneId = clip?.zoneId
-            ),
-            records = records
-        )
-    ).imageConfig.copy(
-        width = previewWidth,
-        height = previewHeight,
-        alignByElapsedTime = false
+    // The same content and look the render gets, at preview size.
+    val content = inga.bpmetrics.export.ExportContent(
+        records = records,
+        startMs = windowStartMs,
+        endMs = windowEndMs.coerceAtLeast(windowStartMs + 1000L),
+        title = title,
+        colours = colours,
+        photos = photos,
+        // The footage's own clock, as the render reads it.
+        clipZoneId = clip?.zoneId
     )
+    val look = preset.copy(width = previewWidth, height = previewHeight)
 
     val bitmap = createBitmap(previewWidth, previewHeight)
     val canvas = Canvas(bitmap)
@@ -715,9 +708,9 @@ private fun renderPreviewFrame(
     ImageExporter.renderAlignedRecordsOnCanvas(
         canvas = canvas,
         aligned = aligned,
-        config = config,
+        content = content,
+        look = look,
         currentTimeMs = playheadMs,
-        windowSizeMs = preset.windowSizeMs,
         // Drawn where it will actually sit, so the preview shows the export rather than a
         // full-frame graph with an unrelated outline over it. Re-rendering on every drag frame
         // is why the outline itself is drawn by the preview widget and not by this.

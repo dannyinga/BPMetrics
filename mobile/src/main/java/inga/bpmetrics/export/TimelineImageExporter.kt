@@ -43,29 +43,24 @@ object TimelineImageExporter {
     /** A stretch of the window that was one event, marked along the top of the plot. */
     data class Section(val label: String, val startMs: Long, val endMs: Long)
 
+    /**
+     * One image: what it shows, and [look], the preset it's drawn in.
+     *
+     * The look used to be fifteen fields here copied out of the preset one by one, the same
+     * hand-copy that made the video path drift (Model and Export Consolidation §6). The canvas
+     * size, the colours and every switch are read from the preset itself now.
+     */
     data class Spec(
-        val width: Int,
-        val height: Int,
         val title: String?,
         val windowStartWallClockMs: Long,
         val windowEndWallClockMs: Long,
         val series: List<Series>,
         val sections: List<Section> = emptyList(),
-        val showTitle: Boolean = true,
-        val showGrid: Boolean = true,
-        val showLabels: Boolean = true,
-        val showStats: Boolean = true,
-        val lowBpmColor: Int = inga.bpmetrics.core.BpmPalette.LOW,
-        val highBpmColor: Int = inga.bpmetrics.core.BpmPalette.HIGH,
-        val labelsColor: Int = inga.bpmetrics.core.BpmPalette.ON_SURFACE,
-        val gridColor: Int = inga.bpmetrics.core.BpmPalette.GRID,
-        val backgroundOpacity: Int = 100,
         val timeZoneId: String = ZoneId.systemDefault().id,
-        /** See [ExportPreset.showWordmark]. Off by default; the preset carries the choice. */
-        val showWordmark: Boolean = false,
-        val wordmarkCorner: WordmarkCorner = WordmarkCorner.BOTTOM_RIGHT,
-        val wordmarkOpacity: Int = 55
+        val look: ExportPreset = ExportPreset()
     ) {
+        val width: Int get() = look.width
+        val height: Int get() = look.height
         val durationMs: Long get() = (windowEndWallClockMs - windowStartWallClockMs).coerceAtLeast(1L)
     }
 
@@ -92,7 +87,7 @@ object TimelineImageExporter {
 
         // Nothing is drawn under this. A fully transparent panel is the point of the setting: the
         // picture is meant to drop onto footage in something that composites.
-        val bgAlpha = (spec.backgroundOpacity * 255 / 100).coerceIn(0, 255)
+        val bgAlpha = (spec.look.backgroundOpacity * 255 / 100).coerceIn(0, 255)
         if (bgAlpha > 0) {
             paint.resetForExport()
             paint.color = inga.bpmetrics.core.BpmPalette.SURFACE
@@ -106,7 +101,7 @@ object TimelineImageExporter {
         val margin = 48f * scale
         var top = margin
 
-        if (spec.showTitle && !spec.title.isNullOrBlank()) {
+        if (spec.look.showTitle && !spec.title.isNullOrBlank()) {
             top = drawHeader(canvas, spec, zone, scale, margin, top, paint)
         }
 
@@ -115,7 +110,7 @@ object TimelineImageExporter {
         //
         // Measured before the plot is sized, because how many rows it needs depends on how many
         // columns fit — four people on a landscape canvas are two rows, not four.
-        val statsLayout = if (spec.showStats) {
+        val statsLayout = if (spec.look.showCurrentStats) {
             statsLayout(spec, drawable, margin, scale, paint)
         } else {
             null
@@ -124,11 +119,11 @@ object TimelineImageExporter {
             val rows = (drawable.size + layout.columns - 1) / layout.columns
             layout.rowHeight * rows + 26f * scale
         } ?: 0f
-        val axisHeight = if (spec.showLabels) 46f * scale else 12f * scale
+        val axisHeight = if (spec.look.showLabels) 46f * scale else 12f * scale
         val sectionHeight = if (spec.sections.size > 1) 40f * scale else 0f
 
         val plot = RectF(
-            margin + (if (spec.showLabels) 96f * scale else 0f),
+            margin + (if (spec.look.showLabels) 96f * scale else 0f),
             top + sectionHeight,
             spec.width - margin,
             spec.height - margin - statsHeight - axisHeight
@@ -140,20 +135,20 @@ object TimelineImageExporter {
         if (spec.sections.size > 1) {
             drawSections(canvas, spec, plot, top, sectionHeight, scale, paint)
         }
-        if (spec.showGrid || spec.showLabels) {
+        if (spec.look.showGrid || spec.look.showLabels) {
             drawGridAndScale(canvas, spec, plot, range, scale, paint)
         }
         drawable.forEach { series ->
             drawCurve(canvas, spec, plot, range, series, drawable.size == 1, scale, paint)
         }
-        if (spec.showLabels) {
+        if (spec.look.showLabels) {
             drawTimeAxis(canvas, spec, plot, zone, scale, paint)
         }
         if (statsLayout != null) {
             drawStats(canvas, spec, drawable, plot.bottom + axisHeight, margin, scale, statsLayout, paint)
         }
 
-        if (spec.showWordmark) {
+        if (spec.look.showWordmark) {
             // Inside the plot, for the same reason as the video renderer: the chart is what anyone
             // is looking at, and a mark in the corner of the picture is in the part nobody reads.
             //
@@ -164,9 +159,9 @@ object TimelineImageExporter {
             Wordmark.draw(
                 canvas = canvas,
                 bounds = plot,
-                corner = spec.wordmarkCorner,
-                opacityPercent = spec.wordmarkOpacity,
-                color = spec.labelsColor,
+                corner = spec.look.wordmarkCorner,
+                opacityPercent = spec.look.wordmarkOpacity,
+                color = spec.look.labelsColor,
                 scale = scale,
                 paint = paint
             )
@@ -186,7 +181,7 @@ object TimelineImageExporter {
         paint: Paint
     ): Float {
         paint.resetForExport()
-        paint.color = spec.labelsColor
+        paint.color = spec.look.labelsColor
         paint.textSize = 46f * scale
         paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
         canvas.drawText(spec.title.orEmpty(), margin, top + 40f * scale, paint)
@@ -245,7 +240,7 @@ object TimelineImageExporter {
             paint.resetForExport()
             // Alternating weight rather than colour: the curves already own colour, and a second
             // colour scheme competing with them makes both harder to read.
-            paint.color = spec.labelsColor
+            paint.color = spec.look.labelsColor
             paint.alpha = if (index % 2 == 0) 38 else 20
             canvas.drawRoundRect(
                 RectF(x0, bandTop, x1 - 2f * scale, bandBottom),
@@ -262,7 +257,7 @@ object TimelineImageExporter {
             // A hairline down the plot, so a section boundary is findable against the curve too.
             if (index > 0) {
                 paint.resetForExport()
-                paint.color = spec.gridColor
+                paint.color = spec.look.gridColor
                 paint.strokeWidth = 1.5f * scale
                 canvas.drawLine(x0, plot.top, x0, plot.bottom, paint)
             }
@@ -282,15 +277,15 @@ object TimelineImageExporter {
             val bpm = range.min + (range.span * i / lines)
             val y = plot.bottom - plot.height() * (i.toFloat() / lines)
 
-            if (spec.showGrid) {
+            if (spec.look.showGrid) {
                 paint.resetForExport()
-                paint.color = spec.gridColor
+                paint.color = spec.look.gridColor
                 paint.strokeWidth = 1.5f * scale
                 canvas.drawLine(plot.left, y, plot.right, y, paint)
             }
-            if (spec.showLabels) {
+            if (spec.look.showLabels) {
                 paint.resetForExport()
-                paint.color = spec.labelsColor
+                paint.color = spec.look.labelsColor
                 paint.alpha = 190
                 paint.textSize = 24f * scale
                 paint.textAlign = Paint.Align.RIGHT
@@ -351,7 +346,7 @@ object TimelineImageExporter {
         if (colourByValue) {
             paint.shader = LinearGradient(
                 0f, plot.bottom, 0f, plot.top,
-                intArrayOf(spec.lowBpmColor, blend(spec.lowBpmColor, spec.highBpmColor), spec.highBpmColor),
+                intArrayOf(spec.look.lowBpmColor, blend(spec.look.lowBpmColor, spec.look.highBpmColor), spec.look.highBpmColor),
                 floatArrayOf(0f, 0.5f, 1f),
                 Shader.TileMode.CLAMP
             )
@@ -379,7 +374,7 @@ object TimelineImageExporter {
         val ticks = if (multiDay) 4 else 6
 
         paint.resetForExport()
-        paint.color = spec.labelsColor
+        paint.color = spec.look.labelsColor
         paint.alpha = 190
         paint.textSize = 22f * scale
         paint.textAlign = Paint.Align.CENTER
@@ -428,7 +423,7 @@ object TimelineImageExporter {
             paint.color = entry.colorArgb
             canvas.drawCircle(x + 8f * scale, rowY - 8f * scale, 8f * scale, paint)
 
-            paint.color = spec.labelsColor
+            paint.color = spec.look.labelsColor
             paint.textSize = NAME_SIZE * scale
             paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
             canvas.drawText(ellipsize(entry.label, layout.nameWidth, paint), x + 24f * scale, rowY, paint)
@@ -461,7 +456,7 @@ object TimelineImageExporter {
     ): Float {
         paint.typeface = android.graphics.Typeface.DEFAULT
         paint.textSize = LABEL_SIZE * scale
-        paint.color = spec.labelsColor
+        paint.color = spec.look.labelsColor
         paint.alpha = 130
         canvas.drawText(label, x, y, paint)
         val labelWidth = paint.measureText(label)

@@ -101,11 +101,11 @@ object VideoExporter {
     }
 
     /** The frame rate a render will use: the footage's when asked for and readable, else the set one. */
-    private fun renderFrameRate(context: Context, config: VideoExportConfig): Int =
-        if (config.matchSourceFrameRate && config.overlayVideoUri != null) {
-            getVideoFrameRate(context, config.overlayVideoUri)?.coerceIn(1, 120) ?: config.frameRate
+    private fun renderFrameRate(context: Context, request: ExportRequest.Video): Int =
+        if (request.preset.matchSourceFrameRate && request.clip != null) {
+            getVideoFrameRate(context, request.clip)?.coerceIn(1, 120) ?: request.preset.frameRate
         } else {
-            config.frameRate
+            request.preset.frameRate
         }
 
     /**
@@ -114,8 +114,8 @@ object VideoExporter {
      * The render runs it first, and so does Retry before queueing a job again, so a job that
      * failed for want of space isn't put back only to fail the same way (Audit §3 Export).
      */
-    fun preflightProblem(context: Context, config: VideoExportConfig): String? {
-        config.overlayVideoUri?.let { clip ->
+    fun preflightProblem(context: Context, request: ExportRequest.Video): String? {
+        request.clip?.let { clip ->
             val readable = runCatching {
                 context.contentResolver.openFileDescriptor(clip, "r")?.use { true } ?: false
             }.getOrDefault(false)
@@ -124,10 +124,10 @@ object VideoExporter {
                     "BPMetrics can no longer see it."
             }
         }
-        val durationMs = (config.imageConfig.endTimeMs - config.imageConfig.startTimeMs).coerceAtLeast(1000L)
+        val durationMs = (request.content.endMs - request.content.startMs).coerceAtLeast(1000L)
         val sized = sizing(
-            config.imageConfig.width, config.imageConfig.height, renderFrameRate(context, config),
-            hasOverlay = config.overlayVideoUri != null, durationMs = durationMs
+            request.preset.width, request.preset.height, renderFrameRate(context, request),
+            hasOverlay = request.clip != null, durationMs = durationMs
         )
         val freeBytes = context.cacheDir.usableSpace
         if (freeBytes < sized.requiredFreeBytes) {
@@ -140,52 +140,26 @@ object VideoExporter {
     private const val TAG = "VideoExporter"
 
     /**
-     * Configuration for video export, including speed and overlay positioning.
-     */
-    data class VideoExportConfig(
-        val imageConfig: ImageExporter.ImageExportConfig,
-        val windowSizeMs: Long = 30000L,
-        val frameRate: Int = 30,
-        /**
-         * Take the frame rate from the footage instead of [frameRate].
-         *
-         * Resolved per clip at render time rather than once for the batch, because a set of clips
-         * off one phone can still mix 30 and 60 — a slow-motion shot among ordinary ones is the
-         * usual way. Re-encoding 60fps footage to 30 throws away half the frames it was filmed for.
-         */
-        val matchSourceFrameRate: Boolean = false,
-        val overlayBitRate: Int = 8000000,
-        val regularBitRate: Int = 2500000,
-        val overlayVideoUri: Uri? = null,
-        val graphRect: RectF = RectF(0f, 0f, 1f, 1f),
-        val lockAspectRatio: Boolean = true,
-        val syncOffsetMs: Long = 0L,
-        /**
-         * When [overlayVideoUri] started filming, if the caller already knows.
-         *
-         * The clip picker resolves this once, shows it, and cuts the preview against it. Passing it
-         * down means the render cannot reach a different answer than the preview did — the two
-         * working it out separately is precisely how they came to disagree.
-         */
-        val overlayStartedAtMs: Long? = null,
-        val records: List<BpmRecordWithPoints> = emptyList()
-    )
-
-    /**
-     * Exports the BPM record as a video using Media3 Transformer.
+     * Renders a video with Media3 Transformer: the curves over the clip, or over a plain
+     * background without one.
+     *
+     * The first recording in the request is the one the single-curve path draws and the staging
+     * file is named after. It comes from the request, so the render service no longer fetches it
+     * again by id.
      */
     suspend fun exportVideo(
         context: Context,
-        record: BpmRecordWithPoints,
-        config: VideoExportConfig,
+        request: ExportRequest.Video,
         onProgress: (Float) -> Unit
     ): File = withContext(Dispatchers.IO) {
         // The clock the footage was filmed on, for the time printed on the frame. Read here as
         // well as when the clip was found, because a job restored from the queue doesn't carry it.
-        val config = config.overlayVideoUri
-            ?.takeIf { config.imageConfig.clipZoneId == null }
-            ?.let { clip -> config.copy(imageConfig = config.imageConfig.copy(clipZoneId = ClipZone.of(context, clip))) }
-            ?: config
+        val request = request.clip
+            ?.takeIf { request.content.clipZoneId == null }
+            ?.let { clip -> request.copy(content = request.content.copy(clipZoneId = ClipZone.of(context, clip))) }
+            ?: request
+        val record = request.content.records.firstOrNull()
+            ?: throw IOException("There's nothing to draw: no recordings came with this export.")
 
         // 1. Setup File
         val sanitizedTitle = record.metadata.title.replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(" ", "_")
@@ -194,16 +168,16 @@ object VideoExporter {
         if (outputFile.exists()) outputFile.delete()
         outputFile.parentFile?.mkdirs()
 
-        val startTimeMs = config.imageConfig.startTimeMs
-        val endTimeMs = config.imageConfig.endTimeMs
+        val startTimeMs = request.content.startMs
+        val endTimeMs = request.content.endMs
         val totalDataDurationMs = (endTimeMs - startTimeMs).coerceAtLeast(1000L)
 
         // Place every record on one timeline up front. Doing it here rather than per frame keeps
         // the overlay cheap, and — more importantly — means the video is clipped against exactly
         // the same origin the graph is drawn against, so all records stay in sync with it.
-        val exportRecords = config.records.ifEmpty { listOf(record) }
+        val exportRecords = request.content.records.ifEmpty { listOf(record) }
         val alignedRecords = if (exportRecords.size > 1) {
-            ImageExporter.alignRecords(exportRecords, config.imageConfig.alignByElapsedTime)
+            ImageExporter.alignRecords(exportRecords)
         } else {
             null
         }
@@ -214,30 +188,33 @@ object VideoExporter {
         val inputMimeType: String?
 
         // 2. Handle Background and Dynamic Bitrate based on output dimensions and fps
-        val width = config.imageConfig.width
-        val height = config.imageConfig.height
+        val width = request.preset.width
+        val height = request.preset.height
         // Matched to the footage when asked for, falling back to the stated rate when the file will
         // not say — a clip whose metadata is unreadable is not a reason to refuse the export.
-        val fps = renderFrameRate(context, config)
+        val fps = renderFrameRate(context, request)
 
         // The bitrate and the size, by the same sum step 4 shows before anything is queued.
-        val sized = sizing(width, height, fps, hasOverlay = config.overlayVideoUri != null, durationMs = totalDataDurationMs)
+        val sized = sizing(width, height, fps, hasOverlay = request.clip != null, durationMs = totalDataDurationMs)
         val targetBitrate = sized.bitrate
 
         // Refuse a render there is plainly no room for, or whose clip has gone, rather than
         // discovering it part way and leaving the phone worse off than before it started.
-        preflightProblem(context, config)?.let { throw IOException(it) }
+        preflightProblem(context, request)?.let { throw IOException(it) }
 
-        if (config.overlayVideoUri != null) {
-            mediaUri = config.overlayVideoUri
+        if (request.clip != null) {
+            mediaUri = request.clip
             inputMimeType = context.contentResolver.getType(mediaUri)
             isInputImage = inputMimeType?.startsWith("image/") == true ||
                     mediaUri.path?.lowercase()?.let { it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".png") } == true
         } else {
             // What a video with no footage behind it is drawn on. The app's surface rather than
             // black, so an export with nothing filmed looks like it came from this app instead of
-            // from a default.
-            val backdrop = createBitmap(128, 128, Bitmap.Config.ARGB_8888).apply {
+            // from a default. The video's own shape at a tenth of its size: a square one was fitted
+            // into a wide video with black bars either side of it.
+            val backdrop = createBitmap(
+                (width / 10).coerceAtLeast(16), (height / 10).coerceAtLeast(16), Bitmap.Config.ARGB_8888
+            ).apply {
                 eraseColor(inga.bpmetrics.core.BpmPalette.SURFACE)
             }
             val tempImageFile = File(context.cacheDir, "export_backdrop.png")
@@ -261,8 +238,8 @@ object VideoExporter {
                         context,
                         mediaUri,
                         timelineOriginMs,
-                        config.syncOffsetMs,
-                        config.overlayStartedAtMs
+                        request.preset.syncOffsetMs,
+                        request.clipStartedAtMs
                     )
                     val videoStartRelativeMs = alignment.first
                     val videoEndRelativeMs = alignment.second
@@ -282,10 +259,14 @@ object VideoExporter {
             }
             .build()
 
+        // Where the graph sits: the preset's frame for this many curves. The request's preset has
+        // this clip's own framing baked in already, so this is the frame the preview showed.
+        val graphRect = request.preset.frameFor(exportRecords.size).toRectF()
+
         // 4. Effects
         val canvasOverlay = object : BitmapOverlay() {
-            private val overlaySize = androidx.media3.common.util.Size(config.imageConfig.width, config.imageConfig.height)
-            private val reusableBitmap = createBitmap(config.imageConfig.width, config.imageConfig.height, Bitmap.Config.ARGB_8888)
+            private val overlaySize = androidx.media3.common.util.Size(request.preset.width, request.preset.height)
+            private val reusableBitmap = createBitmap(request.preset.width, request.preset.height, Bitmap.Config.ARGB_8888)
             private val reusableCanvas = Canvas(reusableBitmap)
 
             override fun getTextureSize(presentationTimeUs: Long) = overlaySize
@@ -297,19 +278,19 @@ object VideoExporter {
                     ImageExporter.renderAlignedRecordsOnCanvas(
                         canvas = reusableCanvas,
                         aligned = alignedRecords,
-                        config = config.imageConfig,
+                        content = request.content,
+                        look = request.preset,
                         currentTimeMs = currentRecordAbsoluteTimeMs,
-                        windowSizeMs = config.windowSizeMs,
-                        graphRect = config.graphRect
+                        graphRect = graphRect
                     )
                 } else {
                     ImageExporter.renderOnCanvas(
                         canvas = reusableCanvas,
                         record = record,
-                        config = config.imageConfig,
+                        content = request.content,
+                        look = request.preset,
                         currentTimeMs = currentRecordAbsoluteTimeMs,
-                        windowSizeMs = config.windowSizeMs,
-                        graphRect = config.graphRect
+                        graphRect = graphRect
                     )
                 }
                 return reusableBitmap
@@ -323,8 +304,8 @@ object VideoExporter {
         effectList.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
         
         effectList.add(Presentation.createForWidthAndHeight(
-            config.imageConfig.width,
-            config.imageConfig.height,
+            request.preset.width,
+            request.preset.height,
             Presentation.LAYOUT_SCALE_TO_FIT
         ))
         effectList.add(OverlayEffect(listOf(canvasOverlay)))

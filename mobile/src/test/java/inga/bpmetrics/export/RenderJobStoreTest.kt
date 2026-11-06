@@ -30,6 +30,69 @@ class RenderJobStoreTest {
         maxDataPoint = null
     )
 
+    private fun request(records: List<BpmRecordWithPoints> = emptyList()) = ExportRequest.Video(
+        content = ExportContent(records = records, startMs = 0L, endMs = 60_000L),
+        preset = ExportPreset()
+    )
+
+    /** A render_jobs table in memory, enough to put a job through [RenderJobStore] and back. */
+    private class FakeDao : inga.bpmetrics.library.RenderJobDao {
+        val rows = linkedMapOf<String, inga.bpmetrics.library.RenderJobEntity>()
+        override suspend fun getAll() = rows.values.sortedBy { it.queuedAt }
+        override suspend fun upsert(job: inga.bpmetrics.library.RenderJobEntity) { rows[job.jobId] = job }
+        override suspend fun upsertAll(jobs: List<inga.bpmetrics.library.RenderJobEntity>) = jobs.forEach { rows[it.jobId] = it }
+        override suspend fun delete(jobId: String) { rows.remove(jobId) }
+        override suspend fun deleteMissing(keep: List<String>) { rows.keys.retainAll(keep.toSet()) }
+        override suspend fun deleteAll() = rows.clear()
+        override suspend fun markInterrupted(rendering: String, failed: String, reason: String) {
+            rows.replaceAll { _, row -> if (row.status == rendering) row.copy(status = failed, error = reason) else row }
+        }
+    }
+
+    @Test
+    fun `a queued job comes back from storage with exactly the look it was queued with`() = kotlinx.coroutines.test.runTest {
+        // Audit #25: the job was stored through `ExportPreset.from(config)`, which didn't know about
+        // the readout pills, the clock, the wordmark or per-cast framing. Killed before it ran, it
+        // rendered with defaults. Now the preset itself is stored.
+        val look = ExportPreset(
+            name = "Story · minimal",
+            width = 1080, height = 1920,
+            pillShowPhoto = false, pillShowName = false, pillScale = 1.4f, pillCorner = PillCorner.TOP_LEFT,
+            clockMode = ClockMode.ELAPSED,
+            showWordmark = true, wordmarkCorner = WordmarkCorner.TOP_LEFT, wordmarkOpacity = 80,
+            graphLeft = 0.1f, graphTop = 0.6f, graphRight = 0.9f, graphBottom = 0.95f,
+            syncOffsetMs = -1_250L, frameRate = 60
+        )
+        val job = RenderJob(
+            recordId = 7,
+            recordTitle = "Subtronics · 21:04",
+            request = ExportRequest.Video(
+                content = ExportContent(
+                    records = listOf(record(7)), startMs = 12_000L, endMs = 48_000L,
+                    title = "Subtronics | Lost Lands", colours = mapOf(7L to -65536)
+                ),
+                preset = look,
+                clip = null,
+                clipStartedAtMs = 1_700_000_012_000L
+            ),
+            targetUri = null,
+            recordIds = listOf(7L),
+            presetName = "Story · minimal"
+        )
+        val store = RenderJobStore(FakeDao())
+
+        store.save(job)
+        val restored = store.restore().single()
+
+        assertEquals(look, restored.request.preset)
+        assertEquals(12_000L, restored.request.content.startMs)
+        assertEquals(48_000L, restored.request.content.endMs)
+        assertEquals("Subtronics | Lost Lands", restored.request.content.title)
+        assertEquals(mapOf(7L to -65536), restored.request.content.colours)
+        assertEquals(1_700_000_012_000L, restored.request.clipStartedAtMs)
+        assertEquals(listOf(7L), restored.recordIds)
+    }
+
     @Test
     fun `record ids survive the round trip`() {
         val ids = listOf(7L, 8L, 900L)
@@ -63,17 +126,14 @@ class RenderJobStoreTest {
         val job = RenderJob(
             recordId = 7,
             recordTitle = "Subtronics",
-            config = VideoExporter.VideoExportConfig(
-                imageConfig = ImageExporter.ImageExportConfig(),
-                records = emptyList()
-            ),
+            request = request(),
             targetUri = null,
             recordIds = listOf(7L, 8L)
         )
 
         val filled = RenderJobStore.rehydrate(job, listOf(record(7), record(8), record(99)))
 
-        assertEquals(listOf(7L, 8L), filled?.config?.records?.map { it.metadata.recordId })
+        assertEquals(listOf(7L, 8L), filled?.request?.content?.records?.map { it.metadata.recordId })
     }
 
     @Test
@@ -83,10 +143,7 @@ class RenderJobStoreTest {
         val job = RenderJob(
             recordId = 7,
             recordTitle = "Subtronics",
-            config = VideoExporter.VideoExportConfig(
-                imageConfig = ImageExporter.ImageExportConfig(),
-                records = emptyList()
-            ),
+            request = request(),
             targetUri = null,
             recordIds = listOf(7L, 8L)
         )
@@ -100,10 +157,7 @@ class RenderJobStoreTest {
         val job = RenderJob(
             recordId = 7,
             recordTitle = "Subtronics",
-            config = VideoExporter.VideoExportConfig(
-                imageConfig = ImageExporter.ImageExportConfig(),
-                records = loaded
-            ),
+            request = request(loaded),
             targetUri = null,
             recordIds = listOf(7L)
         )
@@ -116,7 +170,7 @@ class RenderJobStoreTest {
         fun job(status: RenderStatus) = RenderJob(
             recordId = 7,
             recordTitle = "Subtronics",
-            config = VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig()),
+            request = request(),
             targetUri = null,
             status = status
         )
@@ -134,7 +188,7 @@ class RenderJobStoreTest {
         val job = RenderJob(
             recordId = 7,
             recordTitle = "Subtronics · 21:04",
-            config = VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig()),
+            request = request(),
             targetUri = null,
             recordIds = listOf(7L, 8L),
             presetName = "Story 9:16",
@@ -149,7 +203,7 @@ class RenderJobStoreTest {
         val job = RenderJob(
             recordId = 7,
             recordTitle = "Subtronics",
-            config = VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig()),
+            request = request(),
             targetUri = null,
             recordIds = listOf(7L),
             presetName = "Landscape 1080p"

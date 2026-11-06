@@ -472,6 +472,27 @@ Ambient mode and a tile are post-1.0.
 
 **Commit:** `refactor(export): one look, one content, two kinds of request`
 
+**As built:**
+- **S13.1:** `export/ExportRequest.kt` holds `ExportContent` (records, window, title, colours, photos, the clip's zone) and `ExportRequest.Video` (content, preset, clip, clip start).
+  - **Departure: no `ExportRequest.Image`.** The timeline image's content is already-laid-out series, built by the view model per image, so its `Spec` keeps its content fields and takes the preset as `look` (below).
+- **S13.2:** `ImageExportConfig` and `VideoExportConfig` are gone, and so are `ExportPreset.applyTo` and `ExportPreset.from`.
+  - **Video-frame renderer:** takes `(content, look)`. Inside, a small `Frame(content, look, zoneId)` carries them and the resolved zone; nothing is copied.
+  - **Video render:** takes an `ExportRequest.Video`.
+  - **Timeline image `Spec`:** the fifteen copied look fields became `look: ExportPreset`.
+  - **Config builders:** the view model's `buildConfig` (now `buildRequest`) and the Look preview's own copy build content and read the preset. The third builder was the job store's, below.
+  - **Framing:** the request's preset is fully resolved for that video. The clip's framing is baked in and the per-cast pins cleared, so `frameFor` answers the frame it uses and a stored job frames exactly as queued.
+- **S13.3:** a job stores `request.preset.toJson()` and content columns, with no schema change.
+  - **Round trip:** `RenderJobStoreTest` saves and restores a job through a fake DAO. Its readout pills, clock mode, wordmark, framing, sync offset and frame rate come back identical (Audit #25).
+  - **Not stored:** photos, as before.
+- **S13.4:** `headerXPercent`, `overlayBitRate` and `regularBitRate` are gone from the preset; the renderers read none of them, and the encoder sizes each render itself. The unreachable elapsed-time alignment is gone too.
+  - **Old presets:** JSON with those keys still opens and doesn't carry them on (tested).
+  - **Render service:** takes the primary recording from the request instead of fetching it again by id.
+- **Also fixed: the plain background.** A video with no footage was drawn on a 128×128 backdrop, fitted into a 16:9 video with black bars either side. It's now the video's own shape.
+- **Verified on the emulator:**
+  - **Preview and render agree:** a no-footage video of Mr Amsterdam matched the preview (framing, both readout pills, clock, wordmark), and its background fills the frame.
+  - **Image:** an image export renders from the preset.
+  - **Clean-up:** the test files were deleted.
+
 ### S14 — Renderers that agree with each other
 
 | Ticket | Work | Plan / Audit |

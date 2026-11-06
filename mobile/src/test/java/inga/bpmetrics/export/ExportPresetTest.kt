@@ -45,103 +45,10 @@ class ExportPresetTest {
         maxDataPoint = null
     )
 
-    /** A config with every content-specific field populated, so stripping has something to fail at. */
-    private fun contentHeavyConfig() = VideoExporter.VideoExportConfig(
-        imageConfig = ImageExporter.ImageExportConfig(
-            width = 1080,
-            height = 1920,
-            // Deliberately odd values. Round numbers collide with the bitrate defaults — the
-            // first version of the stripping test failed because "2500000" contains "500000".
-            startTimeMs = 987_654_321L,
-            endTimeMs = 876_543_219L,
-            customRecordColors = mapOf(7L to 0xFFFF0000.toInt()),
-            graphTitle = "Subtronics 2026",
-            showGrid = false,
-            headerXPercent = 0.4f
-        ),
-        windowSizeMs = 45_000L,
-        frameRate = 60,
-        overlayVideoUri = android.net.Uri.parse("content://media/external/video/media/42"),
-        graphRect = RectF(0.1f, 0.2f, 0.9f, 0.8f),
-        lockAspectRatio = false,
-        syncOffsetMs = 1234L,
-        records = listOf(record(7), record(8))
-    )
-
-    @Test
-    fun `appearance survives a round trip`() {
-        val preset = ExportPreset.from(contentHeavyConfig(), name = "Story")
-
-        val restored = ExportPreset.fromJson(preset.toJson())!!
-
-        assertEquals("Story", restored.name)
-        assertEquals(1080, restored.width)
-        assertEquals(1920, restored.height)
-        assertEquals(45_000L, restored.windowSizeMs)
-        assertEquals(60, restored.frameRate)
-        assertEquals(false, restored.showGrid)
-        assertEquals(false, restored.lockAspectRatio)
-        assertEquals(0.4f, restored.headerXPercent, 0.001f)
-    }
-
-    @Test
-    fun `applying a preset leaves the content alone`() {
-        // The whole point. A preset says how an export looks; the config says what it is of.
-        val original = contentHeavyConfig()
-        val preset = ExportPreset(name = "Square", width = 1080, height = 1080, showGrid = true)
-
-        val applied = preset.applyTo(original)
-
-        assertEquals(1080, applied.imageConfig.width)
-        assertEquals(1080, applied.imageConfig.height)
-        assertEquals(true, applied.imageConfig.showGrid)
-
-        // Content is untouched.
-        assertEquals(987_654_321L, applied.imageConfig.startTimeMs)
-        assertEquals(876_543_219L, applied.imageConfig.endTimeMs)
-        assertEquals(mapOf(7L to 0xFFFF0000.toInt()), applied.imageConfig.customRecordColors)
-        assertEquals("Subtronics 2026", applied.imageConfig.graphTitle)
-        assertEquals(original.overlayVideoUri, applied.overlayVideoUri)
-        assertEquals(listOf(7L, 8L), applied.records.map { it.metadata.recordId })
-
-        // Sync offset is not content. It corrects a constant error in how one *phone* stamps its
-        // videos, so it belongs to the look that gets reused across every clip that phone filmed —
-        // which means a preset overwrites it rather than preserving whatever the config carried.
-        assertEquals(0L, applied.syncOffsetMs)
-    }
-
-    @Test
-    fun `a preset carries its sync offset onto whatever it is applied to`() {
-        val corrected = ExportPreset(name = "That old phone", syncOffsetMs = -2_500L)
-
-        assertEquals(-2_500L, corrected.applyTo(contentHeavyConfig()).syncOffsetMs)
-    }
-
-    @Test
-    fun `no content-specific value reaches the serialized form`() {
-        // Checked against the text rather than the fields, because the risk is someone adding a
-        // property to ExportPreset later without noticing what it drags along.
-        val json = ExportPreset.from(contentHeavyConfig(), name = "Story").toJson()
-
-        listOf(
-            "987654321",       // startTimeMs
-            "876543219",       // endTimeMs
-            "Subtronics 2026", // graphTitle
-            "content://media", // overlayVideoUri
-            "customRecordColors",
-            "records"
-        ).forEach { forbidden ->
-            assertTrue(
-                "a preset must not carry $forbidden, but the payload was: $json",
-                !json.contains(forbidden)
-            )
-        }
-    }
-
     @Test
     fun `every setting survives being saved and read back`() {
         // Field by field, against a preset where nothing is left at its default — so a new field
-        // added without a line in `from` or `applyTo` shows up here rather than as a setting that
+        // added to the preset without being serialized shows up here rather than as a setting that
         // quietly resets itself the next time the preset is applied.
         val edited = ExportPreset(
             name = "Everything changed",
@@ -150,11 +57,10 @@ class ExportPresetTest {
             showGrid = false, gridColor = 0x55667788,
             lowBpmColor = 0x1A2B3C4D, highBpmColor = 0x4D3C2B1A,
             showTitle = false, showCurrentStats = false,
-            headerXPercent = 0.42f, futureOpacity = 0.17f,
+            futureOpacity = 0.17f,
             backgroundOpacity = 37,
             graphLeft = 0.11f, graphTop = 0.22f, graphRight = 0.83f, graphBottom = 0.94f,
             windowSizeMs = 12_345L, frameRate = 50, matchSourceFrameRate = true,
-            overlayBitRate = 9_100_000, regularBitRate = 3_200_000,
             syncOffsetMs = -1_750L
         )
 
@@ -175,6 +81,27 @@ class ExportPresetTest {
 
         assertEquals("Pacific era", restored.name)
         assertTrue("timeZoneId" !in restored.toJson())
+    }
+
+    @Test
+    fun `a preset saved with the retired fields still opens, and doesn't carry them on`() {
+        // S13 removed fields nothing read: the header's x position, and two bit rates the encoder
+        // never used (it sizes each render itself). Gson skips keys it doesn't know.
+        val old = """
+            {"version":4,"name":"Before S13","width":1080,"height":1920,"frameRate":30,
+             "windowSizeMs":30000,"headerXPercent":0.85,"overlayBitRate":8000000,
+             "regularBitRate":2500000,"showGrid":false}
+        """.trimIndent()
+
+        val restored = ExportPreset.fromJson(old)!!
+
+        assertEquals("Before S13", restored.name)
+        assertEquals(1080, restored.width)
+        assertEquals(false, restored.showGrid)
+        val json = restored.toJson()
+        listOf("headerXPercent", "overlayBitRate", "regularBitRate").forEach {
+            assertTrue("$it should be gone, but the payload was: $json", it !in json)
+        }
     }
 
     @Test
@@ -205,8 +132,7 @@ class ExportPresetTest {
     fun `nonsense values are repaired rather than carried into a render`() {
         val broken = ExportPreset(
             width = 0, height = -4, frameRate = 0, windowSizeMs = 0L,
-            overlayBitRate = 0, regularBitRate = -1,
-            backgroundOpacity = 900, futureOpacity = 4f, headerXPercent = -2f
+            backgroundOpacity = 900, futureOpacity = 4f
         )
         val shipped = ExportPreset()
 
@@ -216,11 +142,8 @@ class ExportPresetTest {
         assertEquals(shipped.height, fixed.height)
         assertEquals(shipped.frameRate, fixed.frameRate)
         assertEquals(shipped.windowSizeMs, fixed.windowSizeMs)
-        assertEquals(shipped.overlayBitRate, fixed.overlayBitRate)
-        assertEquals(shipped.regularBitRate, fixed.regularBitRate)
         assertEquals(100, fixed.backgroundOpacity)
         assertEquals(1f, fixed.futureOpacity, 0.0001f)
-        assertEquals(0f, fixed.headerXPercent, 0.0001f)
     }
 
     @Test
@@ -403,29 +326,6 @@ class ExportPresetTest {
     }
 
     @Test
-    fun `readout settings reach the render config`() {
-        // A setting that stops at the preset is one that appears to save and then does nothing,
-        // which has happened in this file before.
-        val tuned = ExportPreset(
-            pillShowPhoto = false,
-            pillShowName = false,
-            pillBpmInPersonColor = false,
-            pillScale = 0.75f,
-            pillCorner = PillCorner.TOP_RIGHT
-        )
-
-        val applied = tuned.applyTo(
-            VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig())
-        ).imageConfig
-
-        assertFalse(applied.pillShowPhoto)
-        assertFalse(applied.pillShowName)
-        assertFalse(applied.pillBpmInPersonColor)
-        assertEquals(0.75f, applied.pillScale, 0.0001f)
-        assertEquals(PillCorner.TOP_RIGHT, applied.pillCorner)
-    }
-
-    @Test
     fun `a preset written before the readouts existed comes back with a real corner`() {
         // The enum-arrives-null trap again, on a second field.
         val older = """
@@ -501,25 +401,6 @@ class ExportPresetTest {
         assertTrue(restored.showWordmark)
         assertEquals(WordmarkCorner.TOP_LEFT, restored.wordmarkCorner)
         assertEquals(40, restored.wordmarkOpacity)
-    }
-
-    @Test
-    fun `applying a preset carries the wordmark onto the render config`() {
-        // The renderers read the config, not the preset. A field that stops at the preset is a
-        // setting that appears to save and then does nothing, which has happened here before.
-        val signed = ExportPreset(
-            showWordmark = true,
-            wordmarkCorner = WordmarkCorner.BOTTOM_LEFT,
-            wordmarkOpacity = 30
-        )
-
-        val applied = signed.applyTo(
-            VideoExporter.VideoExportConfig(imageConfig = ImageExporter.ImageExportConfig())
-        )
-
-        assertTrue(applied.imageConfig.showWordmark)
-        assertEquals(WordmarkCorner.BOTTOM_LEFT, applied.imageConfig.wordmarkCorner)
-        assertEquals(30, applied.imageConfig.wordmarkOpacity)
     }
 
     /**

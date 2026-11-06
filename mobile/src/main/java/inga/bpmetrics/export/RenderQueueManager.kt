@@ -24,7 +24,8 @@ data class RenderJob(
     val id: String = UUID.randomUUID().toString(),
     val recordId: Long,
     val recordTitle: String,
-    val config: VideoExporter.VideoExportConfig,
+    /** What to render and how it looks, exactly as queued. See [ExportRequest.Video]. */
+    val request: ExportRequest.Video,
     val targetUri: Uri?,
     val status: RenderStatus = RenderStatus.QUEUED,
     val progress: Float = 0f,
@@ -33,8 +34,8 @@ data class RenderJob(
     /**
      * Every recording this job draws.
      *
-     * Held beside the config because a restored job has no recordings in its config yet — they are
-     * fetched from the library when it runs. The ids are what survives; the data does not need to.
+     * Held beside the request because a restored job has no recordings in it yet: they are fetched
+     * from the library when it runs. The ids are what survives; the data does not need to.
      */
     val recordIds: List<Long> = emptyList(),
 
@@ -49,7 +50,7 @@ data class RenderJob(
     val queuedAt: Long = System.currentTimeMillis()
 ) {
     /** How many recordings are drawn, whether or not they are currently loaded. */
-    val recordCount: Int get() = recordIds.size.takeIf { it > 0 } ?: config.records.size
+    val recordCount: Int get() = recordIds.size.takeIf { it > 0 } ?: request.content.records.size
 
     /** Saved or cancelled: nothing left to do or to look into. What "Clear finished" removes. */
     val isFinished: Boolean
@@ -65,7 +66,7 @@ data class RenderJob(
             sourceLabel?.takeIf { it.isNotBlank() }?.let { add(it) }
             add(if (recordCount == 1) "1 recording" else "$recordCount recordings")
             presetName?.takeIf { it.isNotBlank() }?.let { add(it) }
-            if (config.overlayVideoUri != null) add("over video")
+            if (request.clip != null) add("over video")
         }.joinToString(" · ")
 }
 
@@ -139,16 +140,16 @@ object RenderQueueManager {
     fun addJob(
         recordId: Long,
         recordTitle: String,
-        config: VideoExporter.VideoExportConfig,
+        request: ExportRequest.Video,
         targetUri: Uri?,
-        recordIds: List<Long> = config.records.map { it.metadata.recordId },
+        recordIds: List<Long> = request.content.records.map { it.metadata.recordId },
         presetName: String? = null,
         sourceLabel: String? = null
     ): RenderJob {
         val job = RenderJob(
             recordId = recordId,
             recordTitle = recordTitle,
-            config = config,
+            request = request,
             targetUri = targetUri,
             recordIds = recordIds,
             presetName = presetName,

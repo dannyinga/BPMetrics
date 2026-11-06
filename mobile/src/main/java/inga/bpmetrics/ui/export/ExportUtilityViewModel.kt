@@ -912,13 +912,12 @@ class ExportUtilityViewModel(
     }
 
     /**
-     * Builds the config for one export.
+     * The request for one video: content from the arguments, the look from the preset.
      *
-     * The single place a [VideoExporter.VideoExportConfig] is assembled: appearance from the
-     * preset, content from the arguments. Nothing else constructs one, so a batched export and a
-     * one-off cannot drift apart.
+     * The preset goes in fully resolved for this video, with the framing it uses baked in and the
+     * per-cast pins cleared, so a job restored from the queue frames exactly as this did.
      */
-    fun buildConfig(
+    fun buildRequest(
         forRecords: List<BpmRecordWithPoints>,
         overlay: android.net.Uri?,
         colours: Map<Long, Int>,
@@ -928,10 +927,10 @@ class ExportUtilityViewModel(
         /** The clip this is drawn over, when there is one. Decides the sync and the crop. */
         clip: VideoExporter.VideoClip? = null,
         placement: GraphPlacement? = null
-    ): VideoExporter.VideoExportConfig {
+    ): inga.bpmetrics.export.ExportRequest.Video {
         // Always clock-aligned. A recording happened at a particular time, and starting it at 0:00
         // of a video only ever looked right when the two happened to begin together.
-        val timeline = inga.bpmetrics.export.ImageExporter.timelineFor(forRecords, false)
+        val timeline = inga.bpmetrics.export.ImageExporter.timelineFor(forRecords)
 
         // The clip's own window on the shared timeline. Without this the export spans the whole
         // recording and the footage drifts out of sync within seconds.
@@ -939,34 +938,30 @@ class ExportUtilityViewModel(
         val startMs = window?.startMs ?: 0L
         val endMs = window?.endMs ?: timeline.durationMs
 
-        val base = VideoExporter.VideoExportConfig(
-            imageConfig = inga.bpmetrics.export.ImageExporter.ImageExportConfig(
-                startTimeMs = startMs,
-                endTimeMs = endMs.coerceAtLeast(startMs + 1000L),
-                customRecordColors = colours,
-                recordPhotos = photos,
-                graphTitle = title,
-                alignByElapsedTime = false,
-                // The footage's own clock, for the preview and the render alike.
-                clipZoneId = clip?.zoneId
-            ),
-            overlayVideoUri = overlay,
-            // The render aligns against exactly what the picker resolved and the preview drew.
-            overlayStartedAtMs = clip?.startedAtMs,
-            records = forRecords
+        val content = inga.bpmetrics.export.ExportContent(
+            records = forRecords,
+            startMs = startMs,
+            endMs = endMs.coerceAtLeast(startMs + 1000L),
+            title = title,
+            colours = colours,
+            photos = photos,
+            // The footage's own clock, for the preview and the render alike.
+            clipZoneId = clip?.zoneId
         )
 
-        return _preset.value.applyTo(base).let { applied ->
-            applied.copy(
-                // The clip's own framing when it has been given one, otherwise whatever the
-                // preset carries — framing is part of a look, so a preset has to bring its own.
-                // The count is `forRecords.size`: one curve and one readout per record, which is
-                // exactly what the frame has to make room for. A clip framed by hand still wins —
-                // `placement` is that override, and a pin is only ever a better default.
-                graphRect = (placement ?: GraphPlacement.of(_preset.value, forRecords.size))
-                    .toRectF()
-            )
-        }
+        // The clip's own framing when it has been given one, otherwise whatever the preset gives
+        // for this many curves (one curve and one readout per record). A clip framed by hand still
+        // wins: `placement` is that override, and a pin is only ever a better default.
+        val framing = placement ?: GraphPlacement.of(_preset.value, forRecords.size)
+        val look = framing.into(_preset.value).copy(framesByLaneCount = emptyMap())
+
+        return inga.bpmetrics.export.ExportRequest.Video(
+            content = content,
+            preset = look,
+            clip = overlay,
+            // The render aligns against exactly what the picker resolved and the preview drew.
+            clipStartedAtMs = clip?.startedAtMs
+        )
     }
 
     /**
@@ -1079,30 +1074,15 @@ class ExportUtilityViewModel(
             .sortedBy { it.startMs }
 
         return TimelineImageExporter.Spec(
-            width = preset.width,
-            height = preset.height,
             title = titleOverride ?: entry.label,
             windowStartWallClockMs = windowStart,
             windowEndWallClockMs = windowEnd,
             series = series,
             sections = sections,
-            showTitle = preset.showTitle,
-            showGrid = preset.showGrid,
-            showLabels = preset.showLabels,
-            showStats = preset.showCurrentStats,
-            lowBpmColor = preset.lowBpmColor,
-            highBpmColor = preset.highBpmColor,
-            labelsColor = preset.labelsColor,
-            gridColor = preset.gridColor,
-            backgroundOpacity = preset.backgroundOpacity,
-            // Where these recordings happened, not whatever zone the preset was saved in. See
-            // `ImageExporter.inZoneOf`, which fixes the same thing for video — an image's time axis
-            // and its date line are read in this zone, so the preset's frozen Pacific put a
-            // Chicago set's hours and, near midnight, its *date* in the wrong place.
+            // Where these recordings happened (see `exportZoneOf`): an image's time axis and its
+            // date line are read in this zone.
             timeZoneId = inga.bpmetrics.library.exportZoneOf(records.map { it.metadata }),
-            showWordmark = preset.showWordmark,
-            wordmarkCorner = preset.wordmarkCorner,
-            wordmarkOpacity = preset.wordmarkOpacity
+            look = preset
         )
     }
 

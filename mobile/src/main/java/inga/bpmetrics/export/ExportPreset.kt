@@ -36,6 +36,8 @@ data class GraphFrame(
     val width: Float get() = right - left
     val height: Float get() = bottom - top
 
+    fun toRectF(): android.graphics.RectF = android.graphics.RectF(left, top, right, bottom)
+
     /** True where this rectangle has enough area to draw a graph in. */
     val isUsable: Boolean get() = width >= MIN_SIDE && height >= MIN_SIDE
 
@@ -97,7 +99,6 @@ data class ExportPreset(
     val highBpmColor: Int = inga.bpmetrics.core.BpmPalette.HIGH,
     val showTitle: Boolean = true,
     val showCurrentStats: Boolean = true,
-    val headerXPercent: Float = 0.85f,
     val futureOpacity: Float = 0.65f,
 
     // Background and overlay
@@ -146,8 +147,6 @@ data class ExportPreset(
     val frameRate: Int = 30,
     /** Take the frame rate from each clip instead of [frameRate]. */
     val matchSourceFrameRate: Boolean = false,
-    val overlayBitRate: Int = 8_000_000,
-    val regularBitRate: Int = 2_500_000,
     /**
      * How far to nudge the curves against the footage, in milliseconds.
      *
@@ -323,7 +322,7 @@ data class ExportPreset(
      * so the repair belongs here, at the one door values enter through.
      *
      * Only states nothing could have chosen are corrected. Fields where "absent" and "deliberately
-     * zero" look identical — the opacities, `headerXPercent` — are left as they arrive; they have
+     * zero" look identical (the opacities) are left as they arrive; they have
      * existed since the first version, so absent is not a case that occurs.
      */
     @Suppress("USELESS_ELVIS")
@@ -339,11 +338,8 @@ data class ExportPreset(
             height = height.takeIf { it > 0 } ?: shipped.height,
             frameRate = frameRate.takeIf { it in 1..240 } ?: shipped.frameRate,
             windowSizeMs = windowSizeMs.takeIf { it > 0L } ?: shipped.windowSizeMs,
-            overlayBitRate = overlayBitRate.takeIf { it > 0 } ?: shipped.overlayBitRate,
-            regularBitRate = regularBitRate.takeIf { it > 0 } ?: shipped.regularBitRate,
             backgroundOpacity = backgroundOpacity.coerceIn(0, 100),
             futureOpacity = futureOpacity.coerceIn(0f, 1f),
-            headerXPercent = headerXPercent.coerceIn(0f, 1f),
             graphLeft = if (degenerate) shipped.graphLeft else graphLeft.coerceIn(0f, 1f),
             graphTop = if (degenerate) shipped.graphTop else graphTop.coerceIn(0f, 1f),
             graphRight = if (degenerate) shipped.graphRight else graphRight.coerceIn(0f, 1f),
@@ -374,59 +370,6 @@ data class ExportPreset(
                 ?: shipped.pillNameScale
         )
     }
-
-    /**
-     * Applies this preset over a config, leaving everything content-specific alone.
-     *
-     * The config passed in supplies the recordings, the time range, the overlay video and the
-     * colours; the preset supplies only how it looks. Written as an overlay rather than a
-     * construction so a caller cannot accidentally lose the content half.
-     */
-    fun applyTo(config: VideoExporter.VideoExportConfig): VideoExporter.VideoExportConfig =
-        config.copy(
-            imageConfig = config.imageConfig.copy(
-                width = width,
-                height = height,
-                backgroundOpacity = backgroundOpacity,
-                showLabels = showLabels,
-                labelsColor = labelsColor,
-                showGrid = showGrid,
-                gridColor = gridColor,
-                lowBpmColor = lowBpmColor,
-                highBpmColor = highBpmColor,
-                showTitle = showTitle,
-                showCurrentStats = showCurrentStats,
-                headerXPercent = headerXPercent,
-                futureOpacity = futureOpacity,
-                pillShowPhoto = pillShowPhoto,
-                pillShowName = pillShowName,
-                pillBpmInPersonColor = pillBpmInPersonColor,
-                pillScale = pillScale,
-                pillPhotoScale = pillPhotoScale,
-                pillBpmScale = pillBpmScale,
-                pillNameScale = pillNameScale,
-                pillCorner = pillCorner,
-                clockMode = clockMode,
-                showWordmark = showWordmark,
-                wordmarkCorner = wordmarkCorner,
-                wordmarkOpacity = wordmarkOpacity,
-                // Always clock-aligned. A recording happened at a particular time, and placing it
-                // at an arbitrary point in a video was never right — it only ever looked right when
-                // the recording happened to start when filming did.
-                alignByElapsedTime = false
-                // startTimeMs, endTimeMs, customRecordColors and graphTitle are untouched on
-                // purpose. They describe this export, not how exports look.
-            ),
-            windowSizeMs = windowSizeMs,
-            frameRate = frameRate,
-            matchSourceFrameRate = matchSourceFrameRate,
-            overlayBitRate = overlayBitRate,
-            regularBitRate = regularBitRate,
-            lockAspectRatio = lockAspectRatio,
-            syncOffsetMs = syncOffsetMs,
-            graphRect = android.graphics.RectF(graphLeft, graphTop, graphRight, graphBottom)
-            // overlayVideoUri and records are content, and stay as the caller set them.
-        )
 
     companion object {
         /**
@@ -461,38 +404,6 @@ data class ExportPreset(
             listOf(0.04f, 0.62f, 0.96f, 0.97f),
             listOf(0.14f, 0.58f, 0.86f, 0.90f)
         )
-
-        /** Captures the appearance of a config, and nothing else. */
-        fun from(config: VideoExporter.VideoExportConfig, name: String = ""): ExportPreset {
-            val image = config.imageConfig
-            return ExportPreset(
-                name = name,
-                width = image.width,
-                height = image.height,
-                lockAspectRatio = config.lockAspectRatio,
-                showLabels = image.showLabels,
-                labelsColor = image.labelsColor,
-                showGrid = image.showGrid,
-                gridColor = image.gridColor,
-                lowBpmColor = image.lowBpmColor,
-                highBpmColor = image.highBpmColor,
-                showTitle = image.showTitle,
-                showCurrentStats = image.showCurrentStats,
-                headerXPercent = image.headerXPercent,
-                futureOpacity = image.futureOpacity,
-                backgroundOpacity = image.backgroundOpacity,
-                graphLeft = config.graphRect.left,
-                graphTop = config.graphRect.top,
-                graphRight = config.graphRect.right,
-                graphBottom = config.graphRect.bottom,
-                windowSizeMs = config.windowSizeMs,
-                frameRate = config.frameRate,
-                matchSourceFrameRate = config.matchSourceFrameRate,
-                overlayBitRate = config.overlayBitRate,
-                regularBitRate = config.regularBitRate,
-                syncOffsetMs = config.syncOffsetMs
-            )
-        }
 
         /**
          * Reads a preset back.

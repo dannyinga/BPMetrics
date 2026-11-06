@@ -9,10 +9,8 @@ import inga.bpmetrics.library.RenderJobEntity
 /**
  * Turns a queued render into a row and back again.
  *
- * The awkward part of persisting the queue is that a [VideoExporter.VideoExportConfig] is half
- * appearance and half content, and only the appearance half already knows how to serialize itself.
- * So this splits it the same way [ExportPreset] does: the look goes out as preset JSON, and the
- * content — which recordings, which clip, what window — goes into columns.
+ * A job is an [ExportRequest.Video]: the look is its [ExportPreset], which goes out as its own
+ * JSON, and the content (which recordings, which clip, what window) goes into columns.
  *
  * Records are stored as *ids*. Writing whole `BpmRecordWithPoints`s here would copy the library into a second
  * table that starts drifting from it immediately, and a queue row is not the right place to be the
@@ -51,11 +49,11 @@ class RenderJobStore(private val dao: RenderJobDao) {
          * honestly is the only correct answer, since there is nothing left to draw.
          */
         fun rehydrate(job: RenderJob, available: List<BpmRecordWithPoints>): RenderJob? {
-            if (job.config.records.isNotEmpty()) return job
+            if (job.request.content.records.isNotEmpty()) return job
             val wanted = job.recordIds.toSet()
             val found = available.filter { it.metadata.recordId in wanted }
             if (found.isEmpty()) return null
-            return job.copy(config = job.config.copy(records = found))
+            return job.copy(request = job.request.copy(content = job.request.content.copy(records = found)))
         }
     }
 
@@ -92,26 +90,29 @@ class RenderJobStore(private val dao: RenderJobDao) {
     }
 
     private fun RenderJob.toEntity(): RenderJobEntity {
-        val image = config.imageConfig
+        val content = request.content
         return RenderJobEntity(
             jobId = id,
             recordId = recordId,
             title = recordTitle,
-            recordIdsCsv = encodeIds(recordIds.ifEmpty { config.records.map { it.metadata.recordId } }),
-            // The look, in the app's one format for a look.
-            presetJson = ExportPreset.from(config).toJson(),
-            colorsCsv = encodeColors(image.customRecordColors),
-            graphTitle = image.graphTitle,
-            startTimeMs = image.startTimeMs,
-            endTimeMs = image.endTimeMs,
-            overlayUri = config.overlayVideoUri?.toString(),
-            overlayStartedAtMs = config.overlayStartedAtMs,
+            recordIdsCsv = encodeIds(recordIds.ifEmpty { content.records.map { it.metadata.recordId } }),
+            // The whole look, as the preset it is. It went through `ExportPreset.from(config)`,
+            // which didn't know about the readout pills, the clock, the wordmark or per-cast
+            // framing, so a job restored after the app was killed rendered with defaults
+            // (Audit #25). Nothing is copied now, so nothing can be left behind.
+            presetJson = request.preset.toJson(),
+            colorsCsv = encodeColors(content.colours),
+            graphTitle = content.title,
+            startTimeMs = content.startMs,
+            endTimeMs = content.endMs,
+            overlayUri = request.clip?.toString(),
+            overlayStartedAtMs = request.clipStartedAtMs,
             targetUri = targetUri?.toString(),
             status = status.name,
             error = error,
             presetName = presetName,
             sourceLabel = sourceLabel,
-            recordCount = recordIds.size.takeIf { it > 0 } ?: config.records.size,
+            recordCount = recordIds.size.takeIf { it > 0 } ?: content.records.size,
             queuedAt = queuedAt
         )
     }
@@ -124,25 +125,23 @@ class RenderJobStore(private val dao: RenderJobDao) {
             return null
         }
 
-        val base = VideoExporter.VideoExportConfig(
-            imageConfig = ImageExporter.ImageExportConfig(
-                startTimeMs = startTimeMs,
-                endTimeMs = endTimeMs,
-                customRecordColors = decodeColors(colorsCsv),
-                graphTitle = graphTitle,
-                alignByElapsedTime = false
-            ),
-            overlayVideoUri = overlayUri?.let { runCatching { Uri.parse(it) }.getOrNull() },
-            overlayStartedAtMs = overlayStartedAtMs,
-            // Filled in by rehydrate, once the library is to hand.
-            records = emptyList()
-        )
-
         return RenderJob(
             id = jobId,
             recordId = recordId,
             recordTitle = title,
-            config = preset.applyTo(base),
+            request = ExportRequest.Video(
+                content = ExportContent(
+                    // Filled in by rehydrate, once the library is to hand.
+                    records = emptyList(),
+                    startMs = startTimeMs,
+                    endMs = endTimeMs,
+                    title = graphTitle,
+                    colours = decodeColors(colorsCsv)
+                ),
+                preset = preset,
+                clip = overlayUri?.let { runCatching { Uri.parse(it) }.getOrNull() },
+                clipStartedAtMs = overlayStartedAtMs
+            ),
             targetUri = targetUri?.let { runCatching { Uri.parse(it) }.getOrNull() },
             status = runCatching { RenderStatus.valueOf(status) }.getOrDefault(RenderStatus.QUEUED),
             error = error,

@@ -707,7 +707,7 @@ private fun queueBatch(
             context,
             allRecords.first().metadata.recordId,
             name,
-            viewModel.buildConfig(allRecords, manualOverlay, colours, photos, name),
+            viewModel.buildRequest(allRecords, manualOverlay, colours, photos, name),
             null,
             presetName = presetName,
             sourceLabel = name
@@ -734,7 +734,7 @@ private fun queueBatch(
                     inga.bpmetrics.library.exportZoneOf(forThisClip.map { it.metadata }, job.clip.zoneId)
                 )
             )}",
-            viewModel.buildConfig(
+            viewModel.buildRequest(
                 forRecords = forThisClip,
                 overlay = job.clip.uri,
                 colours = colours,

@@ -184,7 +184,7 @@ fun RenderQueueContent(modifier: Modifier = Modifier) {
                             // that failed for want of space went straight back to fail the same way.
                             scope.launch {
                                 val problem = withContext(Dispatchers.IO) {
-                                    VideoExporter.preflightProblem(context, job.config)
+                                    VideoExporter.preflightProblem(context, job.request)
                                 }
                                 if (problem != null) {
                                     RenderQueueManager.updateJobStatus(job.id, RenderStatus.FAILED, error = problem)
@@ -543,9 +543,9 @@ fun RenderJobCard(
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
-                val w = job.config.imageConfig.width
-                val h = job.config.imageConfig.height
-                val fps = job.config.frameRate
+                val w = job.request.preset.width
+                val h = job.request.preset.height
+                val fps = job.request.preset.frameRate
                 Text(
                     text = "Resolution: ${w}x${h} | Frame Rate: ${fps}fps",
                     fontSize = 11.sp,

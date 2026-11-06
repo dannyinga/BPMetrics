@@ -32,69 +32,24 @@ object ImageExporter {
 
 
     /**
-     * Configuration for image and video rendering.
+     * What one frame is drawn from: the content, the look, and the clock it's read in.
+     *
+     * Not a config to fill in. It holds the two things it was given and adds only the zone, which
+     * depends on both (see [inga.bpmetrics.library.exportZoneOf]). The thirty-field
+     * `ImageExportConfig` this replaces was filled by hand-copying a preset into it, and the copies
+     * drifted (Model and Export Consolidation §6).
      */
-    data class ImageExportConfig(
-        val width: Int = 1920,
-        val height: Int = 1080,
-        val startTimeMs: Long = 0L,
-        val endTimeMs: Long = 0L,
-        val backgroundOpacity: Int = 100,
-        val showLabels: Boolean = true,
-        val labelsColor: Int = inga.bpmetrics.core.BpmPalette.ON_SURFACE,
-        val showGrid: Boolean = true,
-        val gridColor: Int = inga.bpmetrics.core.BpmPalette.GRID,
-        val lowBpmColor: Int = inga.bpmetrics.core.BpmPalette.LOW,
-        val highBpmColor: Int = inga.bpmetrics.core.BpmPalette.HIGH,
-        val showTitle: Boolean = true,
-        val showCurrentStats: Boolean = true,
-        val headerXPercent: Float = 0.85f,
-        val futureOpacity: Float = 0.65f,
-        val timeZoneId: String = java.time.ZoneId.systemDefault().id,
-        /**
-         * The UTC offset the footage says it was filmed at ("-05:00"), when it says. The clock
-         * uses it where no venue gives a zone. See [ClipZone].
-         */
-        val clipZoneId: String? = null,
-        val customRecordColors: Map<Long, Int> = emptyMap(),
-        /**
-         * The wearer's photograph for each recording, already cropped, keyed by record id.
-         *
-         * Decoded by the caller rather than here: this runs once per frame, and reading a file off
-         * disk thirty times a second for a picture that never changes is the kind of thing that
-         * turns a two-minute render into a ten-minute one.
-         *
-         * Absent is the ordinary case, and the pill falls back to the wearer's colour and initial —
-         * the same fallback the avatar uses everywhere in the app.
-         */
-        val recordPhotos: Map<Long, Bitmap> = emptyMap(),
-        val alignByElapsedTime: Boolean = true,
-        /**
-         * Heading drawn on the graph.
-         *
-         * A single record uses its own title. Several have no title of their own, so exporting a
-         * named analysis passes its name here — "Subtronics 2026" rather than the generic label
-         * every multi-watch export would otherwise carry. Null keeps that default.
-         */
-        val graphTitle: String? = null,
-
-        /** How the live readouts are drawn. See [ExportPreset] for why these are a preset. */
-        val pillShowPhoto: Boolean = true,
-        val pillShowName: Boolean = true,
-        val pillBpmInPersonColor: Boolean = true,
-        val pillScale: Float = 1f,
-        val pillPhotoScale: Float = 1f,
-        val pillBpmScale: Float = 1f,
-        val pillNameScale: Float = 1f,
-        val pillCorner: PillCorner = PillCorner.TOP_RIGHT,
-        /** See [ExportPreset.clockMode]. */
-        val clockMode: ClockMode = ClockMode.CLOCK,
-
-        /** See [ExportPreset.showWordmark]. Off by default; the preset carries the choice. */
-        val showWordmark: Boolean = false,
-        val wordmarkCorner: WordmarkCorner = WordmarkCorner.BOTTOM_RIGHT,
-        val wordmarkOpacity: Int = 55
-    )
+    class Frame internal constructor(
+        val content: ExportContent,
+        val look: ExportPreset,
+        /** The zone clock readings are shown in. */
+        val zoneId: String
+    ) {
+        companion object {
+            fun of(content: ExportContent, look: ExportPreset, records: List<inga.bpmetrics.library.BpmRecordEntity>) =
+                Frame(content, look, inga.bpmetrics.library.exportZoneOf(records, content.clipZoneId))
+        }
+    }
 
     /**
      * Interpolates the BPM value at a specific timestamp.
@@ -149,28 +104,28 @@ object ImageExporter {
      *
      * @param canvas The canvas to draw on.
      * @param record The BPM record data.
-     * @param config Rendering configuration.
+     * @param content what is drawn: the recording, the window, the caption, colours and photos.
+     * @param look how it looks: the preset, which also gives the scrolling window's width.
      * @param currentTimeMs Optional current playback time for video rendering (affects scrolling window).
-     * @param windowSizeMs Optional duration of the visible time window for scrolling.
-     * @param backgroundBitmap Optional bitmap to draw as a background.
-     * @param graphRect Defines the normalized rectangle (0-1) where the graph should be drawn within the canvas.
+     * @param graphRect the normalized rectangle (0-1) the graph is drawn in. The preset's own
+     *   frame for one curve by default.
      */
     fun renderOnCanvas(
         canvas: Canvas,
         record: BpmRecordWithPoints,
-        config: ImageExportConfig,
+        content: ExportContent,
+        look: ExportPreset,
         currentTimeMs: Double? = null,
-        windowSizeMs: Long? = null,
-        graphRect: RectF = RectF(0f, 0f, 1f, 1f)
+        graphRect: RectF = look.frameFor(1).toRectF()
     ) = renderOnCanvasInZone(
-        canvas, record, config.inZoneOf(listOf(record.metadata)),
-        currentTimeMs, windowSizeMs, graphRect
+        canvas, record, Frame.of(content, look, listOf(record.metadata)),
+        currentTimeMs, look.windowSizeMs, graphRect
     )
 
     private fun renderOnCanvasInZone(
         canvas: Canvas,
         record: BpmRecordWithPoints,
-        config: ImageExportConfig,
+        config: Frame,
         currentTimeMs: Double?,
         windowSizeMs: Long?,
         graphRect: RectF
@@ -210,7 +165,7 @@ object ImageExporter {
         // photograph, no name, no configurable size, still a pulsing heart beside the digits. Two
         // sites drawing the same thing is how one of them quietly stops matching, and this is that
         // having already happened.
-        if (config.showCurrentStats) {
+        if (config.look.showCurrentStats) {
             drawMultiStatsHUD(
                 canvas = canvas,
                 dims = dims,
@@ -348,16 +303,16 @@ object ImageExporter {
     private fun drawWordmark(
         canvas: Canvas,
         dims: RenderingDimensions,
-        config: ImageExportConfig,
+        config: Frame,
         paint: Paint
     ) {
-        if (!config.showWordmark) return
+        if (!config.look.showWordmark) return
         Wordmark.draw(
             canvas = canvas,
             bounds = dims.outerRect,
-            corner = config.wordmarkCorner,
-            opacityPercent = config.wordmarkOpacity,
-            color = config.labelsColor,
+            corner = config.look.wordmarkCorner,
+            opacityPercent = config.look.wordmarkOpacity,
+            color = config.look.labelsColor,
             // The panel's own scale, not the canvas's. A preset that shrinks the graph to a quarter
             // of the frame should get a mark a quarter the size — one scaled off the canvas would
             // sit in a small panel looking like a headline.
@@ -366,7 +321,7 @@ object ImageExporter {
         )
     }
 
-    private fun drawContainer(canvas: Canvas, dims: RenderingDimensions, config: ImageExportConfig, paint: Paint) {
+    private fun drawContainer(canvas: Canvas, dims: RenderingDimensions, config: Frame, paint: Paint) {
         val outerCornerRadius = 24f * dims.scaleFactor
         val outerClipPath = Path().apply {
             addRoundRect(dims.outerRect, outerCornerRadius, outerCornerRadius, Path.Direction.CW)
@@ -379,7 +334,7 @@ object ImageExporter {
         // BPMetrics should be the same near-black the app itself is, rather than a flat #000 that
         // belongs to no palette.
         if (canvas.isOpaque) canvas.drawColor(inga.bpmetrics.core.BpmPalette.SURFACE)
-        val bgAlpha = (config.backgroundOpacity * 255 / 100).coerceIn(0, 255)
+        val bgAlpha = (config.look.backgroundOpacity * 255 / 100).coerceIn(0, 255)
         if (bgAlpha > 0) {
             paint.resetForExport()
             paint.color = inga.bpmetrics.core.BpmPalette.SURFACE
@@ -392,7 +347,7 @@ object ImageExporter {
         canvas: Canvas,
         dims: RenderingDimensions,
         ranges: BpmRanges,
-        config: ImageExportConfig,
+        config: Frame,
         paint: Paint,
         /** The window and playhead, for the time axis. Null on a still, which has neither. */
         viewport: Viewport? = null,
@@ -408,15 +363,15 @@ object ImageExporter {
             val y = dims.getY(bpm, ranges)
             if (y !in dims.graphTop..dims.graphBottom) return@forEach
 
-            if (config.showGrid) {
+            if (config.look.showGrid) {
                 paint.resetForExport()
-                paint.color = config.gridColor
+                paint.color = config.look.gridColor
                 paint.strokeWidth = 2f
                 canvas.drawLine(dims.graphLeft, y, dims.graphRight, y, paint)
             }
-            if (config.showLabels) {
+            if (config.look.showLabels) {
                 paint.resetForExport()
-                paint.color = config.labelsColor
+                paint.color = config.look.labelsColor
                 paint.textSize = labelSize
                 paint.textAlign = Paint.Align.RIGHT
                 canvas.drawText(
@@ -449,7 +404,7 @@ object ImageExporter {
         canvas: Canvas,
         dims: RenderingDimensions,
         viewport: Viewport,
-        config: ImageExportConfig,
+        config: Frame,
         paint: Paint,
         labelSize: Float
     ) {
@@ -466,7 +421,7 @@ object ImageExporter {
             // brightest thing on the graph — a second marker through the same point adds nothing
             // and draws a bar across the curve at the one place it is most worth seeing clearly.
             // The label stays, because the offsets either side are measured from it.
-            if (config.showGrid && !isNow) {
+            if (config.look.showGrid && !isNow) {
                 paint.resetForExport()
                 // The grid colour as it is, dimmed further — not an alpha of its own.
                 //
@@ -475,15 +430,15 @@ object ImageExporter {
                 // it. A time axis is a reference, not a subject: it should be found when looked for
                 // and invisible when not, and anything louder than the heart rate lines is reading
                 // as a feature of the data.
-                paint.color = config.gridColor
-                paint.alpha = (Color.alpha(config.gridColor) * 0.7f).roundToInt()
+                paint.color = config.look.gridColor
+                paint.alpha = (Color.alpha(config.look.gridColor) * 0.7f).roundToInt()
                 paint.strokeWidth = 2f
                 canvas.drawLine(x, dims.graphTop, x, dims.graphBottom, paint)
             }
 
-            if (config.showLabels) {
+            if (config.look.showLabels) {
                 paint.resetForExport()
-                paint.color = config.labelsColor
+                paint.color = config.look.labelsColor
                 paint.alpha = if (isNow) 255 else 180
                 paint.textSize = labelSize * 0.82f
                 paint.isFakeBoldText = isNow
@@ -511,7 +466,7 @@ object ImageExporter {
         canvas: Canvas,
         dims: RenderingDimensions,
         ranges: BpmRanges,
-        config: ImageExportConfig,
+        config: Frame,
         paint: Paint,
         viewport: Viewport?,
         timelineOriginMs: Long
@@ -534,9 +489,9 @@ object ImageExporter {
             clockWidth = paint.measureText(clock)
         }
 
-        if (config.showTitle) {
+        if (config.look.showTitle) {
             paint.resetForExport()
-            paint.color = config.labelsColor
+            paint.color = config.look.labelsColor
             paint.textSize = 48f * dims.scaleFactor
             paint.isFakeBoldText = true
             paint.textAlign = Paint.Align.CENTER
@@ -547,11 +502,11 @@ object ImageExporter {
 
         if (clock != null) {
             paint.resetForExport()
-            paint.color = config.labelsColor
+            paint.color = config.look.labelsColor
             paint.textSize = 40f * dims.scaleFactor
             paint.isFakeBoldText = true
             // To the right where it shares the band, centred where it has the band to itself.
-            if (config.showTitle) {
+            if (config.look.showTitle) {
                 paint.textAlign = Paint.Align.RIGHT
                 canvas.drawText(clock, dims.graphRight, baseline, paint)
             } else {
@@ -561,40 +516,18 @@ object ImageExporter {
         }
     }
 
-    /**
-     * This config, with its clock in the zone the recordings actually happened in.
-     *
-     * The clock used to read `timeZoneId` straight off the config, which came straight off the
-     * **preset** — and a preset's zone is `ZoneId.systemDefault()` as of the moment it was created,
-     * frozen into its JSON. So every look anyone had ever saved on a phone in Pacific time captioned
-     * every export in Pacific time, including a set in Chicago whose venue said so plainly. A zone is
-     * a fact about where a recording happened, not about how an export looks; it was on the preset
-     * for the same category error the preset's own documentation warns against with record ids.
-     *
-     * Applied at the two public entry points, because they are the one moment the recordings are
-     * guaranteed to be in hand. Deriving it earlier — in `ExportPreset.applyTo`, say — misses the
-     * render queue, which rebuilds a job's config after a restart with its recordings not loaded
-     * yet, and it would have to be remembered again at every future call site.
-     *
-     * For recordings no venue covers, the phone's zone, as on every screen (see
-     * [inga.bpmetrics.library.exportZoneOf]). The config's zone, which is the preset's, is never
-     * used: it put an unfiled Kansas set two hours early.
-     */
-    private fun ImageExportConfig.inZoneOf(records: List<inga.bpmetrics.library.BpmRecordEntity>) =
-        copy(timeZoneId = inga.bpmetrics.library.exportZoneOf(records, clipZoneId))
-
     /** What the clock says, or null when it is switched off. */
     private fun clockTextFor(
-        config: ImageExportConfig,
+        config: Frame,
         viewport: Viewport,
         timelineOriginMs: Long
-    ): String? = when (config.clockMode) {
+    ): String? = when (config.look.clockMode) {
         ClockMode.NONE -> null
         // With seconds: this one is a running clock rather than a stamp, and it advances a frame
         // at a time.
         ClockMode.CLOCK -> StringFormatHelpers.getTimeString(
             timelineOriginMs + viewport.playhead.toLong(),
-            java.time.ZoneId.of(config.timeZoneId),
+            java.time.ZoneId.of(config.zoneId),
             withSeconds = true
         )
         // From the start of the session, which is well defined however many people are on the
@@ -604,7 +537,7 @@ object ImageExporter {
         )
     }
 
-    private fun drawDataCurve(canvas: Canvas, dims: RenderingDimensions, ranges: BpmRanges, viewport: Viewport, record: BpmRecordWithPoints, config: ImageExportConfig, paint: Paint) {
+    private fun drawDataCurve(canvas: Canvas, dims: RenderingDimensions, ranges: BpmRanges, viewport: Viewport, record: BpmRecordWithPoints, config: Frame, paint: Paint) {
         canvas.withClip(dims.graphLeft, dims.graphTop, dims.graphRight, dims.graphBottom) {
             val visiblePoints = record.dataPoints.filter {
                 it.timestamp >= (viewport.start - viewport.lookahead) && it.timestamp <= (viewport.end + viewport.lookahead)
@@ -768,7 +701,7 @@ object ImageExporter {
         dims: RenderingDimensions,
         ranges: BpmRanges,
         viewport: Viewport,
-        config: ImageExportConfig,
+        config: Frame,
         fill: Path,
         pastSolid: Path,
         pastDashed: Path,
@@ -787,7 +720,7 @@ object ImageExporter {
             null, Shader.TileMode.CLAMP
         )
 
-        val futureAlpha = (config.futureOpacity * 255).toInt().coerceIn(0, 255)
+        val futureAlpha = (config.look.futureOpacity * 255).toInt().coerceIn(0, 255)
         val futureAlphaColor = android.graphics.Color.argb(futureAlpha, 0, 0, 0)
 
         val futureAlphaMask = LinearGradient(
@@ -806,7 +739,7 @@ object ImageExporter {
         val colorGradient = LinearGradient(
             0f, dims.getY(ranges.uiMax, ranges),
             0f, dims.getY(ranges.uiMin, ranges),
-            intArrayOf(config.highBpmColor, midUiColor, config.lowBpmColor),
+            intArrayOf(config.look.highBpmColor, midUiColor, config.look.lowBpmColor),
             null, Shader.TileMode.CLAMP
         )
 
@@ -814,7 +747,7 @@ object ImageExporter {
         val fillGradient = LinearGradient(
             0f, dims.getY(ranges.uiMax, ranges),
             0f, dims.getY(ranges.uiMin, ranges),
-            intArrayOf((config.highBpmColor and 0x00FFFFFF) or 0x55000000, 0x00000000),
+            intArrayOf((config.look.highBpmColor and 0x00FFFFFF) or 0x55000000, 0x00000000),
             null, Shader.TileMode.CLAMP
         )
         paint.shader = ComposeShader(fillGradient, pastAlphaMask, PorterDuff.Mode.DST_IN)
@@ -867,8 +800,8 @@ object ImageExporter {
      * video as they do everywhere else in the app. The fallback is only for a recording nobody is
      * assigned to.
      */
-    private fun colorForRecord(record: BpmRecordWithPoints, index: Int, config: ImageExportConfig): Int =
-        config.customRecordColors[record.metadata.recordId]
+    private fun colorForRecord(record: BpmRecordWithPoints, index: Int, config: Frame): Int =
+        config.content.colours[record.metadata.recordId]
             ?: PersonColors.defaultFor(index)
 
     /**
@@ -926,7 +859,7 @@ object ImageExporter {
         ranges: BpmRanges,
         viewport: Viewport,
         record: BpmRecordWithPoints,
-        config: ImageExportConfig,
+        config: Frame,
         /** When the session began, so the beat can be placed on an absolute clock. */
         timelineOriginMs: Long,
         paint: Paint
@@ -969,7 +902,7 @@ object ImageExporter {
     private class RenderingDimensions(
         canvas: Canvas,
         rect: RectF,
-        config: ImageExportConfig
+        config: Frame
     ) {
         val fullWidth = canvas.width.toFloat()
         val fullHeight = canvas.height.toFloat()
@@ -984,10 +917,10 @@ object ImageExporter {
         val outerRect = RectF(drawAreaLeft, drawAreaTop, drawAreaRight, drawAreaBottom)
 
         // UPDATED: Standardized padding
-        val paddingLeft = (if (config.showLabels) 140f else 60f) * scaleFactor
+        val paddingLeft = (if (config.look.showLabels) 140f else 60f) * scaleFactor
         val paddingRight = 60f * scaleFactor // Fixed padding instead of a variable buffer
-        val paddingTop = (if (config.showTitle) 120f else 60f) * scaleFactor
-        val paddingBottom = (if (config.showLabels) 100f else 40f) * scaleFactor
+        val paddingTop = (if (config.look.showTitle) 120f else 60f) * scaleFactor
+        val paddingBottom = (if (config.look.showLabels) 100f else 40f) * scaleFactor
 
         // UPDATED: Graph now takes full width minus standard padding
         val graphWidth = drawAreaWidth - paddingLeft - paddingRight
@@ -1008,11 +941,11 @@ object ImageExporter {
 
     private class Viewport(val start: Double, val end: Double, val playhead: Double, val duration: Double, val lookahead: Long)
 
-    private fun calculateRanges(record: BpmRecordWithPoints, config: ImageExportConfig, windowSizeMs: Long? = null): BpmRanges {
+    private fun calculateRanges(record: BpmRecordWithPoints, config: Frame, windowSizeMs: Long? = null): BpmRanges {
         // Expand the search range by the window size (or 5s default) to capture everything that will be visible
         val margin = windowSizeMs ?: 5000L
-        val searchStart = config.startTimeMs - margin
-        val searchEnd = config.endTimeMs + margin
+        val searchStart = config.content.startMs - margin
+        val searchEnd = config.content.endMs + margin
 
         val snippetPoints = record.dataPoints.filter { it.timestamp >= searchStart && it.timestamp <= searchEnd }
         val sMin = snippetPoints.minOfOrNull { it.bpm } ?: record.minDataPoint?.bpm ?: 60.0
@@ -1036,9 +969,9 @@ object ImageExporter {
         return BpmRanges(snapped.start, snapped.endInclusive, record.metadata.title)
     }
 
-    private fun calculateViewport(currentTime: Double?, windowSize: Long?, config: ImageExportConfig, record: BpmRecordWithPoints): Viewport {
+    private fun calculateViewport(currentTime: Double?, windowSize: Long?, config: Frame, record: BpmRecordWithPoints): Viewport {
         // 1. Determine the playhead position (50% through the selected snippet if currentTime is null)
-        val playhead = currentTime ?: ((config.startTimeMs + config.endTimeMs) / 2.0)
+        val playhead = currentTime ?: ((config.content.startMs + config.content.endMs) / 2.0)
 
         val start: Double
         val end: Double
@@ -1051,8 +984,8 @@ object ImageExporter {
         } else {
             // 3. If no window size is provided (static image of the whole snippet),
             // the viewport IS the snippet range.
-            start = config.startTimeMs.toDouble()
-            end = config.endTimeMs.toDouble()
+            start = config.content.startMs.toDouble()
+            end = config.content.endMs.toDouble()
         }
 
         val duration = (end - start).coerceAtLeast(1.0)
@@ -1061,13 +994,13 @@ object ImageExporter {
         return Viewport(start, end, playhead, duration, lookahead)
     }
 
-    private fun getBpmColor(bpm: Double, ranges: BpmRanges, config: ImageExportConfig): Int {
+    private fun getBpmColor(bpm: Double, ranges: BpmRanges, config: Frame): Int {
         val fraction = ((bpm - ranges.uiMin) / ranges.uiRange).coerceIn(0.0, 1.0).toFloat()
         // The same walk the on-screen chart uses, against this preset's endpoints — which default
         // to the app's own low and high.
         return inga.bpmetrics.core.BpmRamp.blend(
-            config.lowBpmColor,
-            config.highBpmColor,
+            config.look.lowBpmColor,
+            config.look.highBpmColor,
             fraction
         )
     }
@@ -1095,60 +1028,42 @@ object ImageExporter {
     /**
      * Computes the shared time axis for [records] without rewriting any data points.
      *
-     * Cheap enough to call from the UI; use [alignRecords] when the shifted points are needed.
+     * Clock time: the origin is the earliest session start, and each record sits at its real
+     * distance from it. Cheap enough to call from the UI; use [alignRecords] when the shifted
+     * points are needed.
      *
-     * Two modes:
-     * - **Elapsed time** ([alignByElapsedTime] true): every record is treated as starting at
-     *   0:00, overlaying sessions that happened at different times so their shapes can be
-     *   compared. The origin stays the first record's start, preserving how video sync behaved
-     *   before clock alignment existed.
-     * - **Clock time** ([alignByElapsedTime] false): the origin is the earliest session start,
-     *   and each record sits at its real distance from it.
+     * There was an elapsed-time mode, starting every record at 0:00 to compare shapes. Nothing
+     * reached it: every caller passed false, because a recording happened at a particular time and
+     * a video is in sync with that time (Model and Export Consolidation §6).
      */
-    fun timelineFor(records: List<BpmRecordWithPoints>, alignByElapsedTime: Boolean): Timeline {
+    fun timelineFor(records: List<BpmRecordWithPoints>): Timeline {
         if (records.isEmpty()) return Timeline(0L, 0L)
-
-        return if (alignByElapsedTime) {
-            val duration = records.maxOf { rec -> lastTimestampOf(rec) - firstTimestampOf(rec) }
-            Timeline(records.first().metadata.startTime, duration.coerceAtLeast(0L))
-        } else {
-            val origin = records.minOf { it.metadata.startTime }
-            val duration = records.maxOf { rec ->
-                (rec.metadata.startTime - origin) + lastTimestampOf(rec)
-            }
-            Timeline(origin, duration.coerceAtLeast(0L))
+        val origin = records.minOf { it.metadata.startTime }
+        val duration = records.maxOf { rec ->
+            (rec.metadata.startTime - origin) + lastTimestampOf(rec)
         }
+        return Timeline(origin, duration.coerceAtLeast(0L))
     }
 
     /**
      * Places several records on one timeline so a single graph can show them together.
      *
-     * In clock-time mode each record is offset by how long after [Timeline.originWallClockMs] it
-     * actually started, so every record lands exactly where it would if it had been exported on
-     * its own. That is what lets one video stay in sync with all of them at once.
-     *
-     * See [timelineFor] for the meaning of [alignByElapsedTime].
+     * Each record is offset by how long after [Timeline.originWallClockMs] it actually started, so
+     * every record lands exactly where it would if it had been exported on its own. That is what
+     * lets one video stay in sync with all of them at once.
      */
-    fun alignRecords(records: List<BpmRecordWithPoints>, alignByElapsedTime: Boolean): AlignedRecords {
-        val timeline = timelineFor(records, alignByElapsedTime)
+    fun alignRecords(records: List<BpmRecordWithPoints>): AlignedRecords {
+        val timeline = timelineFor(records)
         if (records.isEmpty()) return AlignedRecords(emptyList(), timeline)
 
         val shifted = records.map { rec ->
-            val offset = if (alignByElapsedTime) {
-                -firstTimestampOf(rec)
-            } else {
-                rec.metadata.startTime - timeline.originWallClockMs
-            }
-
+            val offset = rec.metadata.startTime - timeline.originWallClockMs
             if (offset == 0L) rec
             else rec.copy(dataPoints = rec.dataPoints.map { it.copy(timestamp = it.timestamp + offset) })
         }
 
         return AlignedRecords(shifted, timeline)
     }
-
-    private fun firstTimestampOf(record: BpmRecordWithPoints): Long =
-        record.dataPoints.firstOrNull()?.timestamp ?: 0L
 
     private fun lastTimestampOf(record: BpmRecordWithPoints): Long =
         record.dataPoints.lastOrNull()?.timestamp ?: record.metadata.durationMs
@@ -1162,19 +1077,19 @@ object ImageExporter {
     fun renderAlignedRecordsOnCanvas(
         canvas: Canvas,
         aligned: AlignedRecords,
-        config: ImageExportConfig,
+        content: ExportContent,
+        look: ExportPreset,
         currentTimeMs: Double? = null,
-        windowSizeMs: Long? = null,
-        graphRect: RectF = RectF(0f, 0f, 1f, 1f)
+        graphRect: RectF = look.frameFor(aligned.records.size).toRectF()
     ) = renderAlignedRecordsOnCanvasInZone(
-        canvas, aligned, config.inZoneOf(aligned.records.map { it.metadata }),
-        currentTimeMs, windowSizeMs, graphRect
+        canvas, aligned, Frame.of(content, look, aligned.records.map { it.metadata }),
+        currentTimeMs, look.windowSizeMs, graphRect
     )
 
     private fun renderAlignedRecordsOnCanvasInZone(
         canvas: Canvas,
         aligned: AlignedRecords,
-        config: ImageExportConfig,
+        config: Frame,
         currentTimeMs: Double?,
         windowSizeMs: Long?,
         graphRect: RectF
@@ -1193,17 +1108,19 @@ object ImageExporter {
         val maxBpm = (allPoints.maxOf { it.bpm } + 5.0).coerceAtMost(220.0)
         val ranges = BpmRanges(
             minBpm, maxBpm,
-            config.graphTitle?.takeIf { it.isNotBlank() } ?: "Multi-Watch Session"
+            config.content.title?.takeIf { it.isNotBlank() } ?: "Multi-Watch Session"
         )
 
-        // Clock-aligned exports carry a crop chosen against the shared timeline, so it is honoured
-        // as-is. Elapsed mode has no meaningful shared crop, and a caller may supply none at all,
-        // so both fall back to spanning the whole timeline.
-        val hasUsableRange = !config.alignByElapsedTime && config.endTimeMs > config.startTimeMs
+        // The crop is chosen against the shared timeline, so it is honoured as-is. A caller may
+        // supply none at all, which falls back to the whole timeline.
+        val hasUsableRange = config.content.endMs > config.content.startMs
         val multiConfig = if (hasUsableRange) {
             config
         } else {
-            config.copy(startTimeMs = 0L, endTimeMs = aligned.timeline.durationMs)
+            Frame(
+                config.content.copy(startMs = 0L, endMs = aligned.timeline.durationMs),
+                config.look, config.zoneId
+            )
         }
 
         val viewport = calculateViewport(currentTimeMs, windowSizeMs, multiConfig, primaryRecord)
@@ -1226,7 +1143,12 @@ object ImageExporter {
         } else {
             processedRecords.mapIndexed { index, rec ->
                 val assignedColor = colorForRecord(rec, index, config)
-                multiConfig.copy(lowBpmColor = assignedColor, highBpmColor = assignedColor)
+                // Each person's curve in their own colour: the look with both ends of the ramp set to it.
+                Frame(
+                    multiConfig.content,
+                    multiConfig.look.copy(lowBpmColor = assignedColor, highBpmColor = assignedColor),
+                    multiConfig.zoneId
+                )
             }
         }
 
@@ -1242,7 +1164,7 @@ object ImageExporter {
             )
         }
 
-        if (config.showCurrentStats) {
+        if (config.look.showCurrentStats) {
             // The pills name each wearer and colour-match their curve, so they replace the legend.
             drawMultiStatsHUD(
                 canvas = canvas,
@@ -1302,7 +1224,7 @@ object ImageExporter {
     private fun measureReadouts(
         dims: RenderingDimensions,
         records: List<BpmRecordWithPoints>,
-        config: ImageExportConfig,
+        config: Frame,
         paint: Paint
     ): ReadoutMetrics {
         val scale = dims.scaleFactor
@@ -1336,7 +1258,7 @@ object ImageExporter {
 
         // The preset scales what the renderer works out rather than replacing it, so no setting can
         // produce pills that do not fit the graph they are drawn on. The bounds still bind.
-        val rowHeight = ((available - rowGap * (records.size - 1)) / records.size * config.pillScale)
+        val rowHeight = ((available - rowGap * (records.size - 1)) / records.size * config.look.pillScale)
             .coerceIn(48f * scale, minOf(190f * scale, widthCap * 1.4f))
 
         // Everything else follows the row height, so the proportions hold at any size.
@@ -1373,8 +1295,8 @@ object ImageExporter {
         // Nothing here collapses when a part is switched off: the widths are summed from the parts
         // that are actually present, so hiding the name closes the gap rather than leaving a hole
         // where it used to be.
-        val avatarSize = if (config.pillShowPhoto) {
-            rowHeight * 0.58f * config.pillPhotoScale
+        val avatarSize = if (config.look.pillShowPhoto) {
+            rowHeight * 0.58f * config.look.pillPhotoScale
         } else {
             0f
         }
@@ -1387,11 +1309,11 @@ object ImageExporter {
         // stacking is the fallback, this number *is* the rule — the pill lays out flat while it
         // fits inside a fifth of the frame and stacks the moment it would not.
         val widthBudget = dims.drawAreaWidth * 0.22f
-        val labelSize = rowHeight * 0.24f * config.pillNameScale
+        val labelSize = rowHeight * 0.24f * config.look.pillNameScale
 
         paint.resetForExport()
         paint.isFakeBoldText = true
-        paint.textSize = rowHeight * 0.50f * config.pillBpmScale
+        paint.textSize = rowHeight * 0.50f * config.look.pillBpmScale
         // Reserve the width of the widest plausible reading so pills share one width. Without it a
         // wearer crossing from 99 to 100 would widen their pill mid-render and break the column.
         val flatDigitWidth = paint.measureText("888")
@@ -1399,7 +1321,7 @@ object ImageExporter {
         paint.isFakeBoldText = false
         paint.textSize = labelSize
         val labels = distinctLabelsOf(records)
-        val fullNameWidth = if (config.pillShowName) {
+        val fullNameWidth = if (config.look.pillShowName) {
             labels.maxOfOrNull { paint.measureText(it) } ?: 0f
         } else {
             0f
@@ -1410,9 +1332,9 @@ object ImageExporter {
         // the name underneath when laying it out would push the column past its share of the frame.
         val flatWidth = padH * 2 + avatarSize + gap + flatDigitWidth +
             (if (fullNameWidth > 0f) gap + fullNameWidth else 0f)
-        val stacked = config.pillShowName && flatWidth > widthBudget
+        val stacked = config.look.pillShowName && flatWidth > widthBudget
 
-        val digitSize = rowHeight * (if (stacked) 0.44f else 0.50f) * config.pillBpmScale
+        val digitSize = rowHeight * (if (stacked) 0.44f else 0.50f) * config.look.pillBpmScale
 
         paint.resetForExport()
         paint.isFakeBoldText = true
@@ -1427,7 +1349,7 @@ object ImageExporter {
 
         val maxLabelWidth = widthBudget - (padH * 2 + avatarSize + gap) -
             (if (stacked) 0f else gap + digitWidth)
-        val shownLabels = if (config.pillShowName && maxLabelWidth > labelSize) {
+        val shownLabels = if (config.look.pillShowName && maxLabelWidth > labelSize) {
             labels.map { ellipsize(it, maxLabelWidth, paint) }
         } else {
             List(records.size) { "" }
@@ -1471,7 +1393,7 @@ object ImageExporter {
         dims: RenderingDimensions,
         viewport: Viewport,
         records: List<BpmRecordWithPoints>,
-        config: ImageExportConfig,
+        config: Frame,
         /** The vertical scale, so a lone wearer's reading can be coloured by value. */
         ranges: BpmRanges,
         timelineOriginMs: Long,
@@ -1514,7 +1436,7 @@ object ImageExporter {
         // to be: the playhead is centred and everything past it is drawn at `futureOpacity`, so the
         // right of the plot is already the faded half. The pills sit on the part of the graph that
         // is deliberately quiet, and the solid, full-strength past stays clear.
-        val onLeft = config.pillCorner == PillCorner.TOP_LEFT
+        val onLeft = config.look.pillCorner == PillCorner.TOP_LEFT
         val pillLeft = if (onLeft) {
             dims.graphLeft + edgeMargin
         } else {
@@ -1568,7 +1490,7 @@ object ImageExporter {
             if (avatarSize > 0f) {
                 drawPillAvatar(
                     canvas = canvas,
-                    photo = config.recordPhotos[record.metadata.recordId],
+                    photo = config.content.photos[record.metadata.recordId],
                     initial = labels[index].trim().firstOrNull()?.uppercase() ?: "",
                     colorArgb = recordColor,
                     centerX = cursor + avatarSize / 2f,
@@ -1601,8 +1523,8 @@ object ImageExporter {
             // Never when there is no reading: a greyed "--" must not look like somebody's colour,
             // nor like a heart rate at the bottom of the scale.
             val readingColour = when {
-                bpm == null -> config.labelsColor
-                !config.pillBpmInPersonColor -> config.labelsColor
+                bpm == null -> config.look.labelsColor
+                !config.look.pillBpmInPersonColor -> config.look.labelsColor
                 records.size == 1 -> getBpmColor(bpm, ranges, config)
                 else -> recordColor
             }
@@ -1635,7 +1557,7 @@ object ImageExporter {
                 paint.isFakeBoldText = true
                 // Always the label colour, never theirs — with the reading already carrying their
                 // colour, a name in it too leaves no neutral text on the pill at all.
-                paint.color = config.labelsColor
+                paint.color = config.look.labelsColor
                 paint.textAlign = Paint.Align.LEFT
                 canvas.drawText(label, cursor, labelBaseline, paint)
 
@@ -1669,7 +1591,7 @@ object ImageExporter {
                 // Always the label colour, never theirs. With the reading already carrying their
                 // colour, a name in it too is two of the same signal and leaves the pill with no
                 // neutral text on it at all.
-                paint.color = config.labelsColor
+                paint.color = config.look.labelsColor
                 canvas.drawText(
                     label,
                     blockCentreX,
@@ -1741,7 +1663,7 @@ object ImageExporter {
         canvas: Canvas,
         dims: RenderingDimensions,
         records: List<BpmRecordWithPoints>,
-        config: ImageExportConfig,
+        config: Frame,
         paint: Paint
     ) {
         val legendLeft = dims.graphLeft + 16f * dims.scaleFactor
@@ -1758,7 +1680,7 @@ object ImageExporter {
             paint.style = Paint.Style.FILL
             canvas.drawCircle(legendLeft + 10f * dims.scaleFactor, legendTop + 12f * dims.scaleFactor, 8f * dims.scaleFactor, paint)
 
-            paint.color = config.labelsColor
+            paint.color = config.look.labelsColor
             paint.textSize = 20f * dims.scaleFactor
             paint.isFakeBoldText = true
             canvas.drawText(wearerLabel, legendLeft + 28f * dims.scaleFactor, legendTop + 18f * dims.scaleFactor, paint)

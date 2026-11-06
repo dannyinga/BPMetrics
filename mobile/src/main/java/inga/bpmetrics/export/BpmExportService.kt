@@ -49,7 +49,7 @@ class BpmExportService : Service() {
             context: Context,
             recordId: Long,
             recordTitle: String,
-            config: VideoExporter.VideoExportConfig,
+            request: ExportRequest.Video,
             targetUri: Uri?,
             /** How it looks and where it came from, so a queue of six reads as six different jobs. */
             presetName: String? = null,
@@ -58,7 +58,7 @@ class BpmExportService : Service() {
             RenderQueueManager.addJob(
                 recordId = recordId,
                 recordTitle = recordTitle,
-                config = config,
+                request = request,
                 targetUri = targetUri,
                 presetName = presetName,
                 sourceLabel = sourceLabel
@@ -151,10 +151,8 @@ class BpmExportService : Service() {
                         ?: throw IOException(
                             "The recordings this export was queued for are no longer in the library"
                         )
-                    val record = repository.getRecordWithId(hydrated.recordId)
-                        ?: throw IOException(
-                            "The recording this export was queued for is no longer in the library"
-                        )
+                    // The recording the single-curve path draws comes from the request too. It was
+                    // fetched again here by id, a second read of something the request already had.
 
                     // Update notification with title
                     notificationManager.notify(
@@ -163,7 +161,7 @@ class BpmExportService : Service() {
                     )
 
                     var lastNotificationTime = System.currentTimeMillis()
-                    val file = VideoExporter.exportVideo(this@BpmExportService, record, hydrated.config) { progress ->
+                    val file = VideoExporter.exportVideo(this@BpmExportService, hydrated.request) { progress ->
                         RenderQueueManager.updateJobProgress(nextJob.id, progress)
                         
                         val currentTime = System.currentTimeMillis()

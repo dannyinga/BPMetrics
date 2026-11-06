@@ -46,8 +46,6 @@ class TimelineImageSpecTest {
         // Guards the divisor every x-coordinate is computed against. A zero-width window would put
         // every point at the same place, or throw.
         val spec = TimelineImageExporter.Spec(
-            width = 1920,
-            height = 1080,
             title = "Subtronics",
             windowStartWallClockMs = 1_700_000_000_000L,
             windowEndWallClockMs = 1_700_000_000_000L,
@@ -61,8 +59,6 @@ class TimelineImageSpecTest {
     fun `a window spanning a real set reports its true length`() {
         val start = 1_700_000_000_000L
         val spec = TimelineImageExporter.Spec(
-            width = 1920,
-            height = 1080,
             title = "Subtronics",
             windowStartWallClockMs = start,
             windowEndWallClockMs = start + 3_600_000L,
@@ -85,8 +81,6 @@ class TimelineImageSpecTest {
     @Test
     fun `render refuses a spec with nothing to draw rather than producing an empty picture`() {
         val spec = TimelineImageExporter.Spec(
-            width = 1920,
-            height = 1080,
             title = "Nothing",
             windowStartWallClockMs = 0L,
             windowEndWallClockMs = 1_000L,
@@ -100,8 +94,7 @@ class TimelineImageSpecTest {
     @Test
     fun `render refuses a canvas with no area`() {
         val spec = TimelineImageExporter.Spec(
-            width = 0,
-            height = 1080,
+            look = ExportPreset(width = 0),
             title = "Subtronics",
             windowStartWallClockMs = 0L,
             windowEndWallClockMs = 1_000L,
