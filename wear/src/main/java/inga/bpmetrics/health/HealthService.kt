@@ -287,8 +287,10 @@ class HealthService : LifecycleService() {
             // of readings to serialize, and forcing a reset midway wipes the table the record is
             // still being built from — turning a slow save into a lost one.
             if (repository.recordingState.value == RecordingState.ENDING && !repository.isFinalizing) {
-                Log.w(tag, "Finalization did not complete in time; resetting")
-                repository.forceReset()
+                // Saved, not reset: a reset deletes the readings, and a sensor that never confirmed
+                // the stop is no reason to lose the recording (Audit #12).
+                Log.w(tag, "Stop not confirmed in time; saving what was recorded")
+                repository.saveWithoutConfirmation()
             }
         }
     }

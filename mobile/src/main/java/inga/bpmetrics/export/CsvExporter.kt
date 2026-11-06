@@ -91,7 +91,8 @@ object CsvExporter {
                         if (dataParts.size >= 2) {
                             val ts = dataParts[0].toLongOrNull()
                             val bpm = dataParts[1].toDoubleOrNull()
-                            if (ts != null && bpm != null) {
+                            // Out-of-range readings are skipped: one would fail the whole import.
+                            if (ts != null && bpm != null && BpmDataPoint.isValidBpm(bpm)) {
                                 dataPoints.add(BpmDataPoint(ts, bpm))
                             }
                         }

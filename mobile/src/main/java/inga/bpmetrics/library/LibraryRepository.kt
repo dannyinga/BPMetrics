@@ -1578,7 +1578,7 @@ class LibraryRepository(
         performAnalysisAndSaveDataPoints(
             inga.bpmetrics.core.BpmWatchRecord(
                 date = java.sql.Date(slice.startTime),
-                dataPoints = slice.points.map {
+                dataPoints = slice.points.filter { inga.bpmetrics.core.BpmDataPoint.isValidBpm(it.bpm) }.map {
                     inga.bpmetrics.core.BpmDataPoint(it.timestampMs, it.bpm)
                 },
                 startTime = slice.startTime,
@@ -1628,7 +1628,7 @@ class LibraryRepository(
         val newId = saveWatchRecordToLibrary(
             inga.bpmetrics.core.BpmWatchRecord(
                 date = java.sql.Date(merged.startTime),
-                dataPoints = merged.points.map {
+                dataPoints = merged.points.filter { inga.bpmetrics.core.BpmDataPoint.isValidBpm(it.bpm) }.map {
                     inga.bpmetrics.core.BpmDataPoint(it.timestampMs, it.bpm)
                 },
                 startTime = merged.startTime,

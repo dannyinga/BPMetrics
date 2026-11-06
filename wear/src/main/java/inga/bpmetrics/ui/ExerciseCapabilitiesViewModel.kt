@@ -29,13 +29,17 @@ class ExerciseCapabilitiesViewModel (
     val exerciseCapabilities = _exerciseCapabilities.asStateFlow()
 
     init {
-        viewModelScope.launch {
-            if (repository.hasAllPrerequisites.value)
-                _exerciseCapabilities.value = ExerciseCapabilitiesState.Ready
-            else {
-                checkCapabilities()
-            }
-        }
+        // Always checked. It used to be skipped once `hasAllPrerequisites` was set, and the
+        // permission screen, which always comes first, sets it on its way out: so the check never
+        // ran, and a watch without the sensor went straight to a recording screen that could
+        // never record (Audit #14).
+        viewModelScope.launch { checkCapabilities() }
+    }
+
+    /** Runs the check again, after it failed for a reason other than the watch itself. */
+    fun retry() {
+        _exerciseCapabilities.value = ExerciseCapabilitiesState.Checking
+        viewModelScope.launch { checkCapabilities() }
     }
 
     private suspend fun checkCapabilities() {
@@ -60,6 +64,8 @@ class ExerciseCapabilitiesViewModel (
             if (supportsBpm) {
                 Log.d("ExCapVM", "All permissions and exercise capabilities checked")
                 _exerciseCapabilities.value = ExerciseCapabilitiesState.Ready
+                // Permissions came first, so everything recording needs is in place.
+                repository.grantAllPrerequisites()
             } else {
                 _exerciseCapabilities.value = ExerciseCapabilitiesState.UnsupportedDevice
             }
@@ -72,6 +78,13 @@ class ExerciseCapabilitiesViewModel (
             // Health Services is a Play-Services-backed API and can fail in ways that are not
             // `Exception`s at all when the services package is mid-update.
             Log.e("ExCapVM", "Capability check failed", t)
+            if (repository.sessionActive.value) {
+                // A recording is already running, so the sensor plainly works. Holding the wearer
+                // on an error screen would only keep them from its Stop button.
+                _exerciseCapabilities.value = ExerciseCapabilitiesState.Ready
+                repository.grantAllPrerequisites()
+                return
+            }
             _exerciseCapabilities.value =
                 ExerciseCapabilitiesState.Error(t.message ?: "Unknown error")
         }

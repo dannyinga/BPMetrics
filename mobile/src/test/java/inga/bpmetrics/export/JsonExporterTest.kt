@@ -15,6 +15,21 @@ import org.junit.Test
 class JsonExporterTest {
 
     @Test
+    fun `an out-of-range reading is skipped, not fatal to the import`() {
+        // A reading over 250 makes a data point throw. One used to fail the whole file (Play #12).
+        val dto = BpmRecordJsonDto(
+            startTime = 1_000L, endTime = 61_000L,
+            dataPoints = listOf(BpmDataPointDto(0, 120.0), BpmDataPointDto(1_000, 300.0), BpmDataPointDto(2_000, 125.0))
+        )
+        val onlyBad = dto.copy(dataPoints = listOf(BpmDataPointDto(0, 300.0)))
+
+        val records = with(JsonExporter) { listOf(dto, onlyBad).toWatchRecords() }
+
+        assertEquals(1, records.size)
+        assertEquals(listOf(120.0, 125.0), records.single().dataPoints.map { it.bpm })
+    }
+
+    @Test
     fun `toJsonString serializes record metadata, deviceId, wearerName, and category tags`() {
         val record = BpmRecordWithPoints(
             metadata = BpmRecordEntity(

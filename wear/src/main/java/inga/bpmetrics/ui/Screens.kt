@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,6 +21,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,8 +66,9 @@ sealed class Screens(val route: String) {
 /**
  * Composable that handles the high-level permission state logic.
  *
- * Redirects the user to [PermissionsUI] if requirements are missing, or triggers
- * [onReady] if all permissions are granted.
+ * Shows [PermissionsUI] while heart rate access is missing, and triggers [onReady] once it's
+ * granted. Re-checks whenever the app comes back to the front, so turning access on in Settings
+ * carries on by itself.
  *
  * @param viewModel The view model managing permission state and logic.
  * @param onReady Callback triggered once all permissions are successfully granted.
@@ -74,24 +79,37 @@ fun PermissionsScreen (
     onReady: () -> Unit
 ) {
     val permissions by viewModel.permissions.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // Activity result launcher for handling the system permission request dialog
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        if (result.values.all { it }) {
-            viewModel.refresh()
+    ) { viewModel.onRequestResult() }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.refresh()
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    when (permissions) {
+    when (val state = permissions) {
         PermissionState.Checking -> {
             LoadingScreen(label = "Checking permissions...")
         }
         is PermissionState.MissingPermissions -> {
             PermissionsUI(
-                launcher = launcher,
-                missingPermissions = (permissions as PermissionState.MissingPermissions).permissions
+                refused = state.refused,
+                onGrant = { launcher.launch(viewModel.permissionsToRequest()) },
+                onOpenSettings = {
+                    context.startActivity(
+                        android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            .setData(android.net.Uri.fromParts("package", context.packageName, null))
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
             )
         }
         PermissionState.Ready -> LaunchedEffect(Unit) { onReady() }
@@ -99,17 +117,16 @@ fun PermissionsScreen (
 }
 
 /**
- * The visual interface for requesting missing permissions.
+ * Asking for heart rate access, and what to do once it's been refused.
  *
- * Displays a descriptive message and a button to launch the system permission prompt.
- *
- * @param launcher The result launcher used to initiate the permission request.
- * @param missingPermissions The list of permission strings that need to be requested.
+ * @param refused Whether the wearer has said no to the system prompt. The system stops showing
+ *   it after a second refusal, so from then on Settings is the only way to grant it.
  */
 @Composable
 fun PermissionsUI(
-    launcher: ManagedActivityResultLauncher<Array<String>, Map<String, Boolean>>,
-    missingPermissions: List<String>
+    refused: Boolean,
+    onGrant: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -119,15 +136,27 @@ fun PermissionsUI(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Icon(
-                painter = painterResource(id = R.drawable.ic_heart_plus),
-                contentDescription = null,
-                modifier = Modifier.size(48.dp),
-                tint = HeartRed
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            BoxWithConstraints (
-                modifier = Modifier.fillMaxWidth(0.7f),
+            // Not after a refusal: the explanation and both ways forward need the room on a
+            // round screen.
+            if (!refused) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_heart_plus),
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = HeartRed
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            if (refused) {
+                Text(
+                    text = "Heart rate access is off, so BPMetrics can't record. Turn it on " +
+                        "in Settings.",
+                    style = MaterialTheme.typography.caption2,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(0.72f)
+                )
+            } else BoxWithConstraints (
+                modifier = Modifier.fillMaxWidth(0.75f),
             ) {
                 val boxWidth : Dp = this.maxWidth
                 val fontSize = (boxWidth.value / 11).sp
@@ -138,16 +167,32 @@ fun PermissionsUI(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(if (refused) 8.dp else 16.dp))
 
-            Button(
-                modifier = Modifier.fillMaxWidth(0.8f),
-                onClick = { 
-                    launcher.launch(missingPermissions.toTypedArray())
-                },
-                colors = ButtonDefaults.buttonColors(backgroundColor = BpmAccent)
-            ) {
-                Text("Grant Access", color = Color.Black)
+            if (!refused) {
+                Button(
+                    modifier = Modifier.fillMaxWidth(0.7f),
+                    onClick = onGrant,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = BpmAccent)
+                ) {
+                    Text("Grant Access", color = Color.Black)
+                }
+            } else {
+                // Compact, both of them: two full buttons and the explanation don't fit a round
+                // screen.
+                CompactChip(
+                    onClick = onOpenSettings,
+                    label = { Text("Open Settings", color = Color.Black) },
+                    colors = androidx.wear.compose.material.ChipDefaults.primaryChipColors(
+                        backgroundColor = BpmAccent
+                    )
+                )
+                // The prompt may still show after one refusal; after two, the system won't.
+                CompactChip(
+                    onClick = onGrant,
+                    label = { Text("Ask again", style = MaterialTheme.typography.caption2) },
+                    modifier = Modifier.padding(top = 6.dp)
+                )
             }
         }
     }
@@ -156,7 +201,8 @@ fun PermissionsUI(
 /**
  * Composable that checks if the device supports the required Health Services heart rate capabilities.
  *
- * Automatically triggers [onReady] if the device is compatible.
+ * Automatically triggers [onReady] if the device is compatible. A device that isn't, or a check
+ * that fails, says so; the failure used to show a black screen (Audit #14).
  *
  * @param viewModel The view model managing hardware capability detection.
  * @param onReady Callback triggered once the device hardware is confirmed to be compatible.
@@ -168,23 +214,60 @@ fun ExerciseCapabilitiesScreen(
 ) {
     val exerciseCapabilities by viewModel.exerciseCapabilities.collectAsState()
 
-    when (exerciseCapabilities) {
+    when (val state = exerciseCapabilities) {
         ExerciseCapabilitiesState.Checking -> {
             LoadingScreen(label = "Checking device support...")
         }
 
         is ExerciseCapabilitiesState.Error -> {
-            // Option to display an error or retry message
+            GateMessage(
+                text = "Couldn't check this watch's heart rate sensor. ${state.errorMessage}",
+                action = "Try again",
+                onAction = viewModel::retry
+            )
         }
-        
+
         ExerciseCapabilitiesState.Ready -> {
             LaunchedEffect(Unit) { onReady() }
         }
-        
+
         ExerciseCapabilitiesState.UnsupportedDevice -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("This device does not support heart rate tracking.", textAlign = TextAlign.Center)
-            }
+            GateMessage(
+                text = "This watch can't measure heart rate during a workout, which BPMetrics " +
+                    "needs to record."
+            )
+        }
+    }
+}
+
+/** A message in the middle of the round screen, with an optional action under it. */
+@Composable
+private fun GateMessage(text: String, action: String? = null, onAction: () -> Unit = {}) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            painter = painterResource(id = R.drawable.ic_heart_plus),
+            contentDescription = null,
+            modifier = Modifier.size(28.dp),
+            tint = MaterialTheme.colors.error
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.caption1,
+            textAlign = TextAlign.Center,
+            maxLines = 5,
+            modifier = Modifier.fillMaxWidth(0.78f)
+        )
+        if (action != null) {
+            Spacer(Modifier.height(8.dp))
+            CompactChip(
+                onClick = onAction,
+                label = { Text(action, style = MaterialTheme.typography.caption2) }
+            )
         }
     }
 }
@@ -223,7 +306,8 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
         state = uiState,
         onStart = viewModel::onStartClicked,
         onStop = viewModel::onStopClicked,
-        onSendNow = viewModel::onSendNowClicked
+        onSendNow = viewModel::onSendNowClicked,
+        onDismissSave = viewModel::onSaveMessageDismissed
     )
 }
 
@@ -232,16 +316,22 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
  *
  * @param state The current UI state containing heart rate, status, and duration info.
  * @param onStart Callback to trigger when the start button is clicked.
- * @param onStop Callback to trigger when the stop button is clicked.
+ * @param onStop Callback to trigger once stopping has been confirmed.
  * @param onSendNow Callback to offer the phone whatever the watch is still holding.
+ * @param onDismissSave Clears the "Saved" or "Not saved" line.
  */
 @Composable
 fun RecordingContent(
     state: RecordingUIState,
     onStart: () -> Unit,
     onStop: () -> Unit,
-    onSendNow: () -> Unit = {}
+    onSendNow: () -> Unit = {},
+    onDismissSave: () -> Unit = {}
 ) {
+    // Stopping asks first (Audit #11). One tap on a wrist, from a sleeve or a jostle in a crowd,
+    // ended a set, and the button sat right under "Send now".
+    var confirmStop by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -293,11 +383,28 @@ fun RecordingContent(
             )
         }
 
-        // Status text (e.g., "Acquiring...", "Ready")
-        Text(
-            text = state.statusText,
-            style = MaterialTheme.typography.caption2
-        )
+        // How the last recording ended, in place of the status line until it's tapped away or the
+        // next one starts. Stopping used to end in silence whether or not anything was kept.
+        val lastSave = state.lastSave
+        if (lastSave != null && !isRecording && state.serviceState != RecordingState.ENDING) {
+            Text(
+                text = lastSave.message,
+                style = MaterialTheme.typography.caption2,
+                color = if (lastSave is inga.bpmetrics.recording.SaveOutcome.Saved) BpmAccent
+                    else MaterialTheme.colors.error,
+                textAlign = TextAlign.Center,
+                maxLines = 3,
+                modifier = Modifier
+                    .fillMaxWidth(0.8f)
+                    .clickable(onClickLabel = "Dismiss", onClick = onDismissSave)
+            )
+        } else {
+            // Status text (e.g., "Acquiring...", "Ready")
+            Text(
+                text = state.statusText,
+                style = MaterialTheme.typography.caption2
+            )
+        }
 
         // What the phone has not got yet. A recording stays counted here until the phone has
         // saved it, so this is what is genuinely still only on the wrist.
@@ -322,8 +429,9 @@ fun RecordingContent(
         // success or the app falling over.
         //
         // So the chip stays for as long as there is either something outstanding or something to
-        // say about the last press.
-        if (state.pendingRecordCount > 0 || state.sendResult != null || state.isSending) {
+        // say about the last press. Not while recording: it sat just above Stop, and sending
+        // carries on by itself anyway.
+        if (!isRecording && (state.pendingRecordCount > 0 || state.sendResult != null || state.isSending)) {
             // Sending is automatic; this is for when it visibly is not working. Nothing is
             // deleted by it, so pressing it repeatedly is harmless.
             CompactChip(
@@ -354,7 +462,7 @@ fun RecordingContent(
             Button(
                 enabled = buttonEnabled,
                 onClick = {
-                    if (isRecording) onStop() else onStart()
+                    if (isRecording) confirmStop = true else onStart()
                 },
                 modifier = Modifier.size(56.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -363,7 +471,7 @@ fun RecordingContent(
             ) {
                 Icon(
                     painter = if (isRecording) {
-                        painterResource(id = android.R.drawable.ic_delete)
+                        painterResource(id = R.drawable.ic_stop)
                     } else {
                         painterResource(id = R.drawable.ic_heart_plus)
                     },
@@ -382,6 +490,48 @@ fun RecordingContent(
                     style = MaterialTheme.typography.body2,
                 )
             }
+        }
+    }
+
+    // Closes by itself if the recording stops some other way while it's open.
+    androidx.wear.compose.material.dialog.Dialog(
+        showDialog = confirmStop && state.serviceState == RecordingState.RECORDING,
+        onDismissRequest = { confirmStop = false }
+    ) {
+        androidx.wear.compose.material.dialog.Alert(
+            title = { Text("Stop recording?", textAlign = TextAlign.Center) },
+            negativeButton = {
+                Button(
+                    onClick = { confirmStop = false },
+                    colors = ButtonDefaults.secondaryButtonColors()
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_close),
+                        contentDescription = "Keep recording"
+                    )
+                }
+            },
+            positiveButton = {
+                Button(
+                    onClick = {
+                        confirmStop = false
+                        onStop()
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = RecordingRed)
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_stop),
+                        contentDescription = "Stop and save",
+                        tint = Color.White
+                    )
+                }
+            }
+        ) {
+            Text(
+                "It's saved and sent to your phone.",
+                style = MaterialTheme.typography.caption2,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }

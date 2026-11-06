@@ -179,6 +179,14 @@ class RecordingRepository private constructor(context: Context) {
         .map { it.size }
         .stateIn(scope, SharingStarted.Eagerly, 0)
 
+    private val _lastSave = MutableStateFlow<SaveOutcome?>(null)
+    /** How the last recording ended, until the next one starts or it's dismissed. */
+    val lastSave: StateFlow<SaveOutcome?> = _lastSave.asStateFlow()
+
+    fun dismissLastSave() {
+        _lastSave.value = null
+    }
+
     private val _hasAllPrerequisites = MutableStateFlow(false)
     /**
      * Indicates whether all system prerequisites (permissions, capabilities) are met.
@@ -398,6 +406,7 @@ class RecordingRepository private constructor(context: Context) {
         val nowWall = System.currentTimeMillis()
         userIntentState.value = null
         autoRestartAttempts = 0
+        _lastSave.value = null
 
         // Mark the session open here, before anything can suspend. The foreground service and its
         // manager both decide whether they may shut down by reading this, and while it was set on
@@ -473,7 +482,9 @@ class RecordingRepository private constructor(context: Context) {
     fun stopRecording() {
         Log.d(tag, "stopRecording requested")
         if (startTimeWallClock == 0L) {
+            // Stopped in the instant after Start, before the session had a start time.
             forceReset()
+            _lastSave.value = SaveOutcome.NotSaved("it was stopped before anything was recorded.")
             return
         }
 
@@ -482,7 +493,9 @@ class RecordingRepository private constructor(context: Context) {
 
         scope.launch {
             // Signal Health Services to end. Observer handles the "isEnded" transition.
-            exerciseClientManager.endExercise()
+            // With no exercise of ours running there is nothing to report the end, so save now
+            // rather than leaving "Saving…" up until the watchdog's 30 seconds run out.
+            if (!exerciseClientManager.endExercise()) finalizeAndCleanup()
         }
     }
 
@@ -512,11 +525,13 @@ class RecordingRepository private constructor(context: Context) {
                     Log.w(tag, "Discarded $discarded out-of-range point(s) while finalizing")
                 }
 
+                // The record model requires endTime > startTime. A backwards clock step mid-session
+                // would otherwise throw here and destroy the recording, so keep the duration
+                // strictly positive instead of failing.
+                val endTime = System.currentTimeMillis().coerceAtLeast(wallClock + 1)
+                val outcome = SaveOutcome.of(storedPoints.size, points.size, endTime - wallClock)
+
                 if (points.isNotEmpty()) {
-                    // The record model requires endTime > startTime. A backwards clock step mid-session
-                    // would otherwise throw here and destroy the recording, so keep the duration
-                    // strictly positive instead of failing.
-                    val endTime = System.currentTimeMillis().coerceAtLeast(wallClock + 1)
                     val record = BpmWatchRecord(
                         date = Date(wallClock),
                         dataPoints = points.sortedBy { it.timestamp },
@@ -532,10 +547,14 @@ class RecordingRepository private constructor(context: Context) {
                     dao.insertPendingRecord(PendingRecordEntity(recordJson = gson.toJson(record)))
                     Log.d(tag, "Record finalized with ${points.size} points starting at $wallClock for device: ${record.deviceId}")
                 }
+                _lastSave.value = outcome
             } catch (e: Exception) {
                 // Never leave the watch stuck mid-session: the sensors still need re-warming
                 // even when this recording could not be saved.
                 Log.e(tag, "Failed to finalize recording started at $wallClock", e)
+                _lastSave.value = SaveOutcome.NotSaved(
+                    "the watch couldn't write it (${e.message ?: e.javaClass.simpleName})."
+                )
             } finally {
                 finalizing = false
             }
@@ -587,6 +606,24 @@ class RecordingRepository private constructor(context: Context) {
         _liveBpm.value = null
         userIntentState.value = null
         _sessionActive.value = false
+    }
+
+    /**
+     * Saves what a stopping recording has, without waiting any longer for Health Services to
+     * confirm the stop.
+     *
+     * The watchdog's answer to a stop that was never confirmed. It used to call [forceReset],
+     * which deletes the readings: a sensor that didn't answer cost the wearer the whole recording,
+     * with nothing on screen to say so.
+     */
+    fun saveWithoutConfirmation() {
+        Log.w(tag, "Stop not confirmed by Health Services; saving what was recorded")
+        if (startTimeWallClock == 0L) {
+            forceReset()
+            return
+        }
+        scope.launch { exerciseClientManager.endExercise() }
+        finalizeAndCleanup()
     }
 
     /**

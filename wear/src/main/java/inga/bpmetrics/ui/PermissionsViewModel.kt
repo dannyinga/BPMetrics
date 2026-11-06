@@ -32,13 +32,38 @@ class PermissionsViewModel(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) HealthPermissions.READ_HEART_RATE
         else Manifest.permission.BODY_SENSORS
 
-    /** The comprehensive list of all permissions required for the app to record and sync data. */
+    /**
+     * What recording can't happen without. Notifications aren't on it: they show the ongoing
+     * recording, but a refusal used to leave the app stuck on this screen with no way to record.
+     */
     val requiredPermissions = listOf(
         heartRatePermissionAdjusted,
         Manifest.permission.FOREGROUND_SERVICE,
-        Manifest.permission.FOREGROUND_SERVICE_HEALTH,
-        Manifest.permission.POST_NOTIFICATIONS
+        Manifest.permission.FOREGROUND_SERVICE_HEALTH
     )
+
+    /** Asked for alongside, and fine to refuse. */
+    private val optionalPermissions =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) listOf(Manifest.permission.POST_NOTIFICATIONS)
+        else emptyList()
+
+    /** What the Grant button asks for: whatever is still missing, required or not. */
+    fun permissionsToRequest(): Array<String> = (requiredPermissions + optionalPermissions)
+        .filter { ContextCompat.checkSelfPermission(appContext, it) != PackageManager.PERMISSION_GRANTED }
+        .toTypedArray()
+
+    /**
+     * The answer to the system prompt. A refusal is said plainly, with a way to Settings: it used
+     * to leave the same "needs sensor access" screen up, and once the system stops showing its
+     * prompt after a second refusal, Grant did nothing at all (Audit #13).
+     */
+    fun onRequestResult() {
+        checkPermissions()
+        val state = _permissions.value
+        if (state is PermissionState.MissingPermissions) {
+            _permissions.value = state.copy(refused = true)
+        }
+    }
 
     private val _permissions = MutableStateFlow<PermissionState>(PermissionState.Checking)
     /**
@@ -69,11 +94,14 @@ class PermissionsViewModel(
         }
 
         if (missingPermissions.isNotEmpty()) {
-            _permissions.value = PermissionState.MissingPermissions(missingPermissions)
+            // A refusal stays a refusal across a re-check (coming back from Settings unchanged).
+            val refused = (_permissions.value as? PermissionState.MissingPermissions)?.refused ?: false
+            _permissions.value = PermissionState.MissingPermissions(missingPermissions, refused)
         } else {
-            Log.d("PermVM", "All permissions granted. Notifying repository.")
+            // The repository hears about it once the capability check has passed too, since that
+            // starts the health service, and a watch without the sensor shouldn't start it.
+            Log.d("PermVM", "All permissions granted.")
             _permissions.value = PermissionState.Ready
-            repository.grantAllPrerequisites()
         }
     }
 }
@@ -89,6 +117,10 @@ sealed interface PermissionState {
     /**
      * One or more permissions are missing and must be requested.
      * @property permissions The list of missing permission strings.
+     * @property refused Whether the wearer has already said no to the system prompt.
      */
-    data class MissingPermissions(val permissions: List<String>) : PermissionState
+    data class MissingPermissions(
+        val permissions: List<String>,
+        val refused: Boolean = false
+    ) : PermissionState
 }

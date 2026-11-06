@@ -52,7 +52,8 @@ class RecordingViewModel(
         // in it until the phone acknowledges the save, so there is nothing to add to it.
         repository.pendingRecordCount,
         _sending,
-        _sendResult
+        _sendResult,
+        repository.lastSave
     ) { values ->
         RecordingUIState(
             bpm = values[0] as Double?,
@@ -62,6 +63,7 @@ class RecordingViewModel(
             pendingRecordCount = values[4] as Int,
             isSending = values[5] as Boolean,
             sendResult = values[6] as String?,
+            lastSave = values[7] as inga.bpmetrics.recording.SaveOutcome?,
             statusText = statusTextFor(values[2] as RecordingState, values[3] as SignalState)
         )
     }.stateIn(
@@ -87,6 +89,11 @@ class RecordingViewModel(
      */
     fun onStopClicked() {
         repository.stopRecording()
+    }
+
+    /** Clears the "Saved" or "Not saved" line. */
+    fun onSaveMessageDismissed() {
+        repository.dismissLastSave()
     }
 
     /**
@@ -197,7 +204,9 @@ data class RecordingUIState(
     /** Whether a manual send is in flight. */
     val isSending: Boolean = false,
     /** What the last manual send achieved, while it is still worth showing. */
-    val sendResult: String? = null
+    val sendResult: String? = null,
+    /** How the last recording ended, shown until the next one starts or it's tapped away. */
+    val lastSave: inga.bpmetrics.recording.SaveOutcome? = null
 ) {
     /**
      * Whether the start/stop control accepts a press.

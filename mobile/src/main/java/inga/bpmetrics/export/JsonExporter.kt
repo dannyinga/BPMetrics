@@ -858,10 +858,12 @@ object JsonExporter {
 
     /** Converts parsed records into the shape the ingest path accepts, dropping anything unusable. */
     fun List<BpmRecordJsonDto>.toWatchRecords(): List<BpmWatchRecord> = mapNotNull { dto ->
-        if (dto.startTime > 0 && dto.endTime > dto.startTime && dto.dataPoints.isNotEmpty()) {
+        if (dto.startTime > 0 && dto.endTime > dto.startTime && dto.dataPoints.any { BpmDataPoint.isValidBpm(it.bpm) }) {
             BpmWatchRecord(
                 date = Date(dto.date.takeIf { it > 0 } ?: dto.startTime),
-                dataPoints = dto.dataPoints.map { BpmDataPoint(it.timestamp, it.bpm) },
+                // Out-of-range readings skipped, as the watch does: one would fail the whole import.
+                dataPoints = dto.dataPoints.filter { BpmDataPoint.isValidBpm(it.bpm) }
+                    .map { BpmDataPoint(it.timestamp, it.bpm) },
                 startTime = dto.startTime,
                 endTime = dto.endTime,
                 title = dto.title,

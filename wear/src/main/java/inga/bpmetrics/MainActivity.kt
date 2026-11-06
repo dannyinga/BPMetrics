@@ -74,7 +74,11 @@ class MainActivity : ComponentActivity() {
         setTheme(android.R.style.Theme_DeviceDefault)
 
         setContent {
-            BpmNavHost()
+            // The theme existed and nothing used it, so every screen drew in Wear's stock blue
+            // (Audit #10).
+            inga.bpmetrics.theme.BPMetricsTheme {
+                BpmNavHost()
+            }
         }
         
         // Observe lifecycle to manage window flags and service connection

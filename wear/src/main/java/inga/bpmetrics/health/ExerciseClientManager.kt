@@ -111,15 +111,23 @@ class ExerciseClientManager(context: Context) {
 
     suspend fun pauseExercise() = try { exerciseClient.pauseExerciseAsync().await() } catch (e: Exception) {}
 
-    suspend fun endExercise() {
-        try {
-            val info = exerciseClient.getCurrentExerciseInfoAsync().await()
-            if (info.isOwnedExerciseInProgress()) {
-                exerciseClient.endExercise()
-            }
-        } catch (e: Exception) {
-            Log.e(tag, "Error ending exercise", e)
+    /**
+     * Asks Health Services to end our exercise.
+     *
+     * @return whether an end was asked for, so an end will be reported back. False when there was
+     *   no exercise of ours running, or the request failed: nothing will confirm the stop then.
+     */
+    suspend fun endExercise(): Boolean = try {
+        val info = exerciseClient.getCurrentExerciseInfoAsync().await()
+        if (info.isOwnedExerciseInProgress()) {
+            exerciseClient.endExercise()
+            true
+        } else {
+            false
         }
+    } catch (e: Exception) {
+        Log.e(tag, "Error ending exercise", e)
+        false
     }
 
     /**

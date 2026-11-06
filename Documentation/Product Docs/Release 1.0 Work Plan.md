@@ -304,6 +304,33 @@ This is the feedback layer that later sprints rely on, especially for Undo (Audi
 
 **Commit:** `fix(wear): themed, harder to stop by accident, and honest about saving`
 
+**As built:**
+- **S8.1:** `MainActivity` wraps everything in `BPMetricsTheme`, so the watch is teal like the phone.
+- **S8.2:** tapping Stop opens a "Stop recording?" confirm, with an X to keep recording and a stop square to stop and save. The button has a stop icon (it was the system "delete" icon). "Send now" is hidden while recording, so nothing sits right above Stop, and sending carries on by itself anyway.
+- **S8.3:** a stop ends in a line on the watch until it's tapped away or the next recording starts:
+  - "Saved · 33s, 34 readings" in teal.
+  - Or, in red, "Not saved:" plus the reason (worded in `SaveOutcome`, tested): no heart rate measured; every reading out of range; stopped before anything was recorded; or the write failed, with the error.
+  - **Lost recordings fixed:** a stop that Health Services never confirmed hit a 30-second watchdog that called `forceReset()`, deleting the readings without a word. The watchdog now saves what was recorded (`saveWithoutConfirmation`).
+  - **No more 30-second wait:** a stop with no exercise of ours running (`endExercise()` now says whether it asked for an end) saves straight away.
+- **S8.4:**
+  - **A refusal says so:** "Heart rate access is off, so BPMetrics can't record", with "Open Settings" and "Ask again". After two refusals the system stops showing its prompt, and Grant now leads here instead of doing nothing.
+  - **Picks up the change:** permissions are re-checked on return, so granting in Settings carries on.
+  - **Notifications are optional:** refusing them no longer blocks recording.
+- **S8.5:** the capability check was skipped whenever permissions were granted, which is always, since that screen comes first. It now always runs.
+  - An unsupported watch gets a message; a check that fails gets the reason and "Try again" (that state was a black screen).
+  - The health service starts only once the check has passed.
+  - If a recording is already running, a failed check lets the wearer through to Stop.
+- **S8.6:**
+  - **Watch:** already fixed. Out-of-range readings are dropped as they arrive and again when the recording is saved, so a reading over 250 can't reach the data point's check that throws.
+  - **Phone:** CSV and JSON import, and recording split and merge, built data points without that filter, so one bad reading failed the whole import. They skip it now (tested for JSON).
+- **Tests:** the watch has unit tests now (JUnit in `wear/build.gradle.kts`), starting with `SaveOutcomeTest`.
+- **Verified on the watch emulator (API 36):**
+  - **Refusing access:** heart rate access refused twice gave the explanation. On a round screen two full buttons didn't fit, so the actions are compact chips.
+  - **Open Settings:** opened the watch's Settings. Granting there and coming back went through the device check to "Ready to record".
+  - **Stop:** asked first; "Keep recording" carried on; confirming showed "Saved · 33s, 34 readings"; tapping the line dismissed it.
+  - **Clean-up:** the test recording was removed from the watch's outbox, so it won't reach the phone emulator.
+  - **Not checked on a device:** the unsupported-watch message (the emulator has the sensor), and the "Not saved" and watchdog paths, which can't be triggered on the emulator.
+
 ### S9 — Watch layout and states
 
 | Ticket | Work | Audit |
