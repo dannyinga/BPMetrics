@@ -67,4 +67,24 @@ class FrameRegionTest {
     fun outsideThePanelIsNothing() {
         assertNull(VideoFrameRenderer.regionAt(1920, 1080, aligned, content, look, panel, 10f, 10f))
     }
+
+    @Test
+    fun pillsMovedOffTheGraphAreFoundWhereTheyWerePut() {
+        // Pinned to the top left of the frame, well outside the panel.
+        val spot = ReadoutSpot(x = 0.03f, y = 0.05f, pin = ReadoutPin.TOP_LEFT)
+        assertEquals(
+            VideoFrameRenderer.Region.READOUTS,
+            VideoFrameRenderer.regionAt(1920, 1080, aligned, content, look, panel, 1920 * 0.05f, 1080 * 0.08f, readouts = spot)
+        )
+        // And where they were on the graph is the graph again.
+        assertEquals(
+            VideoFrameRenderer.Region.PLOT,
+            VideoFrameRenderer.regionAt(
+                1920, 1080, aligned, content, look, panel,
+                1920 * (panel.left + (panel.right - panel.left) * 0.93f),
+                1080 * (panel.top + (panel.bottom - panel.top) * 0.4f),
+                readouts = spot
+            )
+        )
+    }
 }

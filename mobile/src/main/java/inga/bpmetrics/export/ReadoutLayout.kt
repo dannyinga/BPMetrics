@@ -1,24 +1,19 @@
 package inga.bpmetrics.export
 
-import kotlin.math.ceil
-
 /**
- * Where the live readout pills go: how many columns, how tall, and where each place in the ranking
- * sits.
+ * Where the live readout pills go: one column, pinned at a corner, growing away from it.
  *
- * The pills used to be one column whose rows had a minimum height, and the minimum won over fitting:
- * from three people the column ran past the bottom of the panel, and at five the last person was
- * cut off (UX Audit O1). Here the plan always fits the area it's given and never drops anyone.
+ * One column, always (S14C). Two columns kept everyone on a short panel, but a ranking read across
+ * and then down is no longer a ranking, and a pill sliding from the bottom of one column to the top
+ * of the next to change places read as a jump rather than an overtake.
  *
- * - **One column** while its rows stay readable, which is the layout the ranking reads best in.
- * - **More columns** when they don't: rows get taller as there are fewer of them, and the block
- *   gets wider, so each extra column is allowed a little more of the plot's width.
- * - **Smaller pills** when nothing reaches readable: the plan with the tallest rows, shrunk until
- *   it fits. Never a person left out.
+ * Pills are a fixed size, set by the look, rather than whatever share of the panel was left: five
+ * people take more room than two, and the column grows to make it. It only shrinks when growing
+ * would take it past the edge of the area it's allowed (the panel while it sits on the graph, the
+ * canvas once it's been moved off). Nobody is ever dropped.
  *
- * A pill's width comes from what it says (see [Measure]), so a name gets the room it needs up to
- * the column's allowance rather than a fixed share of the panel, which on a 9:16 story left
- * every name as "D…" (UX Audit O4).
+ * A pill's width comes from what it says (see [Measure]), up to [column]'s `maxWidth`, so a name
+ * gets the room it needs rather than a fixed share of the canvas (UX Audit O4).
  *
  * Pure, so the rule is tested without drawing anything.
  */
@@ -29,113 +24,80 @@ internal object ReadoutLayout {
         fun widthAt(rowHeight: Float, allowance: Float): Float
     }
 
-    /**
-     * Where the readouts go.
-     *
-     * Places are numbered by rank, filling the first column top to bottom and then the next, so the
-     * fastest heart is always top left of the block and the order reads like text.
-     */
+    /** The space between pills, as a share of a row. */
+    const val GAP_SHARE = 0.12f
+
+    /** Where the readouts go: [count] rows of [rowHeight], top to bottom from ([left], [top]). */
     data class Plan(
         val rowHeight: Float,
-        val columns: Int,
-        val rows: Int,
         val pillWidth: Float,
         /** The width each pill was measured against: what a name may be cut to. */
         val allowance: Float,
         val left: Float,
         val top: Float,
-        val gap: Float
+        val gap: Float,
+        val count: Int
     ) {
-        val blockWidth: Float get() = columns * pillWidth + (columns - 1) * gap
-        val blockHeight: Float get() = rows * rowHeight + (rows - 1) * gap
-
-        /** The top-left corner of the pill in place [slot]. */
-        fun corner(slot: Int): Pair<Float, Float> {
-            val s = slot.coerceIn(0, columns * rows - 1)
-            val column = s / rows
-            val row = s % rows
-            return (left + column * (pillWidth + gap)) to (top + row * (rowHeight + gap))
-        }
+        val blockWidth: Float get() = pillWidth
+        val blockHeight: Float get() = count * rowHeight + (count - 1).coerceAtLeast(0) * gap
 
         /**
-         * The top-left corner for a pill part-way between places, as the ranking animation has it.
-         *
-         * Straight from one place to the next, so a pill changing columns slides across rather than
-         * jumping.
+         * The top-left corner of the pill in place [slot], or part-way between two places as the
+         * ranking animation has it: a pill overtaking another slides straight up past it.
          */
         fun corner(slot: Float): Pair<Float, Float> {
-            val below = kotlin.math.floor(slot).toInt()
-            val fraction = slot - below
-            val (x0, y0) = corner(below)
-            if (fraction <= 0f) return x0 to y0
-            val (x1, y1) = corner(below + 1)
-            return (x0 + (x1 - x0) * fraction) to (y0 + (y1 - y0) * fraction)
+            val s = slot.coerceIn(0f, (count - 1).coerceAtLeast(0).toFloat())
+            return left to top + s * (rowHeight + gap)
         }
+
+        fun corner(slot: Int): Pair<Float, Float> = corner(slot.toFloat())
     }
 
     /**
-     * Plans [count] pills inside the area from [areaLeft], [areaTop] to [areaRight], [areaBottom].
+     * Plans [count] pills pinned by their [pin] corner at ([anchorX], [anchorY]), inside the area
+     * from [areaLeft], [areaTop] to [areaRight], [areaBottom].
      *
-     * @param onLeft whether the block hugs the left edge rather than the right.
-     * @param margin kept clear between the block and the area's edges.
-     * @param gap between pills, both ways.
-     * @param maxRowHeight the tallest a row gets, so one person isn't a slab.
-     * @param minRowHeight the shortest row that is still readable.
-     * @param sizeScale the preset's pill size, applied to what fits; it can shrink pills but never
-     *   push them out of the area.
+     * @param rowHeight how tall a pill is, when there's room for it.
+     * @param maxWidth the widest a pill may get; past it, names are cut and then the pill shrinks.
      */
-    fun plan(
+    fun column(
         count: Int,
+        anchorX: Float,
+        anchorY: Float,
+        pin: ReadoutPin,
         areaLeft: Float,
         areaTop: Float,
         areaRight: Float,
         areaBottom: Float,
-        onLeft: Boolean,
-        margin: Float,
-        gap: Float,
-        maxRowHeight: Float,
-        minRowHeight: Float,
-        sizeScale: Float = 1f,
+        rowHeight: Float,
+        maxWidth: Float,
         measure: Measure
     ): Plan {
         val n = count.coerceAtLeast(1)
-        val width = (areaRight - areaLeft - 2 * margin).coerceAtLeast(1f)
-        val height = (areaBottom - areaTop - 2 * margin).coerceAtLeast(1f)
+        val x = anchorX.coerceIn(areaLeft, areaRight)
+        val y = anchorY.coerceIn(areaTop, areaBottom)
 
-        fun option(columns: Int): Plan {
-            val rows = ceil(n / columns.toFloat()).toInt()
-            val share = (FIRST_COLUMN_SHARE + EXTRA_COLUMN_SHARE * (columns - 1)).coerceAtMost(1f)
-            val allowance = ((width * share - gap * (columns - 1)) / columns).coerceAtLeast(1f)
+        // Room the way it grows, and the row that fills it exactly: n rows and n - 1 gaps, each a
+        // share of a row.
+        val room = (if (pin.onTop) areaBottom - y else y - areaTop).coerceAtLeast(1f)
+        val fitting = room / (n + (n - 1) * GAP_SHARE)
+        var row = minOf(rowHeight, fitting).coerceAtLeast(1f)
 
-            val fitsHeight = ((height - gap * (rows - 1)) / rows).coerceAtLeast(1f)
-            var rowHeight = (minOf(fitsHeight, maxRowHeight) * sizeScale).coerceAtMost(fitsHeight)
-            // Shrunk until the pill fits its allowance. Everything on a pill is sized off its row
-            // height, so its width scales with it and one proportional step all but lands it; the
-            // repeats absorb what doesn't scale, like rounding and names cut to fit.
-            repeat(4) {
-                val w = measure.widthAt(rowHeight, allowance)
-                if (w > allowance) rowHeight *= allowance / w
-            }
-            val pillWidth = measure.widthAt(rowHeight, allowance).coerceAtMost(allowance)
-
-            val blockWidth = columns * pillWidth + (columns - 1) * gap
-            val left = if (onLeft) areaLeft + margin else areaRight - margin - blockWidth
-            return Plan(rowHeight, columns, rows, pillWidth, allowance, left, areaTop + margin, gap)
+        val allowance = minOf(maxWidth, areaRight - areaLeft).coerceAtLeast(1f)
+        // Shrunk until the pill fits its allowance. Everything on a pill is sized off its row, so
+        // one proportional step all but lands it; the repeats absorb what doesn't scale.
+        repeat(4) {
+            val w = measure.widthAt(row, allowance)
+            if (w > allowance) row *= allowance / w
         }
+        val width = measure.widthAt(row, allowance).coerceAtMost(allowance)
+        val gap = row * GAP_SHARE
+        val height = n * row + (n - 1) * gap
 
-        val options = (1..n).map(::option)
-        return options.firstOrNull { it.rowHeight >= minRowHeight }
-            ?: options.maxBy { it.rowHeight }
+        // Grown away from the pin, then held inside the area: a column pinned near an edge slides
+        // in rather than hanging off it.
+        val left = (if (pin.onLeft) x else x - width).coerceIn(areaLeft, (areaRight - width).coerceAtLeast(areaLeft))
+        val top = (if (pin.onTop) y else y - height).coerceIn(areaTop, (areaBottom - height).coerceAtLeast(areaTop))
+        return Plan(row, width, allowance, left, top, gap, n)
     }
-
-    /**
-     * How much of the plot's width one column may claim.
-     *
-     * A third. The pills sit over the faded future half of the curve, and past about this they stop
-     * annotating it and start hiding it.
-     */
-    private const val FIRST_COLUMN_SHARE = 0.32f
-
-    /** What each further column adds to that, since a block of short rows is worth a wider one. */
-    private const val EXTRA_COLUMN_SHARE = 0.2f
 }

@@ -511,4 +511,35 @@ class ExportPresetTest {
         assertEquals(1080, restored.width)
         assertEquals(1920, restored.height)
     }
+
+    @Test
+    fun `readouts moved off the graph come back where they were put`() {
+        val spot = ReadoutSpot(x = 0.1f, y = 0.9f, pin = ReadoutPin.BOTTOM_LEFT)
+        val restored = ExportPreset.fromJson(ExportPreset(readouts = spot).toJson())!!
+        assertEquals(spot, restored.readouts)
+        assertEquals(spot, restored.frameFor(3).readouts)
+    }
+
+    @Test
+    fun `readouts on the graph stay on it`() {
+        assertNull(ExportPreset.fromJson(ExportPreset().toJson())!!.readouts)
+        assertNull(ExportPreset.BUILT_IN.first().frameFor(5).readouts)
+    }
+
+    @Test
+    fun `a spot off the canvas is brought back onto it`() {
+        val restored = ExportPreset(readouts = ReadoutSpot(x = 1.4f, y = -0.2f)).sanitised()
+        assertEquals(1f, restored.readouts!!.x, 0.0001f)
+        assertEquals(0f, restored.readouts!!.y, 0.0001f)
+    }
+
+    @Test
+    fun `between two pinned casts the readouts move part of the way too`() {
+        val two = GraphFrame(readouts = ReadoutSpot(x = 0.2f, y = 0.2f, pin = ReadoutPin.TOP_LEFT))
+        val four = GraphFrame(readouts = ReadoutSpot(x = 0.6f, y = 0.6f, pin = ReadoutPin.BOTTOM_RIGHT))
+        val preset = ExportPreset(framesByLaneCount = mapOf(2 to two, 4 to four))
+        val three = preset.frameFor(3).readouts!!
+        assertEquals(0.4f, three.x, 0.0001f)
+        assertEquals(0.4f, three.y, 0.0001f)
+    }
 }

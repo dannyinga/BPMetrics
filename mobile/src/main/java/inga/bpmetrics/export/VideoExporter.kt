@@ -261,7 +261,8 @@ object VideoExporter {
 
         // Where the graph sits: the preset's frame for this many curves. The request's preset has
         // this clip's own framing baked in already, so this is the frame the preview showed.
-        val graphRect = request.preset.frameFor(exportRecords.size).toRectF()
+        val frame = request.preset.frameFor(exportRecords.size)
+        val graphRect = frame.toRectF()
 
         // 4. Effects
         val canvasOverlay = object : BitmapOverlay() {
@@ -280,7 +281,8 @@ object VideoExporter {
                     content = request.content,
                     look = request.preset,
                     currentTimeMs = currentRecordAbsoluteTimeMs,
-                    graphRect = graphRect
+                    graphRect = graphRect,
+                    readouts = frame.readouts
                 )
                 return reusableBitmap
             }

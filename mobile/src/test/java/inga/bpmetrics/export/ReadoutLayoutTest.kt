@@ -5,11 +5,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Where the live readout pills go (UX Audit O1, O4).
+ * Where the live readout pills go (UX Audit O1, O4; S14C).
  *
- * The old column had a minimum row height that won over fitting, so from three people it ran off
- * the bottom of the panel and at five the last person was cut off. These pin down the promise that
- * replaced it: the block always fits, and nobody is ever left out.
+ * One column of fixed-size pills, pinned at a corner and growing away from it. It shrinks only when
+ * growing would take it out of its area, and nobody is ever left out.
  */
 class ReadoutLayoutTest {
 
@@ -23,122 +22,117 @@ class ReadoutLayoutTest {
         if (bare + name <= allowance) bare + name else maxOf(bare, allowance)
     }
 
-    private fun plan(
+    // A 1920 × 1080 canvas with a 24 px margin.
+    private val area = floatArrayOf(24f, 24f, 1896f, 1056f)
+
+    private fun column(
         count: Int,
-        width: Float = 1700f,
-        height: Float = 260f,
-        onLeft: Boolean = false,
-        minRow: Float = 50f,
-        maxRow: Float = 170f,
+        x: Float = 1896f,
+        y: Float = 24f,
+        pin: ReadoutPin = ReadoutPin.TOP_RIGHT,
+        row: Float = 64f,
+        maxWidth: Float = 800f,
+        bounds: FloatArray = area,
         measure: ReadoutLayout.Measure = pill()
-    ) = ReadoutLayout.plan(
+    ) = ReadoutLayout.column(
         count = count,
-        areaLeft = 100f,
-        areaTop = 400f,
-        areaRight = 100f + width,
-        areaBottom = 400f + height,
-        onLeft = onLeft,
-        margin = 16f,
-        gap = 8f,
-        maxRowHeight = maxRow,
-        minRowHeight = minRow,
+        anchorX = x,
+        anchorY = y,
+        pin = pin,
+        areaLeft = bounds[0],
+        areaTop = bounds[1],
+        areaRight = bounds[2],
+        areaBottom = bounds[3],
+        rowHeight = row,
+        maxWidth = maxWidth,
         measure = measure
     )
 
-    private fun assertInside(plan: ReadoutLayout.Plan, count: Int, width: Float = 1700f, height: Float = 260f) {
+    private fun assertInside(plan: ReadoutLayout.Plan, bounds: FloatArray = area) {
         val slop = 0.5f
-        repeat(count) { slot ->
+        repeat(plan.count) { slot ->
             val (x, y) = plan.corner(slot)
-            assertTrue("place $slot starts left of the area", x >= 100f - slop)
-            assertTrue("place $slot starts above the area", y >= 400f - slop)
-            assertTrue("place $slot runs past the right", x + plan.pillWidth <= 100f + width + slop)
-            assertTrue("place $slot runs past the bottom", y + plan.rowHeight <= 400f + height + slop)
+            assertTrue("place $slot starts left of the area", x >= bounds[0] - slop)
+            assertTrue("place $slot starts above the area", y >= bounds[1] - slop)
+            assertTrue("place $slot runs past the right", x + plan.pillWidth <= bounds[2] + slop)
+            assertTrue("place $slot runs past the bottom", y + plan.rowHeight <= bounds[3] + slop)
         }
     }
 
     @Test
-    fun `every cast from one to eight fits, with a place for everyone`() {
-        for (count in 1..8) {
-            val plan = plan(count)
-            assertTrue("$count people get ${plan.columns * plan.rows} places", plan.columns * plan.rows >= count)
-            assertInside(plan, count)
+    fun `pills keep their size as people are added`() {
+        val two = column(2)
+        val five = column(5)
+        assertEquals(64f, two.rowHeight, 0.01f)
+        assertEquals(64f, five.rowHeight, 0.01f)
+        assertTrue("the column grows", five.blockHeight > two.blockHeight)
+    }
+
+    @Test
+    fun `one column, top to bottom by place`() {
+        val plan = column(5)
+        val corners = (0 until 5).map { plan.corner(it) }
+        assertTrue(corners.all { it.first == corners.first().first })
+        assertTrue(corners.zipWithNext().all { (a, b) -> b.second > a.second })
+    }
+
+    @Test
+    fun `pinned top right, it hangs down and to the left of the point`() {
+        val plan = column(3, x = 1500f, y = 300f)
+        assertEquals(1500f, plan.left + plan.pillWidth, 0.01f)
+        assertEquals(300f, plan.top, 0.01f)
+    }
+
+    @Test
+    fun `pinned bottom left, it grows up and to the right`() {
+        val plan = column(4, x = 100f, y = 900f, pin = ReadoutPin.BOTTOM_LEFT)
+        assertEquals(100f, plan.left, 0.01f)
+        assertEquals(900f, plan.top + plan.blockHeight, 0.01f)
+    }
+
+    @Test
+    fun `it shrinks only when growing would leave its area, and keeps everyone`() {
+        // On a short panel: 150 px of room below the pin.
+        val panel = floatArrayOf(100f, 700f, 1800f, 850f)
+        val plan = column(6, x = 1800f, y = 700f, bounds = panel)
+        assertEquals(6, plan.count)
+        assertTrue(plan.rowHeight < 64f)
+        assertInside(plan, panel)
+    }
+
+    @Test
+    fun `every cast from one to eight fits wherever it is pinned`() {
+        for (count in 1..8) for (pin in ReadoutPin.entries) {
+            val x = if (pin.onLeft) 1700f else 200f
+            val y = if (pin.onTop) 900f else 150f
+            assertInside(column(count, x = x, y = y, pin = pin))
         }
     }
 
     @Test
-    fun `a short lower-third panel still fits five`() {
-        // The Granada case on "Landscape · lower third": five people, a plot about 120 px tall.
-        val plan = plan(5, height = 120f)
-        assertInside(plan, 5, height = 120f)
-    }
-
-    @Test
-    fun `two people with room get one column`() {
-        val plan = plan(2)
-        assertEquals(1, plan.columns)
-    }
-
-    @Test
-    fun `when one column's rows would be unreadable, a second column takes over`() {
-        // Five rows in 228 px are 39 px each, under the 50 px floor. Three rows in two columns are 70.
-        val plan = plan(5)
-        assertEquals(2, plan.columns)
-        assertTrue(plan.rowHeight >= 50f)
-    }
-
-    @Test
-    fun `when nothing is readable, the pills shrink rather than anyone being dropped`() {
-        val plan = plan(6, width = 300f, height = 100f)
-        assertTrue(plan.columns * plan.rows >= 6)
-        assertInside(plan, 6, width = 300f, height = 100f)
-    }
-
-    @Test
-    fun `on a narrow story panel the pills get narrower rather than spilling over the curve`() {
-        // About a 9:16 plot: narrow and tall. One column, held to its share of the width.
-        val narrow = plan(2, width = 820f, height = 480f)
-        assertEquals(1, narrow.columns)
-        assertTrue(narrow.blockWidth <= (820f - 32f) * 0.32f + 0.5f)
-        assertInside(narrow, 2, width = 820f, height = 480f)
-    }
-
-    @Test
-    fun `the block hugs the side the preset chose`() {
-        val right = plan(2)
-        assertEquals(100f + 1700f - 16f, right.left + right.blockWidth, 0.5f)
-
-        val left = plan(2, onLeft = true)
-        assertEquals(100f + 16f, left.left, 0.5f)
-    }
-
-    @Test
-    fun `places fill the first column top to bottom, then the next`() {
-        val plan = plan(5)
-        val (x0, y0) = plan.corner(0)
-        val (x1, y1) = plan.corner(1)
-        val (x3, _) = plan.corner(plan.rows)
-        assertEquals(x0, x1, 0.01f)
-        assertTrue(y1 > y0)
-        assertTrue("the next column is to the right", x3 > x0)
+    fun `a long name cuts or shrinks the pill rather than passing the width it's allowed`() {
+        val plan = column(3, maxWidth = 150f, measure = pill(nameRows = 6f))
+        assertTrue(plan.pillWidth <= 150f + 0.01f)
     }
 
     @Test
     fun `a pill changing places is drawn between them`() {
-        val plan = plan(5)
-        val (xa, ya) = plan.corner(0)
-        val (xb, yb) = plan.corner(1)
-        val (xm, ym) = plan.corner(0.5f)
-        assertEquals((xa + xb) / 2f, xm, 0.01f)
-        assertEquals((ya + yb) / 2f, ym, 0.01f)
+        val plan = column(3)
+        val (_, top0) = plan.corner(0)
+        val (_, top1) = plan.corner(1)
+        assertEquals((top0 + top1) / 2f, plan.corner(0.5f).second, 0.01f)
     }
 
     @Test
-    fun `a size setting above one can't push pills out of the area`() {
-        val big = ReadoutLayout.plan(
-            count = 3, areaLeft = 0f, areaTop = 0f, areaRight = 1700f, areaBottom = 260f,
-            onLeft = false, margin = 16f, gap = 8f, maxRowHeight = 170f, minRowHeight = 50f,
-            sizeScale = 2f, measure = pill()
-        )
-        assertTrue(big.blockHeight <= 260f - 32f + 0.5f)
+    fun `a dropped column keeps its place and grows from the canvas corner it's nearest`() {
+        val low = ReadoutSpot.at(0.7f, 0.7f, 0.9f, 0.9f)
+        assertEquals(ReadoutPin.BOTTOM_RIGHT, low.pin)
+        assertEquals(0.9f, low.x, 0.0001f)
+        assertEquals(0.9f, low.y, 0.0001f)
+
+        val high = ReadoutSpot.at(0.1f, 0.1f, 0.3f, 0.4f)
+        assertEquals(ReadoutPin.TOP_LEFT, high.pin)
+        assertEquals(0.1f, high.x, 0.0001f)
+        assertEquals(0.1f, high.y, 0.0001f)
     }
 }

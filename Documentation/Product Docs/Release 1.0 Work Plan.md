@@ -594,14 +594,53 @@ Ambient mode and a tile are post-1.0.
   - **Last look wins:** "Make default" and its star are gone from the export flow. Settings says a new export starts from the look used last, and the one picked there is for a first export.
   - **Settings matches the export flow:** a built-in edited there saves as a new preset instead of being overwritten, Export writes the same sanitised `.bpmpreset` file, Back with changes asks first, and "Choose a video" is gone from there.
   - **Import:** importing in the export flow saves the preset, and only puts it to use when that loses no unsaved changes.
-  - **Smaller things:** a canvas size no chip names shows as its own chip, the preset menu button is the full 48 dp, Next on Source says why it's greyed out, and the dead "Video: … / Remove" block is gone.
+  - **Smaller things:** a canvas size no chip names shows as its own chip, the preset menu button is the full 48 dp, Next on Source says why it's grayed out, and the dead "Video: … / Remove" block is gone.
 - **S14B.6:** `ClipRetiming.candidatesFor`: every recording running during the clip, plus, for each other person with a recording within two hours of it (the same show, not the festival), their nearest one.
-  - **Display:** people without readings for the clip are offered once each and ticked, greyed as "not recording", with a line saying their readout shows "--" until their watch starts.
+  - **Display:** people without readings for the clip are offered once each and ticked, grayed as "not recording", with a line saying their readout shows "--" until their watch starts.
   - **What can be ticked:** a clip can only be ticked when someone on it was recording (`drawsSomething`).
   - **Tests:** `ClipRetimingTest` covers Tyler at Boogie T, one entry per person, no other days, and a clip with only absent people.
   - **On the emulator,** the Gorge clip offers Danny, with Toby and Stina as not recording.
 - **Not done:** presets as looks only (E5). The canvas is still part of a preset; with "Match the clip" as the default it rarely matters. Title wrapping is still skipped.
 - **Verified:** 791 unit tests and 11 export device tests pass; both apps build; lint shows nothing new. On the emulator: each tab, tap-to-tab for pills, title and outside, the scope switch, the nudge, text size and swatches, the landscape full screen turning and turning back, and the Settings editor's discard prompt.
+
+### S14C — Readouts in one column, placed on their own *(Danny, 2026-11-06)*
+
+Two columns kept everyone on a short panel, but a ranking read across and then down isn't a ranking, and a pill moving between columns jumped. Decided:
+- One column of fixed-size pills that grows as people are added.
+- By default it sits over the graph's right edge.
+- It can be dragged off the graph, and where it sits follows the same "this clip / N-person clips / every clip" choice as the graph's frame.
+
+| Ticket | Work |
+|---|---|
+| **S14C.1** | One column, always. Pills keep the look's size and the column grows; it shrinks only when growing would take it past its area. Nobody is dropped. |
+| **S14C.2** | The column has its own place: on the graph by default, or anywhere on the canvas once dragged, pinned to the nearest corner of the frame so more people never push it off. |
+| **S14C.3** | The editor shows the column as a dashed box that drags on its own, and Readouts says where it is, with "Put back on the graph". |
+
+**Commit:** `feat(export): readouts in one column, placed on their own`
+
+**As built:**
+- **S14C.1:** `ReadoutLayout.column` replaces the multi-column plan.
+  - **Size:** a pill is 64 px at 1080 on the canvas's short edge, times the look's pill size, and never below the readable floor.
+  - **Growing:** the column grows away from its pinned corner. It shrinks only when it would leave its area: the panel while it's on the graph, the canvas once it's moved.
+  - **Width:** on the graph a pill is at most half the plot wide, elsewhere 42% of the canvas.
+  - **Ranking:** a pill changing places slides straight past the one it overtakes.
+  - **Spacing:** names and readings have a wider gap between them. The longest name used to run into its number ("Alexandra106").
+- **S14C.2:** `ReadoutSpot` (x, y, pin) on `ExportPreset.readouts`, `GraphFrame.readouts` and `GraphPlacement.readouts`. Null means on the graph.
+  - **Follows the graph's frame:** it moves with clip frames, per-person-count pins (interpolated between them), "Every clip" and saving.
+  - **Pinning:** a dropped column keeps its place and pins to the canvas corner it's nearest (`ReadoutSpot.at`).
+  - **Drawing:** the pills are drawn after the panel's clip is lifted, so a moved column isn't cut off.
+  - **Presets:** version 6, so an older build refuses a preset it would draw with the column back on the graph.
+- **S14C.3:**
+  - **Preview:** a dashed box in another color, taken from the renderer's own layout (`VideoFrameRenderer.readoutBlock`), in the inline and full-screen previews. A drag that starts on it moves the column; one on the graph moves the graph. It has no handles, since its size is the pill size.
+  - **Taps:** a tap on the moved column still opens Readouts.
+  - **Readouts tab:** "On the graph" with the Left/Right side, or "Placed on its own" with "Put back on the graph". A framing chip moves the graph and leaves a moved column where it is.
+- **Tests:**
+  - `ReadoutLayoutTest` (rewritten): fixed size as people are added, one column top to bottom, each pin's direction, shrinking only at the edge, 1–8 people at every pin, and a dropped column's pin.
+  - `ExportPresetTest`: the spot survives saving, stays null for built-ins, is clamped onto the canvas, and is interpolated between pins.
+  - `FrameRegionTest`: finds a moved column outside the panel, and finds the graph where it used to be.
+- **References:** every built-in at 1, 3 and 5 people and the video frame are re-recorded, and two new images show five people moved off the graph (story top left, landscape bottom right). All synthetic; recorded on Pixel_7_Pro and checked by eye.
+- **Verified:** 812 unit tests and 13 export device tests pass, the app builds, and lint shows nothing new.
+  - On the emulator, in Settings' editor for "4 Person 1080p" with several people, the dashed box sat on the graph's corner, dragged off to the top right, and "Put back on the graph" returned it. The preset wasn't saved.
 
 ---
 

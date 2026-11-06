@@ -31,7 +31,9 @@ data class GraphFrame(
     val left: Float = 0.25f,
     val top: Float = 0.58f,
     val right: Float = 0.75f,
-    val bottom: Float = 0.91f
+    val bottom: Float = 0.91f,
+    /** Where the readouts sit on this frame's clips. Null keeps them on the graph. See [ReadoutSpot]. */
+    val readouts: ReadoutSpot? = null
 ) {
     val width: Float get() = right - left
     val height: Float get() = bottom - top
@@ -46,7 +48,8 @@ data class GraphFrame(
         left = left.coerceIn(0f, 1f),
         top = top.coerceIn(0f, 1f),
         right = right.coerceIn(0f, 1f),
-        bottom = bottom.coerceIn(0f, 1f)
+        bottom = bottom.coerceIn(0f, 1f),
+        readouts = readouts?.sanitised()
     ).takeIf { it.isUsable }
 
     companion object {
@@ -67,7 +70,8 @@ data class GraphFrame(
                 left = mix(a.left, b.left),
                 top = mix(a.top, b.top),
                 right = mix(a.right, b.right),
-                bottom = mix(a.bottom, b.bottom)
+                bottom = mix(a.bottom, b.bottom),
+                readouts = ReadoutSpot.between(a.readouts, b.readouts, f)
             )
         }
     }
@@ -119,6 +123,11 @@ data class ExportPreset(
     val graphTop: Float = 0.58f,
     val graphRight: Float = 0.94f,
     val graphBottom: Float = 0.93f,
+    /**
+     * Where the readout column sits, when it has been moved off the graph (S14C). Null keeps it on
+     * the graph, in the plot's top corner on [pillCorner]'s side, moving with the frame.
+     */
+    val readouts: ReadoutSpot? = null,
 
     /**
      * The frame to use when a clip has a particular number of people on it.
@@ -200,7 +209,8 @@ data class ExportPreset(
     /** The name's size within the pill, as a multiplier. */
     val pillNameScale: Float = 1f,
     /**
-     * Where the readouts sit. The clock takes the opposite side of the same edge.
+     * Which side of the graph the readouts sit on while they're on it. See [readouts] for moving
+     * them off it.
      *
      * Right by default, over the faded half of the graph.
      *
@@ -283,6 +293,10 @@ data class ExportPreset(
     fun withFraming(left: Float, top: Float, right: Float, bottom: Float): ExportPreset =
         copy(graphLeft = left, graphTop = top, graphRight = right, graphBottom = bottom)
 
+    /** The framing and the readouts' spot, replaced together, as a clip's framing carries both. */
+    fun withFraming(left: Float, top: Float, right: Float, bottom: Float, readouts: ReadoutSpot?): ExportPreset =
+        withFraming(left, top, right, bottom).copy(readouts = readouts)
+
     /**
      * Whether this preset's framing is one that shipped as a default and has since been replaced.
      *
@@ -304,7 +318,7 @@ data class ExportPreset(
 
     /** The frame this preset was drawn with before any of this existed. */
     val baseFrame: GraphFrame
-        get() = GraphFrame(graphLeft, graphTop, graphRight, graphBottom)
+        get() = GraphFrame(graphLeft, graphTop, graphRight, graphBottom, readouts)
 
     /**
      * The frame to draw a clip with [laneCount] people on it.
@@ -415,7 +429,8 @@ data class ExportPreset(
             // whole point of these is fixing how the old ones rendered.
             bpmScale = bpmScale ?: shipped.bpmScale,
             contrast = contrast ?: shipped.contrast,
-            textScale = textScale.takeIf { it > 0.05f }?.coerceIn(0.75f, 2f) ?: shipped.textScale
+            textScale = textScale.takeIf { it > 0.05f }?.coerceIn(0.75f, 2f) ?: shipped.textScale,
+            readouts = readouts?.sanitised()
         )
     }
 
@@ -427,6 +442,7 @@ data class ExportPreset(
          * silently ignoring fields it does not understand would produce an export that looks
          * nothing like the one it was shared from.
          *
+         * 6 adds the readouts' own position. An older build would draw them back on the graph.
          * 5 adds the vertical scale, contrast, and matching or filling the clip's shape.
          * 4 adds the live readout settings: what a pill carries and how large it is.
          * 3 adds the wordmark.
@@ -436,7 +452,7 @@ data class ExportPreset(
          * Files written at 1 still load: the check is one-directional, so raising this only stops
          * *older* builds reading what they cannot render.
          */
-        const val CURRENT_VERSION = 5
+        const val CURRENT_VERSION = 6
 
         /**
          * Graph framings that shipped as the default in some earlier build.

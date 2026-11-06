@@ -146,6 +146,35 @@ class RendererReferenceTest {
         if (problems.isNotEmpty()) fail(problems.joinToString("\n"))
     }
 
+    /**
+     * The column moved off the graph (S14C): five people pinned to a corner of the frame, on a
+     * story and a landscape canvas, growing away from the corner they were placed against.
+     */
+    @Test
+    fun readoutsMovedOffTheGraphSitWhereTheyWerePut() {
+        val problems = mutableListOf<String>()
+        listOf(
+            "story_9_16" to ReadoutSpot(x = 0.05f, y = 0.05f, pin = ReadoutPin.TOP_LEFT),
+            "landscape_1080p" to ReadoutSpot(x = 0.97f, y = 0.52f, pin = ReadoutPin.BOTTOM_RIGHT)
+        ).forEach { (slug, spot) ->
+            val preset = ExportPreset.BUILT_IN.first { it.name.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_') == slug }
+            val look = preset.copy(width = preset.width / 2, height = preset.height / 2, readouts = spot)
+            val content = ExportContent(
+                records = crowd, startMs = startMs, endMs = startMs + 20 * 60_000L,
+                title = "Excision B2B SLANDER · Bass Canyon", colours = crowdColours, clipZoneId = "UTC"
+            )
+            val bitmap = Bitmap.createBitmap(look.width, look.height, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(Color.BLACK)
+            VideoFrameRenderer.renderAlignedRecordsOnCanvas(
+                Canvas(bitmap), VideoFrameRenderer.alignRecords(crowd), content, look,
+                currentTimeMs = 14 * 60_000.0
+            )
+            runCatching { assertMatchesReference("moved_${slug}_5", bitmap) }
+                .exceptionOrNull()?.let { problems += it.message.orEmpty() }
+        }
+        if (problems.isNotEmpty()) fail(problems.joinToString("\n"))
+    }
+
     /** The same input drawn twice comes out the same, before any reference comes into it. */
     @Test
     fun drawingIsRepeatable() {

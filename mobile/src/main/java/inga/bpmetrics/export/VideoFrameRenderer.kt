@@ -1076,19 +1076,17 @@ object VideoFrameRenderer {
         look: ExportPreset,
         graphRect: RectF,
         x: Float,
-        y: Float
+        y: Float,
+        readouts: ReadoutSpot? = look.frameFor(aligned.records.size).readouts
     ): Region? {
+        // First, and before the panel test: a column moved off the graph is outside the panel.
+        readoutBlock(width, height, aligned.records, content, look, graphRect, readouts)?.let { block ->
+            if (block.contains(x, y)) return Region.READOUTS
+        }
+
         val config = Frame.of(content, look, aligned.records.map { it.metadata })
         val dims = RenderingDimensions(width.toFloat(), height.toFloat(), graphRect, config)
         if (!dims.outerRect.contains(x, y)) return null
-
-        if (look.showCurrentStats && aligned.records.isNotEmpty()) {
-            measureReadouts(dims, aligned.records, config, ChartKit.paint()).plan?.let { plan ->
-                if (x in plan.left..(plan.left + plan.blockWidth) && y in plan.top..(plan.top + plan.blockHeight)) {
-                    return Region.READOUTS
-                }
-            }
-        }
         if (look.showWordmark) {
             // The mark is one short line in a corner: the corner's last fifth across, sixth down.
             val nearRight = look.wordmarkCorner == WordmarkCorner.TOP_RIGHT || look.wordmarkCorner == WordmarkCorner.BOTTOM_RIGHT
@@ -1109,6 +1107,30 @@ object VideoFrameRenderer {
     }
 
     /**
+     * Where the readout column is drawn on a [width] × [height] frame, in pixels, or null when the
+     * look draws none.
+     *
+     * For the preview's outline, which has to sit exactly on the column the render draws. Takes the
+     * records as they are rather than aligned: only who they are matters to the column's size, and
+     * aligning copies every data point.
+     */
+    fun readoutBlock(
+        width: Int,
+        height: Int,
+        records: List<BpmRecordWithPoints>,
+        content: ExportContent,
+        look: ExportPreset,
+        graphRect: RectF,
+        readouts: ReadoutSpot?
+    ): RectF? {
+        if (!look.showCurrentStats || records.isEmpty()) return null
+        val config = Frame.of(content, look, records.map { it.metadata })
+        val dims = RenderingDimensions(width.toFloat(), height.toFloat(), graphRect, config)
+        val plan = measureReadouts(dims, records, config, ChartKit.paint(), readouts).plan ?: return null
+        return RectF(plan.left, plan.top, plan.left + plan.blockWidth, plan.top + plan.blockHeight)
+    }
+
+    /**
      * Renders records that have already been placed on a shared timeline by [alignRecords].
      *
      * Video export aligns once and then calls this for every frame — re-aligning per frame would
@@ -1120,10 +1142,12 @@ object VideoFrameRenderer {
         content: ExportContent,
         look: ExportPreset,
         currentTimeMs: Double? = null,
-        graphRect: RectF = look.frameFor(aligned.records.size).toRectF()
+        graphRect: RectF = look.frameFor(aligned.records.size).toRectF(),
+        /** Where the readout column sits. Null keeps it on the graph. See [ReadoutSpot]. */
+        readouts: ReadoutSpot? = look.frameFor(aligned.records.size).readouts
     ) = renderAlignedRecordsOnCanvasInZone(
         canvas, aligned, Frame.of(content, look, aligned.records.map { it.metadata }),
-        currentTimeMs, look.windowSizeMs, graphRect
+        currentTimeMs, look.windowSizeMs, graphRect, readouts
     )
 
     private fun renderAlignedRecordsOnCanvasInZone(
@@ -1132,7 +1156,8 @@ object VideoFrameRenderer {
         config: Frame,
         currentTimeMs: Double?,
         windowSizeMs: Long?,
-        graphRect: RectF
+        graphRect: RectF,
+        readouts: ReadoutSpot?
     ) {
         val processedRecords = aligned.records
         if (processedRecords.isEmpty()) return
@@ -1214,8 +1239,15 @@ object VideoFrameRenderer {
             )
         }
 
+        // The pills name each wearer and colour-match their curve, so they replace the legend.
+        if (!config.look.showCurrentStats) drawMultiLegend(canvas, dims, processedRecords, config, paint)
+
+        drawWordmark(canvas, dims, config, paint)
+
+        canvas.restore()
+
+        // After the panel's clip is lifted: a column moved off the graph sits outside the panel.
         if (config.look.showCurrentStats) {
-            // The pills name each wearer and colour-match their curve, so they replace the legend.
             drawMultiStatsHUD(
                 canvas = canvas,
                 dims = dims,
@@ -1224,19 +1256,14 @@ object VideoFrameRenderer {
                 config = config,
                 ranges = ranges,
                 timelineOriginMs = aligned.timeline.originWallClockMs,
-                paint = paint
+                paint = paint,
+                readouts = readouts
             )
-        } else {
-            drawMultiLegend(canvas, dims, processedRecords, config, paint)
         }
-
-        drawWordmark(canvas, dims, config, paint)
-
-        canvas.restore()
     }
 
     /**
-     * Draws a live BPM pill per wearer, stacked at the top right of the graph.
+     * Draws a live BPM pill per wearer, in one column on the graph or wherever it was moved to.
      *
      * Single-record export shows one large readout. With several wearers the same information is
      * repeated compactly — each heart in that wearer's line colour, beating at their own rate —
@@ -1275,45 +1302,50 @@ object VideoFrameRenderer {
     /**
      * The readouts' layout for this frame: the plan (see [ReadoutLayout]) and the pill it settled on.
      *
-     * Inside the plot, so the pills never sit on the title, the axis labels or the time axis, and
-     * sized against the plot too. They were sized against the whole panel and then stacked from the
-     * top of the plot, which is how a column the panel's height ran off the bottom of the plot below
-     * it (UX Audit O1).
+     * On the graph ([readouts] null), the column starts inside the plot's top corner on the look's
+     * side and may run down over the panel, never past it. Moved off it, the column starts where it
+     * was put and may use the whole canvas (S14C).
      */
     private fun measureReadouts(
         dims: RenderingDimensions,
         records: List<BpmRecordWithPoints>,
         config: Frame,
-        paint: Paint
+        paint: Paint,
+        readouts: ReadoutSpot?
     ): ReadoutMetrics {
-        val scale = dims.scaleFactor
-        val plan = ReadoutLayout.plan(
+        val canvasScale = ChartKit.scale(dims.fullWidth, dims.fullHeight)
+        val onGraph = readouts == null
+        val pin = readouts?.pin
+            ?: if (config.look.pillCorner == PillCorner.TOP_LEFT) ReadoutPin.TOP_LEFT else ReadoutPin.TOP_RIGHT
+
+        val margin = if (onGraph) dims.edge else READOUT_MARGIN * canvasScale
+        val areaLeft = if (onGraph) dims.graphLeft + margin else margin
+        val areaTop = if (onGraph) dims.graphTop + margin else margin
+        val areaRight = if (onGraph) dims.graphRight - margin else dims.fullWidth - margin
+        val areaBottom = if (onGraph) dims.drawAreaBottom - margin else dims.fullHeight - margin
+
+        val plan = ReadoutLayout.column(
             count = records.size,
-            areaLeft = dims.graphLeft,
-            areaTop = dims.graphTop,
-            areaRight = dims.graphRight,
-            areaBottom = dims.graphBottom,
-            onLeft = config.look.pillCorner == PillCorner.TOP_LEFT,
-            margin = 16f * scale,
-            gap = 8f * scale,
-            maxRowHeight = 190f * scale,
-            // The reading is under half the row, so this keeps it at the readable floor.
-            minRowHeight = dims.readableText / DIGIT_SHARE_STACKED,
-            sizeScale = config.look.pillScale,
-            // The width whole names need, so the plan makes room for them before anything is cut.
-            measure = { rowHeight, _ -> wholeNamesWidth(dims, rowHeight, records, config, paint) }
+            anchorX = readouts?.let { it.x * dims.fullWidth } ?: if (pin.onLeft) areaLeft else areaRight,
+            anchorY = readouts?.let { it.y * dims.fullHeight } ?: areaTop,
+            pin = pin,
+            areaLeft = areaLeft,
+            areaTop = areaTop,
+            areaRight = areaRight,
+            areaBottom = areaBottom,
+            // The look's size on any canvas, held to the readable floor: the reading is under half
+            // the row, and the name is never smaller than the smallest text elsewhere.
+            rowHeight = maxOf(READOUT_ROW * canvasScale, dims.readableText / DIGIT_SHARE_STACKED) *
+                config.look.pillScale,
+            // On the graph, no more than half the plot: past that the pills stop annotating the
+            // curve and start hiding the half of it that has happened.
+            maxWidth = if (onGraph) minOf(dims.fullWidth * READOUT_MAX_WIDTH, dims.graphWidth * 0.5f)
+            else dims.fullWidth * READOUT_MAX_WIDTH,
+            measure = { rowHeight, allowance ->
+                pillAt(dims, rowHeight, allowance, records, config, paint).pillWidth
+            }
         )
         val pill = pillAt(dims, plan.rowHeight, plan.allowance, records, config, paint)
-        // Anchored to the pill actually drawn. The plan measured the narrowest pill that keeps the
-        // names whole; the one drawn may be wider, laid flat because that fits the allowance too,
-        // and a block anchored right at the narrower width would run off the plot.
-        val drawn = pill.pillWidth.coerceAtMost(plan.allowance)
-        val onLeft = config.look.pillCorner == PillCorner.TOP_LEFT
-        val blockWidth = plan.columns * drawn + (plan.columns - 1) * plan.gap
-        val placed = plan.copy(
-            pillWidth = drawn,
-            left = if (onLeft) plan.left else dims.graphRight - 16f * scale - blockWidth
-        )
         return ReadoutMetrics(
             rowHeight = pill.rowHeight,
             digitSize = pill.digitSize,
@@ -1325,41 +1357,32 @@ object VideoFrameRenderer {
             digitWidth = pill.digitWidth,
             textBlockWidth = pill.textBlockWidth,
             labelWidth = pill.labelWidth,
-            pillWidth = drawn,
+            pillWidth = plan.pillWidth,
             shownLabels = pill.shownLabels,
             stacked = pill.stacked,
-            plan = placed
+            plan = plan
         )
     }
 
-    /**
-     * How wide a pill at [rowHeight] is with every name whole: beside the reading or under it,
-     * whichever is narrower.
-     */
-    private fun wholeNamesWidth(
-        dims: RenderingDimensions,
-        rowHeight: Float,
-        records: List<BpmRecordWithPoints>,
-        config: Frame,
-        paint: Paint
-    ): Float {
-        // Flat, with nothing cut: what the pill measures with all the room in the world.
-        val flat = pillAt(dims, rowHeight, Float.MAX_VALUE, records, config, paint)
-        if (!config.look.pillShowName || flat.labelWidth <= 0f) return flat.pillWidth
-        val padH = rowHeight * 0.15f
-        val gap = rowHeight * 0.075f
-        paint.resetForExport()
-        paint.isFakeBoldText = true
-        paint.textSize = rowHeight * DIGIT_SHARE_STACKED * config.look.pillBpmScale
-        val stackedDigits = paint.measureText("888")
-        val face = if (flat.avatarSize > 0f) flat.avatarSize + gap else 0f
-        val stacked = padH * 2 + face + maxOf(stackedDigits, flat.labelWidth)
-        return minOf(flat.pillWidth, stacked)
-    }
+    /** A pill's height at 1080 on the canvas's short edge, before the look's size. */
+    private const val READOUT_ROW = 64f
+
+    /** The widest a pill gets, as a share of the canvas's width. */
+    private const val READOUT_MAX_WIDTH = 0.42f
+
+    /** Kept clear between a moved column and the canvas's edge, at 1080 on the short edge. */
+    private const val READOUT_MARGIN = 24f
 
     /** The reading's share of a pill's height with the name beside it, and with it underneath. */
     private const val DIGIT_SHARE_FLAT = 0.50f
     private const val DIGIT_SHARE_STACKED = 0.44f
+
+    /**
+     * Between a name and the reading beside it, as a share of the row. Wider than the gap between
+     * the face and the name, which belong together: at the face's gap, the longest name ran into
+     * its number ("Alexandra106").
+     */
+    private const val NAME_GAP = 0.22f
 
     /**
      * One pill at [rowHeight], with names cut to fit [allowance].
@@ -1413,7 +1436,7 @@ object VideoFrameRenderer {
         }
 
         val flatWidth = padH * 2 + avatarSize + gap + flatDigitWidth +
-            (if (fullNameWidth > 0f) gap + fullNameWidth else 0f)
+            (if (fullNameWidth > 0f) rowHeight * NAME_GAP + fullNameWidth else 0f)
         val stacked = config.look.pillShowName && flatWidth > allowance
 
         val digitSize = rowHeight * (if (stacked) DIGIT_SHARE_STACKED else DIGIT_SHARE_FLAT) *
@@ -1428,7 +1451,7 @@ object VideoFrameRenderer {
         paint.textSize = labelSize
 
         val maxLabelWidth = allowance - (padH * 2 + avatarSize + gap) -
-            (if (stacked) 0f else gap + digitWidth)
+            (if (stacked) 0f else rowHeight * NAME_GAP + digitWidth)
         val shownLabels = if (config.look.pillShowName && maxLabelWidth > labelSize) {
             labels.map { ChartKit.ellipsize(it, maxLabelWidth, paint) }
         } else {
@@ -1441,7 +1464,7 @@ object VideoFrameRenderer {
         val textBlockWidth = if (stacked) {
             maxOf(digitWidth, labelWidth)
         } else {
-            digitWidth + (if (labelWidth > 0f) gap + labelWidth else 0f)
+            digitWidth + (if (labelWidth > 0f) rowHeight * NAME_GAP + labelWidth else 0f)
         }
         val contentWidth = if (avatarSize > 0f) avatarSize + gap + textBlockWidth else textBlockWidth
 
@@ -1471,9 +1494,10 @@ object VideoFrameRenderer {
         /** The vertical scale, so a lone wearer's reading can be coloured by value. */
         ranges: BpmRanges,
         timelineOriginMs: Long,
-        paint: Paint
+        paint: Paint,
+        readouts: ReadoutSpot?
     ) {
-        val m = measureReadouts(dims, records, config, paint)
+        val m = measureReadouts(dims, records, config, paint, readouts)
         val plan = m.plan ?: return
         val rowHeight = m.rowHeight
         val digitSize = m.digitSize
@@ -1501,9 +1525,9 @@ object VideoFrameRenderer {
         paint.textSize = labelSize
         val labelMetrics = paint.fontMetrics
 
-        // Inside the plot, against whichever edge the preset chose. On the right that is a cheap
-        // place to be: the playhead is centred and everything past it is drawn at `futureOpacity`,
-        // so the pills sit on the part of the graph that is deliberately quiet.
+        // One column, wherever the plan put it. On the graph's right that is a cheap place to be:
+        // the playhead is centred and everything past it is drawn at `futureOpacity`, so the pills
+        // sit on the part of the graph that is deliberately quiet.
         val slots = animatedRankSlots(records, viewport.playhead)
 
         // Pills mid-slide are drawn last so one passes *over* the pill it is overtaking. Two
@@ -1628,7 +1652,7 @@ object VideoFrameRenderer {
                 paint.textAlign = Paint.Align.LEFT
                 canvas.drawText(
                     reading,
-                    cursor + labelWidth + gap,
+                    cursor + labelWidth + rowHeight * NAME_GAP,
                     centerY + digitBaselineOffset,
                     paint
                 )

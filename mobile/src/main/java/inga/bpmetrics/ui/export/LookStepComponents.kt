@@ -236,7 +236,8 @@ fun ExportPreview(
                                     records = records, startMs = 0L, endMs = 1L, title = title,
                                     colours = colours, photos = photos
                                 ),
-                                preset, placement.toRectF(), x, y
+                                preset, placement.toRectF(), x, y,
+                                readouts = placement.readouts
                             )
                         )
                     }
@@ -265,6 +266,7 @@ fun ExportPreview(
                 GraphFramingOverlay(
                     placement = placement,
                     onChange = onPlacementChange,
+                    readoutBlock = rememberReadoutBlock(records, preset, placement, title),
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -411,6 +413,7 @@ private fun FullScreenPreview(
                         GraphFramingOverlay(
                             placement = placement,
                             onChange = onPlacementChange,
+                            readoutBlock = rememberReadoutBlock(records, preset, placement, title),
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -561,27 +564,60 @@ private fun clipTimeLabel(ms: Long): String {
 }
 
 /**
- * The graph's frame, as an outline that can be dragged and resized.
+ * Where the readout column is on the preview, as fractions of the canvas, or null where none is
+ * drawn. From the renderer's own layout, so the outline sits exactly on the pills.
+ */
+@Composable
+private fun rememberReadoutBlock(
+    records: List<BpmRecordWithPoints>,
+    preset: ExportPreset,
+    placement: GraphPlacement,
+    title: String?
+): RectF? = remember(records, preset, placement, title) {
+    if (records.isEmpty()) return@remember null
+    val content = inga.bpmetrics.export.ExportContent(records = records, startMs = 0L, endMs = 1L, title = title)
+    VideoFrameRenderer.readoutBlock(
+        preset.width, preset.height, records, content, preset, placement.toRectF(), placement.readouts
+    )?.let { px ->
+        val w = preset.width.toFloat().coerceAtLeast(1f)
+        val h = preset.height.toFloat().coerceAtLeast(1f)
+        RectF(px.left / w, px.top / h, px.right / w, px.bottom / h)
+    }
+}
+
+/**
+ * The graph's frame, as an outline that can be dragged and resized, and the readout column, as a
+ * dashed outline that can be dragged on its own.
  *
  * Drawn over the preview rather than beside it because a rectangle's size only means anything
  * against the thing it sits on. Deliberately unfilled: the render underneath is what is being
  * judged, and a tint over it defeats the point.
+ *
+ * Dragging the column takes it off the graph (S14C): it stays where it's dropped, pinned to the
+ * corner of the frame it's nearest, and the graph moves without it from then on. It has no handles,
+ * because its size is the pills' size, which is set in Readouts.
  */
 @Composable
 private fun GraphFramingOverlay(
     placement: GraphPlacement,
     onChange: (GraphPlacement) -> Unit,
+    readoutBlock: RectF?,
     modifier: Modifier = Modifier
 ) {
     val current by rememberUpdatedState(placement)
     val onChanged by rememberUpdatedState(onChange)
+    val currentBlock by rememberUpdatedState(readoutBlock)
     val outline = MaterialTheme.colorScheme.primary
+    val readoutOutline = MaterialTheme.colorScheme.tertiary
     val knob = MaterialTheme.colorScheme.onPrimary
 
     // What this gesture grabbed, remembered for its duration. Local to the composable — a shared
     // one would let two previews fight over the same handle.
     var grabbed by remember { mutableStateOf<GraphHandle?>(null) }
     var moving by remember { mutableStateOf(false) }
+    // The column as the drag began, and how far it has come since, in fractions of the canvas.
+    var readoutsFrom by remember { mutableStateOf<RectF?>(null) }
+    var readoutsBy by remember { mutableStateOf(Offset.Zero) }
 
     Box(
         modifier = modifier
@@ -596,21 +632,40 @@ private fun GraphFramingOverlay(
                     onDragStart = { offset ->
                         val w = size.width.toFloat().coerceAtLeast(1f)
                         val h = size.height.toFloat().coerceAtLeast(1f)
-                        grabbed = handleAt(offset, current, w, h, slop)
+                        // The column first: it sits over the graph, and a drag that starts on the
+                        // pills is aimed at the pills.
+                        readoutsFrom = currentBlock?.takeIf { it.contains(offset.x / w, offset.y / h) }
+                        readoutsBy = Offset.Zero
+                        grabbed = if (readoutsFrom != null) null else handleAt(offset, current, w, h, slop)
                         // Moving only from inside the frame. A drag that begins on the footage is
                         // aimed at the footage, and shoving the graph across the screen because a
                         // finger landed in open space is worse than doing nothing.
-                        moving = grabbed == null && current.contains(offset.x / w, offset.y / h)
+                        moving = readoutsFrom == null && grabbed == null &&
+                            current.contains(offset.x / w, offset.y / h)
                     },
-                    onDragEnd = { grabbed = null; moving = false },
-                    onDragCancel = { grabbed = null; moving = false }
+                    onDragEnd = { grabbed = null; moving = false; readoutsFrom = null },
+                    onDragCancel = { grabbed = null; moving = false; readoutsFrom = null }
                 ) { change, drag ->
                     change.consume()
                     val w = size.width.toFloat().coerceAtLeast(1f)
                     val h = size.height.toFloat().coerceAtLeast(1f)
                     val dx = drag.x / w
                     val dy = drag.y / h
+                    val from = readoutsFrom
                     when {
+                        from != null -> {
+                            readoutsBy += Offset(dx, dy)
+                            // Kept whole on the canvas while it is carried.
+                            val x = (from.left + readoutsBy.x).coerceIn(0f, (1f - from.width()).coerceAtLeast(0f))
+                            val y = (from.top + readoutsBy.y).coerceIn(0f, (1f - from.height()).coerceAtLeast(0f))
+                            onChanged(
+                                current.copy(
+                                    readouts = inga.bpmetrics.export.ReadoutSpot.at(
+                                        x, y, x + from.width(), y + from.height()
+                                    )
+                                )
+                            )
+                        }
                         grabbed != null -> onChanged(current.resizedBy(grabbed!!, dx, dy))
                         moving -> onChanged(current.movedTo(current.left + dx, current.top + dy))
                     }
@@ -629,6 +684,24 @@ private fun GraphFramingOverlay(
                 size = Size(right - left, bottom - top),
                 style = Stroke(width = 2.dp.toPx())
             )
+
+            // Dashed, and in another color, so it reads as a second thing that moves on its own
+            // rather than as part of the graph's frame.
+            readoutBlock?.let { block ->
+                val pad = 3.dp.toPx()
+                drawRoundRect(
+                    color = readoutOutline,
+                    topLeft = Offset(block.left * size.width - pad, block.top * size.height - pad),
+                    size = Size(block.width() * size.width + pad * 2, block.height() * size.height + pad * 2),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()),
+                    style = Stroke(
+                        width = 1.5.dp.toPx(),
+                        pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                            floatArrayOf(5.dp.toPx(), 3.dp.toPx())
+                        )
+                    )
+                )
+            }
 
             // Corners only, set just outside the frame where the preview has room. Knobs on the
             // edges sat on what the frame holds: the top one covered the centre of the title, the
@@ -866,7 +939,8 @@ private fun renderPreviewFrame(
         // Drawn where it will actually sit, so the preview shows the export rather than a
         // full-frame graph with an unrelated outline over it. Re-rendering on every drag frame
         // is why the outline itself is drawn by the preview widget and not by this.
-        graphRect = placement.toRectF()
+        graphRect = placement.toRectF(),
+        readouts = placement.readouts
     )
     return bitmap
 }
@@ -964,7 +1038,7 @@ fun LookSections(
                 LookTab.PRESETS -> presets?.invoke()
                 LookTab.LAYOUT -> LayoutTab(preset, onChange, framing, onFramingChange, isImage, hasPreview, framingScope, onPickVideo)
                 LookTab.GRAPH -> GraphTab(preset, onChange, isImage)
-                LookTab.READOUTS -> ReadoutsTab(preset, onChange)
+                LookTab.READOUTS -> ReadoutsTab(preset, onChange, framing, onFramingChange)
                 LookTab.TEXT -> TextTab(preset, onChange, title, onTitleChange)
                 LookTab.TIME -> TimeTab(preset, onChange, clipTime)
                 LookTab.SIGNATURE -> SignatureTab(preset, onChange)
@@ -1097,7 +1171,8 @@ private fun LayoutTab(
         GraphPlacement.PRESETS.forEach { (label, placement) ->
             FilterChip(
                 selected = framing.matches(placement),
-                onClick = { onFramingChange(placement) },
+                // A framing chip moves the graph; readouts moved off it stay where they were put.
+                onClick = { onFramingChange(placement.copy(readouts = framing.readouts)) },
                 label = { Text(label) }
             )
         }
@@ -1209,7 +1284,12 @@ private fun GraphTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit, isI
 }
 
 @Composable
-private fun ReadoutsTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit) {
+private fun ReadoutsTab(
+    preset: ExportPreset,
+    onChange: (ExportPreset) -> Unit,
+    framing: GraphPlacement,
+    onFramingChange: (GraphPlacement) -> Unit
+) {
     // The switch lives with what it switches. It sat in Graph, turning off this whole section while
     // the section stayed fully editable (UX Audit E6).
     SwitchRow("Show readouts", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
@@ -1230,16 +1310,31 @@ private fun ReadoutsTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit) 
     }
 
     Spacer(Modifier.height(8.dp))
-    // The clock is in the header whichever side this is; the hint used to say it took the other side.
-    SectionLabel("Side", "Right sits over the faded part of the graph, what hasn't happened yet.")
-    FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        PillCorner.entries.forEach { corner ->
-            FilterChip(
-                selected = preset.pillCorner == corner,
-                onClick = { onChange(preset.copy(pillCorner = corner)) },
-                label = { Text(corner.label) }
-            )
+    // Where the column is, said here as well as shown: the dashed box in the preview is the only
+    // other sign that it can move on its own (S14C).
+    if (framing.readouts == null) {
+        // The clock is in the header whichever side this is.
+        SectionLabel(
+            "On the graph",
+            "One column in the graph's top corner, moving with it. Right sits over the faded part, " +
+                "what hasn't happened yet. Drag the dashed box in the preview to place it anywhere."
+        )
+        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PillCorner.entries.forEach { corner ->
+                FilterChip(
+                    selected = preset.pillCorner == corner,
+                    onClick = { onChange(preset.copy(pillCorner = corner)) },
+                    label = { Text(corner.label) }
+                )
+            }
         }
+    } else {
+        SectionLabel(
+            "Placed on its own",
+            "Drag the dashed box in the preview to move it. It grows away from the corner of the " +
+                "frame it's nearest, so more people never push it off the edge."
+        )
+        TextButton(onClick = { onFramingChange(framing.copy(readouts = null)) }) { Text("Put back on the graph") }
     }
 
     Spacer(Modifier.height(12.dp))

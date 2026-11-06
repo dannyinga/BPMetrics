@@ -283,7 +283,13 @@ data class GraphPlacement(
     val left: Float,
     val top: Float,
     val right: Float,
-    val bottom: Float
+    val bottom: Float,
+    /**
+     * Where the readout column sits, when it has been moved off the graph (S14C). Part of a clip's
+     * framing, so moving it follows the same "this clip, this many people, every clip" choice as the
+     * graph. Null keeps it on the graph.
+     */
+    val readouts: inga.bpmetrics.export.ReadoutSpot? = null
 ) {
     fun toRectF(): android.graphics.RectF = android.graphics.RectF(left, top, right, bottom)
 
@@ -291,7 +297,7 @@ data class GraphPlacement(
     val height: Float get() = bottom - top
 
     /** Writes this framing into a preset, so saving one carries what is on screen. */
-    fun into(preset: ExportPreset): ExportPreset = preset.withFraming(left, top, right, bottom)
+    fun into(preset: ExportPreset): ExportPreset = preset.withFraming(left, top, right, bottom, readouts)
 
     /**
      * The same shape, resized to [newWidth] of the canvas, held on its own centre.
@@ -318,7 +324,7 @@ data class GraphPlacement(
         val centreY = (top + bottom) / 2f
         val x = (centreX - w / 2f).coerceIn(0f, 1f - w)
         val y = (centreY - h / 2f).coerceIn(0f, 1f - h)
-        return GraphPlacement(x, y, x + w, y + h)
+        return copy(left = x, top = y, right = x + w, bottom = y + h)
     }
 
     /** Resizes from the top-left, sliding back into frame if the new size would overflow. */
@@ -327,7 +333,7 @@ data class GraphPlacement(
         val h = newHeight.coerceIn(MIN_SIZE, 1f)
         val x = left.coerceIn(0f, 1f - w)
         val y = top.coerceIn(0f, 1f - h)
-        return GraphPlacement(x, y, x + w, y + h)
+        return copy(left = x, top = y, right = x + w, bottom = y + h)
     }
 
     /** Centres left-to-right, keeping the height and vertical position. */
@@ -339,7 +345,8 @@ data class GraphPlacement(
     /** Whether a point, in the same 0..1 space, falls inside the frame. */
     fun contains(x: Float, y: Float): Boolean = x in left..right && y in top..bottom
 
-    /** Whether this is the same framing, allowing for a drag that landed a hair off. */
+    /** Whether this is the same graph frame, allowing for a drag that landed a hair off. Where the
+     * readouts sit isn't compared: a framing chip is about the graph. */
     fun matches(other: GraphPlacement): Boolean =
         kotlin.math.abs(left - other.left) < 0.005f &&
             kotlin.math.abs(top - other.top) < 0.005f &&
@@ -372,7 +379,7 @@ data class GraphPlacement(
         val h = height
         val newX = x.coerceIn(0f, 1f - w)
         val newY = y.coerceIn(0f, 1f - h)
-        return GraphPlacement(newX, newY, newX + w, newY + h)
+        return copy(left = newX, top = newY, right = newX + w, bottom = newY + h)
     }
 
     companion object {
@@ -421,11 +428,11 @@ data class GraphPlacement(
             // the call sites that genuinely have no clip in hand, such as the preset editor, which
             // is framing the look rather than any particular shot.
             val frame = preset.frameFor(laneCount)
-            val stored = GraphPlacement(frame.left, frame.top, frame.right, frame.bottom)
+            val stored = GraphPlacement(frame.left, frame.top, frame.right, frame.bottom, frame.readouts)
             val degenerate = stored.width < MIN_SIZE || stored.height < MIN_SIZE
             val unset = stored.left == 0f && stored.top == 0f &&
                 stored.right == 1f && stored.bottom == 1f
-            return if (degenerate || unset) DEFAULT else stored
+            return if (degenerate || unset) DEFAULT.copy(readouts = frame.readouts) else stored
         }
 
         /** Below this the graph is unreadable, so a drag stops rather than allowing it. */
@@ -1295,7 +1302,8 @@ class ExportUtilityViewModel(
                     left = framing.left,
                     top = framing.top,
                     right = framing.right,
-                    bottom = framing.bottom
+                    bottom = framing.bottom,
+                    readouts = framing.readouts
                 )
             )
         )
