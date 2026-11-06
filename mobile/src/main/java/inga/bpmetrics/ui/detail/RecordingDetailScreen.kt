@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.detail
 
+import inga.bpmetrics.library.location
 import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box

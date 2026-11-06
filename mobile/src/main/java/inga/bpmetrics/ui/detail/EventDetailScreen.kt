@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.detail
 
+import inga.bpmetrics.library.location
 import inga.bpmetrics.ui.feedback.Feedback
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -100,11 +101,9 @@ fun EventDetailScreen(
     // Its own cover, or whatever it inherits — the same answer the timeline card shows, so the
     // page and the card that opened it look like the same thing.
     val cover = remember(event, tree) {
-        // Nearest wins up the tree, exactly as the timeline card resolves it: a set with no
+        // Nearest wins up the tree, through the same walk as the timeline card: a set with no
         // picture of its own shows its day's, or its festival's.
-        event?.let { own ->
-            EventTree.ancestryOf(tree, own.eventId).firstNotNullOfOrNull { it.ownCover }
-        }
+        event?.let { inga.bpmetrics.library.CoverResolver.of(it, tree)?.value }
     }
 
     // Whether anything is nested in here at all, which decides whether the Events tab exists.

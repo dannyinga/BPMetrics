@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.analysis
 
+import inga.bpmetrics.library.location
 import inga.bpmetrics.library.DerivedFigures
 import inga.bpmetrics.library.AnalysisSnapshotRecord
 import inga.bpmetrics.library.AnalysisSnapshotTag
@@ -8,7 +9,9 @@ import inga.bpmetrics.library.SnapshotZone
 import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
-import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.Inherited
+import inga.bpmetrics.library.TagEntity
+import inga.bpmetrics.library.tag
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.PersonEntity
 import inga.bpmetrics.library.RecordNameFormatter
@@ -119,7 +122,7 @@ data class AnalysisRecord(
              * everything in it can be ranked by — see §2.5. Null falls back to the recording's own
              * tags, which is what a snapshot has.
              */
-            effectiveTags: List<EffectiveTag>? = null
+            effectiveTags: List<Inherited<TagEntity>>? = null
         ): AnalysisRecord =
             AnalysisRecord(
                 recordId = record.metadata.recordId,
@@ -180,7 +183,7 @@ data class AnalysisRecord(
             watches: List<WatchEntity> = emptyList(),
             people: List<PersonEntity> = emptyList(),
             events: List<EventEntity> = emptyList(),
-            effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap(),
+            effectiveTags: Map<Long, List<Inherited<TagEntity>>> = emptyMap(),
             locations: List<inga.bpmetrics.library.LocationEntity> = emptyList()
         ): List<AnalysisRecord> {
             val names = categories.associate { it.categoryId to it.name }

@@ -1,5 +1,6 @@
 package inga.bpmetrics.ui.record
 
+import inga.bpmetrics.library.cover
 import inga.bpmetrics.util.launchGuarded
 
 import androidx.lifecycle.ViewModel
@@ -7,7 +8,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecordWithPoints
 import inga.bpmetrics.library.CategoryEntity
-import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.Inherited
+import inga.bpmetrics.library.tag
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
@@ -74,7 +76,7 @@ class BpmRecordViewModel(
      * tags applied directly. Filing the recording into a tagged event has to change what is shown
      * here without anything having been written to the recording — that is the point of §2.5.
      */
-    val effectiveTags: StateFlow<List<EffectiveTag>> = repository.effectiveTags
+    val effectiveTags: StateFlow<List<Inherited<TagEntity>>> = repository.effectiveTags
         .map { all -> all[recordId].orEmpty() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -110,7 +112,7 @@ class BpmRecordViewModel(
      * instead of nothing — and the screen can say the venue is inherited, which is the difference
      * between "nobody set this" and "the festival already did".
      */
-    val place: StateFlow<inga.bpmetrics.library.EffectivePlace?> = combine(
+    val place: StateFlow<inga.bpmetrics.library.Inherited<inga.bpmetrics.library.LocationEntity>?> = combine(
         _record, repository.allEventsInTree, locations
     ) { rec, events, places ->
         rec?.let {
@@ -161,12 +163,7 @@ class BpmRecordViewModel(
         repository.allEventsInTree
     ) { rec, events ->
         if (rec == null) return@combine null
-        inga.bpmetrics.library.CoverResolver.forRecording(
-            directCover = rec.metadata.ownCover,
-            eventId = rec.metadata.eventId,
-            eventCovers = events.associate { it.eventId to it.ownCover },
-            events = events
-        )?.cover
+        inga.bpmetrics.library.CoverResolver.of(rec.metadata, events)?.cover
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**

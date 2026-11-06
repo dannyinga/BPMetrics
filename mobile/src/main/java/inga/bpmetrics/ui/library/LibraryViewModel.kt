@@ -1,5 +1,7 @@
 package inga.bpmetrics.ui.library
 
+import inga.bpmetrics.library.location
+import inga.bpmetrics.library.cover
 import inga.bpmetrics.util.launchGuarded
 
 import androidx.lifecycle.ViewModel
@@ -13,7 +15,9 @@ import inga.bpmetrics.library.FilterState
 import inga.bpmetrics.library.rule
 import inga.bpmetrics.library.CategoryEntity
 import inga.bpmetrics.library.EventEntity
-import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.Inherited
+import inga.bpmetrics.library.TagEntity
+import inga.bpmetrics.library.tag
 import inga.bpmetrics.library.TimeSpan
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.PersonEntity
@@ -118,7 +122,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * Resolved once here rather than per tile: the answer is the same for every recording in an
      * event, and asking per row would be three queries a tile while scrolling.
      */
-    val effectiveTags: StateFlow<Map<Long, List<EffectiveTag>>> = repository.effectiveTags
+    val effectiveTags: StateFlow<Map<Long, List<Inherited<TagEntity>>>> = repository.effectiveTags
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
@@ -324,15 +328,9 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         repository.records,
         repository.allEventsInTree
     ) { records, events ->
-        val eventCovers = events.associate { it.eventId to it.ownCover }
-
         records.mapNotNull { record ->
-            inga.bpmetrics.library.CoverResolver.forRecording(
-                directCover = record.metadata.ownCover,
-                eventId = record.metadata.eventId,
-                eventCovers = eventCovers,
-                events = events
-            )?.let { record.metadata.recordId to it.cover }
+            inga.bpmetrics.library.CoverResolver.of(record.metadata, events)
+                ?.let { record.metadata.recordId to it.cover }
         }.toMap()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
@@ -574,7 +572,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         @Suppress("UNCHECKED_CAST")
         val places = args[6] as List<inga.bpmetrics.library.LocationEntity>
         @Suppress("UNCHECKED_CAST")
-        val tagsByRecord = args[7] as Map<Long, List<EffectiveTag>>
+        val tagsByRecord = args[7] as Map<Long, List<Inherited<TagEntity>>>
         @Suppress("UNCHECKED_CAST")
         val allTags = args[8] as List<inga.bpmetrics.library.TagEntity>
 
@@ -1599,7 +1597,7 @@ fun List<BpmRecord>.spanOrNull(): TimeSpan? =
 private data class FilterInputs(
     val records: List<BpmRecord>,
     val filter: FilterState,
-    val tags: Map<Long, List<inga.bpmetrics.library.EffectiveTag>>,
+    val tags: Map<Long, List<inga.bpmetrics.library.Inherited<inga.bpmetrics.library.TagEntity>>>,
     val events: List<inga.bpmetrics.library.EventEntity>,
     val places: List<inga.bpmetrics.library.LocationEntity>
 )

@@ -75,7 +75,7 @@ class OneTreeTest {
         )
 
         assertEquals(listOf(loud), effective.map { it.tag })
-        assertEquals(TagSource.ANCESTOR, effective.single().source)
+        assertEquals(Source.ANCESTOR, effective.single().source)
     }
 
     @Test
@@ -90,7 +90,7 @@ class OneTreeTest {
         )!!
 
         assertEquals(flyer, effective.cover)
-        assertEquals(CoverSource.ANCESTOR, effective.source)
+        assertEquals(Source.ANCESTOR, effective.source)
     }
 
     @Test

@@ -48,8 +48,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import inga.bpmetrics.library.CategoryEntity
-import inga.bpmetrics.library.EffectiveTag
-import inga.bpmetrics.library.TagSource
+import inga.bpmetrics.library.Inherited
+import inga.bpmetrics.library.tag
+import inga.bpmetrics.library.Source
 import inga.bpmetrics.library.TagEntity
 import inga.bpmetrics.ui.record.BpmRecordViewModel
 import inga.bpmetrics.ui.components.ExpandableSection
@@ -271,7 +272,7 @@ private fun NewTagDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EffectiveTagChip(
-    effective: EffectiveTag,
+    effective: Inherited<TagEntity>,
     onRemove: (() -> Unit)? = null,
     onExplain: ((String) -> Unit)? = null
 ) {
@@ -279,9 +280,9 @@ fun EffectiveTagChip(
 
     if (effective.isInherited) {
         val from = when (effective.source) {
-            TagSource.EVENT -> "this event"
-            TagSource.ANCESTOR -> "an event above it"
-            TagSource.DIRECT -> ""
+            Source.EVENT -> "this event"
+            Source.ANCESTOR -> "an event above it"
+            Source.OWN -> ""
         }
         AssistChip(
             onClick = { onExplain?.invoke("$label comes from $from — remove it there") },

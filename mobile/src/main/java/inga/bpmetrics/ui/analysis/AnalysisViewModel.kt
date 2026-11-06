@@ -10,10 +10,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.CategoryEntity
-import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.Inherited
+import inga.bpmetrics.library.tag
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.library.TagEntity
-import inga.bpmetrics.library.TagSource
+import inga.bpmetrics.library.Source
 import inga.bpmetrics.library.BpmZones
 import inga.bpmetrics.library.ZoneTime
 import inga.bpmetrics.ui.library.LibraryViewModel
@@ -870,7 +871,7 @@ private fun LibraryRepository.describeScope(ref: ScopeRef): Flow<AnalysisScope> 
 private fun LibraryRepository.analysisRecords(
     select: (
         List<inga.bpmetrics.library.BpmRecord>,
-        Map<Long, List<inga.bpmetrics.library.EffectiveTag>>
+        Map<Long, List<inga.bpmetrics.library.Inherited<inga.bpmetrics.library.TagEntity>>>
     ) -> List<inga.bpmetrics.library.BpmRecord>
 ): Flow<List<AnalysisRecord>> = combine(
     combine(records, getAllCategories(), getAllWatches(), getAllPeople(), allEventsInTree, ::Library),

@@ -35,7 +35,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.Cover
-import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.Inherited
+import inga.bpmetrics.library.TagEntity
+import inga.bpmetrics.library.tag
 import inga.bpmetrics.ui.components.CoverBackground
 import inga.bpmetrics.ui.components.CoverScrim
 import inga.bpmetrics.ui.components.overCover
@@ -81,7 +83,7 @@ fun SubjectHeader(
      * it could not while each subject handed down a finished row of chips — which was also two
      * copies of the same `FlowRow`.
      */
-    tags: List<EffectiveTag> = emptyList(),
+    tags: List<Inherited<TagEntity>> = emptyList(),
     onRemoveTag: (Long) -> Unit = {},
     onExplainTag: (String) -> Unit = {},
     /**
@@ -244,7 +246,7 @@ private const val TAGS_SHOWN = 4
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HeaderTags(
-    tags: List<EffectiveTag>,
+    tags: List<Inherited<TagEntity>>,
     onRemove: (Long) -> Unit,
     onExplain: (String) -> Unit
 ) {

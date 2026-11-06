@@ -2,7 +2,9 @@ package inga.bpmetrics.ui
 
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordEntity
-import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.Inherited
+import inga.bpmetrics.library.TagEntity
+import inga.bpmetrics.library.tag
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.LibraryRepository
 import inga.bpmetrics.ui.library.LibraryViewModel
@@ -24,7 +26,7 @@ class LibraryViewModelTest {
 
     private val repository = mockk<LibraryRepository>(relaxed = true)
     private val recordsFlow = MutableStateFlow<List<BpmRecord>>(emptyList())
-    private val effectiveTagsFlow = MutableStateFlow<Map<Long, List<EffectiveTag>>>(emptyMap())
+    private val effectiveTagsFlow = MutableStateFlow<Map<Long, List<Inherited<TagEntity>>>>(emptyMap())
     private val eventsFlow = MutableStateFlow<List<EventEntity>>(emptyList())
     private val locationsFlow =
         MutableStateFlow<List<inga.bpmetrics.library.LocationEntity>>(emptyList())

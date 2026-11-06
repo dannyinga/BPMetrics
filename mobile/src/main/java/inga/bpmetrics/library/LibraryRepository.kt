@@ -2737,7 +2737,7 @@ class LibraryRepository(
      * queries for every visible tile while scrolling, to answer a question that is the same for
      * every recording in an event.
      */
-    val effectiveTags: Flow<Map<Long, List<EffectiveTag>>> = combine(
+    val effectiveTags: Flow<Map<Long, List<Inherited<TagEntity>>>> = combine(
         records,
         tagDao.getAllEventTagsFlow(),
         eventDao.getAllEventsFlowUnfiltered()

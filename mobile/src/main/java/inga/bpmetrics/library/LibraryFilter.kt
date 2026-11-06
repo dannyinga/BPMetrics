@@ -95,7 +95,7 @@ data class FilterState(
  *   filtering by a collection and opening that collection cannot give different sets.
  */
 data class FilterContext(
-    val effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap(),
+    val effectiveTags: Map<Long, List<Inherited<TagEntity>>> = emptyMap(),
     val recordIdsByCollection: Map<Long, Set<Long>> = emptyMap(),
     val eventNames: Map<Long, String> = emptyMap(),
     val placeNames: Map<Long, String> = emptyMap(),
@@ -148,7 +148,7 @@ data class FilterContext(
 fun filterContextOf(
     events: List<EventEntity>,
     places: List<LocationEntity>,
-    effectiveTags: Map<Long, List<EffectiveTag>> = emptyMap(),
+    effectiveTags: Map<Long, List<Inherited<TagEntity>>> = emptyMap(),
     tags: List<TagEntity> = emptyList()
 ): FilterContext {
     val byId = places.associateBy { it.locationId }

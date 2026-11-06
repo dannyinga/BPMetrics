@@ -88,100 +88,60 @@ data class Cover(
     }
 }
 
-/** Where the cover shown on a recording came from. */
-enum class CoverSource {
-    /** Set on this recording. The exception, for the one that deserves its own picture. */
-    DIRECT,
-
-    /** Set on the event this recording is filed under. */
-    EVENT,
-
-    /** Set on an event further up the tree. See [TagSource.ANCESTOR]. */
-    ANCESTOR
-}
-
-/** A cover as it applies to something, and why. */
-data class EffectiveCover(
-    val cover: Cover,
-    val source: CoverSource
-) {
-    val isInherited: Boolean get() = source != CoverSource.DIRECT
-}
-
 /**
- * Works out which picture stands for a recording, given what its event and collections carry.
+ * Works out which picture stands for a recording or an event.
  *
- * Deliberately the same shape as [EffectiveTagsResolver], and for the same reason: nothing is
- * written downward. A cover set on "Coachella Day 1" applies to every recording under it because it
- * is *found* there when asked, not because it was copied onto each one. That is what makes filing a
- * recording into an event immediately correct with nothing to clean up — and what makes a recording
- * arriving late from a watch pick up the right picture on its own, which was the entire reason for
- * putting the cover on the event rather than on the recording.
+ * Nothing is written downward. A cover set on "Coachella Day 1" applies to every recording under it
+ * because it is *found* there when asked, not because it was copied onto each one. That is what
+ * makes filing a recording into an event immediately correct with nothing to clean up, and what
+ * makes a recording arriving late from a watch pick up the right picture on its own.
  *
- * Nearest wins. A recording's own cover beats its event's, which beats its collection's, which
- * beats that collection's parent's.
+ * Nearest wins: a recording's own cover, then its event's, then the events above. The walk itself
+ * is [nearest], shared with places and tags; this only says what to pick.
  */
 object CoverResolver {
 
     /**
-     * @param directCover The recording's own cover, if it has been given one.
-     * @param eventCover The cover on the event it is filed under, if any.
-     * @param groupChainCovers The covers of the collections above it, nearest first — its event's
-     *   collection, then that collection's parent, and so on to the top. Entries are null where
-     *   that collection has no cover of its own.
+     * From a chain already in hand.
+     *
+     * @param eventCover the cover on the event it is filed under, if any.
+     * @param groupChainCovers the covers of the events above that, nearest first; null where one
+     *   has none of its own.
      */
-    fun resolve(
-        directCover: Cover?,
-        eventCover: Cover?,
-        groupChainCovers: List<Cover?>
-    ): EffectiveCover? {
-        directCover?.let { return EffectiveCover(it, CoverSource.DIRECT) }
-        eventCover?.let { return EffectiveCover(it, CoverSource.EVENT) }
-        groupChainCovers.firstNotNullOfOrNull { it }
-            ?.let { return EffectiveCover(it, CoverSource.ANCESTOR) }
-        return null
-    }
+    fun resolve(directCover: Cover?, eventCover: Cover?, groupChainCovers: List<Cover?>): Inherited<Cover>? =
+        nearest(directCover, listOf(eventCover) + groupChainCovers) { it }
+
+    /**
+     * The cover for anything in the tree: its own, else the nearest event's above it. What every
+     * screen should ask, so the card and the page it opens show the same picture.
+     */
+    fun of(item: TreeItem, events: List<EventEntity>): Inherited<Cover>? =
+        EventTree.nearest(item, events) { it.ownCover }
 
     /**
      * The cover for a recording, from whole maps rather than a pre-walked chain.
      *
-     * The convenience the UI actually wants: a screen holds every event already, and asking it to
-     * assemble an ancestry per row is how one screen comes to walk the tree slightly differently
-     * from another. This had its own copy of that walk until TX-1.4; it now calls the same
-     * [EventTree.ancestryOf] as everything else, cycle guard and all.
+     * @param eventCovers each event's own cover, by id.
      */
     fun forRecording(
         directCover: Cover?,
         eventId: Long?,
         eventCovers: Map<Long, Cover?>,
         events: List<EventEntity>
-    ): EffectiveCover? {
-        val ancestry = eventId?.let { EventTree.ancestryOf(events, it) }.orEmpty()
-        return resolve(
-            directCover = directCover,
-            eventCover = ancestry.firstOrNull()?.let { eventCovers[it.eventId] },
-            groupChainCovers = ancestry.drop(1).map { eventCovers[it.eventId] }
-        )
-    }
+    ): Inherited<Cover>? = nearest(
+        own = directCover,
+        ancestry = eventId?.let { EventTree.ancestryOf(events, it) }.orEmpty()
+    ) { eventCovers[it.eventId] }
 
     /**
      * Every event's picture, its own or the nearest one above it.
      *
      * The map any list of events wants. A day inside a festival shows the festival's photograph
-     * rather than nothing, which is what inheritance means everywhere else in the app — a cover put
-     * on "Coachella" that decorated the Coachella card and left all six days blank would be a cover
-     * that only worked at the level it was set.
-     *
-     * Shared because it had already been written twice with different answers: the library walked
-     * the ancestry, and the export picker read `ownCover` directly — so the same six days were
-     * photographs in one list and grey rows in the other.
+     * rather than nothing. Shared because it had already been written twice with different
+     * answers: the library walked the ancestry, and the export picker read `ownCover` directly.
      */
-    fun byEvent(events: List<EventEntity>): Map<Long, Cover> {
-        val own = events.associate { it.eventId to it.ownCover }
-        return events.mapNotNull { event ->
-            EventTree.ancestryOf(events, event.eventId)
-                .firstNotNullOfOrNull { own[it.eventId] }
-                ?.let { event.eventId to it }
+    fun byEvent(events: List<EventEntity>): Map<Long, Cover> =
+        events.mapNotNull { event ->
+            EventTree.nearest(event, events) { it.ownCover }?.let { event.eventId to it.value }
         }.toMap()
-    }
 }

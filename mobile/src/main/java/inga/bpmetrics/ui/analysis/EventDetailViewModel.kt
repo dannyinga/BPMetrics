@@ -7,7 +7,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import inga.bpmetrics.library.BpmRecord
 import inga.bpmetrics.library.BpmRecordWithPoints
-import inga.bpmetrics.library.EffectiveTag
+import inga.bpmetrics.library.Inherited
+import inga.bpmetrics.library.TagEntity
+import inga.bpmetrics.library.tag
 import inga.bpmetrics.library.EffectiveTagsResolver
 import inga.bpmetrics.library.EventEntity
 import inga.bpmetrics.library.LibraryRepository
@@ -124,7 +126,7 @@ class EventDetailViewModel(
      * A group tag is shown here for the same reason it is shown on a recording: it applies, and
      * hiding it would leave someone wondering why their filter matched. It is not removable here.
      */
-    val tags: StateFlow<List<EffectiveTag>> = combine(
+    val tags: StateFlow<List<Inherited<TagEntity>>> = combine(
         repository.getTagsForEvent(eventId),
         // Observed rather than read once, so tagging an event above this one refreshes this page
         // rather than waiting for something else to reload it.

@@ -30,7 +30,7 @@ class CoverResolverTest {
         val effective = CoverResolver.resolve(mine, null, emptyList())!!
 
         assertEquals(mine, effective.cover)
-        assertEquals(CoverSource.DIRECT, effective.source)
+        assertEquals(Source.OWN, effective.source)
         assertTrue(!effective.isInherited)
     }
 
@@ -39,7 +39,7 @@ class CoverResolverTest {
         val effective = CoverResolver.resolve(null, subtronics, listOf(dayOne, coachella))!!
 
         assertEquals(subtronics, effective.cover)
-        assertEquals(CoverSource.EVENT, effective.source)
+        assertEquals(Source.EVENT, effective.source)
         assertTrue(effective.isInherited)
     }
 
@@ -48,7 +48,7 @@ class CoverResolverTest {
         val effective = CoverResolver.resolve(null, null, listOf(dayOne, coachella))!!
 
         assertEquals(dayOne, effective.cover)
-        assertEquals(CoverSource.ANCESTOR, effective.source)
+        assertEquals(Source.ANCESTOR, effective.source)
     }
 
     @Test
@@ -58,7 +58,7 @@ class CoverResolverTest {
         val effective = CoverResolver.resolve(null, null, listOf(null, coachella))!!
 
         assertEquals(coachella, effective.cover)
-        assertEquals(CoverSource.ANCESTOR, effective.source)
+        assertEquals(Source.ANCESTOR, effective.source)
     }
 
     @Test
@@ -102,7 +102,7 @@ class CoverResolverTest {
         )!!
 
         assertEquals(coachella, effective.cover)
-        assertEquals(CoverSource.ANCESTOR, effective.source)
+        assertEquals(Source.ANCESTOR, effective.source)
     }
 
     @Test
@@ -127,7 +127,7 @@ class CoverResolverTest {
         )!!
 
         assertEquals(subtronics, effective.cover)
-        assertEquals(CoverSource.EVENT, effective.source)
+        assertEquals(Source.EVENT, effective.source)
     }
 
     @Test

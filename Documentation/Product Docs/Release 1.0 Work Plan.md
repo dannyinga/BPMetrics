@@ -411,6 +411,21 @@ Ambient mode and a tile are post-1.0.
 
 **Commit:** `refactor(library): one nearest-wins walk for covers, places and tags`
 
+**As built:**
+- **S11.1:** `Inherited.kt` holds the new pieces:
+  - `Source` (OWN, EVENT, ANCESTOR) and `Inherited<T>` (value, source, isInherited).
+  - Two walks: `nearest` (first value from own, then up the chain) and `gather` (all values, deduplicated, each credited to the nearest place it appears).
+  - Tree conveniences: `EventTree.nearest`, `EventTree.gather` and `ancestryAbove` for any `TreeItem`.
+  - Accessors `.tag`, `.cover` and `.location`, so call sites still read as what they hold.
+- **Comparison test:** `InheritanceWalkTest` builds a festival → day → set tree, with recordings in the set, on the day and unfiled, plus a tag repeated up the chain. It checked the walk against all three resolvers before they moved onto it, and passes after.
+- **S11.2:** `CoverResolver`, `LocationResolver` and `EffectiveTagsResolver` are thin calls to the walk.
+  - **Deleted:** `CoverSource`, `PlaceSource`, `TagSource`, `EffectiveCover`, `EffectivePlace` and `EffectiveTag`.
+  - **New:** `CoverResolver.of(item, events)` is the one-call cover lookup.
+  - **Kept as one-liners:** `resolve` and `forRecording`, which tests and callers still use.
+  - **`LocationResolver.forEvent`** still reports an event's own venue as `EVENT`, as it always did.
+- **S11.3:** the bypasses call `CoverResolver.of`: `EventDetailScreen`'s inline walk, and the private `eventCovers` maps in `LibraryViewModel.coversByRecord` and `BpmRecordViewModel.cover`.
+- **Verified on the emulator:** the library renders covers as before, including a festival's days that have none of their own showing the festival's.
+
 ### S12 — One verb per operation
 
 | Ticket | Work | Plan |

@@ -29,7 +29,7 @@ class EffectiveTagsResolverTest {
         )
 
         assertEquals(1, result.size)
-        assertEquals(TagSource.DIRECT, result.single().source)
+        assertEquals(Source.OWN, result.single().source)
         assertFalse(result.single().isInherited)
     }
 
@@ -43,9 +43,9 @@ class EffectiveTagsResolverTest {
 
         assertEquals(
             listOf(
-                "Loud" to TagSource.DIRECT,
-                "Saturday" to TagSource.EVENT,
-                "Coachella 2026" to TagSource.ANCESTOR
+                "Loud" to Source.OWN,
+                "Saturday" to Source.EVENT,
+                "Coachella 2026" to Source.ANCESTOR
             ),
             result.map { it.tag.name to it.source }
         )
@@ -62,7 +62,7 @@ class EffectiveTagsResolverTest {
         )
 
         assertEquals(1, result.size)
-        assertEquals(TagSource.DIRECT, result.single().source)
+        assertEquals(Source.OWN, result.single().source)
     }
 
     @Test
@@ -74,7 +74,7 @@ class EffectiveTagsResolverTest {
         )
 
         assertEquals(1, result.size)
-        assertEquals(TagSource.EVENT, result.single().source)
+        assertEquals(Source.EVENT, result.single().source)
     }
 
     @Test
@@ -185,7 +185,7 @@ class EffectiveTagsResolverTest {
         )
 
         assertEquals(listOf(90L), result.map { it.tag.tagId })
-        assertEquals(TagSource.ANCESTOR, result.single().source)
+        assertEquals(Source.ANCESTOR, result.single().source)
     }
 
     @Test

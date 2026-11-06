@@ -575,7 +575,7 @@ class ExportUtilityViewModel(
         val places = registries[1] as List<inga.bpmetrics.library.LocationEntity>
         @Suppress("UNCHECKED_CAST")
         val tagsByRecord =
-            registries[2] as Map<Long, List<inga.bpmetrics.library.EffectiveTag>>
+            registries[2] as Map<Long, List<inga.bpmetrics.library.Inherited<inga.bpmetrics.library.TagEntity>>>
         @Suppress("UNCHECKED_CAST")
         val allTags = registries[3] as List<inga.bpmetrics.library.TagEntity>
 

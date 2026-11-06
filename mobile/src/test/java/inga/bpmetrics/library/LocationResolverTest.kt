@@ -65,7 +65,7 @@ class LocationResolverTest {
         val found = LocationResolver.forRecording(3, 3, festival(), registry(gorge, brooklyn))!!
 
         assertEquals("Brooklyn Mirage", found.location.name)
-        assertEquals(PlaceSource.DIRECT, found.source)
+        assertEquals(Source.OWN, found.source)
     }
 
     @Test
@@ -222,7 +222,7 @@ class LocationResolverTest {
         val here = festival() + event(4, "Afterparty", parent = 2, at = 2)
 
         assertEquals(
-            PlaceSource.EVENT,
+            Source.EVENT,
             LocationResolver.forRecording(null, 4, here, registry(gorge, showbox))!!.source
         )
     }
@@ -230,7 +230,7 @@ class LocationResolverTest {
     @Test
     fun `a venue from further up reads as inherited`() {
         assertEquals(
-            PlaceSource.ANCESTOR,
+            Source.ANCESTOR,
             LocationResolver.forRecording(null, 3, festival(), registry(gorge))!!.source
         )
     }

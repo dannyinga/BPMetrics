@@ -1,33 +1,15 @@
 package inga.bpmetrics.library
 
-/** Where a recording's location came from. Mirrors [TagSource] and [CoverSource]. */
-enum class PlaceSource {
-    /** Set on this recording. The exception, for the one that genuinely differs. */
-    DIRECT,
-
-    /** Set on the event it is filed under. */
-    EVENT,
-
-    /** Set on an event further up the tree — the festival rather than the set. */
-    ANCESTOR
-}
-
-/** A location as it applies to something, and why. */
-data class EffectivePlace(val location: LocationEntity, val source: PlaceSource) {
-    val isInherited: Boolean get() = source != PlaceSource.DIRECT
-}
-
 /**
  * Which venue, and so which clock, applies to a recording.
  *
- * Deliberately the same shape as [CoverResolver] and [EffectiveTagsResolver], walking the same
- * [EventTree]: a venue is a property of the occasion, so it is set once on the festival and every
- * recording under it inherits. Setting it per recording would mean once per watch per night.
+ * A venue is a property of the occasion, so it is set once on the festival and every recording
+ * under it inherits. Setting it per recording would mean once per watch per night. The walk is
+ * [nearest], the same one covers and tags use; this only says what to pick.
  *
- * A location is a *reference*, so this resolves an id and then looks it up — unlike covers and tags
- * there is nothing to merge field by field. Renaming the Gorge, or correcting its zone, changes
- * every event pointing at it, which is the whole reason it is a registry entry rather than free
- * text on each event.
+ * A location is a *reference*, so this resolves an id and then looks it up. Renaming the Gorge, or
+ * correcting its zone, changes every event pointing at it, which is the whole reason it is a
+ * registry entry rather than free text on each event.
  *
  * Nothing is written downward. A recording arriving late from a watch picks up its event's clock
  * the moment it is filed, with nothing to clean up.
@@ -44,31 +26,20 @@ object LocationResolver {
         eventId: Long?,
         events: List<EventEntity>,
         locations: Map<Long, LocationEntity>
-    ): EffectivePlace? {
-        directLocationId?.let { id ->
-            locations[id]?.let { return EffectivePlace(it, PlaceSource.DIRECT) }
-        }
+    ): Inherited<LocationEntity>? = nearest(
+        own = directLocationId?.let(locations::get),
+        ancestry = eventId?.let { EventTree.ancestryOf(events, it) }.orEmpty()
+    ) { event -> event.locationId?.let(locations::get) }
 
-        val ancestry = eventId?.let { EventTree.ancestryOf(events, it) }.orEmpty()
-        ancestry.forEachIndexed { depth, event ->
-            event.locationId?.let { id ->
-                locations[id]?.let {
-                    return EffectivePlace(
-                        it,
-                        if (depth == 0) PlaceSource.EVENT else PlaceSource.ANCESTOR
-                    )
-                }
-            }
-        }
-        return null
-    }
-
-    /** The venue for an event, which is its own or the nearest one above it. */
+    /**
+     * The venue for an event, which is its own or the nearest one above it. Its own counts as
+     * [Source.EVENT], as it always has: what's asked is the event's venue, not a recording's.
+     */
     fun forEvent(
         eventId: Long,
         events: List<EventEntity>,
         locations: Map<Long, LocationEntity>
-    ): EffectivePlace? = forRecording(null, eventId, events, locations)
+    ): Inherited<LocationEntity>? = forRecording(null, eventId, events, locations)
 
     /**
      * The zone to read a recording in, always answering something.
