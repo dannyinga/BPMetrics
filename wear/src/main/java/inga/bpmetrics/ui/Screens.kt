@@ -1,19 +1,16 @@
 package inga.bpmetrics.ui
 
 import android.os.SystemClock
-import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,21 +19,21 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.ButtonDefaults
+import androidx.wear.compose.material.Chip
+import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.CompactChip
 import androidx.wear.compose.material.Icon
@@ -44,14 +41,19 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import inga.bpmetrics.R
 import inga.bpmetrics.recording.RecordingState
+import inga.bpmetrics.recording.SaveOutcome
+import inga.bpmetrics.recording.SignalState
 import inga.bpmetrics.theme.BpmAccent
 import inga.bpmetrics.theme.HeartRed
 import inga.bpmetrics.theme.RecordingRed
+import inga.bpmetrics.theme.WarningAmber
+import inga.bpmetrics.theme.WearOnSurfaceVariant
+import inga.bpmetrics.theme.WearSurfaceVariant
 import kotlinx.coroutines.delay
 
 /**
  * Sealed class representing the different navigation routes in the watch application.
- * 
+ *
  * @property route The string identifier used for navigation.
  */
 sealed class Screens(val route: String) {
@@ -128,74 +130,60 @@ fun PermissionsUI(
     onGrant: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            // Not after a refusal: the explanation and both ways forward need the room on a
-            // round screen.
-            if (!refused) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_heart_plus),
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = HeartRed
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-            if (refused) {
-                Text(
-                    text = "Heart rate access is off, so BPMetrics can't record. Turn it on " +
-                        "in Settings.",
-                    style = MaterialTheme.typography.caption2,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(0.72f)
-                )
-            } else BoxWithConstraints (
-                modifier = Modifier.fillMaxWidth(0.75f),
-            ) {
-                val boxWidth : Dp = this.maxWidth
-                val fontSize = (boxWidth.value / 11).sp
-                Text(
-                    text = "BPMetrics needs sensor access to track your heart rate.",
-                    fontSize = fontSize,
-                    textAlign = TextAlign.Center
-                )
-            }
-
-            Spacer(modifier = Modifier.height(if (refused) 8.dp else 16.dp))
-
-            if (!refused) {
-                Button(
-                    modifier = Modifier.fillMaxWidth(0.7f),
-                    onClick = onGrant,
-                    colors = ButtonDefaults.buttonColors(backgroundColor = BpmAccent)
-                ) {
-                    Text("Grant Access", color = Color.Black)
-                }
-            } else {
-                // Compact, both of them: two full buttons and the explanation don't fit a round
-                // screen.
-                CompactChip(
-                    onClick = onOpenSettings,
-                    label = { Text("Open Settings", color = Color.Black) },
-                    colors = androidx.wear.compose.material.ChipDefaults.primaryChipColors(
-                        backgroundColor = BpmAccent
-                    )
-                )
-                // The prompt may still show after one refusal; after two, the system won't.
-                CompactChip(
-                    onClick = onGrant,
-                    label = { Text("Ask again", style = MaterialTheme.typography.caption2) },
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-            }
+    // Chips in a list that scrolls with the crown: the button used to run off the edge of a small
+    // round screen (Audit §6 Watch).
+    WearScreen(centerItem = 1) {
+        item {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_heart),
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
+                tint = HeartRed
+            )
+        }
+        item {
+            Text(
+                text = if (refused) {
+                    "Heart rate access is off, so BPMetrics can't record. Turn it on in Settings."
+                } else {
+                    "BPMetrics needs heart rate access to record."
+                },
+                style = MaterialTheme.typography.body2,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+        }
+        if (refused) {
+            item { WideChip("Open Settings", onClick = onOpenSettings, primary = true) }
+            // The prompt may still show after one refusal; after two, the system won't.
+            item { WideChip("Ask again", onClick = onGrant) }
+        } else {
+            item { WideChip("Grant access", onClick = onGrant, primary = true) }
         }
     }
+}
+
+/** A full-width chip whose label wraps rather than cutting words off (Audit §3 Watch). */
+@Composable
+private fun WideChip(label: String, onClick: () -> Unit, primary: Boolean = false, enabled: Boolean = true) {
+    Chip(
+        onClick = onClick,
+        enabled = enabled,
+        label = {
+            Text(
+                label,
+                maxLines = 2,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        colors = if (primary) {
+            ChipDefaults.primaryChipColors(backgroundColor = BpmAccent, contentColor = Color.Black)
+        } else {
+            ChipDefaults.secondaryChipColors()
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 /**
@@ -240,34 +228,28 @@ fun ExerciseCapabilitiesScreen(
     }
 }
 
-/** A message in the middle of the round screen, with an optional action under it. */
+/** A message on its own screen, with an optional action under it. */
 @Composable
 private fun GateMessage(text: String, action: String? = null, onAction: () -> Unit = {}) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(
-            painter = painterResource(id = R.drawable.ic_heart_plus),
-            contentDescription = null,
-            modifier = Modifier.size(28.dp),
-            tint = MaterialTheme.colors.error
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.caption1,
-            textAlign = TextAlign.Center,
-            maxLines = 5,
-            modifier = Modifier.fillMaxWidth(0.78f)
-        )
-        if (action != null) {
-            Spacer(Modifier.height(8.dp))
-            CompactChip(
-                onClick = onAction,
-                label = { Text(action, style = MaterialTheme.typography.caption2) }
+    WearScreen(centerItem = 1) {
+        item {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_heart),
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+                tint = MaterialTheme.colors.error
             )
+        }
+        item {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.body2,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+        }
+        if (action != null) {
+            item { WideChip(action, onClick = onAction) }
         }
     }
 }
@@ -277,23 +259,22 @@ private fun GateMessage(text: String, action: String? = null, onAction: () -> Un
  */
 @Composable
 fun LoadingScreen(label: String) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(32.dp),
-            indicatorColor = BpmAccent
-        )
-        Spacer(Modifier.height(12.dp))
-        Text(text = label, style = MaterialTheme.typography.caption2)
+    WearScreen(centerItem = 0) {
+        item {
+            CircularProgressIndicator(
+                modifier = Modifier.size(32.dp),
+                indicatorColor = BpmAccent
+            )
+        }
+        item {
+            Text(text = label, style = MaterialTheme.typography.caption2)
+        }
     }
 }
 
 /**
  * The primary interaction screen for the user.
- * 
+ *
  * Displays the live heart rate, recording status, and controls for starting/stopping the session.
  *
  * @param viewModel The view model providing UI state and handling interaction logic.
@@ -307,18 +288,37 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
         onStart = viewModel::onStartClicked,
         onStop = viewModel::onStopClicked,
         onSendNow = viewModel::onSendNowClicked,
-        onDismissSave = viewModel::onSaveMessageDismissed
+        onDismissSave = viewModel::onSaveMessageDismissed,
+        onDismissSendResult = viewModel::onSendResultDismissed
     )
 }
 
 /**
- * The internal layout and logic for displaying recording content.
+ * What the reading needs the wearer to know, or null. Off the wrist and no signal mean the number
+ * on screen isn't a heart rate right now.
+ */
+private fun signalWarning(signal: SignalState): String? = when (signal) {
+    SignalState.OFF_BODY -> "Watch off wrist"
+    SignalState.UNAVAILABLE -> "No signal"
+    SignalState.ACQUIRING -> "Finding pulse"
+    else -> null
+}
+
+/**
+ * The recording screen.
+ *
+ * Built so the two states can't be confused at a glance (Audit §3 Watch): recording has a red REC
+ * line with the timer and the reading in full white; idle has the status in that line and the
+ * reading dimmed. The control sits in the same place, at the same size, in both. Warnings get a
+ * line of their own, in amber and larger type, whose space is kept even when empty, so nothing
+ * moves when one appears.
  *
  * @param state The current UI state containing heart rate, status, and duration info.
  * @param onStart Callback to trigger when the start button is clicked.
  * @param onStop Callback to trigger once stopping has been confirmed.
  * @param onSendNow Callback to offer the phone whatever the watch is still holding.
  * @param onDismissSave Clears the "Saved" or "Not saved" line.
+ * @param onDismissSendResult Clears a failed send.
  */
 @Composable
 fun RecordingContent(
@@ -326,176 +326,186 @@ fun RecordingContent(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onSendNow: () -> Unit = {},
-    onDismissSave: () -> Unit = {}
+    onDismissSave: () -> Unit = {},
+    onDismissSendResult: () -> Unit = {}
 ) {
     // Stopping asks first (Audit #11). One tap on a wrist, from a sleeve or a jostle in a crowd,
     // ended a set, and the button sat right under "Send now".
     var confirmStop by remember { mutableStateOf(false) }
+    val isRecording = state.serviceState == RecordingState.RECORDING
 
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        val isRecording = state.serviceState == RecordingState.RECORDING
-
-        // The watch model is deliberately not shown. It is the least useful line on a round
-        // screen with the least room — the phone names each watch and stamps records as they
-        // arrive, so the model told the wearer nothing they could act on while pushing the
-        // things they can act on towards the crop.
-
-        // State-driven timer calculation
-        val recordingStartTime = state.recordingStartTime
-        val recordingDuration by produceState(0L, recordingStartTime) {
-            if (recordingStartTime == 0L) {
-                value = 0L
-                return@produceState
-            }
-
-            while (true) {
-                value = SystemClock.elapsedRealtime() - state.recordingStartTime
-                delay(1000)
-            }
+    val recordingStartTime = state.recordingStartTime
+    val recordingDuration by produceState(0L, recordingStartTime) {
+        if (recordingStartTime == 0L) {
+            value = 0L
+            return@produceState
         }
-
-        // Formatting logic for the workout timer
-        val seconds = recordingDuration / 1000 % 60
-        val minutes = recordingDuration / (1000 * 60) % 60
-        val hours = recordingDuration / (1000 * 60 * 60)
-
-        val minutesF = if (minutes > 0) "${minutes}m " else ""
-        val hoursF = if (hours > 0) "${hours}h " else ""
-        val formattedTimeStamp = "$hoursF$minutesF${seconds}s"
-
-        // Live Heart Rate Display
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                painter = painterResource(id = R.drawable.ic_heart_plus),
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = HeartRed
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = if (state.bpm == null) "--" else state.bpm.toInt().toString(),
-                style = MaterialTheme.typography.display2,
-                fontWeight = FontWeight.Bold
-            )
+        while (true) {
+            value = SystemClock.elapsedRealtime() - recordingStartTime
+            delay(1000)
         }
+    }
 
-        // How the last recording ended, in place of the status line until it's tapped away or the
-        // next one starts. Stopping used to end in silence whether or not anything was kept.
-        val lastSave = state.lastSave
-        if (lastSave != null && !isRecording && state.serviceState != RecordingState.ENDING) {
-            Text(
-                text = lastSave.message,
-                style = MaterialTheme.typography.caption2,
-                color = if (lastSave is inga.bpmetrics.recording.SaveOutcome.Saved) BpmAccent
-                    else MaterialTheme.colors.error,
-                textAlign = TextAlign.Center,
-                maxLines = 3,
-                modifier = Modifier
-                    .fillMaxWidth(0.8f)
-                    .clickable(onClickLabel = "Dismiss", onClick = onDismissSave)
-            )
-        } else {
-            // Status text (e.g., "Acquiring...", "Ready")
-            Text(
-                text = state.statusText,
-                style = MaterialTheme.typography.caption2
-            )
-        }
+    val warning = signalWarning(state.signalState)
+        ?.takeIf { isRecording || state.serviceState == RecordingState.UNAVAILABLE }
+    val lastSave = state.lastSave?.takeIf { !isRecording && state.serviceState != RecordingState.ENDING }
 
-        // What the phone has not got yet. A recording stays counted here until the phone has
-        // saved it, so this is what is genuinely still only on the wrist.
-        if (state.pendingRecordCount > 0) {
-            Text(
-                text = if (state.pendingRecordCount == 1) {
-                    "⇅ 1 recording not on phone yet"
-                } else {
-                    "⇅ ${state.pendingRecordCount} recordings not on phone yet"
-                },
-                style = MaterialTheme.typography.caption2,
-                color = BpmAccent,
-                textAlign = TextAlign.Center
-            )
-        }
-
-        // Outside the count, deliberately. The whole block used to sit inside it, which meant the
-        // one press most worth giving an answer to gave none: press Send now on a recording the
-        // phone already has, the reconcile confirms it, the count drops to zero, and the chip —
-        // along with the "Phone has everything" it was about to display — is removed from the
-        // composition mid-press. The wearer sees the row vanish and has no idea whether that was
-        // success or the app falling over.
-        //
-        // So the chip stays for as long as there is either something outstanding or something to
-        // say about the last press. Not while recording: it sat just above Stop, and sending
-        // carries on by itself anyway.
-        if (!isRecording && (state.pendingRecordCount > 0 || state.sendResult != null || state.isSending)) {
-            // Sending is automatic; this is for when it visibly is not working. Nothing is
-            // deleted by it, so pressing it repeatedly is harmless.
-            CompactChip(
-                onClick = onSendNow,
-                enabled = !state.isSending && state.pendingRecordCount > 0,
-                label = {
-                    Text(
-                        text = state.sendResult ?: if (state.isSending) "Sending…" else "Send now",
-                        style = MaterialTheme.typography.caption2,
-                        maxLines = 1
+    // Centred on the warning line, so the status and reading above it and the control below it are
+    // all on screen when it opens; anything about syncing sits under the control, a turn of the crown away.
+    WearScreen(centerItem = 2) {
+        // 1. What's happening: a red REC and the timer, or the status while idle.
+        item {
+            if (isRecording) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_record),
+                        contentDescription = null,
+                        tint = RecordingRed,
+                        modifier = Modifier.size(10.dp)
                     )
-                },
-                modifier = Modifier.padding(top = 2.dp)
-            )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "REC  ${Elapsed.format(recordingDuration)}",
+                        style = MaterialTheme.typography.caption1,
+                        fontWeight = FontWeight.Bold,
+                        color = RecordingRed
+                    )
+                }
+            } else {
+                Text(
+                    text = state.statusText,
+                    style = MaterialTheme.typography.caption1,
+                    color = WearOnSurfaceVariant
+                )
+            }
         }
 
-        Spacer(
-            modifier = Modifier.height(12.dp)
-        )
+        // 2. The reading: full and white while recording, dimmed while it's only a preview.
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_heart),
+                    contentDescription = null,
+                    modifier = Modifier.size(if (isRecording) 24.dp else 18.dp),
+                    tint = if (isRecording) HeartRed else WearOnSurfaceVariant
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = state.bpm?.toInt()?.toString() ?: "--",
+                    style = if (isRecording) MaterialTheme.typography.display2 else MaterialTheme.typography.display3,
+                    fontWeight = if (isRecording) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isRecording) Color.White else WearOnSurfaceVariant
+                )
+            }
+        }
 
-        // Recording can begin from any state — waiting on a signal lock is no longer required.
-        val buttonEnabled = state.isControlEnabled
+        // 3. Warnings and the last save, in a line whose height is kept when it's empty.
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                when {
+                    warning != null -> Text(
+                        text = warning,
+                        style = MaterialTheme.typography.title3,
+                        color = WarningAmber,
+                        textAlign = TextAlign.Center
+                    )
+                    lastSave != null -> Text(
+                        text = lastSave.message,
+                        style = MaterialTheme.typography.caption2,
+                        color = if (lastSave is SaveOutcome.Saved) BpmAccent else MaterialTheme.colors.error,
+                        textAlign = TextAlign.Center,
+                        maxLines = 3,
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp)
+                            .clickable(onClickLabel = "Dismiss", onClick = onDismissSave)
+                    )
+                }
+            }
+        }
 
-        Row(
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // 4. The control: same place, same size, whatever the state.
+        item {
             Button(
-                enabled = buttonEnabled,
-                onClick = {
-                    if (isRecording) confirmStop = true else onStart()
-                },
-                modifier = Modifier.size(56.dp),
+                enabled = state.isControlEnabled,
+                onClick = { if (isRecording) confirmStop = true else onStart() },
+                modifier = Modifier.size(ButtonDefaults.DefaultButtonSize),
                 colors = ButtonDefaults.buttonColors(
-                    backgroundColor = if (isRecording) RecordingRed else BpmAccent
+                    backgroundColor = if (isRecording) RecordingRed else WearSurfaceVariant
                 )
             ) {
                 Icon(
-                    painter = if (isRecording) {
-                        painterResource(id = R.drawable.ic_stop)
-                    } else {
-                        painterResource(id = R.drawable.ic_heart_plus)
-                    },
-                    contentDescription = if (isRecording) "Stop" else "Start",
-                    modifier = Modifier.size(32.dp),
-                    tint = if (isRecording) Color.White else Color.Black
+                    painter = painterResource(id = if (isRecording) R.drawable.ic_stop else R.drawable.ic_record),
+                    contentDescription = if (isRecording) "Stop" else "Start recording",
+                    modifier = Modifier.size(if (isRecording) 28.dp else 24.dp),
+                    tint = if (isRecording) Color.White else RecordingRed
                 )
             }
+        }
 
-            // Show timer only when recording
-            if (state.serviceState == RecordingState.RECORDING) {
-                Spacer(modifier = Modifier.width(12.dp))
-
+        // 5. What the phone hasn't got yet. A recording stays counted here until the phone has
+        // saved it, so this is what is genuinely still only on the wrist.
+        if (state.pendingRecordCount > 0) {
+            item {
                 Text(
-                    text = formattedTimeStamp,
-                    style = MaterialTheme.typography.body2,
+                    text = if (state.pendingRecordCount == 1) {
+                        "1 recording not on phone yet"
+                    } else {
+                        "${state.pendingRecordCount} recordings not on phone yet"
+                    },
+                    style = MaterialTheme.typography.caption2,
+                    color = BpmAccent,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 4.dp, start = 12.dp, end = 12.dp)
                 )
+            }
+        }
+
+        // 6. Sending. Not while recording (it sat just above Stop, and sending carries on by
+        // itself anyway). A failure stays with Retry and Dismiss; it used to vanish after four
+        // seconds, cut off mid-word.
+        if (!isRecording) {
+            if (state.sendFailed && state.sendResult != null) {
+                item {
+                    Text(
+                        text = state.sendResult,
+                        style = MaterialTheme.typography.caption1,
+                        color = MaterialTheme.colors.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CompactChip(onClick = onSendNow, label = { Text("Retry") })
+                        CompactChip(
+                            onClick = onDismissSendResult,
+                            label = { Text("Dismiss") },
+                            colors = ChipDefaults.secondaryChipColors()
+                        )
+                    }
+                }
+            } else if (state.pendingRecordCount > 0 || state.sendResult != null || state.isSending) {
+                item {
+                    // Sending is automatic; this is for when it visibly is not working. Nothing
+                    // is deleted by it, so pressing it repeatedly is harmless.
+                    WideChip(
+                        label = state.sendResult ?: if (state.isSending) "Sending…" else "Send now",
+                        onClick = onSendNow,
+                        enabled = !state.isSending && state.pendingRecordCount > 0
+                    )
+                }
             }
         }
     }
 
     // Closes by itself if the recording stops some other way while it's open.
     androidx.wear.compose.material.dialog.Dialog(
-        showDialog = confirmStop && state.serviceState == RecordingState.RECORDING,
+        showDialog = confirmStop && isRecording,
         onDismissRequest = { confirmStop = false }
     ) {
         androidx.wear.compose.material.dialog.Alert(

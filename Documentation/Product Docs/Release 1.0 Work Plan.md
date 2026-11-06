@@ -346,6 +346,30 @@ Ambient mode and a tile are post-1.0.
 
 **Commit:** `feat(wear): proper Wear scaffolding and a recording state you can see`
 
+**As built:**
+- **S9.1:** every watch screen sits in one frame, `WearScreen`: `Scaffold` with `TimeText`, a vignette, a `PositionIndicator`, and a `ScalingLazyColumn` that scrolls with the crown or bezel (`rotaryScrollable`). That covers permissions, the device check, loading, recording and recovery.
+- **S9.2:** recording shows a red "● REC 9s" line and the reading in bold white with a red heart. Idle shows the status in that line, and the reading in a smaller, dimmed grey.
+- **S9.3:**
+  - **The control:** one size and one place in both states. The timer moved out of the row beside it, so Start and Stop both sit at the same spot.
+  - **Warnings:** "Watch off wrist", "No signal" and "Finding pulse" have their own line, in amber and larger type.
+- **S9.4:**
+  - **Sync chips:** full width, and their labels wrap to two lines.
+  - **Send failures:** "Could not reach the phone" stays, with Retry and Dismiss; it used to vanish after four seconds.
+  - **Placement:** the pending count and the send chip sit below the control, a turn of the crown away.
+- **S9.5:**
+  - **Timer:** reads "1h 0m 5s" (`Elapsed`, tested).
+  - **Heart icon:** `ic_heart` is a single shape that survives tinting; the two-tone `ic_heart_plus` is gone.
+  - **Notification:** the ongoing notification and ongoing activity use the heart as a monochrome icon. While recording they show a running timer ("Recording · #duration#" with a `StopwatchPart`, plus the notification's chronometer).
+- **S9.6:**
+  - **Start icon:** Start is a red record dot on a dark button, and Stop is a white square on red.
+  - **Permission screen:** its chip fits the round screen.
+  - **No jumping:** the warning line keeps its height when empty, and the "not on phone yet" line sits below the control, so nothing jumps when it appears.
+- **Verified on My_Watch (API 36), paired with Pixel_7_Pro:**
+  - **Screens:** idle, recording, saved and the permission screen, all fitting the round screen. The control sat at the same spot in each.
+  - **Watch face:** showed the white heart while recording.
+  - **Sync:** a 34-second recording reached the phone straight away.
+  - **Not exercised:** the warnings and the send-failure state; the emulator's synthetic sensor doesn't produce them.
+
 ---
 
 ## Phase D — Model refactor *(no visible change)*

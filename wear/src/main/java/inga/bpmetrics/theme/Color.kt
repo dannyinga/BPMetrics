@@ -50,3 +50,9 @@ val WearOnSurfaceVariant = Color(0xFFBEC9C4)
 val WearOnAccent = Color(0xFF00382F)
 val WearError = Color(0xFFFFB4AB)
 val WearOnError = Color(0xFF690005)
+
+/**
+ * Something's wrong with the reading, not the recording: off the wrist, no signal. Amber, so it
+ * reads as a warning and not as the red of "recording".
+ */
+val WarningAmber = Color(0xFFFFC857)

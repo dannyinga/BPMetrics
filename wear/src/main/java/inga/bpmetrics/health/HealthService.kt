@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.VibratorManager
 import android.util.Log
@@ -120,28 +121,37 @@ class HealthService : LifecycleService() {
             }
 
             // 3. Observe state changes to manage notification and feedback
-            repository.recordingState.collect { state ->
-                handleStateChange(state)
-            }
+            // With the start time too, which lands a moment after RECORDING does: the timer in the
+            // notification needs it.
+            kotlinx.coroutines.flow.combine(
+                repository.recordingState,
+                repository.recordingStartTime
+            ) { state, since -> state to since }
+                .collect { (state, since) -> handleStateChange(state, since) }
         }
     }
 
     /**
      * Logic for responding to state transitions within the [RecordingRepository].
      */
-    private fun handleStateChange(state: RecordingState) {
+    private var lastHandledState: RecordingState? = null
+
+    private fun handleStateChange(state: RecordingState, recordingSinceBoot: Long) {
+        // The start time arriving re-runs this for the same state; only a real change acts.
+        val changed = state != lastHandledState
+        lastHandledState = state
         when (state) {
             RecordingState.READY -> {
-                vibrateOnAcquisition()
+                if (changed) vibrateOnAcquisition()
                 updateNotification("Ready to record")
             }
             RecordingState.RECORDING -> {
                 cancelEndingTimeout()
-                updateNotification("Recording heart rate...")
+                updateNotification("Recording heart rate", recordingSinceBoot)
             }
             RecordingState.ENDING -> {
                 updateNotification("Saving record...")
-                startEndingTimeout()
+                if (changed) startEndingTimeout()
             }
             // INACTIVE deliberately does not shut the service down. recordingState starts at
             // INACTIVE and only later emits what is really happening, so this collector's first
@@ -184,8 +194,15 @@ class HealthService : LifecycleService() {
     /**
      * Builds the ongoing notification, wired to the [OngoingActivity] that provides a shortcut
      * back to the app from the watch face.
+     *
+     * While recording, both show a running timer, so the watch face says how long a set has been
+     * going without opening the app. The icon is the single-shape heart: the system draws these
+     * monochrome, and the colour launcher icon came out as a grey blob (Audit §3 Watch).
+     *
+     * @param recordingSinceBoot when the recording started, in [SystemClock.elapsedRealtime] time,
+     *   or 0 when nothing is recording.
      */
-    private fun buildNotification(contentText: String): Notification {
+    private fun buildNotification(contentText: String, recordingSinceBoot: Long = 0L): Notification {
         val launchActivityIntent = Intent(this, MainActivity::class.java)
         val activityPendingIntent = PendingIntent.getActivity(
             this,
@@ -193,17 +210,31 @@ class HealthService : LifecycleService() {
             launchActivityIntent,
             PendingIntent.FLAG_IMMUTABLE
         )
+        val recording = recordingSinceBoot > 0L
 
         val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(TITLE_TEXT)
             .setContentText(contentText)
-            .setSmallIcon(R.mipmap.ic_launcher_round)
+            .setSmallIcon(R.drawable.ic_heart)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_WORKOUT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        if (recording) {
+            notificationBuilder
+                .setUsesChronometer(true)
+                .setWhen(System.currentTimeMillis() - (SystemClock.elapsedRealtime() - recordingSinceBoot))
+        }
 
-        val ongoingActivityStatus = Status.Builder().addTemplate(TITLE_TEXT).build()
+        val ongoingActivityStatus = if (recording) {
+            Status.Builder()
+                .addTemplate("Recording · #duration#")
+                .addPart("duration", Status.StopwatchPart(recordingSinceBoot))
+                .build()
+        } else {
+            Status.Builder().addTemplate(contentText).build()
+        }
         OngoingActivity.Builder(applicationContext, NOTIFICATION_ID, notificationBuilder)
+            .setStaticIcon(R.drawable.ic_heart)
             .setTouchIntent(activityPendingIntent)
             .setStatus(ongoingActivityStatus)
             .build()
@@ -255,18 +286,18 @@ class HealthService : LifecycleService() {
      *
      * The channel is not recreated here; that is done once in [startForegroundWithNotification].
      */
-    private fun updateNotification(contentText: String) {
+    private fun updateNotification(contentText: String, recordingSinceBoot: Long = 0L) {
         try {
             startForeground(
                 NOTIFICATION_ID,
-                buildNotification(contentText),
+                buildNotification(contentText, recordingSinceBoot),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
             )
         } catch (e: Exception) {
             // Android refuses foreground promotion in some states (an app in the background with
             // no exemption). The status text still matters, so fall back to posting it.
             Log.w(tag, "Could not re-assert foreground; posting notification only", e)
-            notificationManager.notify(NOTIFICATION_ID, buildNotification(contentText))
+            notificationManager.notify(NOTIFICATION_ID, buildNotification(contentText, recordingSinceBoot))
         }
     }
 

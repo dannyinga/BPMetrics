@@ -40,6 +40,9 @@ class RecordingViewModel(
 
     private val _sending = MutableStateFlow(false)
 
+    /** Whether the last manual send couldn't reach the phone. Kept until dismissed or retried. */
+    private val _sendFailed = MutableStateFlow(false)
+
     // Typed explicitly. Left to infer, the element type becomes whatever supertype these flows
     // happen to share, which changes whenever one is added or removed and which Kotlin is in the
     // process of making a hard error.
@@ -53,7 +56,8 @@ class RecordingViewModel(
         repository.pendingRecordCount,
         _sending,
         _sendResult,
-        repository.lastSave
+        repository.lastSave,
+        _sendFailed
     ) { values ->
         RecordingUIState(
             bpm = values[0] as Double?,
@@ -64,6 +68,7 @@ class RecordingViewModel(
             isSending = values[5] as Boolean,
             sendResult = values[6] as String?,
             lastSave = values[7] as inga.bpmetrics.recording.SaveOutcome?,
+            sendFailed = values[8] as Boolean,
             statusText = statusTextFor(values[2] as RecordingState, values[3] as SignalState)
         )
     }.stateIn(
@@ -110,8 +115,11 @@ class RecordingViewModel(
         viewModelScope.launch {
             _sending.value = true
             _sendResult.value = null
+            _sendFailed.value = false
             try {
-                _sendResult.value = describe(manager.syncNow())
+                val outcome = manager.syncNow()
+                _sendResult.value = describe(outcome)
+                _sendFailed.value = outcome.failed
             } catch (e: CancellationException) {
                 // The screen went away mid-send. Not a failure, and rethrowing is required or the
                 // coroutine machinery is left believing a cancelled job completed.
@@ -126,12 +134,22 @@ class RecordingViewModel(
                 // disappearing off their wrist with the recording still on it.
                 Log.e(TAG, "Manual send failed", t)
                 _sendResult.value = "Send failed"
+                _sendFailed.value = true
             } finally {
                 _sending.value = false
             }
+            // A failure stays until it's dismissed or retried: gone after four seconds, it was
+            // easy to miss on a wrist, and it's the one result that needs doing something about.
+            if (_sendFailed.value) return@launch
             delay(RESULT_VISIBLE_MS)
             _sendResult.value = null
         }
+    }
+
+    /** Clears a send failure the wearer has read. */
+    fun onSendResultDismissed() {
+        _sendResult.value = null
+        _sendFailed.value = false
     }
 
     private companion object {
@@ -206,7 +224,9 @@ data class RecordingUIState(
     /** What the last manual send achieved, while it is still worth showing. */
     val sendResult: String? = null,
     /** How the last recording ended, shown until the next one starts or it's tapped away. */
-    val lastSave: inga.bpmetrics.recording.SaveOutcome? = null
+    val lastSave: inga.bpmetrics.recording.SaveOutcome? = null,
+    /** Whether [sendResult] is a failure, which stays until dismissed and offers a retry. */
+    val sendFailed: Boolean = false
 ) {
     /**
      * Whether the start/stop control accepts a press.
