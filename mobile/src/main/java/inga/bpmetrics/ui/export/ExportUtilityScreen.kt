@@ -25,6 +25,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -345,9 +349,12 @@ fun ExportUtilityScreen(
         topBar = {
             Column {
                 TopAppBar(
+                    // Shorter than the standard bar: every line above the Look step's settings is
+                    // one fewer for them, and two short lines fit.
+                    expandedHeight = 52.dp,
                     title = {
                         Column {
-                            Text("Export", fontWeight = FontWeight.Bold)
+                            Text("Export", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Text(
                                 sourceLabel.ifBlank { step.question },
                                 style = MaterialTheme.typography.bodySmall,
@@ -388,51 +395,18 @@ fun ExportUtilityScreen(
                         }
                     }
                 )
-                StepIndicator(
+                StepBar(
                     current = step,
                     furthest = furthest,
-                    onSelect = { viewModel.goTo(it) }
+                    onSelect = { viewModel.goTo(it) },
+                    onBack = { viewModel.back() },
+                    onNext = { viewModel.next() },
+                    canAdvance = canAdvance,
+                    blockedReason = nextBlockedReason
                 )
                 HorizontalDivider()
             }
         },
-        bottomBar = {
-            // Step 4 has Back and no Next: the queue is the end of the flow. It had neither, so the
-            // only way back to change something was the system back gesture.
-            // On a surface of its own, so the buttons read as a bar rather than floating over the
-            // list's last rows (Audit §6 Export).
-            androidx.compose.material3.Surface(tonalElevation = 3.dp) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (step != ExportStep.SOURCE) {
-                        TextButton(onClick = { viewModel.back() }) { Text("Back") }
-                    } else {
-                        Spacer(Modifier.width(1.dp))
-                    }
-                    // The reason beside a disabled Next, so it never just doesn't respond.
-                    if (step != ExportStep.MAKE) Row(verticalAlignment = Alignment.CenterVertically) {
-                        // On every step, Source included: Next greyed out there with no reason
-                        // given (UX Audit E8).
-                        nextBlockedReason?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                        }
-                        Button(onClick = { viewModel.next() }, enabled = canAdvance) {
-                            Text("Next")
-                        }
-                    }
-                }
-            }
-        }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (step) {
@@ -942,7 +916,7 @@ private fun LookStep(
     onExportPresetFile: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onImportPresetFile: () -> Unit
 ) {
-    var tab by rememberSaveable { mutableStateOf(LookTab.PRESETS) }
+    var tab by rememberSaveable { mutableStateOf(LookTab.LAYOUT) }
     var scope by rememberSaveable { mutableStateOf(FramingScope.CLIP) }
 
     // Where a change to the frame goes, said on screen by the scope switch rather than decided out
@@ -960,6 +934,22 @@ private fun LookStep(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // The look in use, above everything it decides. Not a tab: choosing one replaces every
+        // setting below rather than being one of them.
+        LookPicker(
+            presets = presets,
+            selectedId = selectedPresetId,
+            edited = presetEdited,
+            onApply = onApplyPreset,
+            onSaveAs = onSaveAs,
+            onUpdate = onUpdatePreset,
+            onDelete = onDeletePreset,
+            onExportFile = onExportPresetFile,
+            onImportFile = onImportPresetFile,
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(start = 16.dp, end = 4.dp)
+        )
         if (isImage) {
             // The image preview is the image, at whatever the settings currently say. There is no
             // clip to scrub through and no playhead to choose.
@@ -1050,26 +1040,6 @@ private fun LookStep(
             isImage = isImage,
             title = graphTitle,
             onTitleChange = onGraphTitleChange,
-            presets = {
-                PresetBar(
-                    presets = presets,
-                    selectedId = selectedPresetId,
-                    edited = presetEdited,
-                    onApply = onApplyPreset,
-                    onSaveAs = onSaveAs,
-                    onUpdate = onUpdatePreset,
-                    onDelete = onDeletePreset,
-                    onExportFile = onExportPresetFile,
-                    onImportFile = onImportPresetFile
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    // Said here because nothing else does: there is no "default" to set any more.
-                    "A new export starts from the look you used last.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            },
             framingScope = if (!isImage && previewing != null) {
                 {
                     val cast = previewing.recordIds.size.coerceAtLeast(1)
@@ -1154,82 +1124,151 @@ private fun FramingScopeRow(
 }
 
 /**
- * Where the user is, and where they may go.
+ * Where the user is, where they may go, and the way on: Back, the steps, and Next, in one row.
  *
  * Steps already visited are tappable; ones ahead are not. Jumping to "how should it look" before
  * saying what is being exported would be asking about the appearance of nothing.
+ *
+ * Back and Next were a bar of their own along the bottom, which on the Look step left the settings
+ * under a third of the screen. Here they cost nothing: the row was already there. Only the current
+ * step is named, so four steps and two buttons fit across a phone.
  */
 @Composable
-private fun StepIndicator(
+private fun StepBar(
+    current: ExportStep,
+    furthest: ExportStep,
+    onSelect: (ExportStep) -> Unit,
+    onBack: () -> Unit,
+    onNext: () -> Unit,
+    canAdvance: Boolean,
+    /** Why Next won't go, said under the row, so it never just doesn't respond (UX Audit E8). */
+    blockedReason: String?
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (current != ExportStep.SOURCE) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Back")
+                }
+            } else {
+                Spacer(Modifier.width(48.dp))
+            }
+
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ExportStep.entries.forEach { entry -> StepMark(entry, current, furthest, onSelect) }
+            }
+
+            // Step 4 has no Next: the queue is the end of the flow.
+            if (current != ExportStep.MAKE) {
+                Button(
+                    // Still answers when it can't go, by saying why, rather than being a button
+                    // that ignores the tap.
+                    onClick = { if (canAdvance) onNext() else blockedReason?.let { Feedback.say(it) } },
+                    colors = if (canAdvance) ButtonDefaults.buttonColors() else ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                        contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    ),
+                    contentPadding = PaddingValues(start = 16.dp, end = 8.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Next")
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+            } else {
+                Spacer(Modifier.width(48.dp))
+            }
+        }
+        // Only while Next is held back, so it costs a line only when it has something to say.
+        if (!canAdvance && current != ExportStep.MAKE) {
+            blockedReason?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+/** One step: its number, or a tick once passed, and its name while it's the current one. */
+@Composable
+private fun StepMark(
+    entry: ExportStep,
     current: ExportStep,
     furthest: ExportStep,
     onSelect: (ExportStep) -> Unit
 ) {
+    val reached = entry.ordinal <= furthest.ordinal
+    val done = entry.ordinal < furthest.ordinal && entry != current
+    val active = entry == current
+
     Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .clip(CircleShape)
+            .then(if (reached) Modifier.clickable { onSelect(entry) } else Modifier)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ExportStep.entries.forEach { entry ->
-            val reached = entry.ordinal <= furthest.ordinal
-            val done = entry.ordinal < furthest.ordinal
-            val active = entry == current
-
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .then(if (reached) Modifier.clickable { onSelect(entry) } else Modifier)
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(CircleShape)
-                        .background(
-                            when {
-                                active -> MaterialTheme.colorScheme.primary
-                                done -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                                else -> MaterialTheme.colorScheme.surfaceVariant
-                            }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (done) {
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
-                    } else {
-                        Text(
-                            "${entry.number}",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (active) {
-                                MaterialTheme.colorScheme.onPrimary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                        )
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        active -> MaterialTheme.colorScheme.primary
+                        done -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                        else -> MaterialTheme.colorScheme.surfaceVariant
                     }
-                }
-                Spacer(Modifier.width(6.dp))
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (done) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = entry.title,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onPrimary
+                )
+            } else {
                 Text(
-                    entry.title,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (active) FontWeight.Bold else null,
-                    color = if (reached) {
-                        MaterialTheme.colorScheme.onSurface
+                    "${entry.number}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (active) {
+                        MaterialTheme.colorScheme.onPrimary
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    maxLines = 1
+                    }
                 )
             }
+        }
+        if (active) {
+            Spacer(Modifier.width(6.dp))
+            Text(
+                entry.title,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
         }
     }
 }

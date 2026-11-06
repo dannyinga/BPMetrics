@@ -3,6 +3,7 @@ package inga.bpmetrics.ui.export
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,13 +11,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,24 +34,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.ExportPresetEntity
-import inga.bpmetrics.ui.components.FlowRow
 
 /**
- * The preset bar for step 3.
+ * The saved look in use, and the way to change it, in one line above the preview.
  *
- * Applying one is a single tap on a chip; everything that changes a preset lives behind the
- * overflow, because the common action is "use this one" and the rare ones should not sit next to
- * it competing for attention.
+ * Saved looks used to be a tab beside the settings, but choosing one isn't a setting: it replaces
+ * all of them. So the name of the look sits where the whole editor can see it, and opens a list;
+ * everything that changes a saved look is behind the overflow, because the common action is "use
+ * this one" and the rare ones shouldn't compete with it.
  *
- * @param selectedId Which preset the current settings started from. It stays selected through
- *   edits, so "Update to current settings" is there when there's something to update with.
- * @param edited Whether the settings hold changes no preset has. Choosing a preset then asks
+ * @param selectedId Which look the current settings started from. It stays named through edits,
+ *   marked "edited", so Update is there when there's something to update with.
+ * @param edited Whether the settings hold changes no saved look has. Choosing a look then asks
  *   first, because it replaces them (Audit #21).
  */
 @Composable
-fun PresetBar(
+fun LookPicker(
     presets: List<ExportPresetEntity>,
     selectedId: Long?,
     edited: Boolean,
@@ -58,89 +61,116 @@ fun PresetBar(
     onUpdate: (ExportPresetEntity) -> Unit,
     onDelete: (ExportPresetEntity) -> Unit,
     onExportFile: (ExportPresetEntity) -> Unit,
-    onImportFile: () -> Unit
+    onImportFile: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
-    var menuFor by remember { mutableStateOf<ExportPresetEntity?>(null) }
+    var listOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<ExportPresetEntity?>(null) }
     var confirmApply by remember { mutableStateOf<ExportPresetEntity?>(null) }
     val selected = presets.firstOrNull { it.presetId == selectedId }
 
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Presets", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Row {
-                TextButton(onClick = onImportFile) { Text("Import") }
-                TextButton(onClick = { showSaveDialog = true }) { Text("Save as…") }
-            }
-        }
-
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            presets.forEach { preset ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    FilterChip(
-                        selected = preset.presetId == selectedId,
-                        onClick = { if (edited) confirmApply = preset else onApply(preset) },
-                        label = { Text(preset.name) }
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Look",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(4.dp))
+        Box(Modifier.weight(1f)) {
+            TextButton(
+                onClick = { listOpen = true },
+                contentPadding = PaddingValues(horizontal = 8.dp)
+            ) {
+                Text(
+                    selected?.name ?: "Unsaved",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (edited && selected != null) {
+                    Text(
+                        " · edited",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
                     )
-                    Box {
-                        // The full 48 dp target. At 32 dp with a 16 dp icon it was a hard tap (UX Audit E8).
-                        IconButton(onClick = { menuFor = preset }) {
-                            Icon(
-                                Icons.Default.MoreVert,
-                                contentDescription = "${preset.name} options",
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = menuFor?.presetId == preset.presetId,
-                            onDismissRequest = { menuFor = null }
-                        ) {
-                            // On the preset the settings started from, edited or not. It used to
-                            // vanish at the first edit, which was the one time it was wanted.
-                            if (preset.presetId == selectedId && !preset.isBuiltIn) {
-                                DropdownMenuItem(
-                                    text = { Text("Update to current settings") },
-                                    onClick = { menuFor = null; onUpdate(preset) }
-                                )
+                }
+                Icon(Icons.Default.ArrowDropDown, contentDescription = "Choose a saved look")
+            }
+            DropdownMenu(expanded = listOpen, onDismissRequest = { listOpen = false }) {
+                // Yours first: they're the ones made for how you film.
+                val (builtIn, yours) = presets.partition { it.isBuiltIn }
+                listOf("Yours" to yours, "Built in" to builtIn).forEach { (heading, group) ->
+                    if (group.isEmpty()) return@forEach
+                    Text(
+                        heading,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                    group.forEach { preset ->
+                        DropdownMenuItem(
+                            text = { Text(preset.name) },
+                            leadingIcon = {
+                                if (preset.presetId == selectedId) Icon(Icons.Default.Check, contentDescription = "In use")
+                                else Spacer(Modifier.size(24.dp))
+                            },
+                            onClick = {
+                                listOpen = false
+                                if (edited) confirmApply = preset else onApply(preset)
                             }
-                            DropdownMenuItem(
-                                text = { Text("Export to file") },
-                                onClick = { menuFor = null; onExportFile(preset) }
-                            )
-                            if (!preset.isBuiltIn) {
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = {
-                                        Text("Delete", color = MaterialTheme.colorScheme.error)
-                                    },
-                                    onClick = { menuFor = null; confirmDelete = preset }
-                                )
-                            }
-                        }
+                        )
                     }
                 }
+                HorizontalDivider()
+                // Said here because nothing else does: there is no "default" to set any more.
+                Text(
+                    "A new export starts from the look you used last.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp).widthIn(max = 260.dp)
+                )
             }
         }
-
-        if (edited) {
-            Text(
-                when {
-                    selected == null -> "These settings aren't saved as a preset."
-                    selected.isBuiltIn -> "Changed from ${selected.name}. Save as a new preset to keep them."
-                    else -> "Changed from ${selected.name}. Update it from its menu, or save as a new preset."
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Saved look options")
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                // Only when there's something to update with, and never a built-in: editing one
+                // saves a new look instead.
+                if (selected != null && edited && !selected.isBuiltIn) {
+                    DropdownMenuItem(
+                        text = { Text("Update ${selected.name}") },
+                        onClick = { menuOpen = false; onUpdate(selected) }
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("Save as a new look…") },
+                    onClick = { menuOpen = false; showSaveDialog = true }
+                )
+                DropdownMenuItem(
+                    text = { Text("Import from a file") },
+                    onClick = { menuOpen = false; onImportFile() }
+                )
+                if (selected != null) {
+                    DropdownMenuItem(
+                        text = { Text("Export ${selected.name} to a file") },
+                        onClick = { menuOpen = false; onExportFile(selected) }
+                    )
+                }
+                if (selected != null && !selected.isBuiltIn) {
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Delete ${selected.name}", color = MaterialTheme.colorScheme.error) },
+                        onClick = { menuOpen = false; confirmDelete = selected }
+                    )
+                }
+            }
         }
     }
 
@@ -153,7 +183,7 @@ fun PresetBar(
                     if (selected != null) {
                         "Your changes to ${selected.name} aren't saved, and ${preset.name} replaces them."
                     } else {
-                        "These settings aren't saved as a preset, and ${preset.name} replaces them."
+                        "These settings aren't saved as a look, and ${preset.name} replaces them."
                     }
                 )
             },
@@ -172,13 +202,13 @@ fun PresetBar(
         var name by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showSaveDialog = false },
-            title = { Text("Save these settings") },
+            title = { Text("Save as a new look") },
             text = {
                 Column {
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text("Preset name") },
+                        label = { Text("Name") },
                         placeholder = { Text("Story 9:16") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()

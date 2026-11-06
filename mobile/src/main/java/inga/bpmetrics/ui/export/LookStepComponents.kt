@@ -171,38 +171,21 @@ fun ExportPreview(
 
     Column(modifier) {
         // The preview is sticky and takes a third of a short screen. That is right while framing
-        // something and wrong while reading down a list of settings, so it folds — and the row
-        // stays, because a preview with no way back is worse than one always in the way.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TextButton(onClick = { expanded = !expanded }) {
+        // something and wrong while reading down a list of settings, so it folds. Folded, a slim
+        // row brings it back; open, its two buttons sit on its corner rather than on a row of
+        // their own, which was a line taken from the settings below.
+        if (!expanded) {
+            TextButton(onClick = { expanded = true }) {
                 androidx.compose.material3.Icon(
-                    if (expanded) {
-                        androidx.compose.material.icons.Icons.Default.ExpandLess
-                    } else {
-                        androidx.compose.material.icons.Icons.Default.ExpandMore
-                    },
+                    androidx.compose.material.icons.Icons.Default.ExpandMore,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(Modifier.width(4.dp))
-                Text(if (expanded) "Hide preview" else "Show preview")
+                Text("Show preview")
             }
-
-            if (expanded) {
-                androidx.compose.material3.IconButton(onClick = { fullScreen = true }) {
-                    androidx.compose.material3.Icon(
-                        androidx.compose.material.icons.Icons.Default.Fullscreen,
-                        contentDescription = "Open the preview full screen"
-                    )
-                }
-            }
+            return@Column
         }
-
-        if (!expanded) return@Column
 
         BoxWithConstraints(
             modifier = Modifier.fillMaxWidth(),
@@ -269,10 +252,27 @@ fun ExportPreview(
                     readoutBlock = rememberReadoutBlock(records, preset, placement, title),
                     modifier = Modifier.fillMaxSize()
                 )
+
+                // Over the frame, after the framing overlay so a tap on them isn't a drag.
+                Row(
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    PreviewCornerButton(
+                        icon = androidx.compose.material.icons.Icons.Default.ExpandLess,
+                        description = "Hide the preview",
+                        onClick = { expanded = false }
+                    )
+                    PreviewCornerButton(
+                        icon = androidx.compose.material.icons.Icons.Default.Fullscreen,
+                        description = "Open the preview full screen",
+                        onClick = { fullScreen = true }
+                    )
+                }
             }
         }
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(2.dp))
 
         ScrubTimeline(
             at = at,
@@ -280,6 +280,28 @@ fun ExportPreview(
             onScrub = onScrub,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+/**
+ * A small button on the preview's corner. Dark and translucent, so it reads over bright footage
+ * and dark alike without hiding much of either.
+ */
+@Composable
+private fun PreviewCornerButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    onClick: () -> Unit
+) {
+    androidx.compose.material3.FilledIconButton(
+        onClick = onClick,
+        modifier = Modifier.size(32.dp),
+        colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+            containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f),
+            contentColor = androidx.compose.ui.graphics.Color.White
+        )
+    ) {
+        androidx.compose.material3.Icon(icon, contentDescription = description, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -456,6 +478,9 @@ private fun FullScreenPreview(
  * thing on a nine-second clip and another on a nine-minute one. This reads as footage — a filled
  * track for what has played, ticks at regular intervals, and the elapsed and total times spelled
  * out — so a position on it is a moment rather than a fraction.
+ *
+ * One line: the times sit at the bar's ends rather than on a row of their own underneath, which
+ * gave the settings below another line.
  */
 @Composable
 private fun ScrubTimeline(
@@ -469,11 +494,13 @@ private fun ScrubTimeline(
     val played = MaterialTheme.colorScheme.primary
     val tick = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
 
-    Column(modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        if (durationMs > 0L) TimeLabel(clipTimeLabel((durationMs * at.coerceIn(0f, 1f)).toLong()))
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(36.dp)
+                .weight(1f)
+                .padding(horizontal = 8.dp)
+                .height(32.dp)
                 .pointerInput(Unit) {
                     // Tap and drag both land on the same handler, so the playhead can be thrown to
                     // a moment as well as walked to it.
@@ -533,24 +560,18 @@ private fun ScrubTimeline(
             }
         }
 
-        if (durationMs > 0L) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    clipTimeLabel((durationMs * at.coerceIn(0f, 1f)).toLong()),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    clipTimeLabel(durationMs),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+        if (durationMs > 0L) TimeLabel(clipTimeLabel(durationMs))
     }
+}
+
+@Composable
+private fun TimeLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1
+    )
 }
 
 /** A tick spacing that stays readable: never more than about a dozen across the bar. */
@@ -947,8 +968,6 @@ private fun renderPreviewFrame(
 
 /** The editor's tabs, in the order they're offered (S14B.1). */
 enum class LookTab(val label: String) {
-    // Only where there are presets to choose: the export flow. Settings is where they are managed.
-    PRESETS("Presets"),
     LAYOUT("Layout"),
     GRAPH("Graph"),
     READOUTS("Readouts"),
@@ -1005,12 +1024,11 @@ fun LookSections(
     /** When this clip was filmed, and the nudge, at the top of Time. Null where there's no clip. */
     clipTime: (@Composable () -> Unit)? = null,
     /** Lays curves over a video picked by hand. Null where nothing can be picked. */
-    onPickVideo: (() -> Unit)? = null,
-    /** The saved looks, as a tab of their own. Null where they are managed elsewhere. */
-    presets: (@Composable () -> Unit)? = null
+    onPickVideo: (() -> Unit)? = null
 ) {
-    val base = if (isImage) LookTab.FOR_IMAGES else LookTab.entries.filter { it != LookTab.PRESETS }
-    val tabs = if (presets != null) listOf(LookTab.PRESETS) + base else base
+    // Saved looks aren't a tab: choosing one isn't a setting, so it sits above the preview (the
+    // export flow's `LookPicker`).
+    val tabs = if (isImage) LookTab.FOR_IMAGES else LookTab.entries
     val shown = if (tab in tabs) tab else tabs.first()
 
     Column(modifier) {
@@ -1035,7 +1053,6 @@ fun LookSections(
                 .padding(16.dp)
         ) {
             when (shown) {
-                LookTab.PRESETS -> presets?.invoke()
                 LookTab.LAYOUT -> LayoutTab(preset, onChange, framing, onFramingChange, isImage, hasPreview, framingScope, onPickVideo)
                 LookTab.GRAPH -> GraphTab(preset, onChange, isImage)
                 LookTab.READOUTS -> ReadoutsTab(preset, onChange, framing, onFramingChange)
