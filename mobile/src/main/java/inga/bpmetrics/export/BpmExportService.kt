@@ -104,16 +104,13 @@ class BpmExportService : Service() {
 
         // Media processing where the platform has the type (Android 15); Android 14 has no type
         // for it, so the render runs as data sync there (Play #14).
-        val serviceType = when {
-            android.os.Build.VERSION.SDK_INT >= 35 ->
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
-            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q ->
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            else -> 0
-        }
-        androidx.core.app.ServiceCompat.startForeground(
-            this, NOTIFICATION_ID, createNotification("Starting renders", 0f), serviceType
-        )
+        val serviceType =
+            if (android.os.Build.VERSION.SDK_INT >= 35) android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+            else android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        // The platform call, not ServiceCompat's: androidx.core 1.17 masks the type to the ones
+        // Android 14 knew, which turns media processing into "none", and Android refuses to start a
+        // foreground service with no type. Every export crashed on Android 15 and later.
+        startForeground(NOTIFICATION_ID, createNotification("Starting renders", 0f), serviceType)
         
         // Ensure the queue processing loop is running
         if (queueJob == null || queueJob?.isCompleted == true) {
