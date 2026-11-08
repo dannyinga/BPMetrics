@@ -101,6 +101,24 @@ data class ExportPreset(
      */
     val lowBpmColor: Int = inga.bpmetrics.core.BpmPalette.LOW,
     val highBpmColor: Int = inga.bpmetrics.core.BpmPalette.HIGH,
+    /**
+     * Whether each curve is drawn flat in its person's color (true) or as the low-to-high ramp
+     * (false). The Live BPM reading and its rim follow the curve.
+     *
+     * Null until it's chosen, meaning by how many are on the frame: several get their colors,
+     * because that's what tells the curves apart, and one gets the ramp, because there's nothing
+     * to tell it from and the color can say how high the rate is instead. Every look saved before
+     * there was a choice reads as null, so none of them changes.
+     */
+    val curvesInPersonColor: Boolean? = null,
+    /**
+     * Where on the BPM scale the ramp from [lowBpmColor] to [highBpmColor] runs, as fractions of
+     * it, bottom 0 to top 1. Below [rampStart] a curve is the low color, above [rampEnd] the high,
+     * and between them it blends: a narrow band makes the color snap from one to the other around
+     * a heart rate, the full width shades it all the way up.
+     */
+    val rampStart: Float = 0f,
+    val rampEnd: Float = 1f,
     val showTitle: Boolean = true,
     val showCurrentStats: Boolean = true,
     val futureOpacity: Float = 0.65f,
@@ -187,14 +205,8 @@ data class ExportPreset(
      */
     val pillShowPhoto: Boolean = true,
     val pillShowName: Boolean = true,
-    /**
-     * Whether the reading takes the wearer's colour.
-     *
-     * On, because the number is the largest thing on the pill and colouring it is the strongest
-     * available tie back to the curve it belongs to. Off leaves it in the label colour, which reads
-     * more calmly when several pills sit close together.
-     */
-    val pillBpmInPersonColor: Boolean = true,
+    // The reading is always in the curve's color (see VideoFrameRenderer), so there is no setting for
+    // it. A preset saved with `pillBpmInPersonColor` still reads; the key is ignored.
     /**
      * Overall pill size, as a multiplier on what the renderer works out for the graph.
      *
@@ -228,6 +240,13 @@ data class ExportPreset(
      * HUD — so a solo export, the commonest kind there is, carried no time at all.
      */
     val clockMode: ClockMode = ClockMode.CLOCK,
+    /**
+     * Whether the header carries the date, for a set that runs past midnight or an export shared
+     * long after. Small above the clock where there is one, in its place where there isn't.
+     */
+    val showDate: Boolean = false,
+    /** How the date is written. See [DateStyle]. */
+    val dateStyle: DateStyle = DateStyle.MONTH_DAY_YEAR,
 
     // Identity
     /**
@@ -252,7 +271,7 @@ data class ExportPreset(
 
     // Fitting the footage
     /** What the vertical scale covers. See [BpmScale]. */
-    val bpmScale: BpmScale = BpmScale.ON_SCREEN,
+    val bpmScale: BpmScale = BpmScale.RECORDING,
     /** What keeps the curves and text readable over footage. See [Contrast]. */
     val contrast: Contrast = Contrast.AUTO,
     /**
@@ -394,6 +413,24 @@ data class ExportPreset(
     }
 
     /**
+     * The curve's color at [fraction] of the way up the BPM scale: the low color below the ramp,
+     * the high above it, blended across it. Both renderers and the editor's swatches use this, so
+     * a ramp looks the same on each.
+     */
+    fun rampColor(fraction: Float): Int {
+        val across = ((fraction - rampStart) / (rampEnd - rampStart).coerceAtLeast(MIN_RAMP_WIDTH))
+        return inga.bpmetrics.core.BpmRamp.blend(lowBpmColor, highBpmColor, across.coerceIn(0f, 1f))
+    }
+
+    /**
+     * Where to sample [rampColor] for a gradient shader, bottom to top: the ends of the scale, the
+     * ends of the ramp, and enough between them that a blend round the color wheel isn't cut short
+     * into a straight line between two stops.
+     */
+    fun rampStops(): List<Float> =
+        (listOf(0f, 1f) + (0..16).map { rampStart + (rampEnd - rampStart) * it / 16f }).distinct().sorted()
+
+    /**
      * Repairs anything deserialization could have left impossible.
      *
      * Gson builds objects without running the constructor, so a field absent from the payload is
@@ -412,6 +449,7 @@ data class ExportPreset(
         // A rectangle with no area draws nothing, which is how an older preset with no framing
         // stored would silently render an empty graph.
         val degenerate = (graphRight - graphLeft) < 0.01f || (graphBottom - graphTop) < 0.01f
+        val rampUsable = rampStart >= 0f && rampEnd <= 1f && rampEnd - rampStart >= MIN_RAMP_WIDTH
 
         return copy(
             name = name ?: "",
@@ -435,6 +473,7 @@ data class ExportPreset(
             wordmarkOpacity = wordmarkOpacity.coerceIn(0, 100),
             pillCorner = pillCorner ?: shipped.pillCorner,
             clockMode = clockMode ?: shipped.clockMode,
+            dateStyle = dateStyle ?: shipped.dateStyle,
             // A scale of zero is not a small pill, it is an absent one — and zero is exactly what a
             // preset written before these existed would arrive with if Gson ever stops finding the
             // no-arg constructor. Bounded rather than defaulted, because a deliberate 0.6 and an
@@ -448,14 +487,27 @@ data class ExportPreset(
                 ?: shipped.pillNameScale,
             // Absent from every preset written before 5, and those get what a new one does: the
             // whole point of these is fixing how the old ones rendered.
-            bpmScale = bpmScale ?: shipped.bpmScale,
+            //
+            // Before 7, "what's on screen" was the default, so a look saved then carries it without
+            // anyone having chosen it. Such a look gets the default now, the whole recording; once
+            // saved again it's at the current version, and a choice of "what's on screen" holds.
+            bpmScale = if (version < 7) shipped.bpmScale else bpmScale ?: shipped.bpmScale,
+            // Read and repaired, it's a look of this version now.
+            version = CURRENT_VERSION,
             contrast = contrast ?: shipped.contrast,
             textScale = textScale.takeIf { it > 0.05f }?.coerceIn(0.75f, 2f) ?: shipped.textScale,
-            readouts = readouts?.sanitised()
+            readouts = readouts?.sanitised(),
+            // A ramp turned inside out or squeezed to nothing has no sensible repair, so it's the
+            // full width again.
+            rampStart = if (rampUsable) rampStart else shipped.rampStart,
+            rampEnd = if (rampUsable) rampEnd else shipped.rampEnd
         )
     }
 
     companion object {
+        /** The narrowest the low-to-high ramp may be, so it's still a blend and not a step. */
+        const val MIN_RAMP_WIDTH = 0.05f
+
         /**
          * Bumped when a field is added or its meaning changes.
          *
@@ -463,6 +515,7 @@ data class ExportPreset(
          * silently ignoring fields it does not understand would produce an export that looks
          * nothing like the one it was shared from.
          *
+         * 7 adds the choice of curve colors, where the low-to-high ramp runs, and the clock's date.
          * 6 adds the readouts' own position. An older build would draw them back on the graph.
          * 5 adds the vertical scale, contrast, and matching or filling the clip's shape.
          * 4 adds the live readout settings: what a pill carries and how large it is.
@@ -473,7 +526,7 @@ data class ExportPreset(
          * Files written at 1 still load: the check is one-directional, so raising this only stops
          * *older* builds reading what they cannot render.
          */
-        const val CURRENT_VERSION = 6
+        const val CURRENT_VERSION = 7
 
         /**
          * Graph framings that shipped as the default in some earlier build.

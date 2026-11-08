@@ -39,7 +39,25 @@ enum class ClockMode(val label: String) {
      * many people are on it — unlike "time into the recording", which with five wearers who started
      * five minutes apart is five different numbers.
      */
-    ELAPSED("Time into session")
+    ELAPSED("Time into session"),
+
+    /** The time of day, with the time into the session small above it. */
+    BOTH("Both")
+}
+
+/**
+ * How the date beside the clock is written. Each with the year: an export is shared and kept, and a
+ * date without one stops saying when within a year.
+ */
+enum class DateStyle(val pattern: String) {
+    MONTH_DAY_YEAR("MMM d, yyyy"),
+    NUMERIC("M/d/yyyy"),
+    YEAR_MONTH_DAY("yyyy-MM-dd");
+
+    /** How [atMs] reads in [zone] in this style, as the export draws it. */
+    fun format(atMs: Long, zone: java.time.ZoneId): String =
+        java.time.Instant.ofEpochMilli(atMs).atZone(zone)
+            .format(java.time.format.DateTimeFormatter.ofPattern(pattern, java.util.Locale.getDefault()))
 }
 
 /**

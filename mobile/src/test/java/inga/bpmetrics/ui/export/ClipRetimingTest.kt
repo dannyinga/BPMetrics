@@ -223,6 +223,83 @@ class ClipRetimingTest {
         )
     }
 
+    // --- The BPM offset ---
+
+    @Test
+    fun `an offset moves the clip from when it was filmed, and a new offset replaces it`() {
+        val file = screenRecording(startedAt = setStart)
+        val shifted = ClipRetiming.shift(picked(file), 1_500L, set)
+
+        assertEquals(setStart + 1_500L, shifted.clip.startedAtMs)
+        assertEquals(setStart, ClipRetiming.filmedAt(shifted))
+        // Still filmed when the file says: the offset is on top of being in sync.
+        assertTrue(ClipRetiming.onFileTime(shifted))
+        assertEquals(setStart, ClipRetiming.fileTime(shifted))
+
+        val again = ClipRetiming.shift(shifted, -500L, set)
+        assertEquals(setStart - 500L, again.clip.startedAtMs)
+    }
+
+    @Test
+    fun `a screen recording set to its evening keeps its offset, and the offset keeps the evening`() {
+        val evening = ClipRetiming.retime(picked(screenRecording()), setStart, set)
+        val shifted = ClipRetiming.shift(evening, 2_000L, set)
+        assertEquals(setStart + 2_000L, shifted.clip.startedAtMs)
+
+        // A new filming time keeps the offset on top of it.
+        val later = ClipRetiming.retime(shifted, setStart + minute, set)
+        assertEquals(setStart + minute + 2_000L, later.clip.startedAtMs)
+        assertEquals(setStart + minute, ClipRetiming.filmedAt(later))
+    }
+
+    @Test
+    fun `an offset back to zero on the file's time is in sync with the file again`() {
+        val file = screenRecording(startedAt = setStart)
+        val back = ClipRetiming.shift(ClipRetiming.shift(picked(file), 800L, set), 0L, set)
+
+        assertTrue(ClipRetiming.onFileTime(back))
+        assertEquals(file, back.clip)
+        assertEquals(0L, back.offsetMs)
+    }
+
+    @Test
+    fun `a filming time set by hand is out of sync, and syncing to the file keeps the offset`() {
+        val file = screenRecording()
+        val evening = ClipRetiming.shift(ClipRetiming.retime(picked(file), setStart, set), 1_000L, set)
+        assertFalse(ClipRetiming.onFileTime(evening))
+        // The file's time is still known, to compare against and to go back to.
+        assertEquals(today, ClipRetiming.fileTime(evening))
+
+        val synced = ClipRetiming.syncToFile(evening, set)
+
+        assertTrue(ClipRetiming.onFileTime(synced))
+        assertEquals(1_000L, synced.offsetMs)
+        assertEquals(today + 1_000L, synced.clip.startedAtMs)
+    }
+
+    @Test
+    fun `the offset is typed in seconds, signed, and half-typed text waits`() {
+        assertEquals(1_500L, OffsetText.parse("1.5"))
+        assertEquals(1_500L, OffsetText.parse("+1.5"))
+        assertEquals(-250L, OffsetText.parse("-0.25"))
+        assertEquals(-250L, OffsetText.parse("−.25"))
+        assertEquals(0L, OffsetText.parse(""))
+        assertNull(OffsetText.parse("-"))
+        assertNull(OffsetText.parse("1."))
+        assertNull(OffsetText.parse("abc"))
+        // Minutes away is a different filming time, set with the time instead.
+        assertNull(OffsetText.parse("900"))
+
+        assertTrue(OffsetText.partial("-"))
+        assertTrue(OffsetText.partial("2."))
+        assertFalse(OffsetText.partial("abc"))
+
+        assertEquals("0", OffsetText.format(0L))
+        assertEquals("+1.5", OffsetText.format(1_500L))
+        assertEquals("-0.25", OffsetText.format(-250L))
+        assertEquals("+2", OffsetText.format(2_000L))
+    }
+
     // --- Everyone at the show (S14B.6) ---
 
     private fun worn(id: Long, by: String, startedAt: Long, lengthMs: Long) =
@@ -246,8 +323,31 @@ class ClipRetimingTest {
         val offered = ClipRetiming.candidatesFor(early, boogieT).map { it.metadata.wearerName }
         assertEquals(listOf("Danny", "Colin", "Stina", "Bethany", "Tyler"), offered)
         assertFalse(ClipRetiming.hasReadings(early, boogieT[4]))
-        // And ticked by default, all five.
-        assertEquals(setOf(1L, 2L, 3L, 4L, 5L), ClipRetiming.castFor(early, boogieT, emptySet()))
+        // But not ticked: only the four recording are on it to begin with.
+        assertEquals(setOf(1L, 2L, 3L, 4L), ClipRetiming.castFor(early, boogieT, emptySet()))
+    }
+
+    @Test
+    fun `someone ticked by hand stays on through a nudge, while the clip still lands on readings`() {
+        val withTyler = setOf(1L, 2L, 3L, 4L, 5L)
+
+        assertEquals(withTyler, ClipRetiming.castFor(clipAt(setStart + 11 * minute), boogieT, withTyler))
+    }
+
+    @Test
+    fun `a clip moved off everyone it had starts again from who's recording there`() {
+        // Only Tyler, ticked by hand, then the clip moves to before his watch started.
+        val later = clipAt(setStart + 10 * minute)
+
+        assertEquals(setOf(1L, 2L, 3L, 4L), ClipRetiming.castFor(later, boogieT, setOf(5L)))
+    }
+
+    @Test
+    fun `with nobody recording, everyone offered is on it, so the preview has curves to correct against`() {
+        // Ten minutes after the set ended: nobody's recording, all five are within the margin.
+        val after = clipAt(setStart + 130 * minute)
+
+        assertEquals(setOf(1L, 2L, 3L, 4L, 5L), ClipRetiming.castFor(after, boogieT, emptySet()))
     }
 
     @Test

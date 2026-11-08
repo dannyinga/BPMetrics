@@ -159,6 +159,12 @@ fun ExportUtilityScreen(
         // Falls back to the first ticked clip, so arriving at step 3 shows something rather than
         // waiting for a selection the strip has not been scrolled to yet.
         ?: pendingJobs.firstOrNull()
+    // The fallback held as the choice, so a clip shown that way stays shown when a time correction
+    // unticks it. With one clip there's no strip to choose from, so this was the only way to it,
+    // and setting its time to an evening nobody recorded took the clip and its time control away.
+    LaunchedEffect(previewingClip?.clip?.uri) {
+        if (previewingUri == null) previewingClip?.let { previewingUri = it.clip.uri }
+    }
 
     // Which clips a change in the Look step reaches. All of them unless said otherwise: most of a
     // look is the same across a batch, and a change meant for one clip is the one worth saying.
@@ -554,6 +560,7 @@ fun ExportUtilityScreen(
                     onFrameClip = { uri, placement -> viewModel.frameClip(uri, placement) },
                     onSetFilmedAt = { uri, at -> viewModel.setClipFilmedAt(uri, at) },
                     onResetFilmedAt = { viewModel.resetClipFilmedAt(it) },
+                    onSetOffset = { uri, ms -> viewModel.setClipOffset(uri, ms) },
                     onPickOverlay = { pickOverlayLauncher.launch(arrayOf("video/*")) },
                     onApplyPreset = { viewModel.applyPreset(it, lookScope, previewingClip?.clip?.uri) },
                     onSaveAs = { viewModel.savePresetAs(it, previewingClip?.clip?.uri) },
@@ -936,6 +943,7 @@ private fun LookStep(
     /** Says when a clip was really filmed. See [ClipRetiming]. */
     onSetFilmedAt: (Uri, Long) -> Unit,
     onResetFilmedAt: (Uri) -> Unit,
+    onSetOffset: (Uri, Long) -> Unit,
     onPickOverlay: () -> Unit,
     onApplyPreset: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onSaveAs: (String) -> Unit,
@@ -945,7 +953,9 @@ private fun LookStep(
     onImportPresetFile: () -> Unit
 ) {
     var tab by rememberSaveable { mutableStateOf(LookTab.CANVAS) }
-    var timingOpen by rememberSaveable { mutableStateOf(false) }
+    // Opened from the Graph and Live BPM tabs, drawn by the preview.
+    var positioning by rememberSaveable { mutableStateOf<PositionTarget?>(null) }
+    var positioningFull by rememberSaveable { mutableStateOf(false) }
 
     // Where a change to the frame goes, said on screen by the scope switch rather than decided out
     // of sight (S14B.3). With no clip in hand there is only the look to change.
@@ -973,6 +983,25 @@ private fun LookStep(
     } else null
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // Which clip is being previewed, when there's more than one. First, above the look: it
+        // decides whose look, picture and settings everything below is showing.
+        if (!isImage && records.isNotEmpty() && ticked.size > 1) {
+            Box(
+                Modifier
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(start = 16.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)
+            ) {
+                ClipSelectorStrip(
+                    clockFor = { ClipRetiming.clockFor(it, records) },
+                    clips = ticked,
+                    selectedUri = previewing?.clip?.uri,
+                    onSelect = onSelectClip,
+                    collapsed = clipStripCollapsed,
+                    onCollapse = onClipStripCollapse
+                )
+            }
+        }
+
         // The look in use, above everything it decides. Not a tab: choosing one replaces every
         // setting below rather than being one of them.
         LookPicker(
@@ -1027,6 +1056,10 @@ private fun LookStep(
                     },
                     onTapRegion = { tab = LookTab.of(it) },
                     onPresetChange = onPresetChange,
+                    positioning = positioning,
+                    onPositionDone = { positioning = null },
+                    onOpenPosition = { positioningFull = true; positioning = PositionTarget.GRAPH },
+                    positionFull = positioningFull,
                     positionScope = scopeMenu,
                     positionClips = if (ticked.size > 1) {
                         {
@@ -1040,26 +1073,10 @@ private fun LookStep(
                             )
                         }
                     } else null,
-                    onClipTime = if (previewing != null) { { timingOpen = true } } else null,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
             HorizontalDivider()
-        }
-
-        // Which clip is being previewed, when there's more than one. It decides what every tab
-        // below shows, so it sits above them.
-        if (!isImage && records.isNotEmpty() && ticked.size > 1) {
-            Box(Modifier.padding(start = 16.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)) {
-                ClipSelectorStrip(
-                    clockFor = { ClipRetiming.clockFor(it, records) },
-                    clips = ticked,
-                    selectedUri = previewing?.clip?.uri,
-                    onSelect = onSelectClip,
-                    collapsed = clipStripCollapsed,
-                    onCollapse = onClipStripCollapse
-                )
-            }
         }
 
         // The preview must not look like a render that won't happen (Audit #19).
@@ -1067,7 +1084,7 @@ private fun LookStep(
             Text(
                 if (!ClipRetiming.drawsSomething(previewing.clip, previewing.recordIds, records)) {
                     "Not exported: nobody was recording at this clip's time. Correct when it was " +
-                        "filmed with the clock on the preview, and it's ticked again."
+                        "filmed in the Sync tab, and it's ticked again."
                 } else {
                     "Not exported: this clip isn't ticked."
                 },
@@ -1087,31 +1104,28 @@ private fun LookStep(
             title = graphTitle,
             onTitleChange = onGraphTitleChange,
             onPickVideo = if (!isImage && jobCount == 0) onPickOverlay else null,
-            clipSize = previewing?.clip?.takeIf { it.widthPx > 0 && it.heightPx > 0 }?.let { it.widthPx to it.heightPx }
-        )
-    }
-
-    // When the clip was filmed, and the nudge (UX Audit E7). About the clip, not the look, so it
-    // opens from the clip's preview rather than sitting in a tab of settings.
-    if (timingOpen && previewing != null && records.isNotEmpty()) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { timingOpen = false },
-            confirmButton = { TextButton(onClick = { timingOpen = false }) { Text("Done") } },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
+            clipSize = previewing?.clip?.takeIf { it.widthPx > 0 && it.heightPx > 0 }?.let { it.widthPx to it.heightPx },
+            // A still has no Position: its preview is the image, not the frame Position draws.
+            onPosition = if (!isImage && records.isNotEmpty()) { { positioningFull = false; positioning = it } } else null,
+            // When the clip was filmed, and its BPM offset (UX Audit E7): the clip's, not the
+            // look's, so the scope menu doesn't reach it. For the clip on the preview.
+            // The people on the previewed clip, else everyone in the export.
+            people = previewing?.recordIds?.size?.takeIf { it > 0 } ?: records.size,
+            sync = if (!isImage && previewing != null && records.isNotEmpty()) {
+                {
                     FilmedAtControl(
                         clip = previewing,
                         // The clock the render prints, file offset included.
                         zone = remember(records, previewing.clip) {
                             ClipRetiming.clockFor(previewing.clip, records)
                         },
-                        recordingStartMs = records.minOfOrNull { it.metadata.startTime },
                         drawsSomething = ClipRetiming.drawsSomething(previewing.clip, previewing.recordIds, records),
                         onSet = { onSetFilmedAt(previewing.clip.uri, it) },
+                        onOffset = { onSetOffset(previewing.clip.uri, it) },
                         onReset = { onResetFilmedAt(previewing.clip.uri) }
                     )
                 }
-            }
+            } else null
         )
     }
 }

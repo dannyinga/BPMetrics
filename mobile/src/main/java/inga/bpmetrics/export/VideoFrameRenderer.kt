@@ -397,11 +397,18 @@ object VideoFrameRenderer {
         timelineOriginMs: Long,
         contrast: Contrast
     ) {
-        val clock = viewport?.let { clockTextFor(config, it, timelineOriginMs) }
+        val lines = viewport?.let { clockLinesFor(config, it, timelineOriginMs) }
+        val clock = lines?.main
+        val above = lines?.above
         val baseline = dims.headerBaseline
 
         val centreX = dims.graphLeft + dims.graphWidth / 2f
         val gap = 24f * dims.scaleFactor
+
+        // With a line above it, the clock comes down a size so the pair stands no taller than the
+        // title beside it: the header keeps its height, and both stay on the title's row.
+        val clockSize = if (above != null) dims.clockText * STACKED_CLOCK_SIZE else dims.clockText
+        val aboveSize = dims.clockText * ABOVE_SIZE
 
         // Measured before the title is drawn, because it is what decides how much room the title
         // has. The clock is right-aligned and the title is centred, so the space the title may
@@ -410,9 +417,14 @@ object VideoFrameRenderer {
         var clockWidth = 0f
         if (clock != null) {
             paint.resetForExport()
-            paint.textSize = dims.clockText
+            paint.textSize = clockSize
             paint.isFakeBoldText = true
             clockWidth = paint.measureText(clock)
+        }
+        if (above != null) {
+            paint.resetForExport()
+            paint.textSize = aboveSize
+            clockWidth = maxOf(clockWidth, paint.measureText(above))
         }
 
         if (config.look.showTitle) {
@@ -433,20 +445,65 @@ object VideoFrameRenderer {
         }
 
         if (clock != null) {
+            // To the right where it shares the band, centred where it has the band to itself. The
+            // line above is aligned the same way, so the two read as one block.
+            val align = if (config.look.showTitle) Paint.Align.RIGHT else Paint.Align.CENTER
+            val x = if (config.look.showTitle) dims.graphRight else centreX
             paint.resetForExport()
             paint.color = config.look.labelsColor
-            paint.textSize = dims.clockText
+            paint.textSize = clockSize
             paint.isFakeBoldText = true
-            // To the right where it shares the band, centred where it has the band to itself.
-            if (config.look.showTitle) {
-                paint.textAlign = Paint.Align.RIGHT
-                drawText(canvas, clock, dims.graphRight, baseline, paint, contrast, dims)
-            } else {
-                paint.textAlign = Paint.Align.CENTER
-                drawText(canvas, clock, centreX, baseline, paint, contrast, dims)
+            paint.textAlign = align
+            drawText(canvas, clock, x, baseline, paint, contrast, dims)
+            if (above != null) {
+                paint.resetForExport()
+                paint.color = config.look.labelsColor
+                paint.alpha = paint.alpha * ABOVE_ALPHA / 255
+                paint.textSize = aboveSize
+                paint.textAlign = align
+                drawText(canvas, above, x, baseline - clockSize * 1.05f, paint, contrast, dims)
             }
         }
     }
+
+    /** The clock's size when a line sits above it, and that line's, as shares of the clock's own. */
+    private const val STACKED_CLOCK_SIZE = 0.8f
+    private const val ABOVE_SIZE = 0.5f
+    /** How much of the text color the line above the clock gets: quieter than the time. */
+    private const val ABOVE_ALPHA = 210
+
+    /** What the header's clock block says: its main line, and the smaller one above it, if any. */
+    internal data class ClockLines(val main: String, val above: String?)
+
+    /**
+     * The clock block at [atMs]: the time of day, else the time into the session, else the date,
+     * as the main line; whatever else is shown goes above it, date first. Null with none of them.
+     */
+    internal fun clockLinesFor(look: ExportPreset, atMs: Long, elapsedMs: Long, zone: java.time.ZoneId): ClockLines? {
+        val mode = look.clockMode
+        // With seconds: this one is a running clock rather than a stamp, and it advances a frame
+        // at a time.
+        val time = if (mode == ClockMode.CLOCK || mode == ClockMode.BOTH) {
+            StringFormatHelpers.getTimeString(atMs, zone, withSeconds = true)
+        } else null
+        // From the start of the session, which is well defined however many people are on the
+        // frame — unlike "into the recording", which with five wearers is five different numbers.
+        val elapsed = if (mode == ClockMode.ELAPSED || mode == ClockMode.BOTH) {
+            StringFormatHelpers.getDurationString(elapsedMs.coerceAtLeast(0L))
+        } else null
+        val date = if (look.showDate) look.dateStyle.format(atMs, zone) else null
+        val main = time ?: elapsed ?: date ?: return null
+        val above = listOfNotNull(date, elapsed).filter { it != main }.joinToString("  ·  ").ifEmpty { null }
+        return ClockLines(main, above)
+    }
+
+    private fun clockLinesFor(config: Frame, viewport: Viewport, timelineOriginMs: Long): ClockLines? =
+        clockLinesFor(
+            config.look,
+            atMs = timelineOriginMs + viewport.playhead.toLong(),
+            elapsedMs = viewport.playhead.toLong(),
+            zone = ChartKit.zone(config.zoneId)
+        )
 
     /** What keeps this frame's curves and text readable over footage. */
     private fun contrastOf(config: Frame): Contrast =
@@ -496,27 +553,6 @@ object VideoFrameRenderer {
     /** What sits behind text and curves for [Contrast.SHADOW] and [Contrast.OUTLINE]. */
     private const val CONTRAST_SHADOW = 0xE6000000.toInt()
     private const val CONTRAST_OUTLINE = 0xE6000000.toInt()
-
-    /** What the clock says, or null when it is switched off. */
-    private fun clockTextFor(
-        config: Frame,
-        viewport: Viewport,
-        timelineOriginMs: Long
-    ): String? = when (config.look.clockMode) {
-        ClockMode.NONE -> null
-        // With seconds: this one is a running clock rather than a stamp, and it advances a frame
-        // at a time.
-        ClockMode.CLOCK -> StringFormatHelpers.getTimeString(
-            timelineOriginMs + viewport.playhead.toLong(),
-            ChartKit.zone(config.zoneId),
-            withSeconds = true
-        )
-        // From the start of the session, which is well defined however many people are on the
-        // frame — unlike "into the recording", which with five wearers is five different numbers.
-        ClockMode.ELAPSED -> StringFormatHelpers.getDurationString(
-            viewport.playhead.toLong().coerceAtLeast(0L)
-        )
-    }
 
     private fun drawDataCurve(canvas: Canvas, dims: RenderingDimensions, ranges: BpmRanges, viewport: Viewport, record: BpmRecordWithPoints, config: Frame, paint: Paint) {
         canvas.withClip(dims.graphLeft, dims.graphTop, dims.graphRight, dims.graphBottom) {
@@ -719,12 +755,15 @@ object VideoFrameRenderer {
         )
 
         // --- 2. DEFINE VERTICAL COLOR GRADIENT (UI BASED) ---
-        val midUiColor = getBpmColor(ranges.uiMin + (ranges.uiRange / 2.0), ranges, config)
+        // Top to bottom, so the stops run from high down: sampled along the ramp, which may cover
+        // only part of the scale (ExportPreset.rampStart and rampEnd).
+        val rampStops = config.look.rampStops().reversed()
         val colorGradient = LinearGradient(
             0f, dims.getY(ranges.uiMax, ranges),
             0f, dims.getY(ranges.uiMin, ranges),
-            intArrayOf(config.look.highBpmColor, midUiColor, config.look.lowBpmColor),
-            null, Shader.TileMode.CLAMP
+            rampStops.map { config.look.rampColor(it) }.toIntArray(),
+            rampStops.map { 1f - it }.toFloatArray(),
+            Shader.TileMode.CLAMP
         )
 
         // --- 3. RENDER FILL (Past Only) ---
@@ -916,7 +955,7 @@ object VideoFrameRenderer {
         /** Kept clear inside the panel's edge. */
         val edge = 16f * scaleFactor
 
-        private val hasHeader = config.look.showTitle || config.look.clockMode != ClockMode.NONE
+        private val hasHeader = config.look.showTitle || config.look.clockMode != ClockMode.NONE || config.look.showDate
         private val headerText = if (config.look.showTitle) titleText else clockText
 
         /** Where the title and clock sit, a line of [headerText] below the panel's top edge. */
@@ -984,15 +1023,14 @@ object VideoFrameRenderer {
         return Viewport(start, end, playhead, duration, lookahead)
     }
 
+    /** Whether curves are drawn in their people's colors: as the look says, else with several on the frame. */
+    internal fun inPersonColor(look: ExportPreset, people: Int): Boolean = look.curvesInPersonColor ?: (people > 1)
+
     private fun getBpmColor(bpm: Double, ranges: BpmRanges, config: Frame): Int {
         val fraction = ((bpm - ranges.uiMin) / ranges.uiRange).coerceIn(0.0, 1.0).toFloat()
         // The same walk the on-screen chart uses, against this preset's endpoints — which default
         // to the app's own low and high.
-        return inga.bpmetrics.core.BpmRamp.blend(
-            config.look.lowBpmColor,
-            config.look.highBpmColor,
-            fraction
-        )
+        return config.look.rampColor(fraction)
     }
 
     // The multi-watch palette used to live here, as pairs of which only the first was ever read,
@@ -1093,7 +1131,7 @@ object VideoFrameRenderer {
             if (inX && inY) return Region.WORDMARK
         }
         if (y < dims.graphTop) {
-            val clockShown = look.clockMode != ClockMode.NONE
+            val clockShown = look.clockMode != ClockMode.NONE || look.showDate
             // The clock is right-aligned beside a title, or the whole band without one.
             return when {
                 clockShown && (!look.showTitle || x > dims.graphLeft + dims.graphWidth * 0.7f) -> Region.CLOCK
@@ -1210,8 +1248,10 @@ object VideoFrameRenderer {
         // This is also where the preview and the render disagreed: the export drops to the
         // single-record path for one recording and gets the gradient, while the preview always
         // comes through here. Deciding it here means both agree whichever path they took.
-        val recordConfigs = if (processedRecords.size == 1) {
-            listOf(multiConfig)
+        //
+        // Unless the look says otherwise: [ExportPreset.curvesInPersonColor].
+        val recordConfigs = if (!inPersonColor(config.look, processedRecords.size)) {
+            processedRecords.map { multiConfig }
         } else {
             processedRecords.mapIndexed { index, rec ->
                 val assignedColor = colorForRecord(rec, index, config)
@@ -1236,8 +1276,8 @@ object VideoFrameRenderer {
             )
         }
 
-        // The pills name each wearer and colour-match their curve, so they replace the legend.
-        if (!config.look.showCurrentStats) drawMultiLegend(canvas, dims, processedRecords, config, paint)
+        // With Live BPM off, the curves alone: no names and no readings. (A list of names in the
+        // graph's corner used to stand in for the pills.)
 
         drawWordmark(canvas, dims, config, paint)
 
@@ -1552,7 +1592,7 @@ object VideoFrameRenderer {
             // blue-to-red ramp, so the rim is the label colour, quietly.
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = rowHeight * 0.035f
-            paint.color = if (records.size > 1) {
+            paint.color = if (inPersonColor(config.look, records.size)) {
                 (recordColor and 0x00FFFFFF) or 0xCC000000.toInt()
             } else {
                 (config.look.labelsColor and 0x00FFFFFF) or 0x55000000
@@ -1599,12 +1639,14 @@ object VideoFrameRenderer {
             // rate is instead. A pill sitting beside a curve that shades from cool to hot, printing
             // one fixed colour throughout, was contradicting the line right next to it.
             //
+            // The look can choose either for any number of people ([ExportPreset.curvesInPersonColor]);
+            // the reading follows whichever the curve got.
+            //
             // Never when there is no reading: a greyed "--" must not look like somebody's colour,
             // nor like a heart rate at the bottom of the scale.
             val readingColour = when {
                 bpm == null -> config.look.labelsColor
-                !config.look.pillBpmInPersonColor -> config.look.labelsColor
-                records.size == 1 -> getBpmColor(bpm, ranges, config)
+                !inPersonColor(config.look, records.size) -> getBpmColor(bpm, ranges, config)
                 else -> recordColor
             }
             paint.color = readingColour
@@ -1736,35 +1778,5 @@ object VideoFrameRenderer {
         return records.indices.sortedWith(
             compareByDescending<Int> { bpms[it] ?: Double.NEGATIVE_INFINITY }.thenBy { it }
         )
-    }
-
-    private fun drawMultiLegend(
-        canvas: Canvas,
-        dims: RenderingDimensions,
-        records: List<BpmRecordWithPoints>,
-        config: Frame,
-        paint: Paint
-    ) {
-        val legendLeft = dims.graphLeft + 16f * dims.scaleFactor
-        var legendTop = dims.graphTop + 16f * dims.scaleFactor
-        val itemHeight = 32f * dims.scaleFactor
-
-        val legendLabels = ChartKit.distinctLabels(records)
-        records.forEachIndexed { index, record ->
-            val wearerLabel = legendLabels[index]
-            val color = colorForRecord(record, index, config)
-
-            paint.resetForExport()
-            paint.color = color
-            paint.style = Paint.Style.FILL
-            canvas.drawCircle(legendLeft + 10f * dims.scaleFactor, legendTop + 12f * dims.scaleFactor, 8f * dims.scaleFactor, paint)
-
-            paint.color = config.look.labelsColor
-            paint.textSize = maxOf(20f * dims.scaleFactor, dims.readableText)
-            paint.isFakeBoldText = true
-            canvas.drawText(wearerLabel, legendLeft + 28f * dims.scaleFactor, legendTop + 18f * dims.scaleFactor, paint)
-
-            legendTop += itemHeight
-        }
     }
 }

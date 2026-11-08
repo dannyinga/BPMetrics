@@ -68,12 +68,13 @@ class ExportPresetTest {
                 3 to GraphFrame(0.1f, 0.5f, 0.6f, 0.9f, readouts = ReadoutSpot(0.9f, 0.1f, ReadoutPin.TOP_RIGHT)),
                 5 to GraphFrame(0.2f, 0.4f, 0.8f, 0.95f)
             ),
-            pillShowPhoto = false, pillShowName = false, pillBpmInPersonColor = false,
+            pillShowPhoto = false, pillShowName = false, curvesInPersonColor = false,
+            rampStart = 0.25f, rampEnd = 0.75f,
             pillScale = 1.4f, pillPhotoScale = 0.7f, pillBpmScale = 1.2f, pillNameScale = 0.8f,
             pillCorner = PillCorner.TOP_LEFT,
-            clockMode = ClockMode.ELAPSED,
+            clockMode = ClockMode.ELAPSED, showDate = true, dateStyle = DateStyle.YEAR_MONTH_DAY,
             showWordmark = true, wordmarkOpacity = 80,
-            bpmScale = BpmScale.RECORDING, contrast = Contrast.OUTLINE,
+            bpmScale = BpmScale.ON_SCREEN, contrast = Contrast.OUTLINE,
             matchClip = true, fillCanvas = true, textScale = 1.3f
         )
 
@@ -356,13 +357,13 @@ class ExportPresetTest {
     }
 
     @Test
-    fun `a preset saved before S14A follows the screen and gets contrast where it needs it`() {
+    fun `a preset saved before S14A scales to the whole recording and gets contrast where it needs it`() {
         // A version 4 preset, written before these fields existed. Gson leaves the enums null.
         val old = """{"version":4,"name":"Mine","width":1920,"height":1080,"backgroundOpacity":0}"""
         val read = ExportPreset.fromJson(old)
 
         assertNotNull(read)
-        assertEquals(BpmScale.ON_SCREEN, read!!.bpmScale)
+        assertEquals(BpmScale.RECORDING, read!!.bpmScale)
         assertEquals(Contrast.AUTO, read.contrast)
         assertFalse(read.matchClip)
         assertFalse(read.fillCanvas)
@@ -396,9 +397,66 @@ class ExportPresetTest {
 
         assertTrue(shipped.pillShowPhoto)
         assertTrue(shipped.pillShowName)
-        assertTrue(shipped.pillBpmInPersonColor)
         assertEquals(1f, shipped.pillScale, 0.0001f)
         assertEquals(PillCorner.TOP_RIGHT, shipped.pillCorner)
+    }
+
+    @Test
+    fun `until chosen, several people get their colors and one gets the ramp`() {
+        val unchosen = ExportPreset()
+        assertNull(unchosen.curvesInPersonColor)
+        assertFalse(VideoFrameRenderer.inPersonColor(unchosen, 1))
+        assertTrue(VideoFrameRenderer.inPersonColor(unchosen, 4))
+
+        // A look saved before the choice existed reads as unchosen.
+        val old = ExportPreset.fromJson("""{"version":4,"name":"Mine","width":1920,"height":1080}""")
+        assertNull(old!!.curvesInPersonColor)
+    }
+
+    @Test
+    fun `a narrowed ramp is solid low below it, solid high above it, and blends across it`() {
+        val look = ExportPreset(lowBpmColor = 0xFF0000FF.toInt(), highBpmColor = 0xFFFF0000.toInt(), rampStart = 0.4f, rampEnd = 0.6f)
+
+        assertEquals(look.lowBpmColor, look.rampColor(0f))
+        assertEquals(look.lowBpmColor, look.rampColor(0.4f))
+        assertEquals(look.highBpmColor, look.rampColor(0.6f))
+        assertEquals(look.highBpmColor, look.rampColor(1f))
+        // Halfway across the ramp is halfway along the blend.
+        assertEquals(inga.bpmetrics.core.BpmRamp.blend(look.lowBpmColor, look.highBpmColor, 0.5f), look.rampColor(0.5f))
+        // The shader's stops cover the scale, in order, with the ramp's ends among them.
+        val stops = look.rampStops()
+        assertEquals(0f, stops.first(), 0f)
+        assertEquals(1f, stops.last(), 0f)
+        assertTrue(stops.zipWithNext().all { (a, b) -> a < b })
+        assertTrue(0.4f in stops && 0.6f in stops)
+    }
+
+    @Test
+    fun `a ramp turned inside out or missing comes back full width`() {
+        assertEquals(0f to 1f, ExportPreset(rampStart = 0.7f, rampEnd = 0.3f).sanitised().let { it.rampStart to it.rampEnd })
+        // What Gson would leave for a preset saved before the ramp could be narrowed.
+        assertEquals(0f to 1f, ExportPreset(rampStart = 0f, rampEnd = 0f).sanitised().let { it.rampStart to it.rampEnd })
+        assertEquals(0.2f to 0.8f, ExportPreset(rampStart = 0.2f, rampEnd = 0.8f).sanitised().let { it.rampStart to it.rampEnd })
+    }
+
+    @Test
+    fun `a look saved when what's on screen was the default scales to the whole recording`() {
+        val old = ExportPreset(version = 6, bpmScale = BpmScale.ON_SCREEN).toJson()
+        val read = ExportPreset.fromJson(old)!!
+
+        assertEquals(BpmScale.RECORDING, read.bpmScale)
+        // And it's upgraded, so choosing what's on screen again holds through a save.
+        assertEquals(ExportPreset.CURRENT_VERSION, read.version)
+        val chosen = read.copy(bpmScale = BpmScale.ON_SCREEN)
+        assertEquals(BpmScale.ON_SCREEN, ExportPreset.fromJson(chosen.toJson())!!.bpmScale)
+    }
+
+    @Test
+    fun `once chosen, it holds for any number of people`() {
+        val ramp = ExportPreset(curvesInPersonColor = false)
+        assertFalse(VideoFrameRenderer.inPersonColor(ramp, 4))
+        val colors = ExportPreset(curvesInPersonColor = true)
+        assertTrue(VideoFrameRenderer.inPersonColor(colors, 1))
     }
 
     @Test
@@ -434,7 +492,6 @@ class ExportPresetTest {
             name = "Six wearers",
             pillShowPhoto = false,
             pillShowName = true,
-            pillBpmInPersonColor = false,
             pillScale = 0.8f,
             pillPhotoScale = 1.4f,
             pillBpmScale = 1.2f,

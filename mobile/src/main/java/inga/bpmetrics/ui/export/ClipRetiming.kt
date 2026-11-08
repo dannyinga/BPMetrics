@@ -36,7 +36,7 @@ import inga.bpmetrics.library.BpmRecordWithPoints
 object ClipRetiming {
 
     /**
-     * [selection] as filmed at [startedAtMs].
+     * [selection] as filmed at [startedAtMs], its BPM offset kept on top (see [shift]).
      *
      * Everything that depends on when the clip happened is recomputed here rather than left for a
      * consumer to notice: who was recording during it, and whether it can still be ticked. The
@@ -47,18 +47,55 @@ object ClipRetiming {
         selection: ClipSelection,
         startedAtMs: Long,
         records: List<BpmRecordWithPoints>
+    ): ClipSelection = moveTo(selection, startedAtMs + selection.offsetMs, selection.offsetMs, records)
+
+    /**
+     * [selection] with a BPM offset of [offsetMs] from when it was filmed, replacing the one it had.
+     * Positive starts the clip later on the recordings, so the heart rate leads the picture.
+     */
+    fun shift(
+        selection: ClipSelection,
+        offsetMs: Long,
+        records: List<BpmRecordWithPoints>
+    ): ClipSelection = moveTo(selection, filmedAt(selection) + offsetMs, offsetMs, records)
+
+    /** When [selection] was filmed: the file's time, or the one set by hand, before the offset. */
+    fun filmedAt(selection: ClipSelection): Long = selection.clip.startedAtMs - selection.offsetMs
+
+    /** When the file says the clip was filmed, whatever it's been set to since. */
+    fun fileTime(selection: ClipSelection): Long = (selection.originalClip ?: selection.clip).startedAtMs
+
+    /**
+     * Whether the clip is filmed at the file's own time, so the video and the BPM are in sync with
+     * it. The BPM offset doesn't count: a clip starts at its filming time plus its offset, and the
+     * offset is a deliberate shift on top of being in sync, not a departure from it.
+     */
+    fun onFileTime(selection: ClipSelection): Boolean = filmedAt(selection) == fileTime(selection)
+
+    /** Filmed at the file's own time again, the BPM offset kept. */
+    fun syncToFile(selection: ClipSelection, records: List<BpmRecordWithPoints>): ClipSelection =
+        retime(selection, fileTime(selection), records)
+
+    private fun moveTo(
+        selection: ClipSelection,
+        startedAtMs: Long,
+        offsetMs: Long,
+        records: List<BpmRecordWithPoints>
     ): ClipSelection {
         // Always from the file's own clip, so correcting twice does not compound, and "use the
         // file's time" always has the original to go back to.
         val original = selection.originalClip ?: selection.clip
+        // Back where the file put it, with no offset, is the file's time, not a correction that
+        // happens to match.
+        if (startedAtMs == original.startedAtMs && offsetMs == 0L) return reset(selection, records)
         val moved = original.copy(startedAtMs = startedAtMs, basis = VideoTiming.Basis.SET_BY_HAND)
-        return applyClip(selection, moved, originalClip = original, records = records)
+        return applyClip(selection.copy(offsetMs = offsetMs), moved, originalClip = original, records = records)
     }
 
-    /** Back to the time the file gave. A no-op for a clip that was never corrected. */
+    /** Back to the time the file gave, with no offset. A no-op for a clip that was never corrected. */
     fun reset(selection: ClipSelection, records: List<BpmRecordWithPoints>): ClipSelection {
-        val original = selection.originalClip ?: return selection
-        return applyClip(selection, original, originalClip = null, records = records)
+        val original = selection.originalClip ?: return selection.copy(offsetMs = 0L)
+        return applyClip(selection.copy(offsetMs = 0L), original, originalClip = null, records = records)
     }
 
     /**
@@ -113,19 +150,32 @@ object ClipRetiming {
     /**
      * Who is on [clip], keeping a deliberate choice where it still holds.
      *
-     * Everyone offered (see [candidatesFor]) to begin with. The people ticked before a correction
-     * are kept if any of them are still offered, so nudging a time by a few seconds doesn't throw
-     * away someone having been unticked on purpose. Where none are, the clip now covers a
-     * different stretch entirely, and everyone offered is the right starting point.
+     * The people recording while it was filmed, to begin with. The others offered (see
+     * [candidatesFor]) are there to tick, but not ticked: someone whose watch started after the
+     * clip has a pill reading "--" and no curve under the footage, which is rarely what's wanted.
+     *
+     * The people ticked before a correction are kept while one of them is recording at the new
+     * time, so nudging a time by a few seconds doesn't throw away someone having been unticked, or
+     * ticked, on purpose. Otherwise the clip now covers a different stretch, and the people
+     * recording there are the right starting point.
+     *
+     * Where nobody was recording, everyone offered: the clip draws nothing and isn't exported
+     * (see [drawsSomething]), but its preview still has curves to correct its time against.
      */
     fun castFor(
         clip: VideoExporter.VideoClip,
         records: List<BpmRecordWithPoints>,
         previous: Set<Long>
     ): Set<Long> {
-        val offered = candidatesFor(clip, records).map { it.metadata.recordId }.toSet()
+        val candidates = candidatesFor(clip, records)
+        val offered = candidates.map { it.metadata.recordId }.toSet()
+        val recording = candidates.filter { hasReadings(clip, it) }.map { it.metadata.recordId }.toSet()
         val kept = previous intersect offered
-        return kept.ifEmpty { offered }
+        return when {
+            kept.any { it in recording } -> kept
+            recording.isNotEmpty() -> recording
+            else -> offered
+        }
     }
 
     /**

@@ -27,10 +27,12 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -78,6 +80,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.text.KeyboardOptions
@@ -119,8 +124,10 @@ import kotlinx.coroutines.withContext
  * checked by exporting a video and watching it.
  *
  * Nothing moves here. Moving and sizing the graph and the Live BPM column is the Position screen's,
- * opened from the corner: dragging on a preview a few hundred dp wide was coarse, and a drag meant
- * as a scroll or a tap could shift the graph.
+ * opened from Graph & BPM's Scale / Position and from the full-screen button on the corner: dragging
+ * on a preview a few hundred dp wide was coarse, and a drag meant as a scroll or a tap could shift
+ * the graph. Shown from here, because it draws the same frame, while [positioning] says what it's
+ * open on.
  */
 @Composable
 fun ExportPreview(
@@ -143,12 +150,18 @@ fun ExportPreview(
     onTapRegion: ((VideoFrameRenderer.Region?) -> Unit)? = null,
     /** Changes to the look made in Position: the column's corner and size, frames saved per cast. */
     onPresetChange: ((ExportPreset) -> Unit)? = null,
+    /** What Position is open on, or null while it's closed. */
+    positioning: PositionTarget? = null,
+    /** Position closing. */
+    onPositionDone: () -> Unit = {},
     /** Shown in Position's top bar: which clips a change reaches. */
     positionScope: (@Composable () -> Unit)? = null,
     /** Shown in Position under the picture: the way to the batch's other clips. */
     positionClips: (@Composable () -> Unit)? = null,
-    /** Opens when the clip was filmed. Null where there's no clip. */
-    onClipTime: (() -> Unit)? = null
+    /** Opens Position from the preview's corner. Null where there's no button for it. */
+    onOpenPosition: (() -> Unit)? = null,
+    /** Whether Position opens with its controls folded away, for the picture alone. */
+    positionFull: Boolean = false
 ) {
     val context = LocalContext.current
     // The look as it is stored, for changes made in Position. What's drawn is sized to the clip.
@@ -162,7 +175,7 @@ fun ExportPreview(
     // Saveable so a rotation, or a trip into the photo picker, does not reopen a preview someone
     // deliberately folded away to get at the settings underneath.
     var expanded by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
-    var positioning by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    val inPosition = positioning != null && records.isNotEmpty()
 
     // Re-rendered whenever anything it depends on changes, off the main thread because it decodes
     // a video frame and draws every visible data point.
@@ -170,7 +183,7 @@ fun ExportPreview(
     // Not while it is hidden. Every setting touched re-renders this, and half the reason to fold it
     // away is to stop that happening behind a slider being dragged. Nor while Position is up, which
     // would have two renders racing for the same answer.
-    val visible = expanded && !positioning
+    val visible = expanded && !inPosition
     val frame by produceState<Bitmap?>(
         initialValue = null,
         visible, records, preset, overlay, at, colours, photos, title, clip, placement
@@ -189,8 +202,10 @@ fun ExportPreview(
         }
     }
 
-    if (positioning) {
+    if (inPosition) {
         PositionScreen(
+            opensOn = positioning ?: PositionTarget.GRAPH,
+            startFull = positionFull,
             records = records,
             preset = preset,
             look = look,
@@ -206,7 +221,7 @@ fun ExportPreview(
             onPlacementChange = onPlacementChange,
             scope = positionScope,
             clips = positionClips,
-            onDismiss = { positioning = false }
+            onDismiss = onPositionDone
         )
     }
 
@@ -214,24 +229,13 @@ fun ExportPreview(
         // The preview is sticky and takes a third of a short screen. That is right while judging
         // something and wrong while reading down a list of settings, so it folds. Folded, a slim
         // row brings it back; open, its buttons sit on its corner rather than on a row of their own.
-        // On the right, where the button that hid it was, with the preview's other two buttons, so
-        // folding the picture away doesn't also take the way to the clip's time or to Position.
+        // On the right, where the button that hid it was.
         if (!expanded) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                onClipTime?.let {
-                    IconButton(onClick = it) {
-                        Icon(androidx.compose.material.icons.Icons.Default.Schedule, contentDescription = "When this clip was filmed")
-                    }
-                }
-                if (records.isNotEmpty()) {
-                    IconButton(onClick = { positioning = true }) {
-                        Icon(androidx.compose.material.icons.Icons.Default.OpenWith, contentDescription = "Position the graph and Live BPM")
-                    }
-                }
                 TextButton(onClick = { expanded = true }) {
                     Text("Show preview")
                     Spacer(Modifier.width(4.dp))
@@ -300,18 +304,13 @@ fun ExportPreview(
                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    onClipTime?.let {
+                    // The picture full screen, where the graph and Live BPM are moved and sized:
+                    // the same screen as Scale / Position in Graph & BPM, from the thing it shows.
+                    if (onOpenPosition != null && records.isNotEmpty()) {
                         PreviewCornerButton(
-                            icon = androidx.compose.material.icons.Icons.Default.Schedule,
-                            description = "When this clip was filmed",
-                            onClick = it
-                        )
-                    }
-                    if (records.isNotEmpty()) {
-                        PreviewCornerButton(
-                            icon = androidx.compose.material.icons.Icons.Default.OpenWith,
-                            description = "Position the graph and Live BPM",
-                            onClick = { positioning = true }
+                            icon = androidx.compose.material.icons.Icons.Default.Fullscreen,
+                            description = "Full screen: scale and position the graph",
+                            onClick = onOpenPosition
                         )
                     }
                     PreviewCornerButton(
@@ -356,8 +355,8 @@ private fun PreviewCornerButton(
     }
 }
 
-/** What Position is moving and sizing. */
-private enum class PositionTarget { GRAPH, LIVE_BPM }
+/** What Position is moving and sizing. It opens on the graph, from the Graph tab. */
+enum class PositionTarget { GRAPH, LIVE_BPM }
 
 /**
  * Where the graph and the Live BPM column go, and how big they are: the frame as large as the
@@ -372,6 +371,10 @@ private enum class PositionTarget { GRAPH, LIVE_BPM }
  */
 @Composable
 private fun PositionScreen(
+    /** The one first shown. The switch inside goes to the other. */
+    opensOn: PositionTarget,
+    /** Whether it opens with the controls folded away: from the preview's full-screen button. */
+    startFull: Boolean,
     records: List<BpmRecordWithPoints>,
     /** Sized to the clip: what's drawn. */
     preset: ExportPreset,
@@ -440,11 +443,13 @@ private fun PositionScreen(
     }
 
     val liveBpm = look.showCurrentStats && records.isNotEmpty()
-    var chosen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(PositionTarget.GRAPH) }
+    var chosen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(opensOn) }
     val target = if (liveBpm) chosen else PositionTarget.GRAPH
     val block = rememberReadoutBlock(records, preset, placement, title)
     var guides by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(Guides.OFF) }
     var guidesOpen by remember { mutableStateOf(false) }
+    // Folded away for the picture alone, at its largest: the frame full screen, still draggable.
+    var controlsShown by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(!startFull) }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
@@ -539,7 +544,7 @@ private fun PositionScreen(
                         IconButton(onClick = onDismiss) {
                             Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Done")
                         }
-                        Text("Position", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text("Scale / Position", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         // Lines to line things up against: halves, thirds, fifths.
                         Box {
                             IconButton(onClick = { guidesOpen = true }) {
@@ -568,6 +573,13 @@ private fun PositionScreen(
                                 }
                             }
                         }
+                        IconButton(onClick = { controlsShown = !controlsShown }) {
+                            Icon(
+                                if (controlsShown) androidx.compose.material.icons.Icons.Default.Fullscreen
+                                else androidx.compose.material.icons.Icons.Default.FullscreenExit,
+                                contentDescription = if (controlsShown) "Hide the controls" else "Show the controls"
+                            )
+                        }
                         scope?.invoke()
                         TextButton(onClick = onDismiss) { Text("Done") }
                     }
@@ -582,9 +594,11 @@ private fun PositionScreen(
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
                                 )
                             }
-                            Column(Modifier.width(340.dp).fillMaxHeight()) {
-                                clips?.let { Box(Modifier.padding(horizontal = 8.dp)) { it() } }
-                                controls(Modifier.weight(1f))
+                            if (controlsShown) {
+                                Column(Modifier.width(340.dp).fillMaxHeight()) {
+                                    clips?.let { Box(Modifier.padding(horizontal = 8.dp)) { it() } }
+                                    controls(Modifier.weight(1f))
+                                }
                             }
                         }
                     } else {
@@ -595,8 +609,10 @@ private fun PositionScreen(
                             onScrub = onScrub,
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
                         )
-                        clips?.let { Box(Modifier.padding(horizontal = 8.dp)) { it() } }
-                        controls(Modifier.heightIn(max = controlsMax))
+                        if (controlsShown) {
+                            clips?.let { Box(Modifier.padding(horizontal = 8.dp)) { it() } }
+                            controls(Modifier.heightIn(max = controlsMax))
+                        }
                     }
                 }
             }
@@ -772,6 +788,29 @@ private fun LiveBpmPositionControls(
             scale = look.pillScale,
             onScale = { onPresetChange(look.copy(pillScale = it)) }
         )
+        // Each part with its size beside it: a size for something switched off means nothing.
+        // Here rather than in a tab, because how big each part is gets judged against the picture.
+        ToggleScaleRow(
+            label = "Photo",
+            checked = look.pillShowPhoto,
+            onChecked = { onPresetChange(look.copy(pillShowPhoto = it)) },
+            scale = look.pillPhotoScale,
+            onScale = { onPresetChange(look.copy(pillPhotoScale = it)) }
+        )
+        ToggleScaleRow(
+            label = "Name",
+            checked = look.pillShowName,
+            onChecked = { onPresetChange(look.copy(pillShowName = it)) },
+            scale = look.pillNameScale,
+            onScale = { onPresetChange(look.copy(pillNameScale = it)) }
+        )
+        ToggleScaleRow(
+            label = "Reading",
+            checked = null,
+            scale = look.pillBpmScale,
+            onScale = { onPresetChange(look.copy(pillBpmScale = it)) }
+        )
+        Hint("Tap a percentage to put it back to 100%.")
     }
 }
 
@@ -1430,25 +1469,29 @@ private fun renderPreviewFrame(
 /**
  * The editor's tabs, in the order they're offered (S14B.1).
  *
- * Each is about how something looks. Where the graph and the Live BPM column sit, and how big
- * they are, is the Position screen's, opened from the preview: with the two in the tabs as well,
- * every tab had a bit of placement in it and none had all of it.
+ * Each is about how something looks. Where the graph and the Live BPM column sit, how big they
+ * are, and the sizes of the column's parts, are the Position screen's, opened from Graph: with
+ * those in the tabs as well, every tab had a bit of placement in it and none had all of it. Live
+ * BPM had little left but its switch, so that's in Graph too.
+ *
+ * Sync is the exception: when the clip was filmed and its BPM offset, which belong to the clip
+ * rather than the look. A tab all the same, beside the rest, rather than a dialog behind a button
+ * on the preview; only where there's a clip to sync.
+ *
+ * Short names, so all four fit across a phone without the row scrolling.
  */
 enum class LookTab(val label: String) {
     CANVAS("Canvas"),
-    GRAPH("Graph"),
-    LIVE_BPM("Live BPM"),
-    TEXT("Text & color");
+    SYNC("Sync"),
+    GRAPH("Graph & BPM"),
+    STYLE("Style");
 
     companion object {
-        /** The tabs a still offers: it has no live readings. */
-        val FOR_IMAGES = listOf(CANVAS, GRAPH, TEXT)
-
         /** The tab with the settings for what was tapped on the preview (S14B.2). */
         fun of(region: VideoFrameRenderer.Region?): LookTab = when (region) {
-            VideoFrameRenderer.Region.READOUTS -> LIVE_BPM
-            VideoFrameRenderer.Region.TITLE, VideoFrameRenderer.Region.CLOCK, VideoFrameRenderer.Region.WORDMARK -> TEXT
-            VideoFrameRenderer.Region.PLOT -> GRAPH
+            VideoFrameRenderer.Region.WORDMARK -> STYLE
+            VideoFrameRenderer.Region.READOUTS, VideoFrameRenderer.Region.TITLE,
+            VideoFrameRenderer.Region.CLOCK, VideoFrameRenderer.Region.PLOT -> GRAPH
             null -> CANVAS
         }
     }
@@ -1490,9 +1533,15 @@ fun LookSections(
     /** Lays curves over a video picked by hand. Null where nothing can be picked. */
     onPickVideo: (() -> Unit)? = null,
     /** The size of the clip on the preview, to say what a canvas matching it comes out at. */
-    clipSize: Pair<Int, Int>? = null
+    clipSize: Pair<Int, Int>? = null,
+    /** Opens Position, the graph and the Live BPM column. Null where there's nothing to place. */
+    onPosition: ((PositionTarget) -> Unit)? = null,
+    /** The Sync tab's contents: the previewed clip's time. Null, and no tab, where there's no clip. */
+    sync: (@Composable () -> Unit)? = null,
+    /** How many people are on the preview, for what the curves are colored by until it's chosen. */
+    people: Int = 1
 ) {
-    val tabs = if (isImage) LookTab.FOR_IMAGES else LookTab.entries
+    val tabs = LookTab.entries.filter { it != LookTab.SYNC || sync != null }
     val shown = if (tab in tabs) tab else tabs.first()
 
     Column(modifier) {
@@ -1509,18 +1558,23 @@ fun LookSections(
                 )
             }
         }
+        // One per tab visit, so each tab opens at its top rather than as far down as the last was.
+        val scroll = remember(shown) { androidx.compose.foundation.ScrollState(0) }
         Column(
             Modifier
                 .weight(1f, fill = false)
                 .fillMaxWidth()
-                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(16.dp)
         ) {
             when (shown) {
                 LookTab.CANVAS -> CanvasTab(preset, onChange, isImage, onPickVideo, clipSize)
-                LookTab.GRAPH -> GraphTab(preset, onChange, isImage)
-                LookTab.LIVE_BPM -> LiveBpmTab(preset, onChange)
-                LookTab.TEXT -> TextTab(preset, onChange, title, onTitleChange, isImage)
+                LookTab.SYNC -> sync?.invoke()
+                LookTab.GRAPH -> GraphTab(
+                    preset, onChange, isImage, title, onTitleChange,
+                    onPosition = onPosition?.let { open -> { open(PositionTarget.GRAPH) } }
+                )
+                LookTab.STYLE -> StyleTab(preset, onChange, people, isImage)
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -1756,13 +1810,64 @@ private fun <T> InlineChoice(
     }
 }
 
-/** What the graph draws, and how it holds up over footage. */
+/**
+ * The way into Position from a tab: where the thing the tab is about sits on the canvas, and its
+ * size. A button rather than controls, because both are judged against the picture, which Position
+ * shows large.
+ */
 @Composable
-private fun GraphTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit, isImage: Boolean) {
+private fun PositionButton(onClick: () -> Unit) {
+    androidx.compose.material3.OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Icon(
+            androidx.compose.material.icons.Icons.Default.OpenWith,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("Scale / Position")
+    }
+    Spacer(Modifier.height(12.dp))
+}
+
+/**
+ * What the graph draws: its title, a clock and Live BPM, and how it holds up over footage. The
+ * Live BPM column's place and the sizes of its parts are in Scale / Position.
+ */
+@Composable
+private fun GraphTab(
+    preset: ExportPreset,
+    onChange: (ExportPreset) -> Unit,
+    isImage: Boolean,
+    title: String?,
+    onTitleChange: ((String) -> Unit)?,
+    onPosition: (() -> Unit)?
+) {
+    onPosition?.let { PositionButton(it) }
+
+    // The graph's heading, drawn in its header.
+    SwitchRow("Title", preset.showTitle) { onChange(preset.copy(showTitle = it)) }
+    // Only where there is something to name, and only when it will be drawn.
+    if (onTitleChange != null && preset.showTitle) {
+        OutlinedTextField(
+            value = title.orEmpty(),
+            onValueChange = onTitleChange,
+            // "Title" here and on the Contents step: they are the same field (UX Audit E8).
+            label = { Text("Title") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Hint("Blank uses the name of what's exported. Every video in the batch gets it.")
+        Spacer(Modifier.height(8.dp))
+    }
+    // In the header beside the title, so they cost no room on the graph. A still has no playhead.
+    if (!isImage) ClockAndDate(preset, onChange)
     SwitchRow("Axis numbers", preset.showLabels) { onChange(preset.copy(showLabels = it)) }
     SwitchRow("Gridlines", preset.showGrid) { onChange(preset.copy(showGrid = it)) }
     if (isImage) {
         SwitchRow("Summary", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
+    } else {
+        // Where the column goes and the size of its parts are in Scale / Position.
+        SwitchRow("Show Live BPM", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
     }
     Spacer(Modifier.height(4.dp))
 
@@ -1793,7 +1898,8 @@ private fun GraphTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit, isI
     Hint("The playhead is in the middle: ${(preset.windowSizeMs / 2000).toInt()} s of what's coming.")
 
     Spacer(Modifier.height(16.dp))
-    SectionLabel("Scale")
+    // "BPM" so it isn't read as the size the Scale / Position button sets.
+    SectionLabel("BPM scale")
     Segmented(
         options = BpmScale.entries,
         selected = preset.bpmScale,
@@ -1806,8 +1912,11 @@ private fun GraphTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit, isI
             BpmScale.RECORDING -> "Fixed for the whole set, for comparing levels."
         }
     )
+}
 
-    Spacer(Modifier.height(16.dp))
+/** What keeps the curves and text readable over footage. */
+@Composable
+private fun ContrastSection(preset: ExportPreset, onChange: (ExportPreset) -> Unit) {
     SectionLabel("Contrast")
     Segmented(
         options = Contrast.entries,
@@ -1826,43 +1935,44 @@ private fun GraphTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit, isI
 }
 
 /**
- * What each person's live reading shows. Where the column sits and its size are in Position.
+ * What the graph's header says about when it is: a clock (the time of day, the time into the
+ * session, or both) and the date, each a switch with its choices under it.
  */
 @Composable
-private fun LiveBpmTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit) {
-    SwitchRow("Show Live BPM", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
-    if (!preset.showCurrentStats) {
-        Hint("Off: each person's name is listed in the corner instead.")
-        return
+private fun ClockAndDate(preset: ExportPreset, onChange: (ExportPreset) -> Unit) {
+    val none = inga.bpmetrics.export.ClockMode.NONE
+    SwitchRow("Clock", preset.clockMode != none) { on ->
+        onChange(preset.copy(clockMode = if (on) inga.bpmetrics.export.ClockMode.CLOCK else none))
     }
-    Hint("A live reading for each person. Move and size the column in Position, on the preview.")
-    Spacer(Modifier.height(8.dp))
-
-    // Each part with its size beside it: a size for something switched off means nothing.
-    ToggleScaleRow(
-        label = "Photo",
-        checked = preset.pillShowPhoto,
-        onChecked = { onChange(preset.copy(pillShowPhoto = it)) },
-        scale = preset.pillPhotoScale,
-        onScale = { onChange(preset.copy(pillPhotoScale = it)) }
-    )
-    ToggleScaleRow(
-        label = "Name",
-        checked = preset.pillShowName,
-        onChecked = { onChange(preset.copy(pillShowName = it)) },
-        scale = preset.pillNameScale,
-        onScale = { onChange(preset.copy(pillNameScale = it)) }
-    )
-    ToggleScaleRow(
-        label = "Reading",
-        checked = null,
-        scale = preset.pillBpmScale,
-        onScale = { onChange(preset.copy(pillBpmScale = it)) }
-    )
-    Hint("Tap a percentage to put it back to 100%.")
-    Spacer(Modifier.height(8.dp))
-    SwitchRow("Reading in their color", preset.pillBpmInPersonColor) {
-        onChange(preset.copy(pillBpmInPersonColor = it))
+    if (preset.clockMode != none) {
+        Segmented(
+            options = inga.bpmetrics.export.ClockMode.entries.filter { it != none },
+            selected = preset.clockMode,
+            label = {
+                when (it) {
+                    inga.bpmetrics.export.ClockMode.ELAPSED -> "Elapsed"
+                    else -> it.label
+                }
+            },
+            onSelect = { onChange(preset.copy(clockMode = it)) }
+        )
+        if (preset.clockMode == inga.bpmetrics.export.ClockMode.BOTH) {
+            Hint("The time of day, with the time into the session small above it.")
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+    SwitchRow("Date", preset.showDate) { onChange(preset.copy(showDate = it)) }
+    if (preset.showDate) {
+        // Each shown as it reads, on a fixed day, so the choice is the format and not a date.
+        val sample = remember { java.time.ZonedDateTime.of(2026, 10, 17, 0, 0, 0, 0, java.time.ZoneOffset.UTC) }
+        Segmented(
+            options = inga.bpmetrics.export.DateStyle.entries,
+            selected = preset.dateStyle,
+            label = { it.format(sample.toInstant().toEpochMilli(), java.time.ZoneOffset.UTC) },
+            onSelect = { onChange(preset.copy(dateStyle = it)) }
+        )
+        Hint(if (preset.clockMode != none) "Small, above the clock." else "In the header, where the clock would be.")
+        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -1913,61 +2023,19 @@ private fun ToggleScaleRow(
     }
 }
 
-/** The words on the export, the watermark among them, and every color. */
+/**
+ * How the export's words and lines look: the text's size, how it all holds up over footage, the
+ * watermark, and every color.
+ */
 @Composable
-private fun TextTab(
+private fun StyleTab(
     preset: ExportPreset,
     onChange: (ExportPreset) -> Unit,
-    title: String?,
-    onTitleChange: ((String) -> Unit)?,
+    people: Int,
     isImage: Boolean
 ) {
-    SwitchRow("Title", preset.showTitle) { onChange(preset.copy(showTitle = it)) }
-    // Only where there is something to name, and only when it will be drawn.
-    if (onTitleChange != null && preset.showTitle) {
-        OutlinedTextField(
-            value = title.orEmpty(),
-            onValueChange = onTitleChange,
-            // "Title" here and on the Contents step: they are the same field (UX Audit E8).
-            label = { Text("Title") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Hint("Blank uses the name of what's exported. Every video in the batch gets it.")
-    }
-
-    // In the header beside the title, so it costs no room on the graph.
-    if (!isImage) {
-        Spacer(Modifier.height(12.dp))
-        SectionLabel("Clock")
-        Segmented(
-            options = inga.bpmetrics.export.ClockMode.entries,
-            selected = preset.clockMode,
-            label = {
-                when (it) {
-                    inga.bpmetrics.export.ClockMode.ELAPSED -> "Elapsed"
-                    else -> it.label
-                }
-            },
-            onSelect = { onChange(preset.copy(clockMode = it)) }
-        )
-    }
-
-    Spacer(Modifier.height(12.dp))
     ScaleRow("Text size", preset.textScale, range = 0.75f..2f) { onChange(preset.copy(textScale = it)) }
     Hint("The title, clock and axis numbers.")
-
-    // The app's credit: words on the export, in the text color, so here rather than with the canvas.
-    Spacer(Modifier.height(12.dp))
-    SwitchRow("Watermark", preset.showWordmark) { onChange(preset.copy(showWordmark = it)) }
-    if (preset.showWordmark) {
-        Hint("BPMetrics, in the graph's top left, in the text color.")
-        SliderRow(
-            label = "Opacity",
-            value = preset.wordmarkOpacity / 100f,
-            onValue = { onChange(preset.copy(wordmarkOpacity = (it * 100).toInt())) }
-        )
-    }
 
     Spacer(Modifier.height(12.dp))
     val shipped = ExportPreset()
@@ -1981,27 +2049,493 @@ private fun TextTab(
         "Gridlines",
         preset.gridColor,
         listOf(shipped.gridColor, 0x33FFFFFF, 0x40000000, 0x3300DCC2),
-        onPick = { onChange(preset.copy(gridColor = it)) }
+        onPick = { onChange(preset.copy(gridColor = it)) },
+        // Gridlines are faint by design; a custom one needs its faintness too.
+        withOpacity = true
     )
-    Hint("One person's curve goes from Low to High as their heart rate climbs. Several people each get their own color.")
-    Spacer(Modifier.height(6.dp))
-    ColourRow(
-        "Low",
-        preset.lowBpmColor,
-        listOf(shipped.lowBpmColor) + inga.bpmetrics.library.PersonColors.PALETTE,
-        onPick = { onChange(preset.copy(lowBpmColor = it)) }
+    // What the curves are colored by. Shown as what this preview gets, which until it's chosen
+    // depends on how many people are on it (see ExportPreset.curvesInPersonColor).
+    val inPersonColor = VideoFrameRenderer.inPersonColor(preset, people)
+    SwitchRow("Curves in each person's color", inPersonColor) {
+        onChange(preset.copy(curvesInPersonColor = it))
+    }
+    if (inPersonColor) {
+        Hint("Each curve, and its Live BPM reading, is its person's color.")
+    } else {
+        Hint("Every curve goes from low to high as the heart rate climbs.")
+        Spacer(Modifier.height(6.dp))
+        // Only while there's a ramp to color: with person colors it isn't drawn.
+        GradientRow(preset, onChange)
+    }
+
+    // How the curves and text hold up over footage. A still has no footage under it.
+    if (!isImage) {
+        Spacer(Modifier.height(12.dp))
+        ContrastSection(preset, onChange)
+    }
+
+    // The app's credit: words on the export, in the text color, so with the other colors.
+    Spacer(Modifier.height(12.dp))
+    SwitchRow("Watermark", preset.showWordmark) { onChange(preset.copy(showWordmark = it)) }
+    if (preset.showWordmark) {
+        Hint("BPMetrics, in the graph's top left, in the text color.")
+        SliderRow(
+            label = "Opacity",
+            value = preset.wordmarkOpacity / 100f,
+            onValue = { onChange(preset.copy(wordmarkOpacity = (it * 100).toInt())) }
+        )
+    }
+}
+
+/**
+ * The colors one person's curve runs between, low heart rate to high, chosen as a pair.
+ *
+ * Shown as the ramp itself rather than two swatches, because what's being chosen is how the curve
+ * reads as it climbs, and two dots don't show that: the blend goes the short way round the color
+ * wheel, so two ends can pass through a color neither of them is.
+ */
+@Composable
+private fun GradientRow(look: ExportPreset, onChange: (ExportPreset) -> Unit) {
+    var customizing by remember { mutableStateOf(false) }
+    val low = look.lowBpmColor
+    val high = look.highBpmColor
+    val builtIn = BUILT_IN_GRADIENTS.map { it.second to it.third }
+    val options = (builtIn + (low to high)).distinct()
+    // Choosing colors keeps where the blend runs; that's set in the custom dialog.
+    val onPick: (Int, Int) -> Unit = { from, to -> onChange(look.copy(lowBpmColor = from, highBpmColor = to)) }
+
+    Text("Low to high", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    Spacer(Modifier.height(4.dp))
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        options.forEach { (from, to) ->
+            val selected = from == low && to == high
+            val name = BUILT_IN_GRADIENTS.firstOrNull { it.second == from && it.third == to }?.first ?: "Custom"
+            Box(
+                modifier = Modifier
+                    .size(width = 72.dp, height = 36.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(rampBrush(look.copy(lowBpmColor = from, highBpmColor = to)))
+                    .border(
+                        width = if (selected) 3.dp else 1.dp,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+                    .clickable(onClickLabel = name) { onPick(from, to) }
+            )
+        }
+        AddColourButton(description = "Custom low and high colors") { customizing = true }
+    }
+
+    if (customizing) {
+        CustomGradientDialog(
+            look = look,
+            onDismiss = { customizing = false },
+            onDone = { customizing = false; onChange(it) }
+        )
+    }
+}
+
+/**
+ * [look]'s ramp as the renderer draws it, bottom of the scale on the left, sampled along the way
+ * ([ExportPreset.rampStops]): a two-stop gradient would blend in RGB and show a muddy middle the
+ * export never has, and wouldn't show where the blend starts and stops.
+ */
+private fun rampBrush(
+    look: ExportPreset,
+    startX: Float = 0f,
+    endX: Float = Float.POSITIVE_INFINITY
+): androidx.compose.ui.graphics.Brush =
+    androidx.compose.ui.graphics.Brush.horizontalGradient(
+        colorStops = look.rampStops()
+            .map { it to androidx.compose.ui.graphics.Color(look.rampColor(it)) }
+            .toTypedArray(),
+        startX = startX,
+        endX = endX
     )
-    ColourRow(
-        "High",
-        preset.highBpmColor,
-        listOf(shipped.highBpmColor) + inga.bpmetrics.library.PersonColors.PALETTE,
-        onPick = { onChange(preset.copy(highBpmColor = it)) }
+
+/** The few ramps offered ready-made, the app's own first. */
+private val BUILT_IN_GRADIENTS = listOf(
+    Triple("Cool to hot", inga.bpmetrics.core.BpmPalette.LOW, inga.bpmetrics.core.BpmPalette.HIGH),
+    Triple("Green to red", 0xFF00E676.toInt(), 0xFFFF5252.toInt()),
+    Triple("Violet to orange", 0xFF7C4DFF.toInt(), 0xFFFF9100.toInt())
+)
+
+/** An empty circle with a plus: a color of your own. */
+@Composable
+private fun AddColourButton(description: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.outline, androidx.compose.foundation.shape.CircleShape)
+            .clickable(onClickLabel = description, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            androidx.compose.material.icons.Icons.Default.Add,
+            contentDescription = description,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/** A color of your own: red, green and blue, and how see-through where [withOpacity]. */
+@Composable
+private fun CustomColourDialog(
+    title: String,
+    initial: Int,
+    withOpacity: Boolean,
+    onDismiss: () -> Unit,
+    onDone: (Int) -> Unit
+) {
+    var colour by remember { mutableStateOf(if (withOpacity) initial else initial or 0xFF000000.toInt()) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                ColourPreview(colour)
+                Spacer(Modifier.height(12.dp))
+                HsvPicker(colour) { colour = it }
+                Spacer(Modifier.height(12.dp))
+                ChannelSliders(colour, withOpacity) { colour = it }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onDone(colour) }) { Text("Use") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
-/** A row of swatches choosing one color, the first being the app's own. */
+/**
+ * Both ends of the ramp: their colors, one at a time, and where on the BPM scale each sits, as two
+ * handles on the ramp itself. The handle tapped or dragged last is the one the picker below edits.
+ */
 @Composable
-private fun ColourRow(label: String, value: Int, options: List<Int>, onPick: (Int) -> Unit) {
+private fun CustomGradientDialog(
+    look: ExportPreset,
+    onDismiss: () -> Unit,
+    onDone: (ExportPreset) -> Unit
+) {
+    var ramp by remember {
+        mutableStateOf(
+            look.copy(
+                lowBpmColor = look.lowBpmColor or 0xFF000000.toInt(),
+                highBpmColor = look.highBpmColor or 0xFF000000.toInt()
+            )
+        )
+    }
+    var editingHigh by remember { mutableStateOf(false) }
+    val editing = if (editingHigh) ramp.highBpmColor else ramp.lowBpmColor
+    val set: (Int) -> Unit = {
+        ramp = if (editingHigh) ramp.copy(highBpmColor = it) else ramp.copy(lowBpmColor = it)
+    }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Low to high") },
+        text = {
+            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                RampHandles(
+                    ramp = ramp,
+                    editingHigh = editingHigh,
+                    onEditing = { editingHigh = it },
+                    onRange = { start, end -> ramp = ramp.copy(rampStart = start, rampEnd = end) }
+                )
+                Text(
+                    "Drag the ends to set where the blend starts and stops. Tap one to change its color.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (editingHigh) "High color" else "Low color",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(6.dp))
+                HsvPicker(editing, onChange = set)
+                Spacer(Modifier.height(12.dp))
+                // The person colors for speed, as quick starting points.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    inga.bpmetrics.library.PersonColors.PALETTE.forEach { option ->
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(androidx.compose.ui.graphics.Color(option))
+                                .border(
+                                    width = if (option == editing) 3.dp else 1.dp,
+                                    color = if (option == editing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                    shape = androidx.compose.foundation.shape.CircleShape
+                                )
+                                .clickable { set(option) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                ChannelSliders(editing, withOpacity = false, onChange = set)
+            }
+        },
+        confirmButton = { TextButton(onClick = { onDone(ramp) }) { Text("Use") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+/**
+ * The ramp as a bar, bottom of the BPM scale on the left and top on the right, with a handle at
+ * each end of the blend. A touch takes the nearer handle, picks it for editing, and drags it;
+ * neither can cross the other or squeeze the blend under [ExportPreset.MIN_RAMP_WIDTH].
+ */
+@Composable
+private fun RampHandles(
+    ramp: ExportPreset,
+    editingHigh: Boolean,
+    onEditing: (Boolean) -> Unit,
+    onRange: (Float, Float) -> Unit
+) {
+    val latestRamp by rememberUpdatedState(ramp)
+    val latestOnEditing by rememberUpdatedState(onEditing)
+    val latestOnRange by rememberUpdatedState(onRange)
+    val selectedRing = MaterialTheme.colorScheme.primary
+    val handleRadius = 14.dp
+
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .pointerInput(Unit) {
+                val r = handleRadius.toPx()
+                val track = (size.width - 2 * r).coerceAtLeast(1f)
+                fun fractionAt(x: Float) = ((x - r) / track).coerceIn(0f, 1f)
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val at = fractionAt(down.position.x)
+                    val now = latestRamp
+                    // The nearer end; where they're together, the side the touch is on.
+                    val high = kotlin.math.abs(at - now.rampEnd) < kotlin.math.abs(at - now.rampStart) ||
+                        (now.rampEnd - now.rampStart < 0.02f && at > now.rampEnd)
+                    latestOnEditing(high)
+                    down.consume()
+                    drag(down.id) { change ->
+                        val f = fractionAt(change.position.x)
+                        val current = latestRamp
+                        if (high) {
+                            latestOnRange(current.rampStart, f.coerceAtLeast(current.rampStart + ExportPreset.MIN_RAMP_WIDTH))
+                        } else {
+                            latestOnRange(f.coerceAtMost(current.rampEnd - ExportPreset.MIN_RAMP_WIDTH), current.rampEnd)
+                        }
+                        change.consume()
+                    }
+                }
+            }
+    ) {
+        val r = handleRadius.toPx()
+        val track = size.width - 2 * r
+        val barHeight = size.height * 0.6f
+        val top = (size.height - barHeight) / 2f
+        drawRoundRect(
+            brush = rampBrush(ramp, startX = r, endX = size.width - r),
+            topLeft = androidx.compose.ui.geometry.Offset(r, top),
+            size = androidx.compose.ui.geometry.Size(track, barHeight),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(barHeight / 2f)
+        )
+        listOf(false to ramp.rampStart, true to ramp.rampEnd).forEach { (high, at) ->
+            val centre = androidx.compose.ui.geometry.Offset(r + at * track, size.height / 2f)
+            val colour = androidx.compose.ui.graphics.Color(if (high) ramp.highBpmColor else ramp.lowBpmColor)
+            drawCircle(colour, radius = r, center = centre)
+            drawCircle(
+                if (high == editingHigh) selectedRing else androidx.compose.ui.graphics.Color.White,
+                radius = r,
+                center = centre,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = (if (high == editingHigh) 4.dp else 2.dp).toPx())
+            )
+        }
+    }
+}
+
+/**
+ * Picks a color by eye: a square of saturation across and brightness down, over a strip of hues.
+ * The sliders under it are for exact values; this is for finding the color in the first place.
+ *
+ * Alpha is passed through untouched, so a faint gridline color stays faint while its hue changes.
+ */
+@Composable
+private fun HsvPicker(colour: Int, onChange: (Int) -> Unit) {
+    fun hsvOf(argb: Int) = FloatArray(3).also { android.graphics.Color.colorToHSV(argb, it) }
+    val hsv = hsvOf(colour)
+    // The hue is kept here as well as read from the color: at no saturation or no brightness a
+    // color has no hue, and dragging to a corner would otherwise throw away the one chosen.
+    var hue by remember { mutableStateOf(hsv[0]) }
+    var lastSent by remember { mutableStateOf(colour) }
+    if (colour != lastSent) {
+        // Changed from outside, by a slider or a swatch: follow it, where it has a hue to follow.
+        if (hsv[1] > 0.01f && hsv[2] > 0.01f) hue = hsv[0]
+        lastSent = colour
+    }
+    val alpha = colour and 0xFF000000.toInt()
+    val send: (Float, Float, Float) -> Unit = { h, s, v ->
+        val next = (android.graphics.Color.HSVToColor(floatArrayOf(h, s, v)) and 0xFFFFFF) or alpha
+        lastSent = next
+        onChange(next)
+    }
+    val latestSend by rememberUpdatedState(send)
+    val latestHue by rememberUpdatedState(hue)
+    val latestHsv by rememberUpdatedState(hsv)
+    val pure = androidx.compose.ui.graphics.Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f)))
+    val outline = MaterialTheme.colorScheme.outline
+
+    // Saturation across, brightness down.
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(1.6f)
+            .clip(MaterialTheme.shapes.small)
+            .background(
+                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                    listOf(androidx.compose.ui.graphics.Color.White, pure)
+                )
+            )
+            .background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    listOf(androidx.compose.ui.graphics.Color.Transparent, androidx.compose.ui.graphics.Color.Black)
+                )
+            )
+            .border(1.dp, outline, MaterialTheme.shapes.small)
+            .pointerInput(Unit) {
+                fun at(p: androidx.compose.ui.geometry.Offset) = latestSend(
+                    latestHue,
+                    (p.x / size.width).coerceIn(0f, 1f),
+                    1f - (p.y / size.height).coerceIn(0f, 1f)
+                )
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    at(down.position)
+                    down.consume()
+                    drag(down.id) { change -> at(change.position); change.consume() }
+                }
+            }
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val centre = androidx.compose.ui.geometry.Offset(hsv[1] * size.width, (1f - hsv[2]) * size.height)
+            drawCircle(androidx.compose.ui.graphics.Color.Black, radius = 11.dp.toPx(), center = centre,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4.dp.toPx()))
+            drawCircle(androidx.compose.ui.graphics.Color.White, radius = 11.dp.toPx(), center = centre,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()))
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    // Hue, the way round the wheel.
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(
+                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                    (0..12).map { androidx.compose.ui.graphics.Color(android.graphics.Color.HSVToColor(floatArrayOf(it * 30f % 360f, 1f, 1f))) }
+                )
+            )
+            .border(1.dp, outline, androidx.compose.foundation.shape.CircleShape)
+            .pointerInput(Unit) {
+                fun at(p: androidx.compose.ui.geometry.Offset) {
+                    val h = (p.x / size.width).coerceIn(0f, 0.9999f) * 360f
+                    hue = h
+                    // A grey has no hue to show; give it some color so the change can be seen.
+                    val s = latestHsv[1].takeIf { it > 0.01f } ?: 1f
+                    val v = latestHsv[2].takeIf { it > 0.01f } ?: 1f
+                    latestSend(h, s, v)
+                }
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    at(down.position)
+                    down.consume()
+                    drag(down.id) { change -> at(change.position); change.consume() }
+                }
+            }
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val x = hue / 360f * size.width
+            val r = size.height / 2f - 2.dp.toPx()
+            val centre = androidx.compose.ui.geometry.Offset(x.coerceIn(r, size.width - r), size.height / 2f)
+            drawCircle(pure, radius = r, center = centre)
+            drawCircle(androidx.compose.ui.graphics.Color.White, radius = r, center = centre,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()))
+        }
+    }
+}
+
+/** The color as a swatch over the panel's surface, with its hex code. */
+@Composable
+private fun ColourPreview(colour: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .size(48.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(androidx.compose.ui.graphics.Color(inga.bpmetrics.core.BpmPalette.SURFACE))
+                .background(androidx.compose.ui.graphics.Color(colour))
+                .border(1.dp, MaterialTheme.colorScheme.outline, androidx.compose.foundation.shape.CircleShape)
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            "#%06X".format(colour and 0xFFFFFF),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** Red, green and blue sliders, and opacity where [withOpacity]. */
+@Composable
+private fun ChannelSliders(colour: Int, withOpacity: Boolean, onChange: (Int) -> Unit) {
+    fun channel(shift: Int) = (colour ushr shift) and 0xFF
+    fun with(shift: Int, value: Int) = (colour and (0xFF shl shift).inv()) or (value.coerceIn(0, 255) shl shift)
+    listOf("Red" to 16, "Green" to 8, "Blue" to 0).forEach { (label, shift) ->
+        ChannelSlider(label, channel(shift), 255) { onChange(with(shift, it)) }
+    }
+    if (withOpacity) {
+        val percent = kotlin.math.round(channel(24) * 100f / 255f).toInt()
+        ChannelSlider("Opacity", percent, 100) { onChange(with(24, kotlin.math.round(it * 255f / 100f).toInt())) }
+    }
+}
+
+@Composable
+private fun ChannelSlider(label: String, value: Int, max: Int, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(56.dp))
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onChange(kotlin.math.round(it).toInt()) },
+            valueRange = 0f..max.toFloat(),
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            if (max == 100) "$value%" else value.toString(),
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(40.dp)
+        )
+    }
+}
+
+/**
+ * A row of swatches choosing one color, the first being the app's own, and a way to make one. A
+ * color made that way joins the row while it's in use, so it shows as chosen.
+ */
+@Composable
+private fun ColourRow(
+    label: String,
+    value: Int,
+    options: List<Int>,
+    onPick: (Int) -> Unit,
+    withOpacity: Boolean = false
+) {
+    var customizing by remember { mutableStateOf(false) }
     Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(4.dp))
     FlowRow(
@@ -2009,7 +2543,7 @@ private fun ColourRow(label: String, value: Int, options: List<Int>, onPick: (In
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        options.distinct().forEachIndexed { index, colour ->
+        (options + value).distinct().forEachIndexed { index, colour ->
             val selected = colour == value
             Box(
                 modifier = Modifier
@@ -2027,6 +2561,17 @@ private fun ColourRow(label: String, value: Int, options: List<Int>, onPick: (In
                     .clickable(onClickLabel = if (index == 0) "App default" else null) { onPick(colour) }
             )
         }
+        AddColourButton(description = "Custom ${label.lowercase()} color") { customizing = true }
+    }
+
+    if (customizing) {
+        CustomColourDialog(
+            title = label,
+            initial = value,
+            withOpacity = withOpacity,
+            onDismiss = { customizing = false },
+            onDone = { customizing = false; onPick(it) }
+        )
     }
 }
 

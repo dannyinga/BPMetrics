@@ -7,16 +7,20 @@ package inga.bpmetrics.export
  */
 enum class BpmScale(val label: String) {
     /**
+     * The whole recording, for comparing absolute levels across a set.
+     *
+     * The default, and first so the default is the first choice: a curve that climbs means the
+     * heart rate climbed, across the whole set, rather than that the window moved.
+     */
+    RECORDING("Whole recording"),
+
+    /**
      * The readings in the window on screen, eased as it moves.
      *
-     * The default, because the window shows thirty seconds and a heart rarely moves more than a few
-     * beats in thirty seconds: against the whole recording's range, every curve was a flat line
-     * and the pills carried all the information (UX Audit O2).
+     * The window shows thirty seconds and a heart rarely moves more than a few beats in that, so
+     * this gives small changes room to show (UX Audit O2).
      */
-    ON_SCREEN("What's on screen"),
-
-    /** The whole recording, for comparing absolute levels across a set. */
-    RECORDING("Whole recording")
+    ON_SCREEN("What's on screen")
 }
 
 /**

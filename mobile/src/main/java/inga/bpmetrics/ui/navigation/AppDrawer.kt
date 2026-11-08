@@ -150,7 +150,7 @@ fun AppNavigationBar(
  * Contents of the navigation drawer.
  *
  * @param currentRoute The route currently displayed, used to highlight the active section.
- * @param activeRenderCount Number of queued or rendering jobs; shown as a badge on Render Queue.
+ * @param activeRenderCount Number of queued or rendering jobs; shown as a badge on Export.
  * @param incomingCount Number of records still arriving from watches; badged on Settings, which
  * is where Sync now lives. Without it, a transfer in flight would be invisible until someone
  * happened to open that section.
@@ -164,9 +164,8 @@ fun AppDrawerContent(
     incomingCount: Int,
     onNavigate: (AppDestination) -> Unit
 ) {
-    // Narrower than the default 360dp. The sheet holds five items now that the working sections
-    // moved to the bar, and a full-width panel for a short list reads as though something is
-    // missing from it.
+    // Narrower than the default 360dp. A full-width panel for a short list reads as though
+    // something is missing from it.
     ModalDrawerSheet(modifier = Modifier.width(268.dp)) {
         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
             Spacer(Modifier.height(24.dp))
@@ -177,10 +176,28 @@ fun AppDrawerContent(
             )
             Spacer(Modifier.height(24.dp))
 
-            // Only the things you set up: people, watches, tags, settings. The places you *work*
-            // are in the navigation bar, and the render queue is reached from the Export screen it
-            // belongs to — listing either here would be a second door to the same place, and the
-            // menu would stop being one kind of thing.
+            // The places you work first, the same three as the bar. The Look step hides the bar to
+            // give its editor the room, and the menu is then the only way out sideways; listing them
+            // here everywhere keeps the menu one list rather than one that changes with the screen.
+            AppDestination.primary.forEach { destination ->
+                NavigationDrawerItem(
+                    label = { Text(destination.label) },
+                    icon = { Icon(destination.icon, contentDescription = null) },
+                    badge = {
+                        if (destination == AppDestination.EXPORT && activeRenderCount > 0) {
+                            ActivityBadge(activeRenderCount)
+                        }
+                    },
+                    selected = destination.route == currentRoute,
+                    onClick = { onNavigate(destination) },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp))
+
+            // Then the things you set up: people, watches, tags, settings. The render queue is
+            // reached from the Export screen it belongs to, so it is not listed.
             //
             // About is separated below: it is reference material, not somewhere you configure.
             val sections = AppDestination.secondary.filter {
@@ -192,11 +209,8 @@ fun AppDrawerContent(
                     label = { Text(destination.label) },
                     icon = { Icon(destination.icon, contentDescription = null) },
                     badge = {
-                        // Sync lives in Settings now, so a transfer in flight is badged there —
+                        // Sync lives in Settings, so a transfer in flight is badged there —
                         // otherwise it would be invisible until someone happened to look.
-                        // Sync lives in Settings, so a transfer in flight is badged there.
-                        // Nothing badges the render queue here any more — it is not in this menu,
-                        // and Export shows its own count in the header where the queue now lives.
                         val count = if (destination == AppDestination.SETTINGS) incomingCount else 0
                         if (count > 0) ActivityBadge(count)
                     },

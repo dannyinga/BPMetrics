@@ -267,7 +267,13 @@ data class ClipSelection(
      * recording during it, the preview, the render — follows it without knowing a correction
      * happened. This is what lets "use the file's time" undo that. Null while nothing is corrected.
      */
-    val originalClip: VideoExporter.VideoClip? = null
+    val originalClip: VideoExporter.VideoClip? = null,
+    /**
+     * The BPM offset: how far [clip] starts from when it was filmed, so the curve lines up with the
+     * picture. Kept apart from the filming time so either can change without undoing the other: a
+     * screen recording set to the right evening, then shifted half a second. See [ClipRetiming.shift].
+     */
+    val offsetMs: Long = 0L
 ) {
     /** The highest anyone reached during the clip. Null when nobody was recording. */
     val peakBpm: Int? get() = sparks.maxOfOrNull { it.peakBpm }
@@ -1362,10 +1368,18 @@ class ExportUtilityViewModel(
         refreshSparks(uri)
     }
 
-    /** Back to the time the file gave. */
+    /** The clip's BPM offset from when it was filmed. See [ClipSelection.offsetMs]. */
+    fun setClipOffset(uri: android.net.Uri, offsetMs: Long) {
+        _clips.value = _clips.value.map {
+            if (it.clip.uri == uri) ClipRetiming.shift(it, offsetMs, records.value) else it
+        }
+        refreshSparks(uri)
+    }
+
+    /** Filmed at the time the file gave again. The BPM offset stays. */
     fun resetClipFilmedAt(uri: android.net.Uri) {
         _clips.value = _clips.value.map {
-            if (it.clip.uri == uri) ClipRetiming.reset(it, records.value) else it
+            if (it.clip.uri == uri) ClipRetiming.syncToFile(it, records.value) else it
         }
         refreshSparks(uri)
     }

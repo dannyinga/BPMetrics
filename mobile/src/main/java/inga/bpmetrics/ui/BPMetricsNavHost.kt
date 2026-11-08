@@ -98,10 +98,10 @@ fun BPMetricsNavHost(
 
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     val currentDestination = AppDestination.fromRoute(currentRoute)
-    // Export past step 1 gives the screen to the export: its own Back walks the steps, and the
-    // tab bar took room the Look step needs on a small phone (Audit §3 Export).
+    // The Look step gives the screen to the export: the tab bar took room its preview and editor
+    // need on a small phone (Audit §3 Export). The other steps are short enough to keep it.
     val exportStep by exportViewModel.step.collectAsStateWithLifecycle()
-    val inExport = currentRoute == Routes.EXPORT && exportStep != inga.bpmetrics.ui.export.ExportStep.SOURCE
+    val inExport = currentRoute == Routes.EXPORT && exportStep == inga.bpmetrics.ui.export.ExportStep.LOOK
 
     val selectedRecordIds by libraryViewModel.selectedRecordIds.collectAsState()
     val queue by RenderQueueManager.queue.collectAsState(initial = emptyList())

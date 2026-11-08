@@ -642,6 +642,83 @@ Two columns kept everyone on a short panel, but a ranking read across and then d
 - **Verified:** 812 unit tests and 13 export device tests pass, the app builds, and lint shows nothing new.
   - On the emulator, in Settings' editor for "4 Person 1080p" with several people, the dashed box sat on the graph's corner, dragged off to the top right, and "Put back on the graph" returned it. The preset wasn't saved.
 
+### S14D — Exporter polish *(Danny, 2026-11-06 to 2026-11-08)*
+
+Danny went through the look editor tab by tab on real clips (Boogie T at The Granada, five people; Griztronics at The Gorge, two clips). It wasn't planned up front, so it landed as the work settled rather than as one commit: two fixes found on the way, two feature commits, and this sprint's closing commit.
+
+| Ticket | Work | Commit |
+|---|---|---|
+| **S14D.1** | More room for the look settings: Back and Next in the step row, a shorter app bar, a one-line scrub bar, and saved looks on one line above the preview. | `990471d` |
+| **S14D.2** | iPhone clips start when the camera says. | `df00480` |
+| **S14D.3** | Renders start again on Android 15 and later. | `80b653a` |
+| **S14D.4** | A Position screen, four tabs, a canvas set by aspect ratio and resolution, and the watermark fixed to the graph's top left. | `3aee5a4` |
+| **S14D.5** | Tabs settle as Canvas, Sync, Graph & BPM and Style. Graph and Live BPM become one tab, and timing gets its own. | this commit |
+| **S14D.6** | Curve colors: each person's color or a low-to-high gradient, chosen. Built-in gradients, a custom one with draggable ends, and 2D color pickers. | this commit |
+| **S14D.7** | Sync without the dialog: the file's start time always shown, "Recording started at", a typed BPM offset, and "Sync video and BPM to file time?" when they differ. | this commit |
+| **S14D.8** | The clock and date: time of day, elapsed or both, and a date with its year, stacked beside the title. | this commit |
+| **S14D.9** | The app's sections are reachable throughout the export. | this commit |
+
+**Commit:** `feat(export): curve colors, sync in its own tab, and the date beside the clock`
+
+**As built:**
+- **S14D.1:**
+  - **Step row:** Back and Next sit in the step row, which names only the current step and says under it why Next is held back. The bottom bar is gone.
+  - **Preview:** its hide and full-screen buttons sit on its corner, and the scrub bar is one line with the times at its ends.
+  - **Saved looks:** one line above the preview shows the look in use, marked when edited, with a list to choose another and the rest behind its menu.
+- **S14D.2:**
+  - **The problem:** a clip shared from an iPhone is a new copy, so Android's DATE_TAKEN and its file name give when it was copied. A clip filmed during Subtronics on day one landed the next morning.
+  - **The fix:** `ClipZone` reads the udta `date` box, `©day`, or Apple's creationdate tag. `VideoTiming` trusts these over anything worked out from the stamp (`Basis.CAPTURED`).
+  - **Finding clips** also looks at videos added after the recordings began, so a clip that arrives days later is still found.
+- **S14D.3:** androidx.core 1.17's `ServiceCompat` masked the media-processing type to none, which Android 14 and later refuse, so every export crashed as it started. The platform's `startForeground` is called directly.
+- **S14D.4:**
+  - **Position screen:** where the graph and readouts sit, and how big, moved to a screen of its own with a dot pad for the nine anchored spots.
+  - **Canvas:** set by aspect ratio (the clip's own, 16:9, 9:16, 1:1, 4:5 or custom) and resolution (720p to 4K). A side longer than the encoders take brings the whole canvas down, keeping its shape.
+  - **Watermark:** fixed to the graph's top left, the corner nothing else uses.
+  - **Smaller things:** a scope menu beside the look's name, Revert to the saved look, and a clip strip that folds to one line.
+- **S14D.5, the tabs:**
+  - **Canvas, Sync, Graph & BPM, Style.** Sync shows only in the export flow (`LookSections`' `sync`). Each tab opens scrolled to its top.
+  - **Graph & BPM**, in order:
+    - Scale / Position, which opens the Position screen.
+    - Title.
+    - Clock and Date.
+    - Axis numbers and Gridlines.
+    - Show Live BPM.
+    - Background, Fade what's ahead and Seconds shown.
+    - BPM scale.
+  - **Pill sizes:** the pill, photo, name and reading sizes moved into the Position screen.
+  - **Style:** Text size, the text and gridline colors, the curves' colors, Contrast (video only), then the watermark.
+  - **Live BPM off** draws the curves only, with no names or readings.
+  - **The reading** is always in its person's color with several people; the "reading in their color" switch is gone.
+  - **BPM scale** defaults to Whole recording, listed first. Presets go to version 7, and an older one moves to Whole recording once.
+  - **Position screen:** titled "Scale / Position". Its controls fold away. Full screen from the preview opens with them hidden; the tab's button opens with them shown.
+  - **The clip strip** sits above the saved-look line.
+- **S14D.6, curve colors:**
+  - **The choice:** `ExportPreset.curvesInPersonColor`, which is null until chosen. Null means person colors with more than one person and the gradient with one (`VideoFrameRenderer.inPersonColor`).
+  - **Gradients:** three built-ins (Cool to hot, Green to red, Violet to orange), shown as gradient pills, plus a custom one.
+  - **Custom gradient dialog:** a bar with two draggable handles sets where the blend runs (`rampStart`/`rampEnd`, at least 5% apart). Below it are the low and high colors.
+  - **One ramp:** `rampColor` and `rampStops` serve both renderers and the editor's preview.
+  - **Color pickers:** every custom color uses a saturation/value square and a hue bar, with RGB sliders kept underneath. An empty circle with a plus opens a custom color for text, gridlines and the gradient.
+- **S14D.7, sync:**
+  - **The Sync tab** replaces the timing dialog. Top to bottom:
+    - "File start time" on one line.
+    - "Recording started at", with a picker.
+    - "Video and BPM synced to file time", or "Sync video and BPM to file time?" when the start differs from the file.
+    - A typed BPM offset (±10 min, in seconds).
+  - **The offset is separate:** it's kept in `ClipSelection.offsetMs`, so it doesn't count against the sync question. `ClipRetiming.retime` keeps it, and `syncToFile` resets only the start.
+  - **Who's on the clip:** a clip includes only the people recording during it by default (`ClipRetiming.castFor`).
+- **S14D.8, the clock:**
+  - **Switches:** Clock and Date sit above Axis numbers. Clock offers Time of day, Elapsed or Both. Date offers Oct 17, 2026, 10/17/2026 or 2026-10-17 (`DateStyle`).
+  - **Header:** `VideoFrameRenderer.clockLinesFor` gives a main line, plus a small line above it for the date and, with Both, the elapsed time. Stacked, the time is drawn at 80% so the header keeps its height. With no clock, the date takes its place.
+- **S14D.9:** the bottom bar shows on every export step except Look. The menu now opens with Collections, Library and Export, then a divider and the management screens.
+- **Fixed on the way:**
+  - Settings' look editor closed when the screen rotated.
+  - A single clip vanished from the preview after it was unticked.
+- **Tests:**
+  - `ExportPresetTest`: the curve-color default, the ramp and its sanitising, and the version 6 → Whole recording upgrade.
+  - `ClipRetimingTest`: the offset, sync to the file and the default cast.
+  - `HeaderClockTest`: what the header says for each combination of clock and date.
+- **Verified:** 850 phone and 6 watch unit tests pass, both apps build, and the device tests compile. On emulator-5554 with the Boogie T and Gorge clips: each tab, the gradient handles, the pickers, the Sync tab, every clock and date combination, Position opening minimized, and the tab bar and menu.
+
 ---
 
 ## Phase F — One component per job

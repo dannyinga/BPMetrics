@@ -139,7 +139,7 @@ object ImageRenderer {
             drawGridAndScale(canvas, spec, plot, range, scale, paint)
         }
         drawable.forEach { series ->
-            drawCurve(canvas, spec, plot, range, series, drawable.size == 1, scale, paint)
+            drawCurve(canvas, spec, plot, range, series, !VideoFrameRenderer.inPersonColor(spec.look, drawable.size), scale, paint)
         }
         if (spec.look.showLabels) {
             drawTimeAxis(canvas, spec, plot, zone, scale, paint)
@@ -345,8 +345,9 @@ object ImageRenderer {
         if (colourByValue) {
             paint.shader = LinearGradient(
                 0f, plot.bottom, 0f, plot.top,
-                intArrayOf(spec.look.lowBpmColor, blend(spec.look.lowBpmColor, spec.look.highBpmColor), spec.look.highBpmColor),
-                floatArrayOf(0f, 0.5f, 1f),
+                // Bottom to top, sampled along the ramp, which may cover only part of the scale.
+                spec.look.rampStops().map { spec.look.rampColor(it) }.toIntArray(),
+                spec.look.rampStops().toFloatArray(),
                 Shader.TileMode.CLAMP
             )
         } else {
@@ -522,10 +523,6 @@ object ImageRenderer {
 
     private const val NAME_SIZE = 26f
     private const val LABEL_SIZE = 19f
-
-    /** The midpoint of the ramp between two colours — the third copy of a walk that is now shared. */
-    private fun blend(from: Int, to: Int): Int =
-        inga.bpmetrics.core.BpmRamp.blend(from, to, 0.5f)
 
     /** The vertical scale: [ChartKit.bpmRange], the one both renderers use. */
     private class BpmRange(val min: Double, val max: Double) {

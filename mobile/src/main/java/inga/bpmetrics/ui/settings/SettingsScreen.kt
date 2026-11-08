@@ -643,8 +643,11 @@ private fun ExportSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val presets by viewModel.presets.collectAsStateWithLifecycle()
     var deleting by remember { mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null) }
-    var editing by remember { mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null) }
-    var creating by remember { mutableStateOf(false) }
+    // Saveable, by id: Position turns the screen for a landscape look, which recreates the activity,
+    // and a remembered editor closed then, leaving the app on its side with the edits gone.
+    var editingId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val editing = editingId?.let { id -> presets.firstOrNull { it.presetId == id } }
+    var creating by rememberSaveable { mutableStateOf(false) }
     val previewSubjects by viewModel.previewSubjects.collectAsStateWithLifecycle()
     val peopleById by viewModel.peopleById.collectAsStateWithLifecycle()
 
@@ -682,7 +685,7 @@ private fun ExportSection(viewModel: SettingsViewModel) {
                         Text(preset.name, style = MaterialTheme.typography.bodyMedium)
                         if (preset.isBuiltIn) Hint("Shipped with the app")
                     }
-                    TextButton(onClick = { editing = preset }) { Text("Edit") }
+                    TextButton(onClick = { editingId = preset.presetId }) { Text("Edit") }
                     // "Export", and the same file the export flow writes: it was "Share" for what is a
                     // save dialog, with an unsanitised name and a different extension (UX Audit E3).
                     TextButton(onClick = {
@@ -721,11 +724,11 @@ private fun ExportSection(viewModel: SettingsViewModel) {
             onePerson = previewSubjects.first,
             severalPeople = previewSubjects.second,
             people = peopleById,
-            onDismiss = { editing = null },
+            onDismiss = { editingId = null },
             onSave = { newName, preset ->
                 if (entity.isBuiltIn) viewModel.createPreset(newName, preset)
                 else viewModel.updatePreset(entity, newName, preset)
-                editing = null
+                editingId = null
             }
         )
     }
@@ -801,6 +804,8 @@ private fun PresetEditorDialog(
     var showSeveral by rememberSaveable { mutableStateOf(false) }
     var scrubAt by rememberSaveable { mutableStateOf(0.45f) }
     var tab by rememberSaveable { mutableStateOf(inga.bpmetrics.ui.export.LookTab.CANVAS) }
+    var positioning by rememberSaveable { mutableStateOf<inga.bpmetrics.ui.export.PositionTarget?>(null) }
+    var positioningFull by rememberSaveable { mutableStateOf(false) }
     var confirmDiscard by rememberSaveable { mutableStateOf(false) }
 
     val subject = if (showSeveral) severalPeople else onePerson
@@ -885,6 +890,10 @@ private fun PresetEditorDialog(
                             onScrub = { scrubAt = it },
                             onTapRegion = { tab = inga.bpmetrics.ui.export.LookTab.of(it) },
                             onPresetChange = { draft = it },
+                            positioning = positioning,
+                            onPositionDone = { positioning = null },
+                            onOpenPosition = { positioningFull = true; positioning = inga.bpmetrics.ui.export.PositionTarget.GRAPH },
+                            positionFull = positioningFull,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -895,7 +904,9 @@ private fun PresetEditorDialog(
                     onChange = { draft = it },
                     tab = tab,
                     onTab = { tab = it },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    onPosition = if (subject.isNotEmpty()) { { positioningFull = false; positioning = it } } else null,
+                    people = subject.size
                 )
             }
         }
