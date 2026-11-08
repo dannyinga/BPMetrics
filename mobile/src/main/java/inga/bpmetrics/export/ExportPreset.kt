@@ -237,9 +237,11 @@ data class ExportPreset(
      * footage is asking them to publish a version of the mark that is about to change. It exists
      * now so the renderers, the preset editor and the preview all learn about it together, rather
      * than being retrofitted later against three surfaces that have moved on.
+     *
+     * Always in the panel's top left, so there is no corner to choose (see [Wordmark]). A preset
+     * saved with a `wordmarkCorner` still reads; the key is ignored.
      */
     val showWordmark: Boolean = false,
-    val wordmarkCorner: WordmarkCorner = WordmarkCorner.BOTTOM_RIGHT,
     /**
      * How present the mark is, 0..100.
      *
@@ -273,6 +275,28 @@ data class ExportPreset(
     val textScale: Float = 1f
 ) {
     fun toJson(): String = BpmGson.instance.toJson(this)
+
+    /**
+     * This look with whatever differs between [from] and [to] laid over it: a change made to one
+     * look, made to another.
+     *
+     * For changing several clips' looks at once when they aren't all the same look. Field by field
+     * through the stored form, so a field added later is carried without anyone remembering to add
+     * it here. The name is never carried: a clip keeps the name of the look it started from.
+     */
+    fun withChanges(from: ExportPreset, to: ExportPreset): ExportPreset {
+        val gson = BpmGson.instance
+        val before = gson.toJsonTree(from).asJsonObject
+        val after = gson.toJsonTree(to).asJsonObject
+        val mine = gson.toJsonTree(this).asJsonObject
+        for (key in before.keySet() + after.keySet()) {
+            if (key == "name") continue
+            val changed = after.get(key)
+            if (before.get(key) == changed) continue
+            if (changed == null || changed.isJsonNull) mine.remove(key) else mine.add(key, changed)
+        }
+        return gson.fromJson(mine, ExportPreset::class.java).sanitised()
+    }
 
     /**
      * This look at the size it renders over a clip [clipWidth] × [clipHeight], as it plays.
@@ -408,9 +432,6 @@ data class ExportPreset(
                 .filterKeys { it >= 1 }
                 .mapNotNull { (count, frame) -> frame.sanitised()?.let { count to it } }
                 .toMap(),
-            // Gson leaves an absent enum as null, and the type says it cannot be — every preset
-            // written before the wordmark existed arrives that way.
-            wordmarkCorner = wordmarkCorner ?: shipped.wordmarkCorner,
             wordmarkOpacity = wordmarkOpacity.coerceIn(0, 100),
             pillCorner = pillCorner ?: shipped.pillCorner,
             clockMode = clockMode ?: shipped.clockMode,

@@ -42,14 +42,6 @@ enum class ClockMode(val label: String) {
     ELAPSED("Time into session")
 }
 
-/** Which corner of the canvas an export signs itself in. */
-enum class WordmarkCorner(val label: String) {
-    TOP_LEFT("Top left"),
-    TOP_RIGHT("Top right"),
-    BOTTOM_LEFT("Bottom left"),
-    BOTTOM_RIGHT("Bottom right")
-}
-
 /**
  * The app's signature on an export.
  *
@@ -57,11 +49,11 @@ enum class WordmarkCorner(val label: String) {
  * heart rate through it; a mark that competes with either is a mark they will crop out, which is
  * worse than not having put one there. So: one line, no logo, no box.
  *
- * Placed in a corner of the *graph* rather than of the frame. A mark in the corner of a video sits
- * in the part of the picture nobody reads — whereas the graph is the thing the export was made to
- * show, so a credit beside it is a credit that gets seen. [bounds] is therefore the graph's rect,
- * and [scale] the renderer's own, so the mark keeps its proportion when a preset frames the graph
- * small.
+ * Placed in the top-left corner of the *graph* rather than of the frame. A mark in the corner of a
+ * video sits in the part of the picture nobody reads, whereas the graph is the thing the export was
+ * made to show, so a credit beside it is a credit that gets seen. [bounds] is therefore the graph's
+ * rect, and [scale] the renderer's own, so the mark keeps its proportion when a preset frames the
+ * graph small.
  *
  * Drawn by both renderers from here rather than by each of them, because a signature that appears
  * in a different place on a still than on a video is not a signature, it is two of them.
@@ -81,7 +73,6 @@ object Wordmark {
     fun draw(
         canvas: Canvas,
         bounds: RectF,
-        corner: WordmarkCorner,
         opacityPercent: Int,
         color: Int,
         scale: Float,
@@ -102,21 +93,11 @@ object Wordmark {
         val inset = INSET * scale
         val metrics = paint.fontMetrics
 
-        val atTop = corner == WordmarkCorner.TOP_LEFT || corner == WordmarkCorner.TOP_RIGHT
-        val y = if (atTop) bounds.top + inset - metrics.ascent else bounds.bottom - inset - metrics.descent
-
-        val atLeft = corner == WordmarkCorner.TOP_LEFT || corner == WordmarkCorner.BOTTOM_LEFT
-        val x: Float
-        if (atLeft) {
-            paint.textAlign = Paint.Align.LEFT
-            x = bounds.left + inset
-        } else {
-            paint.textAlign = Paint.Align.RIGHT
-            // Trailing letterspacing is added after the last glyph too, so a right-aligned string
-            // sits a hair inside where it was asked to. Given back, or the mark looks misaligned
-            // against anything else pinned to the same edge.
-            x = bounds.right - inset + paint.letterSpacing * paint.textSize
-        }
+        // Top left: the title is centered and the clock is on the right, so this corner of the
+        // header is the one nothing else uses.
+        paint.textAlign = Paint.Align.LEFT
+        val x = bounds.left + inset
+        val y = bounds.top + inset - metrics.ascent
 
         canvas.drawText(TEXT, x, y, paint)
         paint.letterSpacing = 0f

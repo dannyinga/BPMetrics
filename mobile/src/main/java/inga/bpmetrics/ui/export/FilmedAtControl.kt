@@ -99,16 +99,27 @@ fun FilmedAtControl(
         // the bottom of the last section, while this was per clip at the top (UX Audit E7). Both
         // answer "when was this filmed", for this clip.
         Spacer(Modifier.height(8.dp))
-        Text("Nudge", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        // How far the heart rate is shifted against the footage. Positive puts the clip later on the
+        // recordings, so the curve shows what's coming: the heart rate leads the picture.
+        val offset = clip.originalClip?.let { original ->
+            (startedAt - original.startedAtMs).takeIf { kotlin.math.abs(it) < 60_000L }
+        } ?: 0L
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "BPM offset",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            // Only while it's a small shift: a clip set to another evening isn't "0.3 s off".
+            Text(
+                "%+.1f s".format(offset / 1000f),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (offset == 0L) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
+            )
+        }
         Text(
-            "Curve ahead of the footage? Nudge earlier. Behind it? Later." +
-                (clip.originalClip?.let { original ->
-                    val delta = startedAt - original.startedAtMs
-                    // Only while it's a nudge: a clip set to another evening isn't "0.3 s off".
-                    if (delta != 0L && kotlin.math.abs(delta) < 60_000L) {
-                        " Now ${"%+.1f".format(delta / 1000f)} s from the file's time."
-                    } else ""
-                } ?: ""),
+            "Heart rate changing before the footage does? Use −. After it? Use +.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

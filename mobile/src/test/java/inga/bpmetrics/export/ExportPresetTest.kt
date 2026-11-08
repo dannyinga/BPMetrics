@@ -61,12 +61,52 @@ class ExportPresetTest {
             backgroundOpacity = 37,
             graphLeft = 0.11f, graphTop = 0.22f, graphRight = 0.83f, graphBottom = 0.94f,
             windowSizeMs = 12_345L, frameRate = 50, matchSourceFrameRate = true,
-            syncOffsetMs = -1_750L
+            syncOffsetMs = -1_750L,
+            // Live BPM, and where it was put in Position.
+            readouts = ReadoutSpot(0.12f, 0.81f, ReadoutPin.BOTTOM_LEFT),
+            framesByLaneCount = mapOf(
+                3 to GraphFrame(0.1f, 0.5f, 0.6f, 0.9f, readouts = ReadoutSpot(0.9f, 0.1f, ReadoutPin.TOP_RIGHT)),
+                5 to GraphFrame(0.2f, 0.4f, 0.8f, 0.95f)
+            ),
+            pillShowPhoto = false, pillShowName = false, pillBpmInPersonColor = false,
+            pillScale = 1.4f, pillPhotoScale = 0.7f, pillBpmScale = 1.2f, pillNameScale = 0.8f,
+            pillCorner = PillCorner.TOP_LEFT,
+            clockMode = ClockMode.ELAPSED,
+            showWordmark = true, wordmarkOpacity = 80,
+            bpmScale = BpmScale.RECORDING, contrast = Contrast.OUTLINE,
+            matchClip = true, fillCanvas = true, textScale = 1.3f
         )
+
+        // The guard on the guard: every field really is changed here, so one added later and
+        // left out of this test fails it rather than passing by default.
+        val defaults = ExportPreset()
+        val unchanged = ExportPreset::class.java.declaredFields
+            .filterNot { java.lang.reflect.Modifier.isStatic(it.modifiers) || it.isSynthetic || it.name == "version" }
+            .onEach { it.isAccessible = true }
+            .filter { it.get(edited) == it.get(defaults) }
+            .map { it.name }
+        assertEquals("Left at their defaults: $unchanged", emptyList<String>(), unchanged)
 
         val restored = ExportPreset.fromJson(edited.toJson())
 
         assertEquals(edited, restored)
+    }
+
+    @Test
+    fun `a frame set for one clip shows on that clip, pinned for its cast where the look pins`() {
+        val placement = inga.bpmetrics.ui.export.GraphPlacement(0.1f, 0.2f, 0.5f, 0.4f, ReadoutSpot(0.9f, 0.9f, ReadoutPin.BOTTOM_RIGHT))
+
+        // No pins: the look's own frame.
+        val plain = placement.intoFor(ExportPreset(), laneCount = 2)
+        assertEquals(placement, inga.bpmetrics.ui.export.GraphPlacement.of(plain, 2))
+
+        // Pins for 3 and 5: a 4-person clip would be drawn between them, so it gets one of its own.
+        val pinned = ExportPreset(
+            framesByLaneCount = mapOf(3 to GraphFrame(0f, 0.5f, 0.5f, 1f), 5 to GraphFrame(0.5f, 0.5f, 1f, 1f))
+        )
+        val framed = placement.intoFor(pinned, laneCount = 4)
+        assertEquals(placement, inga.bpmetrics.ui.export.GraphPlacement.of(framed, 4))
+        assertEquals(pinned.framesByLaneCount[3], framed.framesByLaneCount[3])
     }
 
     @Test
@@ -431,9 +471,9 @@ class ExportPresetTest {
     }
 
     @Test
-    fun `a preset written before the wordmark existed comes back with a real corner`() {
-        // The trap this guards is an absent enum arriving as null in a field the type system swears
-        // cannot be null, so the first thing to touch it throws.
+    fun `a preset written before the wordmark existed comes back with it off and visible when on`() {
+        // The trap this guards is an absent field arriving zero-filled: an opacity of 0 that would
+        // render an invisible mark the moment someone switched it on.
         //
         // It does not currently bite, and the reason is worth writing down: every parameter of
         // ExportPreset has a default, so Kotlin emits a synthetic no-arg constructor, Gson finds it
@@ -451,8 +491,6 @@ class ExportPresetTest {
 
         val restored = ExportPreset.fromJson(beforeWordmark)!!
 
-        assertNotNull(restored.wordmarkCorner)
-        assertEquals(ExportPreset().wordmarkCorner, restored.wordmarkCorner)
         assertFalse(restored.showWordmark)
         // A usable opacity rather than a zero that would render an invisible mark the moment
         // someone switched the wordmark on.
@@ -471,14 +509,12 @@ class ExportPresetTest {
         val signed = ExportPreset(
             name = "Signed",
             showWordmark = true,
-            wordmarkCorner = WordmarkCorner.TOP_LEFT,
             wordmarkOpacity = 40
         )
 
         val restored = ExportPreset.fromJson(signed.toJson())!!
 
         assertTrue(restored.showWordmark)
-        assertEquals(WordmarkCorner.TOP_LEFT, restored.wordmarkCorner)
         assertEquals(40, restored.wordmarkOpacity)
     }
 
@@ -541,5 +577,29 @@ class ExportPresetTest {
         val three = preset.frameFor(3).readouts!!
         assertEquals(0.4f, three.x, 0.0001f)
         assertEquals(0.4f, three.y, 0.0001f)
+    }
+
+    @Test
+    fun `a change made to one look is made to another without touching the rest of it`() {
+        val onScreen = ExportPreset(name = "Mine", pillShowName = true, showGrid = true)
+        val changed = onScreen.copy(pillShowName = false)
+        // Another clip's look, with colors of its own.
+        val other = ExportPreset(name = "Theirs", showGrid = false, labelsColor = 0xFF00FF00.toInt())
+
+        val result = other.withChanges(onScreen, changed)
+        assertFalse(result.pillShowName)
+        assertFalse(result.showGrid)
+        assertEquals(0xFF00FF00.toInt(), result.labelsColor)
+        assertEquals("Theirs", result.name)
+    }
+
+    @Test
+    fun `readouts put back on the graph are put back on the other look too`() {
+        val spot = ReadoutSpot(x = 0.1f, y = 0.1f, pin = ReadoutPin.TOP_LEFT)
+        val onScreen = ExportPreset(readouts = spot)
+        val other = ExportPreset(readouts = spot, showGrid = false)
+        val result = other.withChanges(onScreen, onScreen.copy(readouts = null))
+        assertNull(result.readouts)
+        assertFalse(result.showGrid)
     }
 }

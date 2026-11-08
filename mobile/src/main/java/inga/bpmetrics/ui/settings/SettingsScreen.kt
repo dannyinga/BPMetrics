@@ -800,7 +800,7 @@ private fun PresetEditorDialog(
     var name by rememberSaveable { mutableStateOf(initial.name) }
     var showSeveral by rememberSaveable { mutableStateOf(false) }
     var scrubAt by rememberSaveable { mutableStateOf(0.45f) }
-    var tab by rememberSaveable { mutableStateOf(inga.bpmetrics.ui.export.LookTab.LAYOUT) }
+    var tab by rememberSaveable { mutableStateOf(inga.bpmetrics.ui.export.LookTab.CANVAS) }
     var confirmDiscard by rememberSaveable { mutableStateOf(false) }
 
     val subject = if (showSeveral) severalPeople else onePerson
@@ -883,16 +883,8 @@ private fun PresetEditorDialog(
                             title = name.ifBlank { "Preview" },
                             at = scrubAt,
                             onScrub = { scrubAt = it },
-                            onTapRegion = { region ->
-                                tab = when (region) {
-                                    inga.bpmetrics.export.VideoFrameRenderer.Region.READOUTS -> inga.bpmetrics.ui.export.LookTab.READOUTS
-                                    inga.bpmetrics.export.VideoFrameRenderer.Region.TITLE -> inga.bpmetrics.ui.export.LookTab.TEXT
-                                    inga.bpmetrics.export.VideoFrameRenderer.Region.CLOCK -> inga.bpmetrics.ui.export.LookTab.TIME
-                                    inga.bpmetrics.export.VideoFrameRenderer.Region.PLOT -> inga.bpmetrics.ui.export.LookTab.GRAPH
-                                    inga.bpmetrics.export.VideoFrameRenderer.Region.WORDMARK -> inga.bpmetrics.ui.export.LookTab.SIGNATURE
-                                    null -> inga.bpmetrics.ui.export.LookTab.LAYOUT
-                                }
-                            },
+                            onTapRegion = { tab = inga.bpmetrics.ui.export.LookTab.of(it) },
+                            onPresetChange = { draft = it },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -903,10 +895,7 @@ private fun PresetEditorDialog(
                     onChange = { draft = it },
                     tab = tab,
                     onTab = { tab = it },
-                    framing = inga.bpmetrics.ui.export.GraphPlacement.of(draft),
-                    onFramingChange = { draft = it.into(draft) },
-                    modifier = Modifier.weight(1f),
-                    hasPreview = subject.isNotEmpty()
+                    modifier = Modifier.weight(1f)
                 )
             }
         }

@@ -62,6 +62,8 @@ fun LookPicker(
     onDelete: (ExportPresetEntity) -> Unit,
     onExportFile: (ExportPresetEntity) -> Unit,
     onImportFile: () -> Unit,
+    /** Shown between the look's name and the overflow: which clips a change reaches. */
+    scope: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
@@ -136,6 +138,7 @@ fun LookPicker(
                 )
             }
         }
+        scope?.invoke()
         Box {
             IconButton(onClick = { menuOpen = true }) {
                 Icon(Icons.Default.MoreVert, contentDescription = "Saved look options")
@@ -147,6 +150,14 @@ fun LookPicker(
                     DropdownMenuItem(
                         text = { Text("Update ${selected.name}") },
                         onClick = { menuOpen = false; onUpdate(selected) }
+                    )
+                }
+                // Unsaved changes carry over from the last export, so "edited" can be there before
+                // anything was touched today. This is the way back to the saved look.
+                if (selected != null && edited) {
+                    DropdownMenuItem(
+                        text = { Text("Revert to ${selected.name}") },
+                        onClick = { menuOpen = false; onApply(selected) }
                     )
                 }
                 DropdownMenuItem(

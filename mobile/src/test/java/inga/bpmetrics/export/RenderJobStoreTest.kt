@@ -59,7 +59,7 @@ class RenderJobStoreTest {
             width = 1080, height = 1920,
             pillShowPhoto = false, pillShowName = false, pillScale = 1.4f, pillCorner = PillCorner.TOP_LEFT,
             clockMode = ClockMode.ELAPSED,
-            showWordmark = true, wordmarkCorner = WordmarkCorner.TOP_LEFT, wordmarkOpacity = 80,
+            showWordmark = true, wordmarkOpacity = 80,
             graphLeft = 0.1f, graphTop = 0.6f, graphRight = 0.9f, graphBottom = 0.95f,
             syncOffsetMs = -1_250L, frameRate = 60
         )

@@ -36,6 +36,33 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.OpenWith
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.GridOff
+import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.AlignHorizontalCenter
+import androidx.compose.material.icons.filled.AlignVerticalCenter
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,7 +98,6 @@ import inga.bpmetrics.export.BpmScale
 import inga.bpmetrics.export.Contrast
 import inga.bpmetrics.export.ExportPreset
 import inga.bpmetrics.export.VideoFrameRenderer
-import inga.bpmetrics.export.WordmarkCorner
 import inga.bpmetrics.export.PillCorner
 import inga.bpmetrics.export.VideoExporter
 import inga.bpmetrics.library.BpmRecordWithPoints
@@ -91,6 +117,10 @@ import kotlinx.coroutines.withContext
  *
  * That distinction is not academic: the multi-wearer pill sizing was work that could only be
  * checked by exporting a video and watching it.
+ *
+ * Nothing moves here. Moving and sizing the graph and the Live BPM column is the Position screen's,
+ * opened from the corner: dragging on a preview a few hundred dp wide was coarse, and a drag meant
+ * as a scroll or a tap could shift the graph.
  */
 @Composable
 fun ExportPreview(
@@ -110,11 +140,21 @@ fun ExportPreview(
      * A tap on the preview, with what was tapped: null outside the panel. Lets the editor open the
      * settings for the thing pointed at (S14B.2).
      */
-    onTapRegion: ((VideoFrameRenderer.Region?) -> Unit)? = null
+    onTapRegion: ((VideoFrameRenderer.Region?) -> Unit)? = null,
+    /** Changes to the look made in Position: the column's corner and size, frames saved per cast. */
+    onPresetChange: ((ExportPreset) -> Unit)? = null,
+    /** Shown in Position's top bar: which clips a change reaches. */
+    positionScope: (@Composable () -> Unit)? = null,
+    /** Shown in Position under the picture: the way to the batch's other clips. */
+    positionClips: (@Composable () -> Unit)? = null,
+    /** Opens when the clip was filmed. Null where there's no clip. */
+    onClipTime: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+    // The look as it is stored, for changes made in Position. What's drawn is sized to the clip.
+    val look = preset
     // At the size it renders over this clip, so a canvas matched to the clip previews as the
-    // clip's shape. Everything below, the full-screen copy included, works from this.
+    // clip's shape. Everything below, Position included, works from this.
     @Suppress("NAME_SHADOWING")
     val preset = clip?.canvasFor(preset) ?: preset
     val aspect = preset.width.toFloat() / preset.height.toFloat().coerceAtLeast(1f)
@@ -122,18 +162,15 @@ fun ExportPreview(
     // Saveable so a rotation, or a trip into the photo picker, does not reopen a preview someone
     // deliberately folded away to get at the settings underneath.
     var expanded by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
-    var fullScreen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var positioning by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
     // Re-rendered whenever anything it depends on changes, off the main thread because it decodes
-    // a video frame and draws every visible data point. Placement is a key too, so the rendered
-    // graph follows the box — the box itself is drawn by the widget, so dragging stays responsive
-    // while the frame catches up.
+    // a video frame and draws every visible data point.
     //
     // Not while it is hidden. Every setting touched re-renders this, and half the reason to fold it
-    // away is to stop that happening behind a slider being dragged — a preview nobody can see has
-    // no business decoding a video frame. Nor while the full-screen copy is up, which would have
-    // two renders racing for the same answer.
-    val visible = expanded && !fullScreen
+    // away is to stop that happening behind a slider being dragged. Nor while Position is up, which
+    // would have two renders racing for the same answer.
+    val visible = expanded && !positioning
     val frame by produceState<Bitmap?>(
         initialValue = null,
         visible, records, preset, overlay, at, colours, photos, title, clip, placement
@@ -152,10 +189,12 @@ fun ExportPreview(
         }
     }
 
-    if (fullScreen) {
-        FullScreenPreview(
+    if (positioning) {
+        PositionScreen(
             records = records,
             preset = preset,
+            look = look,
+            onPresetChange = onPresetChange,
             clip = clip,
             overlay = overlay,
             colours = colours,
@@ -165,24 +204,43 @@ fun ExportPreview(
             onScrub = onScrub,
             placement = placement,
             onPlacementChange = onPlacementChange,
-            onDismiss = { fullScreen = false }
+            scope = positionScope,
+            clips = positionClips,
+            onDismiss = { positioning = false }
         )
     }
 
     Column(modifier) {
-        // The preview is sticky and takes a third of a short screen. That is right while framing
+        // The preview is sticky and takes a third of a short screen. That is right while judging
         // something and wrong while reading down a list of settings, so it folds. Folded, a slim
-        // row brings it back; open, its two buttons sit on its corner rather than on a row of
-        // their own, which was a line taken from the settings below.
+        // row brings it back; open, its buttons sit on its corner rather than on a row of their own.
+        // On the right, where the button that hid it was, with the preview's other two buttons, so
+        // folding the picture away doesn't also take the way to the clip's time or to Position.
         if (!expanded) {
-            TextButton(onClick = { expanded = true }) {
-                androidx.compose.material3.Icon(
-                    androidx.compose.material.icons.Icons.Default.ExpandMore,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(4.dp))
-                Text("Show preview")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                onClipTime?.let {
+                    IconButton(onClick = it) {
+                        Icon(androidx.compose.material.icons.Icons.Default.Schedule, contentDescription = "When this clip was filmed")
+                    }
+                }
+                if (records.isNotEmpty()) {
+                    IconButton(onClick = { positioning = true }) {
+                        Icon(androidx.compose.material.icons.Icons.Default.OpenWith, contentDescription = "Position the graph and Live BPM")
+                    }
+                }
+                TextButton(onClick = { expanded = true }) {
+                    Text("Show preview")
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        androidx.compose.material.icons.Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
             return@Column
         }
@@ -193,13 +251,8 @@ fun ExportPreview(
         ) {
             // Height-capped rather than purely aspect-driven. A 9:16 canvas filling the width is
             // nearly twice as tall as it is wide, which pushed every setting off the bottom of the
-            // screen — a preview with nothing visible to judge against is not doing its job.
-            //
-            // The cap is a share of the screen rather than a flat 240dp. That number was measured
-            // on a tall phone, where it leaves plenty below it; on a short one the same 240dp is a
-            // third of everything there is, and the settings it is meant to be previewed against go
-            // back off the bottom. A third of the screen is the same *proportion* everywhere, and
-            // the floor keeps it from shrinking to something not worth looking at.
+            // screen. A share of the screen rather than a flat height, so it is the same
+            // proportion on a short phone as on a tall one, with a floor.
             val safeAspect = aspect.coerceIn(0.4f, 2.5f)
             val screenHeight = LocalConfiguration.current.screenHeightDp.dp
             val cap = (screenHeight * 0.32f).coerceIn(140.dp, 260.dp)
@@ -207,7 +260,6 @@ fun ExportPreview(
 
             val tapModifier = if (onTapRegion == null || records.isEmpty()) Modifier else {
                 Modifier.pointerInput(records, preset, placement, title) {
-                    // Underneath the framing overlay, so a drag of the frame never reads as a tap.
                     detectTapGestures { offset ->
                         val x = offset.x / size.width * preset.width
                         val y = offset.y / size.height * preset.height
@@ -244,29 +296,28 @@ fun ExportPreview(
                     )
                 } ?: CircularProgressIndicator()
 
-                // An outline and handles, no fill. A tinted rectangle over the render hides the
-                // thing being judged, which is the one job the preview has.
-                GraphFramingOverlay(
-                    placement = placement,
-                    onChange = onPlacementChange,
-                    readoutBlock = rememberReadoutBlock(records, preset, placement, title),
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Over the frame, after the framing overlay so a tap on them isn't a drag.
                 Row(
                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    onClipTime?.let {
+                        PreviewCornerButton(
+                            icon = androidx.compose.material.icons.Icons.Default.Schedule,
+                            description = "When this clip was filmed",
+                            onClick = it
+                        )
+                    }
+                    if (records.isNotEmpty()) {
+                        PreviewCornerButton(
+                            icon = androidx.compose.material.icons.Icons.Default.OpenWith,
+                            description = "Position the graph and Live BPM",
+                            onClick = { positioning = true }
+                        )
+                    }
                     PreviewCornerButton(
                         icon = androidx.compose.material.icons.Icons.Default.ExpandLess,
                         description = "Hide the preview",
                         onClick = { expanded = false }
-                    )
-                    PreviewCornerButton(
-                        icon = androidx.compose.material.icons.Icons.Default.Fullscreen,
-                        description = "Open the preview full screen",
-                        onClick = { fullScreen = true }
                     )
                 }
             }
@@ -301,30 +352,32 @@ private fun PreviewCornerButton(
             contentColor = androidx.compose.ui.graphics.Color.White
         )
     ) {
-        androidx.compose.material3.Icon(icon, contentDescription = description, modifier = Modifier.size(20.dp))
+        Icon(icon, contentDescription = description, modifier = Modifier.size(20.dp))
     }
 }
 
+/** What Position is moving and sizing. */
+private enum class PositionTarget { GRAPH, LIVE_BPM }
+
 /**
- * The same frame, filling the screen.
+ * Where the graph and the Live BPM column go, and how big they are: the frame as large as the
+ * screen allows, with the controls for both under it (beside it, turned sideways).
  *
- * Exists because the preview is a few hundred dp of a canvas that is 1920 across, and the things
- * most worth checking on it — a wearer's name in a pill, an axis label, the wordmark — are small
- * text that simply cannot be read at that size. Judging them by squinting at a thumbnail is how a
- * setting gets called fine and then turns out not to be.
+ * The only place either moves. Dragging a corner on the small preview moved the graph about a
+ * percent of the canvas per pixel of finger; here the same drag is fine adjustment, and the size,
+ * the quick spots and the centering buttons sit with the thing they move instead of in two tabs.
  *
- * Re-rendered at a higher resolution rather than scaling the small frame up: enlarging the thumbnail
- * would enlarge its softness too, and the whole reason for opening this is to look closely.
- *
- * The framing handles are here too, and this is the better place for them. Dragging a corner in a
- * preview a few hundred dp wide moves the graph in steps of about a percent of the canvas per pixel
- * of finger; at full size the same drag is fine adjustment. The small preview is for judging where
- * the graph sits against the whole frame, and this is for settling exactly where its edges land.
+ * Re-rendered at a higher resolution rather than scaling the small frame up, so small text (a
+ * name in a pill, an axis number) can be read here too.
  */
 @Composable
-private fun FullScreenPreview(
+private fun PositionScreen(
     records: List<BpmRecordWithPoints>,
+    /** Sized to the clip: what's drawn. */
     preset: ExportPreset,
+    /** As stored: what changes are made to. */
+    look: ExportPreset,
+    onPresetChange: ((ExportPreset) -> Unit)?,
     clip: VideoExporter.VideoClip?,
     overlay: Uri?,
     colours: Map<Long, Int>,
@@ -334,15 +387,15 @@ private fun FullScreenPreview(
     onScrub: (Float) -> Unit,
     placement: GraphPlacement,
     onPlacementChange: (GraphPlacement) -> Unit,
+    scope: (@Composable () -> Unit)?,
+    clips: (@Composable () -> Unit)?,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val aspect = preset.width.toFloat() / preset.height.toFloat().coerceAtLeast(1f)
 
-    // A landscape video turns the screen with it. Held upright, a 16:9 preview used a quarter of
-    // the screen with black above and below, which is no better than the inline one (UX Audit E1).
-    // Rotating recreates the activity, so the orientation to go back to is kept across that, and
-    // only restored when the preview is closed, not when the rotation itself tears this down.
+    // A landscape video turns the screen with it (UX Audit E1). Rotating recreates the activity,
+    // so the orientation to go back to is kept across that, and only restored when this closes.
     val activity = remember(context) {
         generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }
             .filterIsInstance<android.app.Activity>()
@@ -386,86 +439,517 @@ private fun FullScreenPreview(
         }
     }
 
+    val liveBpm = look.showCurrentStats && records.isNotEmpty()
+    var chosen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(PositionTarget.GRAPH) }
+    val target = if (liveBpm) chosen else PositionTarget.GRAPH
+    val block = rememberReadoutBlock(records, preset, placement, title)
+    var guides by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(Guides.OFF) }
+    var guidesOpen by remember { mutableStateOf(false) }
+
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(androidx.compose.ui.graphics.Color.Black)
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                BoxWithConstraints(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // Fitted to the space, not stretched across the width. Forcing full width means
-                    // the height follows from the aspect and can exceed the screen — which in
-                    // landscape it does, so the frame filled the display edge to edge and the
-                    // controls had nowhere to go but on top of it. Constraining by whichever axis
-                    // runs out first leaves black bars on the other, which is where they belong.
-                    val safeAspect = aspect.coerceIn(0.4f, 2.5f)
-                    val boxAspect = maxWidth / maxHeight
-                    val sizing = if (safeAspect > boxAspect) {
-                        Modifier.fillMaxWidth()
-                    } else {
-                        Modifier.fillMaxHeight()
-                    }
+        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val sideways = maxWidth > maxHeight
+                val controlsMax = maxHeight * 0.5f
 
-                    Box(
-                        sizing
-                            .aspectRatio(safeAspect)
-                            .clip(MaterialTheme.shapes.medium)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                val picture: @Composable (Modifier) -> Unit = { boxModifier ->
+                    BoxWithConstraints(
+                        modifier = boxModifier.background(androidx.compose.ui.graphics.Color.Black),
                         contentAlignment = Alignment.Center
                     ) {
-                        frame?.let {
-                            Image(
-                                bitmap = it.asImageBitmap(),
-                                contentDescription = "Export preview, full screen",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
-                        } ?: CircularProgressIndicator()
+                        // Fitted to the space by whichever side runs out first, so the frame is
+                        // whole with bars on the other.
+                        val safeAspect = aspect.coerceIn(0.4f, 2.5f)
+                        val sizing = if (safeAspect > maxWidth / maxHeight) Modifier.fillMaxWidth() else Modifier.fillMaxHeight()
+                        Box(
+                            sizing
+                                .aspectRatio(safeAspect)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            frame?.let {
+                                Image(
+                                    bitmap = it.asImageBitmap(),
+                                    contentDescription = "Export preview, for positioning",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
+                            } ?: CircularProgressIndicator()
 
-                        // Inside the frame's own box, not the screen's, so the fractions the
-                        // overlay works in map onto the rectangle the renderer drew. Anchored to
-                        // the screen, a drag would move the graph somewhere other than the finger.
-                        GraphFramingOverlay(
-                            placement = placement,
-                            onChange = onPlacementChange,
-                            readoutBlock = rememberReadoutBlock(records, preset, placement, title),
-                            modifier = Modifier.fillMaxSize()
-                        )
+                            GuideLines(guides, Modifier.fillMaxSize())
+
+                            // Inside the frame's own box, so the fractions the overlay works in map
+                            // onto the rectangle the renderer drew.
+                            GraphFramingOverlay(
+                                placement = placement,
+                                onChange = onPlacementChange,
+                                readoutBlock = block,
+                                onGrab = { readouts ->
+                                    chosen = if (readouts) PositionTarget.LIVE_BPM else PositionTarget.GRAPH
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
 
-                // Below the picture, in space of its own. It was floating over the bottom of the
-                // frame, which is exactly where a graph framed as a lower third sits — so the one
-                // control that lets you find a frame worth judging was covering the thing being
-                // judged. Nothing is gained by overlapping it: the room it takes comes out of the
-                // letterbox, not out of the picture.
-                ScrubTimeline(
-                    at = at,
-                    durationMs = playableMs(records, clip, preset),
-                    onScrub = onScrub,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .padding(top = 8.dp, bottom = 16.dp)
+                val controls: @Composable (Modifier) -> Unit = { columnModifier ->
+                    Column(
+                        columnModifier
+                            .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        if (liveBpm) {
+                            Segmented(
+                                options = PositionTarget.entries,
+                                selected = target,
+                                label = { if (it == PositionTarget.GRAPH) "Graph" else "Live BPM" },
+                                onSelect = { chosen = it }
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        when (target) {
+                            PositionTarget.GRAPH -> GraphPositionControls(
+                                placement = placement,
+                                onPlacementChange = onPlacementChange,
+                                look = look,
+                                onPresetChange = onPresetChange,
+                                aspect = aspect
+                            )
+                            PositionTarget.LIVE_BPM -> LiveBpmPositionControls(
+                                placement = placement,
+                                onPlacementChange = onPlacementChange,
+                                block = block,
+                                look = look,
+                                onPresetChange = onPresetChange,
+                                aspect = aspect
+                            )
+                        }
+                    }
+                }
+
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onDismiss) {
+                            Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Done")
+                        }
+                        Text("Position", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        // Lines to line things up against: halves, thirds, fifths.
+                        Box {
+                            IconButton(onClick = { guidesOpen = true }) {
+                                Icon(
+                                    if (guides == Guides.OFF) androidx.compose.material.icons.Icons.Default.GridOff
+                                    else androidx.compose.material.icons.Icons.Default.GridOn,
+                                    contentDescription = "Guides"
+                                )
+                            }
+                            DropdownMenu(expanded = guidesOpen, onDismissRequest = { guidesOpen = false }) {
+                                Text(
+                                    "Guides",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                                Guides.entries.forEach { entry ->
+                                    DropdownMenuItem(
+                                        text = { Text(entry.label) },
+                                        leadingIcon = {
+                                            if (entry == guides) Icon(androidx.compose.material.icons.Icons.Default.Check, contentDescription = "Chosen")
+                                            else Spacer(Modifier.size(24.dp))
+                                        },
+                                        onClick = { guides = entry; guidesOpen = false }
+                                    )
+                                }
+                            }
+                        }
+                        scope?.invoke()
+                        TextButton(onClick = onDismiss) { Text("Done") }
+                    }
+                    if (sideways) {
+                        Row(Modifier.weight(1f)) {
+                            Column(Modifier.weight(1f)) {
+                                picture(Modifier.weight(1f).fillMaxWidth())
+                                ScrubTimeline(
+                                    at = at,
+                                    durationMs = playableMs(records, clip, preset),
+                                    onScrub = onScrub,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+                                )
+                            }
+                            Column(Modifier.width(340.dp).fillMaxHeight()) {
+                                clips?.let { Box(Modifier.padding(horizontal = 8.dp)) { it() } }
+                                controls(Modifier.weight(1f))
+                            }
+                        }
+                    } else {
+                        picture(Modifier.weight(1f).fillMaxWidth())
+                        ScrubTimeline(
+                            at = at,
+                            durationMs = playableMs(records, clip, preset),
+                            onScrub = onScrub,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                        clips?.let { Box(Modifier.padding(horizontal = 8.dp)) { it() } }
+                        controls(Modifier.heightIn(max = controlsMax))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Where the graph goes and how big it is: a section for each. */
+@Composable
+private fun GraphPositionControls(
+    placement: GraphPlacement,
+    onPlacementChange: (GraphPlacement) -> Unit,
+    look: ExportPreset,
+    onPresetChange: ((ExportPreset) -> Unit)?,
+    /** The canvas's width over its height, so the pad is the canvas's shape. */
+    aspect: Float
+) {
+    SectionLabel("Position")
+    PositionSection(
+        anchor = placement.anchor(),
+        onAnchor = { column, row -> onPlacementChange(placement.anchoredAt(column, row)) },
+        aspect = aspect,
+        x = placement.left,
+        xRoom = 1f - placement.width,
+        y = placement.top,
+        yRoom = 1f - placement.height,
+        onMove = { x, y -> onPlacementChange(placement.movedTo(x, y)) }
+    )
+
+    Spacer(Modifier.height(12.dp))
+    // Keeping the shape is the usual case: a graph squashed by a slider nudged one way is rarely
+    // what was meant.
+    var keepShape by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Size", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        FilterChip(
+            selected = keepShape,
+            onClick = { keepShape = !keepShape },
+            label = { Text("Keep shape") },
+            leadingIcon = {
+                Icon(
+                    if (keepShape) androidx.compose.material.icons.Icons.Default.Lock
+                    else androidx.compose.material.icons.Icons.Default.LockOpen,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
                 )
             }
+        )
+    }
+    val shape = placement.height / placement.width.coerceAtLeast(0.0001f)
+    ValueSlider(
+        label = "Width",
+        value = placement.width,
+        range = GraphPlacement.MIN_SIZE..1f,
+        onValue = { w ->
+            onPlacementChange(
+                if (keepShape) {
+                    // The height can veto the width: past where it would leave the canvas, the
+                    // shape would have to change, which is the one thing this mode promises not to.
+                    val width = minOf(w, 1f / shape)
+                    placement.resizedTo(width, width * shape)
+                } else placement.resizedTo(w, placement.height)
+            )
+        }
+    )
+    ValueSlider(
+        label = "Height",
+        value = placement.height,
+        range = GraphPlacement.MIN_SIZE..1f,
+        onValue = { h ->
+            onPlacementChange(
+                if (keepShape) {
+                    val height = minOf(h, shape)
+                    placement.resizedTo(height / shape, height)
+                } else placement.resizedTo(placement.width, h)
+            )
+        }
+    )
+    Hint("You can drag on the picture too: the frame to move it, its corners and edges to resize it.")
 
-            androidx.compose.material3.IconButton(
-                onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-            ) {
-                androidx.compose.material3.Icon(
-                    androidx.compose.material.icons.Icons.Default.Close,
-                    contentDescription = "Close",
-                    tint = androidx.compose.ui.graphics.Color.White
+    // Frames saved for a number of people (UX Audit E2): chips that remove themselves.
+    if (onPresetChange != null && look.framesByLaneCount.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("Saved for", style = MaterialTheme.typography.bodyMedium)
+            look.framesByLaneCount.keys.sorted().forEach { count ->
+                androidx.compose.material3.InputChip(
+                    selected = false,
+                    onClick = { onPresetChange(look.copy(framesByLaneCount = look.framesByLaneCount - count)) },
+                    label = { Text(if (count == 1) "1 person" else "$count people") },
+                    trailingIcon = {
+                        Icon(
+                            androidx.compose.material.icons.Icons.Default.Close,
+                            contentDescription = "Clear the frame for $count",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 )
+            }
+        }
+    }
+}
+
+/** Where the Live BPM column goes and how big it is. */
+@Composable
+private fun LiveBpmPositionControls(
+    placement: GraphPlacement,
+    onPlacementChange: (GraphPlacement) -> Unit,
+    /** Where the column is now, as fractions of the canvas. */
+    block: RectF?,
+    look: ExportPreset,
+    onPresetChange: ((ExportPreset) -> Unit)?,
+    aspect: Float
+) {
+    val onItsOwn = placement.readouts != null
+    // Placed by where its corner lands; the pin and the way it grows follow from that.
+    fun placeAt(left: Float, top: Float, box: RectF) = onPlacementChange(
+        placement.copy(
+            readouts = inga.bpmetrics.export.ReadoutSpot.at(left, top, left + box.width(), top + box.height())
+        )
+    )
+    Segmented(
+        options = listOf(false, true),
+        selected = onItsOwn,
+        label = { if (it) "On its own" else "On the graph" },
+        onSelect = { own ->
+            when {
+                own == onItsOwn -> Unit
+                // Taken off where it already is, so choosing this moves nothing until it's placed.
+                own -> block?.let { placeAt(it.left, it.top, it) }
+                else -> onPlacementChange(placement.copy(readouts = null))
+            }
+        }
+    )
+    Spacer(Modifier.height(12.dp))
+    if (!onItsOwn) {
+        if (onPresetChange != null) {
+            InlineChoice(
+                label = "Corner of the graph",
+                options = PillCorner.entries,
+                selected = look.pillCorner,
+                optionLabel = { it.label },
+                onSelect = { onPresetChange(look.copy(pillCorner = it)) }
+            )
+        }
+        Hint("It moves with the graph. Right sits over what hasn't happened yet.")
+    } else if (block != null) {
+        SectionLabel("Position")
+        PositionSection(
+            anchor = Anchor.indexOf(block.left, block.width()) to Anchor.indexOf(block.top, block.height()),
+            onAnchor = { column, row ->
+                placeAt(Anchor.start(column, block.width()), Anchor.start(row, block.height()), block)
+            },
+            aspect = aspect,
+            x = block.left,
+            xRoom = 1f - block.width(),
+            y = block.top,
+            yRoom = 1f - block.height(),
+            onMove = { x, y -> placeAt(x, y, block) }
+        )
+        Hint("It grows away from the nearest corner, so more people never push it off the edge.")
+    }
+    if (onPresetChange != null) {
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("Size")
+        ToggleScaleRow(
+            label = "Pills",
+            checked = null,
+            scale = look.pillScale,
+            onScale = { onPresetChange(look.copy(pillScale = it)) }
+        )
+    }
+}
+
+/**
+ * Where something sits: a pad of nine dots for the sides, the corners and the middle, beside
+ * sliders for exactly where, and buttons that center one way only.
+ *
+ * @param anchor which dot it's on, each way, or null between them.
+ * @param xRoom how far it can go across: the canvas less its own width. Likewise [yRoom].
+ */
+@Composable
+private fun PositionSection(
+    anchor: Pair<Int?, Int?>,
+    onAnchor: (column: Int, row: Int) -> Unit,
+    aspect: Float,
+    x: Float,
+    xRoom: Float,
+    y: Float,
+    yRoom: Float,
+    onMove: (x: Float, y: Float) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        AnchorPad(anchor = anchor, onPick = onAnchor, aspect = aspect)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            ValueSlider(
+                label = "X",
+                value = x,
+                range = 0f..xRoom.coerceAtLeast(0.0001f),
+                enabled = xRoom > 0.001f,
+                labelWidth = 24.dp,
+                onValue = { onMove(it, y) }
+            )
+            ValueSlider(
+                label = "Y",
+                value = y,
+                range = 0f..yRoom.coerceAtLeast(0.0001f),
+                enabled = yRoom > 0.001f,
+                labelWidth = 24.dp,
+                onValue = { onMove(x, it) }
+            )
+        }
+    }
+    // One way only: the pad's middle dot centers both.
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { onMove(xRoom / 2f, y) },
+            enabled = xRoom > 0.001f,
+            contentPadding = PaddingValues(horizontal = 12.dp)
+        ) {
+            Icon(
+                androidx.compose.material.icons.Icons.Default.AlignHorizontalCenter,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Center across")
+        }
+        OutlinedButton(
+            onClick = { onMove(x, yRoom / 2f) },
+            enabled = yRoom > 0.001f,
+            contentPadding = PaddingValues(horizontal = 12.dp)
+        ) {
+            Icon(
+                androidx.compose.material.icons.Icons.Default.AlignVerticalCenter,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Center down")
+        }
+    }
+}
+
+/**
+ * The canvas in miniature, with a dot at each corner, the middle of each side and the center.
+ * The dot it's on is filled; one that matches only one way is ringed.
+ */
+@Composable
+private fun AnchorPad(
+    anchor: Pair<Int?, Int?>,
+    onPick: (column: Int, row: Int) -> Unit,
+    aspect: Float
+) {
+    val (onColumn, onRow) = anchor
+    val longSide = 120.dp
+    val padWidth = if (aspect >= 1f) longSide else (longSide * aspect).coerceAtLeast(72.dp)
+    val padHeight = if (aspect >= 1f) (longSide / aspect).coerceAtLeast(72.dp) else longSide
+    val rows = listOf("Top", "Middle", "Bottom")
+    val columns = listOf("left", "center", "right")
+    Box(
+        Modifier
+            .size(padWidth, padHeight)
+            .clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
+    ) {
+        for (row in 0..2) for (column in 0..2) {
+            val on = onColumn == column && onRow == row
+            val name = when {
+                row == 1 && column == 1 -> "Center"
+                row == 1 -> "Middle ${columns[column]}"
+                else -> "${rows[row]} ${columns[column]}"
+            }
+            Box(
+                modifier = Modifier
+                    .align(androidx.compose.ui.BiasAlignment(column - 1f, row - 1f))
+                    .size(28.dp)
+                    .clickable(onClickLabel = name) { onPick(column, row) }
+                    .semantics { contentDescription = name },
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    Modifier
+                        .size(if (on) 14.dp else 10.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A slider with its name on the left and its value, as a percentage of the canvas, on the right.
+ */
+@Composable
+private fun ValueSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValue: (Float) -> Unit,
+    enabled: Boolean = true,
+    labelWidth: Dp = 56.dp
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(labelWidth))
+        Slider(
+            value = value.coerceIn(range.start, range.endInclusive),
+            onValueChange = onValue,
+            valueRange = range,
+            enabled = enabled,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "${kotlin.math.round(value * 100).toInt()}%",
+            style = MaterialTheme.typography.labelMedium,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(44.dp)
+        )
+    }
+}
+
+/** Lines over the picture in Position, at even divisions of the canvas. Never in the export. */
+private enum class Guides(val label: String, val divisions: Int) {
+    OFF("Off", 1),
+    HALVES("Halves", 2),
+    THIRDS("Thirds", 3),
+    FIFTHS("Fifths", 5)
+}
+
+/** [guides] drawn over the picture, dashed and light so they read over footage of any kind. */
+@Composable
+private fun GuideLines(guides: Guides, modifier: Modifier = Modifier) {
+    if (guides == Guides.OFF) return
+    Canvas(modifier) {
+        val dash = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()))
+        val stroke = 1.dp.toPx()
+        for (i in 1 until guides.divisions) {
+            val x = size.width * i / guides.divisions
+            val y = size.height * i / guides.divisions
+            listOf(
+                Offset(x, 0f) to Offset(x, size.height),
+                Offset(0f, y) to Offset(size.width, y)
+            ).forEach { (from, to) ->
+                // A dark line under a light one, so it shows on bright footage as well as dark.
+                drawLine(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f), from, to, stroke * 2.5f, pathEffect = dash)
+                drawLine(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f), from, to, stroke, pathEffect = dash)
             }
         }
     }
@@ -616,16 +1100,19 @@ private fun rememberReadoutBlock(
  *
  * Dragging the column takes it off the graph (S14C): it stays where it's dropped, pinned to the
  * corner of the frame it's nearest, and the graph moves without it from then on. It has no handles,
- * because its size is the pills' size, which is set in Readouts.
+ * because its size is the pills' size, set beside it in Position.
  */
 @Composable
 private fun GraphFramingOverlay(
     placement: GraphPlacement,
     onChange: (GraphPlacement) -> Unit,
     readoutBlock: RectF?,
+    /** Told what a drag picked up: true for the column, false for the graph. */
+    onGrab: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val current by rememberUpdatedState(placement)
+    val grabbing by rememberUpdatedState(onGrab)
     val onChanged by rememberUpdatedState(onChange)
     val currentBlock by rememberUpdatedState(readoutBlock)
     val outline = MaterialTheme.colorScheme.primary
@@ -663,6 +1150,8 @@ private fun GraphFramingOverlay(
                         // finger landed in open space is worse than doing nothing.
                         moving = readoutsFrom == null && grabbed == null &&
                             current.contains(offset.x / w, offset.y / h)
+                        if (readoutsFrom != null) grabbing(true)
+                        else if (grabbed != null || moving) grabbing(false)
                     },
                     onDragEnd = { grabbed = null; moving = false; readoutsFrom = null },
                     onDragCancel = { grabbed = null; moving = false; readoutsFrom = null }
@@ -809,34 +1298,6 @@ internal fun footageRect(frameWidth: Int, frameHeight: Int, canvasWidth: Int, ca
     return RectF(left, top, left + w, top + h)
 }
 
-/** A titled row of chips choosing one of [options], with a line saying what the choice does. */
-@Composable
-private fun <T> ChoiceRow(
-    title: String,
-    hint: String,
-    options: List<T>,
-    selected: T,
-    label: (T) -> String,
-    onSelect: (T) -> Unit
-) {
-    Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        options.forEach { option ->
-            FilterChip(
-                selected = option == selected,
-                onClick = { onSelect(option) },
-                label = { Text(label(option)) }
-            )
-        }
-    }
-    Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Spacer(Modifier.height(8.dp))
-}
-
 /** How long the playhead rests before the preview decodes the exact frame under it. */
 private const val EXACT_FRAME_SETTLE_MS = 300L
 
@@ -966,23 +1427,35 @@ private fun renderPreviewFrame(
     return bitmap
 }
 
-/** The editor's tabs, in the order they're offered (S14B.1). */
+/**
+ * The editor's tabs, in the order they're offered (S14B.1).
+ *
+ * Each is about how something looks. Where the graph and the Live BPM column sit, and how big
+ * they are, is the Position screen's, opened from the preview: with the two in the tabs as well,
+ * every tab had a bit of placement in it and none had all of it.
+ */
 enum class LookTab(val label: String) {
-    LAYOUT("Layout"),
+    CANVAS("Canvas"),
     GRAPH("Graph"),
-    READOUTS("Readouts"),
-    TEXT("Text & color"),
-    TIME("Time"),
-    SIGNATURE("Signature");
+    LIVE_BPM("Live BPM"),
+    TEXT("Text & color");
 
     companion object {
-        /** The tabs a still offers: it has no live readouts and no playhead. */
-        val FOR_IMAGES = listOf(LAYOUT, GRAPH, TEXT, SIGNATURE)
+        /** The tabs a still offers: it has no live readings. */
+        val FOR_IMAGES = listOf(CANVAS, GRAPH, TEXT)
+
+        /** The tab with the settings for what was tapped on the preview (S14B.2). */
+        fun of(region: VideoFrameRenderer.Region?): LookTab = when (region) {
+            VideoFrameRenderer.Region.READOUTS -> LIVE_BPM
+            VideoFrameRenderer.Region.TITLE, VideoFrameRenderer.Region.CLOCK, VideoFrameRenderer.Region.WORDMARK -> TEXT
+            VideoFrameRenderer.Region.PLOT -> GRAPH
+            null -> CANVAS
+        }
     }
 }
 
 /**
- * Who a change to the graph's frame applies to (S14B.3). The frame used to be written to the clip
+ * Who a change to the look applies to (S14B.3). The frame used to be written to the clip
  * being previewed without saying so, and saving a preset then baked that clip's frame into it.
  */
 enum class FramingScope(val label: String) {
@@ -995,9 +1468,8 @@ enum class FramingScope(val label: String) {
  * How an export looks: one editor, used by the export flow and by Settings (S14B.1).
  *
  * Tabs, where there were six accordions holding about 35 settings: the preview stays on screen
- * above, and each tab's controls get the rest of it, rather than a quarter of the screen between
- * the preview and the step bar (UX Audit E1). The tab is the caller's, so tapping something in
- * the preview can open its settings (S14B.2).
+ * above, and each tab's controls get the rest of it (UX Audit E1). The tab is the caller's, so
+ * tapping something in the preview can open its settings (S14B.2).
  *
  * Takes a bounded height: the tab row stays put and the tab's contents scroll under it.
  */
@@ -1007,27 +1479,19 @@ fun LookSections(
     onChange: (ExportPreset) -> Unit,
     tab: LookTab,
     onTab: (LookTab) -> Unit,
-    framing: GraphPlacement,
-    onFramingChange: (GraphPlacement) -> Unit,
     modifier: Modifier = Modifier,
     isImage: Boolean = false,
-    /** False where the graph frame cannot be dragged, so the hint offers the chips instead. */
-    hasPreview: Boolean = true,
     /**
      * The heading drawn on the export, and a way to change it. Null where there is nothing to name:
      * the Settings editor previews a made-up subject.
      */
     title: String? = null,
     onTitleChange: ((String) -> Unit)? = null,
-    /** Who a frame change applies to, at the top of Layout. Null where there's no clip. */
-    framingScope: (@Composable () -> Unit)? = null,
-    /** When this clip was filmed, and the nudge, at the top of Time. Null where there's no clip. */
-    clipTime: (@Composable () -> Unit)? = null,
     /** Lays curves over a video picked by hand. Null where nothing can be picked. */
-    onPickVideo: (() -> Unit)? = null
+    onPickVideo: (() -> Unit)? = null,
+    /** The size of the clip on the preview, to say what a canvas matching it comes out at. */
+    clipSize: Pair<Int, Int>? = null
 ) {
-    // Saved looks aren't a tab: choosing one isn't a setting, so it sits above the preview (the
-    // export flow's `LookPicker`).
     val tabs = if (isImage) LookTab.FOR_IMAGES else LookTab.entries
     val shown = if (tab in tabs) tab else tabs.first()
 
@@ -1053,12 +1517,10 @@ fun LookSections(
                 .padding(16.dp)
         ) {
             when (shown) {
-                LookTab.LAYOUT -> LayoutTab(preset, onChange, framing, onFramingChange, isImage, hasPreview, framingScope, onPickVideo)
+                LookTab.CANVAS -> CanvasTab(preset, onChange, isImage, onPickVideo, clipSize)
                 LookTab.GRAPH -> GraphTab(preset, onChange, isImage)
-                LookTab.READOUTS -> ReadoutsTab(preset, onChange, framing, onFramingChange)
-                LookTab.TEXT -> TextTab(preset, onChange, title, onTitleChange)
-                LookTab.TIME -> TimeTab(preset, onChange, clipTime)
-                LookTab.SIGNATURE -> SignatureTab(preset, onChange)
+                LookTab.LIVE_BPM -> LiveBpmTab(preset, onChange)
+                LookTab.TEXT -> TextTab(preset, onChange, title, onTitleChange, isImage)
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -1068,68 +1530,100 @@ fun LookSections(
 @Composable
 private fun SectionLabel(text: String, hint: String? = null) {
     Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-    hint?.let {
-        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+    hint?.let { Hint(it) }
     Spacer(Modifier.height(6.dp))
 }
 
+/** One short line under a control saying what it does. */
 @Composable
-private fun LayoutTab(
+private fun Hint(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+/**
+ * The frame everything is drawn on: its resolution, how footage fills it, and how often it
+ * changes.
+ */
+@Composable
+private fun CanvasTab(
     preset: ExportPreset,
     onChange: (ExportPreset) -> Unit,
-    framing: GraphPlacement,
-    onFramingChange: (GraphPlacement) -> Unit,
     isImage: Boolean,
-    hasPreview: Boolean,
-    framingScope: (@Composable () -> Unit)?,
-    onPickVideo: (() -> Unit)?
+    onPickVideo: (() -> Unit)?,
+    clipSize: Pair<Int, Int>?
 ) {
-    SectionLabel("Canvas", "The shape and size of the finished " + if (isImage) "picture." else "video.")
-    val sizes = listOf(
-        "16:9" to (1920 to 1080),
-        "9:16" to (1080 to 1920),
-        "1:1" to (1080 to 1080),
-        "4:5" to (1080 to 1350)
-    )
     val matching = preset.matchClip && !isImage
-    val named = sizes.any { it.second == (preset.width to preset.height) }
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        // A still has no clip to match.
-        if (!isImage) {
-            FilterChip(
-                selected = matching,
-                onClick = { onChange(preset.copy(matchClip = true)) },
-                label = { Text("Match the clip") }
-            )
-        }
-        sizes.forEach { (label, size) ->
-            FilterChip(
-                selected = !matching && preset.width == size.first && preset.height == size.second,
-                // Placement is fractional, so switching aspect keeps the graph on canvas.
-                onClick = { onChange(preset.copy(width = size.first, height = size.second, matchClip = false)) },
-                label = { Text(label) }
-            )
-        }
-        // A size no chip names still shows as chosen, rather than leaving nothing selected (E8).
-        if (!matching && !named) {
-            FilterChip(selected = true, onClick = {}, label = { Text("${preset.width}×${preset.height}") })
-        }
+    val named = CanvasSize.ratioOf(preset.width, preset.height)
+    // Custom is a choice, not only a shape no other option names: picking it unlocks the sides
+    // even while they still happen to be 16:9.
+    var customChosen by rememberSaveable { mutableStateOf(false) }
+    val custom = !matching && (customChosen || named == null)
+    fun resized(size: Pair<Int, Int>) = preset.copy(width = size.first, height = size.second)
+
+    // The size it comes out at, always in view: what the chips below add up to.
+    val output = when {
+        !matching -> preset.width to preset.height
+        clipSize != null -> preset.forClip(clipSize.first, clipSize.second).let { it.width to it.height }
+        else -> null
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Resolution", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        Text(
+            output?.let { (w, h) -> "$w × $h" } ?: "Each clip's own",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
     }
     Spacer(Modifier.height(8.dp))
+
+    Hint("Aspect ratio")
+    Spacer(Modifier.height(4.dp))
+    // A still has no clip to match.
+    val ratioOptions = (if (isImage) emptyList() else listOf(CLIP)) + AspectRatio.entries.map { it.label } + CUSTOM
+    Segmented(
+        options = ratioOptions,
+        selected = when {
+            matching -> CLIP
+            custom -> CUSTOM
+            else -> named?.label
+        },
+        label = { it },
+        onSelect = { choice ->
+            customChosen = choice == CUSTOM
+            when (choice) {
+                CLIP -> onChange(preset.copy(matchClip = true))
+                CUSTOM -> onChange(preset.copy(matchClip = false, lockAspectRatio = false))
+                // Placement is fractional, so switching shape keeps the graph on the canvas, and
+                // the resolution stays where it was: 1440p at 16:9 is 1440p at 9:16.
+                else -> AspectRatio.entries.first { it.label == choice }.let { ratio ->
+                    onChange(
+                        resized(CanvasSize.shaped(preset.width, preset.height, ratio, DIMENSION_RANGE))
+                            .copy(matchClip = false, lockAspectRatio = true)
+                    )
+                }
+            }
+        }
+    )
+
+    Spacer(Modifier.height(8.dp))
+    Hint("Size")
+    Spacer(Modifier.height(4.dp))
+    Segmented(
+        options = Resolution.entries,
+        selected = CanvasSize.resolutionOf(preset.width, preset.height),
+        label = { it.label },
+        // Keeps the shape. Matching the clip, it is the most the clip is scaled to.
+        onSelect = { onChange(resized(CanvasSize.at(preset.width, preset.height, it, DIMENSION_RANGE))) }
+    )
+
     if (matching) {
-        Text(
-            "Each video takes its clip's shape, upright or sideways, at up to " +
-                "${minOf(preset.width, preset.height)} px on the short side.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+        Hint(
+            "Each clip keeps its own shape, with its short side at ${minOf(preset.width, preset.height)} px, " +
+                "or the clip's own if that's smaller."
         )
     } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
             NumberField(
                 value = preset.width,
                 label = "Width",
@@ -1143,6 +1637,17 @@ private fun LayoutTab(
                     )
                 }
             )
+            // Between the two numbers it ties together, rather than a switch row of its own.
+            androidx.compose.material3.IconToggleButton(
+                checked = preset.lockAspectRatio,
+                onCheckedChange = { onChange(preset.copy(lockAspectRatio = it)) }
+            ) {
+                Icon(
+                    if (preset.lockAspectRatio) androidx.compose.material.icons.Icons.Default.Lock
+                    else androidx.compose.material.icons.Icons.Default.LockOpen,
+                    contentDescription = if (preset.lockAspectRatio) "Shape locked" else "Shape unlocked"
+                )
+            }
             NumberField(
                 value = preset.height,
                 label = "Height",
@@ -1157,221 +1662,265 @@ private fun LayoutTab(
                 }
             )
         }
-        SwitchRow("Lock aspect ratio", preset.lockAspectRatio) { onChange(preset.copy(lockAspectRatio = it)) }
-        if (!isImage) {
-            SwitchRow("Fill the frame", preset.fillCanvas) { onChange(preset.copy(fillCanvas = it)) }
-            Text(
-                if (preset.fillCanvas) "Footage of another shape is cropped to fill the video."
-                else "Footage of another shape is shown whole, with bars at the sides or top.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 
-    // Placement is a video question. An image *is* the graph, so insetting it would leave a border
-    // of nothing around the only thing in the frame.
-    if (isImage) return
-
-    Spacer(Modifier.height(16.dp))
-    SectionLabel(
-        "Where the graph sits",
-        if (hasPreview) "Drag the outline on the preview, or start from one of these."
-        else "Pick a starting arrangement. Fine-tune it against footage in the export."
-    )
-    framingScope?.invoke()
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        GraphPlacement.PRESETS.forEach { (label, placement) ->
-            FilterChip(
-                selected = framing.matches(placement),
-                // A framing chip moves the graph; readouts moved off it stay where they were put.
-                onClick = { onFramingChange(placement.copy(readouts = framing.readouts)) },
-                label = { Text(label) }
-            )
-        }
-    }
-    Row {
-        // Centring by eye is guesswork that never quite lands.
-        TextButton(onClick = { onFramingChange(framing.centredHorizontally()) }) { Text("Center across") }
-        TextButton(onClick = { onFramingChange(framing.centredVertically()) }) { Text("Center down") }
-    }
-    // Absolute, not a nudge: the value *is* how wide the panel is, so the slider always reads where
-    // the panel actually is.
-    SliderRow(label = "Panel width", value = framing.width, onValue = { onFramingChange(framing.scaledTo(it)) })
-    Text(
-        "Keeps the shape and the position. Get the framing right once, then make it as large or " +
-            "small as you want.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-
-    // Frames pinned for a number of people were saved with the look and had no list and no way to
-    // be cleared (UX Audit E2).
-    if (preset.framesByLaneCount.isNotEmpty()) {
+    // Only when the canvas can be a different shape from the footage.
+    if (!isImage && !matching) {
         Spacer(Modifier.height(12.dp))
-        SectionLabel("Frames for a number of people", "These win over the look's own frame for clips with that many people.")
-        preset.framesByLaneCount.keys.sorted().forEach { count ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (count == 1) "1 person" else "$count people",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f)
+        InlineChoice(
+            label = "Footage",
+            options = listOf(false, true),
+            selected = preset.fillCanvas,
+            optionLabel = { if (it) "Fill" else "Fit" },
+            onSelect = { onChange(preset.copy(fillCanvas = it)) }
+        )
+    }
+
+    if (!isImage) {
+        Spacer(Modifier.height(16.dp))
+        SectionLabel("Frame rate")
+        val rates = listOf(24, 25, 30, 50, 60)
+        // Null is the clip's own rate.
+        Segmented(
+            options = listOf<Int?>(null) + rates,
+            selected = if (preset.matchSourceFrameRate) null else preset.frameRate.takeIf { it in rates },
+            label = { it?.toString() ?: CLIP },
+            onSelect = { rate ->
+                onChange(
+                    if (rate == null) preset.copy(matchSourceFrameRate = true)
+                    else preset.copy(frameRate = rate, matchSourceFrameRate = false)
                 )
-                TextButton(onClick = { onChange(preset.copy(framesByLaneCount = preset.framesByLaneCount - count)) }) {
-                    Text("Clear")
-                }
             }
-        }
+        )
+    }
+
+    // The look-wide offset that clip-by-clip timing replaced. Not offered any more, but a preset
+    // saved with one still applies it, so it is shown, with a way out, rather than acting unseen.
+    if (!isImage && preset.syncOffsetMs != 0L) {
+        Spacer(Modifier.height(16.dp))
+        SectionLabel(
+            "Older sync offset",
+            "This look moves every clip by ${"%+.1f".format(preset.syncOffsetMs / 1000f)} s, from an " +
+                "earlier version. Clips line up on their own now."
+        )
+        TextButton(onClick = { onChange(preset.copy(syncOffsetMs = 0L)) }) { Text("Clear it") }
     }
 
     onPickVideo?.let { pick ->
         Spacer(Modifier.height(12.dp))
-        Text(
-            "No clips: the curves are drawn on a plain background.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Hint("No clips: the curves are drawn on a plain background.")
         OutlinedButton(onClick = pick) { Text("Choose a video") }
     }
 }
 
+private const val CLIP = "Clip"
+
+/** The aspect ratio for a shape no name covers: the sides typed by hand. */
+private const val CUSTOM = "Custom"
+
+/** A full-width segmented choice. No check mark: the fill already says which is chosen. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> Segmented(
+    options: List<T>,
+    selected: T?,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier.fillMaxWidth()
+) {
+    SingleChoiceSegmentedButtonRow(modifier) {
+        options.forEachIndexed { index, option ->
+            SegmentedButton(
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                icon = {},
+                label = { Text(label(option), style = MaterialTheme.typography.labelMedium, maxLines = 1) }
+            )
+        }
+    }
+}
+
+/** A label and a short segmented choice on one line. */
+@Composable
+private fun <T> InlineChoice(
+    label: String,
+    options: List<T>,
+    selected: T,
+    optionLabel: (T) -> String,
+    onSelect: (T) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Segmented(options, selected, optionLabel, onSelect, Modifier.width((options.size * 88).dp))
+    }
+}
+
+/** What the graph draws, and how it holds up over footage. */
 @Composable
 private fun GraphTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit, isImage: Boolean) {
-    // Named for what they draw: "Labels" was the axis numbers, and read as names (UX Audit E6).
-    SwitchRow("Heart rate numbers", preset.showLabels) { onChange(preset.copy(showLabels = it)) }
+    SwitchRow("Axis numbers", preset.showLabels) { onChange(preset.copy(showLabels = it)) }
     SwitchRow("Gridlines", preset.showGrid) { onChange(preset.copy(showGrid = it)) }
     if (isImage) {
-        // On a still, the same field is everyone's summary for the whole span.
         SwitchRow("Summary", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
     }
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(4.dp))
 
-    // Opacity of the panel the graph sits on, which is a property of the graph.
     SliderRow(
-        label = "Panel opacity",
+        label = "Background",
         value = preset.backgroundOpacity / 100f,
         onValue = { onChange(preset.copy(backgroundOpacity = (it * 100).toInt())) }
     )
     if (isImage) {
-        Text(
-            "At 0% the saved PNG is transparent behind the curve, ready to lay over footage in " +
-                "another app.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Hint("At 0% the PNG is see-through behind the curve, ready to lay over footage elsewhere.")
         return
     }
 
-    // It fades what *hasn't happened yet*, which "trailing" said backwards (UX Audit E6).
     SliderRow(
         label = "Fade what's ahead",
         value = preset.futureOpacity,
         onValue = { onChange(preset.copy(futureOpacity = it)) }
     )
-    Spacer(Modifier.height(8.dp))
-    ChoiceRow(
-        title = "Scale",
-        hint = when (preset.bpmScale) {
-            BpmScale.ON_SCREEN -> "Fits the heart rates in view, so the curves have room to move."
-            BpmScale.RECORDING -> "The same scale throughout, for comparing levels across a set."
-        },
+    Spacer(Modifier.height(4.dp))
+    NumberField(
+        value = (preset.windowSizeMs / 1000).toInt(),
+        label = "Seconds shown",
+        range = WINDOW_RANGE,
+        modifier = Modifier.fillMaxWidth(),
+        onValue = { onChange(preset.copy(windowSizeMs = it * 1000L)) }
+    )
+    // The playhead is centered, so half of it is what you can see coming.
+    Hint("The playhead is in the middle: ${(preset.windowSizeMs / 2000).toInt()} s of what's coming.")
+
+    Spacer(Modifier.height(16.dp))
+    SectionLabel("Scale")
+    Segmented(
         options = BpmScale.entries,
         selected = preset.bpmScale,
         label = { it.label },
         onSelect = { onChange(preset.copy(bpmScale = it)) }
     )
-    ChoiceRow(
-        title = "Contrast",
-        hint = when (preset.contrast) {
-            Contrast.AUTO -> "A soft shadow behind the curves and text when the panel is under " +
-                "${Contrast.AUTO_PANEL_THRESHOLD}%, so they hold up over bright footage."
-            Contrast.OFF -> "Nothing behind the curves and text but the panel."
-            Contrast.SHADOW -> "A soft shadow behind the curves and text."
-            Contrast.OUTLINE -> "A dark edge round the curves and text. Holds up over anything."
-        },
+    Hint(
+        when (preset.bpmScale) {
+            BpmScale.ON_SCREEN -> "Fits what's in view, so the curves have room to move."
+            BpmScale.RECORDING -> "Fixed for the whole set, for comparing levels."
+        }
+    )
+
+    Spacer(Modifier.height(16.dp))
+    SectionLabel("Contrast")
+    Segmented(
         options = Contrast.entries,
         selected = preset.contrast,
-        label = { it.label },
+        label = { if (it == Contrast.SHADOW) "Shadow" else it.label },
         onSelect = { onChange(preset.copy(contrast = it)) }
+    )
+    Hint(
+        when (preset.contrast) {
+            Contrast.AUTO -> "A shadow when the background is under ${Contrast.AUTO_PANEL_THRESHOLD}%."
+            Contrast.OFF -> "Nothing behind the curves and text but the background."
+            Contrast.SHADOW -> "A soft shadow behind the curves and text."
+            Contrast.OUTLINE -> "A dark edge around the curves and text. Holds up over anything."
+        }
     )
 }
 
+/**
+ * What each person's live reading shows. Where the column sits and its size are in Position.
+ */
 @Composable
-private fun ReadoutsTab(
-    preset: ExportPreset,
-    onChange: (ExportPreset) -> Unit,
-    framing: GraphPlacement,
-    onFramingChange: (GraphPlacement) -> Unit
-) {
-    // The switch lives with what it switches. It sat in Graph, turning off this whole section while
-    // the section stayed fully editable (UX Audit E6).
-    SwitchRow("Show readouts", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
-    Text(
-        if (preset.showCurrentStats) "A live pill for each person over the footage. Two people on a " +
-            "story can carry faces and names; six on a landscape shot read better as numbers."
-        else "Off: each person's name is listed in the corner instead.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    if (!preset.showCurrentStats) return
+private fun LiveBpmTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit) {
+    SwitchRow("Show Live BPM", preset.showCurrentStats) { onChange(preset.copy(showCurrentStats = it)) }
+    if (!preset.showCurrentStats) {
+        Hint("Off: each person's name is listed in the corner instead.")
+        return
+    }
+    Hint("A live reading for each person. Move and size the column in Position, on the preview.")
     Spacer(Modifier.height(8.dp))
 
-    SwitchRow("Photo", preset.pillShowPhoto) { onChange(preset.copy(pillShowPhoto = it)) }
-    SwitchRow("Name", preset.pillShowName) { onChange(preset.copy(pillShowName = it)) }
+    // Each part with its size beside it: a size for something switched off means nothing.
+    ToggleScaleRow(
+        label = "Photo",
+        checked = preset.pillShowPhoto,
+        onChecked = { onChange(preset.copy(pillShowPhoto = it)) },
+        scale = preset.pillPhotoScale,
+        onScale = { onChange(preset.copy(pillPhotoScale = it)) }
+    )
+    ToggleScaleRow(
+        label = "Name",
+        checked = preset.pillShowName,
+        onChecked = { onChange(preset.copy(pillShowName = it)) },
+        scale = preset.pillNameScale,
+        onScale = { onChange(preset.copy(pillNameScale = it)) }
+    )
+    ToggleScaleRow(
+        label = "Reading",
+        checked = null,
+        scale = preset.pillBpmScale,
+        onScale = { onChange(preset.copy(pillBpmScale = it)) }
+    )
+    Hint("Tap a percentage to put it back to 100%.")
+    Spacer(Modifier.height(8.dp))
     SwitchRow("Reading in their color", preset.pillBpmInPersonColor) {
         onChange(preset.copy(pillBpmInPersonColor = it))
     }
+}
 
-    Spacer(Modifier.height(8.dp))
-    // Where the column is, said here as well as shown: the dashed box in the preview is the only
-    // other sign that it can move on its own (S14C).
-    if (framing.readouts == null) {
-        // The clock is in the header whichever side this is.
-        SectionLabel(
-            "On the graph",
-            "One column in the graph's top corner, moving with it. Right sits over the faded part, " +
-                "what hasn't happened yet. Drag the dashed box in the preview to place it anywhere."
+/**
+ * A part that can be switched off, and its size, on one line. [checked] null for a part that's
+ * always there.
+ */
+@Composable
+private fun ToggleScaleRow(
+    label: String,
+    checked: Boolean?,
+    onChecked: (Boolean) -> Unit = {},
+    scale: Float,
+    onScale: (Float) -> Unit
+) {
+    val on = checked != false
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(68.dp)
         )
-        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PillCorner.entries.forEach { corner ->
-                FilterChip(
-                    selected = preset.pillCorner == corner,
-                    onClick = { onChange(preset.copy(pillCorner = corner)) },
-                    label = { Text(corner.label) }
-                )
-            }
+        Slider(
+            value = scale.coerceIn(SCALE_MIN, SCALE_MAX),
+            onValueChange = onScale,
+            valueRange = SCALE_MIN..SCALE_MAX,
+            enabled = on,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "${kotlin.math.round(scale * 100).toInt()}%",
+            style = MaterialTheme.typography.labelMedium,
+            textAlign = TextAlign.End,
+            color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .width(48.dp)
+                .clickable(enabled = on, onClickLabel = "Back to 100%") { onScale(1f) }
+                .padding(vertical = 8.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        if (checked != null) {
+            Switch(checked = checked, onCheckedChange = onChecked)
+        } else {
+            // Lines the sliders up with the rows that have a switch.
+            Spacer(Modifier.width(52.dp))
         }
-    } else {
-        SectionLabel(
-            "Placed on its own",
-            "Drag the dashed box in the preview to move it. It grows away from the corner of the " +
-                "frame it's nearest, so more people never push it off the edge."
-        )
-        TextButton(onClick = { onFramingChange(framing.copy(readouts = null)) }) { Text("Put back on the graph") }
-    }
-
-    Spacer(Modifier.height(12.dp))
-    // Multipliers on what the renderer works out, so no combination can produce pills that don't fit.
-    ScaleRow("Pill size", preset.pillScale) { onChange(preset.copy(pillScale = it)) }
-    if (preset.pillShowPhoto) {
-        ScaleRow("Photo size", preset.pillPhotoScale) { onChange(preset.copy(pillPhotoScale = it)) }
-    }
-    ScaleRow("Reading size", preset.pillBpmScale) { onChange(preset.copy(pillBpmScale = it)) }
-    if (preset.pillShowName) {
-        ScaleRow("Name size", preset.pillNameScale) { onChange(preset.copy(pillNameScale = it)) }
     }
 }
 
+/** The words on the export, the watermark among them, and every color. */
 @Composable
 private fun TextTab(
     preset: ExportPreset,
     onChange: (ExportPreset) -> Unit,
     title: String?,
-    onTitleChange: ((String) -> Unit)?
+    onTitleChange: ((String) -> Unit)?,
+    isImage: Boolean
 ) {
     SwitchRow("Title", preset.showTitle) { onChange(preset.copy(showTitle = it)) }
     // Only where there is something to name, and only when it will be drawn.
@@ -1384,21 +1933,41 @@ private fun TextTab(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        Text(
-            "Leave blank to use the name of what's being exported. Every video in this batch " +
-                "gets this title.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+        Hint("Blank uses the name of what's exported. Every video in the batch gets it.")
+    }
+
+    // In the header beside the title, so it costs no room on the graph.
+    if (!isImage) {
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("Clock")
+        Segmented(
+            options = inga.bpmetrics.export.ClockMode.entries,
+            selected = preset.clockMode,
+            label = {
+                when (it) {
+                    inga.bpmetrics.export.ClockMode.ELAPSED -> "Elapsed"
+                    else -> it.label
+                }
+            },
+            onSelect = { onChange(preset.copy(clockMode = it)) }
         )
     }
 
     Spacer(Modifier.height(12.dp))
     ScaleRow("Text size", preset.textScale, range = 0.75f..2f) { onChange(preset.copy(textScale = it)) }
-    Text(
-        "The title, clock and axis numbers. Never smaller than what reads on a phone.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
+    Hint("The title, clock and axis numbers.")
+
+    // The app's credit: words on the export, in the text color, so here rather than with the canvas.
+    Spacer(Modifier.height(12.dp))
+    SwitchRow("Watermark", preset.showWordmark) { onChange(preset.copy(showWordmark = it)) }
+    if (preset.showWordmark) {
+        Hint("BPMetrics, in the graph's top left, in the text color.")
+        SliderRow(
+            label = "Opacity",
+            value = preset.wordmarkOpacity / 100f,
+            onValue = { onChange(preset.copy(wordmarkOpacity = (it * 100).toInt())) }
+        )
+    }
 
     Spacer(Modifier.height(12.dp))
     val shipped = ExportPreset()
@@ -1414,12 +1983,7 @@ private fun TextTab(
         listOf(shipped.gridColor, 0x33FFFFFF, 0x40000000, 0x3300DCC2),
         onPick = { onChange(preset.copy(gridColor = it)) }
     )
-    Text(
-        "One person's curve shades from the first color to the second as their heart rate climbs. " +
-            "With several people, each is drawn in their own color.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
+    Hint("One person's curve goes from Low to High as their heart rate climbs. Several people each get their own color.")
     Spacer(Modifier.height(6.dp))
     ColourRow(
         "Low",
@@ -1435,7 +1999,7 @@ private fun TextTab(
     )
 }
 
-/** A row of swatches choosing one colour, the first being the app's own. */
+/** A row of swatches choosing one color, the first being the app's own. */
 @Composable
 private fun ColourRow(label: String, value: Int, options: List<Int>, onPick: (Int) -> Unit) {
     Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
@@ -1451,7 +2015,7 @@ private fun ColourRow(label: String, value: Int, options: List<Int>, onPick: (In
                 modifier = Modifier
                     .size(36.dp)
                     .clip(androidx.compose.foundation.shape.CircleShape)
-                    // A checkerboard-free stand-in for transparency: faint colours are shown over
+                    // A checkerboard-free stand-in for transparency: faint colors are shown over
                     // the panel's own surface, which is what they'll be drawn over.
                     .background(androidx.compose.ui.graphics.Color(inga.bpmetrics.core.BpmPalette.SURFACE))
                     .background(androidx.compose.ui.graphics.Color(colour))
@@ -1464,115 +2028,6 @@ private fun ColourRow(label: String, value: Int, options: List<Int>, onPick: (In
             )
         }
     }
-}
-
-@Composable
-private fun TimeTab(
-    preset: ExportPreset,
-    onChange: (ExportPreset) -> Unit,
-    clipTime: (@Composable () -> Unit)?
-) {
-    // When the clip was filmed and the nudge, together, per clip (UX Audit E7).
-    clipTime?.let {
-        it()
-        Spacer(Modifier.height(16.dp))
-    }
-
-    NumberField(
-        value = (preset.windowSizeMs / 1000).toInt(),
-        label = "Visible window (seconds)",
-        range = WINDOW_RANGE,
-        modifier = Modifier.fillMaxWidth(),
-        onValue = { onChange(preset.copy(windowSizeMs = it * 1000L)) }
-    )
-    Text(
-        // The playhead is centred, so half of it is what you can see coming.
-        "The playhead sits in the middle, so this shows ${(preset.windowSizeMs / 2000).toInt()} " +
-            "seconds of what's coming.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-
-    Spacer(Modifier.height(12.dp))
-    SectionLabel("Clock", "In the header beside the title, where it costs no room on the graph.")
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        inga.bpmetrics.export.ClockMode.entries.forEach { mode ->
-            FilterChip(
-                selected = preset.clockMode == mode,
-                onClick = { onChange(preset.copy(clockMode = mode)) },
-                label = { Text(mode.label) }
-            )
-        }
-    }
-
-    Spacer(Modifier.height(12.dp))
-    SectionLabel("Frame rate", "Match source keeps each clip at the rate it was filmed at.")
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        FilterChip(
-            selected = preset.matchSourceFrameRate,
-            onClick = { onChange(preset.copy(matchSourceFrameRate = true)) },
-            label = { Text("Match source") }
-        )
-        listOf(24, 25, 30, 50, 60).forEach { rate ->
-            FilterChip(
-                selected = !preset.matchSourceFrameRate && preset.frameRate == rate,
-                onClick = { onChange(preset.copy(frameRate = rate, matchSourceFrameRate = false)) },
-                label = { Text("$rate") }
-            )
-        }
-    }
-
-    // The look-wide offset that clip-by-clip timing replaced. Not offered any more, but a preset
-    // saved with one still applies it, so it is shown, with a way out, rather than acting unseen.
-    if (preset.syncOffsetMs != 0L) {
-        Spacer(Modifier.height(16.dp))
-        SectionLabel(
-            "Older sync offset",
-            "This look also moves every clip by ${"%+.1f".format(preset.syncOffsetMs / 1000f)} s, from " +
-                "an earlier version. Clips now line up on their own; nudge one under its time if it's off."
-        )
-        TextButton(onClick = { onChange(preset.copy(syncOffsetMs = 0L)) }) { Text("Clear it") }
-    }
-}
-
-@Composable
-private fun SignatureTab(preset: ExportPreset, onChange: (ExportPreset) -> Unit) {
-    SwitchRow("Show wordmark", preset.showWordmark) { onChange(preset.copy(showWordmark = it)) }
-    Text(
-        "A small credit linking the export back to the app.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    if (!preset.showWordmark) return
-    Spacer(Modifier.height(8.dp))
-    SectionLabel("Corner")
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        WordmarkCorner.entries.forEach { corner ->
-            FilterChip(
-                selected = preset.wordmarkCorner == corner,
-                onClick = { onChange(preset.copy(wordmarkCorner = corner)) },
-                label = { Text(corner.label) }
-            )
-        }
-    }
-    Spacer(Modifier.height(8.dp))
-    SliderRow(
-        label = "Wordmark opacity",
-        value = preset.wordmarkOpacity / 100f,
-        onValue = { onChange(preset.copy(wordmarkOpacity = (it * 100).toInt())) }
-    )
 }
 
 @Composable
@@ -1755,7 +2210,23 @@ private fun NumberField(
 /** Pixels. Below 16 there's no graph to draw; above 4096 most phones' encoders refuse. */
 private val DIMENSION_RANGE = 16..4096
 
-/** The canvas's other side, when one side is typed with the aspect ratio locked. */
+/** An aspect ratio offered by name, [across] by [down]. */
+internal enum class AspectRatio(val label: String, val across: Int, val down: Int) {
+    WIDE("16:9", 16, 9),
+    TALL("9:16", 9, 16),
+    SQUARE("1:1", 1, 1),
+    PORTRAIT("4:5", 4, 5)
+}
+
+/** A resolution offered by name: the canvas's short edge, whatever its shape. */
+internal enum class Resolution(val label: String, val shortEdge: Int) {
+    HD("720p", 720),
+    FULL_HD("1080p", 1080),
+    QHD("1440p", 1440),
+    UHD("4K", 2160)
+}
+
+/** The canvas's size: its other side when one is typed, and the named ratios and resolutions. */
 internal object CanvasSize {
     /**
      * [other] scaled by the factor [oldSide] went to [newSide], to the nearest even number
@@ -1767,6 +2238,42 @@ internal object CanvasSize {
         val even = (Math.round(scaled / 2.0) * 2).toInt()
         return even.coerceIn(range)
     }
+
+    /** The named ratio a [width] × [height] canvas is, or null for one no name covers. */
+    fun ratioOf(width: Int, height: Int): AspectRatio? {
+        if (width <= 0 || height <= 0) return null
+        val ratio = width.toDouble() / height
+        return AspectRatio.entries.firstOrNull { kotlin.math.abs(ratio - it.across.toDouble() / it.down) < 0.01 }
+    }
+
+    /** The named resolution a [width] × [height] canvas is at, by its short edge. */
+    fun resolutionOf(width: Int, height: Int): Resolution? =
+        Resolution.entries.firstOrNull { it.shortEdge == minOf(width, height) }
+
+    /** A canvas [across] by [down] in shape with its short edge at [shortEdge], within [range]. */
+    fun sized(across: Int, down: Int, shortEdge: Int, range: IntRange): Pair<Int, Int> {
+        if (across <= 0 || down <= 0) return shortEdge to shortEdge
+        fun even(px: Double) = (Math.round(px / 2.0) * 2).toInt()
+        var short = shortEdge.toDouble()
+        var long = short * maxOf(across, down) / minOf(across, down)
+        // A long edge past the encoders' limit brings the whole canvas down, keeping its shape,
+        // rather than squashing it: a 4K canvas of a wide custom shape comes out a little under 4K.
+        if (long > range.last) {
+            short *= range.last / long
+            long = range.last.toDouble()
+        }
+        val s = even(short).coerceIn(range)
+        val l = even(long).coerceIn(range)
+        return if (across >= down) l to s else s to l
+    }
+
+    /** The canvas at [resolution], keeping its shape. */
+    fun at(width: Int, height: Int, resolution: Resolution, range: IntRange): Pair<Int, Int> =
+        sized(width, height, resolution.shortEdge, range)
+
+    /** The canvas in [ratio]'s shape, keeping its resolution (its short edge). */
+    fun shaped(width: Int, height: Int, ratio: AspectRatio, range: IntRange): Pair<Int, Int> =
+        sized(ratio.across, ratio.down, minOf(width, height), range)
 }
 
 /** Seconds of graph across the frame. */
@@ -1777,7 +2284,10 @@ private val WINDOW_RANGE = 1..600
  *
  * Each clip is its own shot with its own framing, so each gets its own graph placement and its own
  * scrub position. A strip rather than a dropdown because the thumbnails are what makes one clip
- * recognisable from another.
+ * recognizable from another.
+ *
+ * It can be folded to one line, the clip's place in the batch and its time with arrows either
+ * side, for when the settings need the room more than the thumbnails do.
  */
 @Composable
 fun ClipSelectorStrip(
@@ -1785,54 +2295,105 @@ fun ClipSelectorStrip(
     clockFor: (inga.bpmetrics.export.VideoExporter.VideoClip) -> java.time.ZoneId,
     clips: List<ClipSelection>,
     selectedUri: Uri?,
-    onSelect: (Uri) -> Unit
+    onSelect: (Uri) -> Unit,
+    collapsed: Boolean = false,
+    onCollapse: (Boolean) -> Unit = {},
+    /** False where only the one line is wanted, as in Position. */
+    foldable: Boolean = true
 ) {
     if (clips.size < 2) return
 
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(clips, key = { it.clip.uri.toString() }) { selection ->
-            val chosen = selection.clip.uri == selectedUri
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .width(84.dp)
-                    .clickable { onSelect(selection.clip.uri) }
+    if (collapsed) {
+        val index = clips.indexOfFirst { it.clip.uri == selectedUri }.coerceAtLeast(0)
+        val current = clips[index]
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                onClick = { onSelect(clips[index - 1].clip.uri) },
+                enabled = index > 0,
+                modifier = Modifier.size(36.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                        .clip(MaterialTheme.shapes.small)
-                        .background(
-                            if (chosen) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    ClipThumb(selection.clip.uri)
-                }
-                Text(
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous clip")
+            }
+            Text(
+                "Clip ${index + 1} of ${clips.size} · " +
                     inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString(
-                        selection.clip.startedAtMs,
-                        clockFor(selection.clip)
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (chosen) FontWeight.Bold else null,
-                    maxLines = 1
-                )
-                // Says which clips have been framed and which are still on the default, so
-                // "apply to all" has something visible to act on.
-                if (selection.graph != null) {
-                    Text(
-                        "framed",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                        current.clip.startedAtMs,
+                        clockFor(current.clip)
+                    ) + when {
+                        current.look != null -> " · own look"
+                        current.graph != null -> " · framed"
+                        else -> ""
+                    },
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(
+                onClick = { onSelect(clips[index + 1].clip.uri) },
+                enabled = index < clips.lastIndex,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next clip")
+            }
+            if (foldable) {
+                IconButton(onClick = { onCollapse(false) }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.ExpandMore, contentDescription = "Show clip thumbnails")
                 }
             }
+        }
+        return
+    }
+
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        LazyRow(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(clips, key = { it.clip.uri.toString() }) { selection ->
+                val chosen = selection.clip.uri == selectedUri
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .width(84.dp)
+                        .clickable { onSelect(selection.clip.uri) }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (chosen) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        ClipThumb(selection.clip.uri)
+                    }
+                    Text(
+                        inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString(
+                            selection.clip.startedAtMs,
+                            clockFor(selection.clip)
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (chosen) FontWeight.Bold else null,
+                        maxLines = 1
+                    )
+                    // Says which clips have been framed and which are still on the default, so
+                    // "apply to all" has something visible to act on.
+                    if (selection.look != null || selection.graph != null) {
+                        Text(
+                            if (selection.look != null) "own look" else "framed",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        }
+        IconButton(onClick = { onCollapse(true) }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.ExpandLess, contentDescription = "Fold the clips to one line")
         }
     }
 }

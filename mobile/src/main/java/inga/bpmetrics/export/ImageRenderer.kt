@@ -153,13 +153,12 @@ object ImageRenderer {
             // is looking at, and a mark in the corner of the picture is in the part nobody reads.
             //
             // Unlike the video panel there is no padding to tuck it into — this canvas gives the
-            // whole rectangle to the curves — so it does sit over the drawing. That is the trade,
-            // and it is why the corner is a setting: a set that peaks in the middle leaves the
-            // corners clear, one that runs high all evening does not.
+            // whole rectangle to the curves — so it does sit over the drawing, in the top left.
+            // That is the trade: a set that runs high from the start has its first minutes under
+            // the mark.
             Wordmark.draw(
                 canvas = canvas,
                 bounds = plot,
-                corner = spec.look.wordmarkCorner,
                 opacityPercent = spec.look.wordmarkOpacity,
                 color = spec.look.labelsColor,
                 scale = scale,

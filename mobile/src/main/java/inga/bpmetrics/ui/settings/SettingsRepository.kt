@@ -74,6 +74,9 @@ class SettingsRepository(context: Context) {
          */
         val ASKED_RENDER_NOTIFICATIONS = booleanPreferencesKey("asked_render_notifications")
 
+        /** Whether the Look step's clip thumbnails are folded down to one line. */
+        val CLIP_STRIP_COLLAPSED = booleanPreferencesKey("clip_strip_collapsed")
+
         // --- Appearance ---
 
         /** Whether to take colours from the wallpaper, where the platform offers them. */
@@ -149,6 +152,13 @@ class SettingsRepository(context: Context) {
 
     suspend fun setAskedRenderNotifications() {
         dataStore.edit { it[PreferencesKeys.ASKED_RENDER_NOTIFICATIONS] = true }
+    }
+
+    suspend fun clipStripCollapsed(): Boolean =
+        dataStore.data.first()[PreferencesKeys.CLIP_STRIP_COLLAPSED] ?: false
+
+    suspend fun setClipStripCollapsed(collapsed: Boolean) {
+        dataStore.edit { it[PreferencesKeys.CLIP_STRIP_COLLAPSED] = collapsed }
     }
 
     /**

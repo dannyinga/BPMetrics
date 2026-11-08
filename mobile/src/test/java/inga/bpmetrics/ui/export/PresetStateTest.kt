@@ -60,4 +60,37 @@ class PresetStateTest {
         // Kept inside the range.
         assertEquals(4096, CanvasSize.follow(other = 1920, oldSide = 1080, newSide = 4000, range = 16..4096))
     }
+
+    @Test
+    fun `a resolution sets the short side and keeps the shape`() {
+        assertEquals(1280 to 720, CanvasSize.at(1920, 1080, Resolution.HD, 16..4096))
+        assertEquals(3840 to 2160, CanvasSize.at(1920, 1080, Resolution.UHD, 16..4096))
+        // Portrait: the short side is the width.
+        assertEquals(1440 to 2560, CanvasSize.at(1080, 1920, Resolution.QHD, 16..4096))
+        assertEquals(2160 to 2700, CanvasSize.at(1080, 1350, Resolution.UHD, 16..4096))
+    }
+
+    @Test
+    fun `an aspect ratio sets the shape and keeps the resolution`() {
+        assertEquals(1440 to 2560, CanvasSize.shaped(2560, 1440, AspectRatio.TALL, 16..4096))
+        assertEquals(720 to 720, CanvasSize.shaped(1280, 720, AspectRatio.SQUARE, 16..4096))
+        assertEquals(1080 to 1350, CanvasSize.shaped(1920, 1080, AspectRatio.PORTRAIT, 16..4096))
+    }
+
+    @Test
+    fun `a canvas too long for the encoders comes down whole, keeping its shape`() {
+        // 21:9 at 4K would be 5040 wide.
+        val (w, h) = CanvasSize.at(2520, 1080, Resolution.UHD, 16..4096)
+        assertEquals(4096, w)
+        assertEquals(1756, h)
+    }
+
+    @Test
+    fun `the named ratio and resolution are read back from the sides`() {
+        assertEquals(AspectRatio.WIDE, CanvasSize.ratioOf(3840, 2160))
+        assertEquals(AspectRatio.PORTRAIT, CanvasSize.ratioOf(2160, 2700))
+        assertEquals(null, CanvasSize.ratioOf(1000, 700))
+        assertEquals(Resolution.QHD, CanvasSize.resolutionOf(1440, 2560))
+        assertEquals(null, CanvasSize.resolutionOf(1000, 700))
+    }
 }

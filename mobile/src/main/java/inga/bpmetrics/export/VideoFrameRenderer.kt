@@ -226,7 +226,6 @@ object VideoFrameRenderer {
         Wordmark.draw(
             canvas = canvas,
             bounds = dims.outerRect,
-            corner = config.look.wordmarkCorner,
             opacityPercent = config.look.wordmarkOpacity,
             color = config.look.labelsColor,
             // The panel's own scale, not the canvas's. A preset that shrinks the graph to a quarter
@@ -1088,11 +1087,9 @@ object VideoFrameRenderer {
         val dims = RenderingDimensions(width.toFloat(), height.toFloat(), graphRect, config)
         if (!dims.outerRect.contains(x, y)) return null
         if (look.showWordmark) {
-            // The mark is one short line in a corner: the corner's last fifth across, sixth down.
-            val nearRight = look.wordmarkCorner == WordmarkCorner.TOP_RIGHT || look.wordmarkCorner == WordmarkCorner.BOTTOM_RIGHT
-            val nearBottom = look.wordmarkCorner == WordmarkCorner.BOTTOM_LEFT || look.wordmarkCorner == WordmarkCorner.BOTTOM_RIGHT
-            val inX = if (nearRight) x > dims.drawAreaRight - dims.drawAreaWidth * 0.2f else x < dims.drawAreaLeft + dims.drawAreaWidth * 0.2f
-            val inY = if (nearBottom) y > dims.drawAreaBottom - dims.drawAreaHeight / 6f else y < dims.drawAreaTop + dims.drawAreaHeight / 6f
+            // The mark is one short line in the top-left corner: the first fifth across, sixth down.
+            val inX = x < dims.drawAreaLeft + dims.drawAreaWidth * 0.2f
+            val inY = y < dims.drawAreaTop + dims.drawAreaHeight / 6f
             if (inX && inY) return Region.WORDMARK
         }
         if (y < dims.graphTop) {

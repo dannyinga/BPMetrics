@@ -31,6 +31,10 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -106,6 +110,7 @@ fun ExportUtilityScreen(
     val presets by viewModel.presets.collectAsStateWithLifecycle()
     val selectedPresetId by viewModel.selectedPresetId.collectAsStateWithLifecycle()
     val presetEdited by viewModel.presetEdited.collectAsStateWithLifecycle()
+    val clipStripCollapsed by viewModel.clipStripCollapsed.collectAsStateWithLifecycle()
     val preset by viewModel.preset.collectAsStateWithLifecycle()
     var presetToExport by remember {
         mutableStateOf<inga.bpmetrics.library.ExportPresetEntity?>(null)
@@ -155,13 +160,22 @@ fun ExportUtilityScreen(
         // waiting for a selection the strip has not been scrolled to yet.
         ?: pendingJobs.firstOrNull()
 
+    // Which clips a change in the Look step reaches. All of them unless said otherwise: most of a
+    // look is the same across a batch, and a change meant for one clip is the one worth saying.
+    var lookScope by rememberSaveable { mutableStateOf(FramingScope.EVERY) }
+    // The look on screen: the previewed clip's own when it has one, else the batch's.
+    val lookOnScreen = previewingClip?.look ?: preset
+    val (pickerPresetId, pickerEdited) = remember(clips, previewingClip, presets, preset, selectedPresetId, presetEdited) {
+        viewModel.pickerStateFor(previewingClip?.clip?.uri, presets)
+    }
+
     // The framing on screen: the previewed clip's override if it has one, else the preset's own.
     // Saving a preset captures this, so a preset carries the framing it was saved looking at.
     val currentFraming = previewingClip?.graph
         // Framed for however many people are on the clip being previewed, so what step 3 shows is
         // what step 4 will render — the preview reading a count-blind frame would put the two a
         // rectangle apart on exactly the clips this feature exists for.
-        ?: GraphPlacement.of(preset, previewingClip?.recordIds?.size ?: 0)
+        ?: GraphPlacement.of(lookOnScreen, previewingClip?.recordIds?.size ?: 0)
 
     // Colour comes from the person, never chosen per export — one answer, set in People, so the
     // same person is the same colour on screen and in the video of the same session.
@@ -495,6 +509,8 @@ fun ExportUtilityScreen(
 
                 ExportStep.LOOK -> LookStep(
                     records = records,
+                    scope = lookScope,
+                    onScope = { lookScope = it },
                     isImage = kind == ExportKind.IMAGE,
                     // Drawn through exactly the call step 4 makes, so the preview and the saved
                     // file cannot be different pictures. The first entry stands for the batch.
@@ -506,10 +522,10 @@ fun ExportUtilityScreen(
                     imageRevision = listOf(imagePlan, recordColours, imageCrop, imageTitle),
                     jobCount = pendingJobs.size,
                     presets = presets,
-                    selectedPresetId = selectedPresetId,
-                    presetEdited = presetEdited,
-                    preset = preset,
-                    onPresetChange = { viewModel.setPreset(it) },
+                    selectedPresetId = pickerPresetId,
+                    presetEdited = pickerEdited,
+                    preset = lookOnScreen,
+                    onPresetChange = { viewModel.setLook(it, lookScope, previewingClip?.clip?.uri) },
                     // Previewed against the first ticked clip, since that is what most of the
                     // batch will look like. A preview of nothing would be useless with a batch.
                     previewOverlay = pendingJobs.firstOrNull()?.clip?.uri ?: manualOverlay,
@@ -529,16 +545,19 @@ fun ExportUtilityScreen(
                     ticked = pendingJobs,
                     previewing = previewingClip,
                     onSelectClip = { previewingUri = it },
+                    clipStripCollapsed = clipStripCollapsed,
+                    onClipStripCollapse = viewModel::setClipStripCollapsed,
                     onPlacementChange = { uri, placement -> viewModel.setClipGraph(uri, placement) },
                     onScrubClip = { uri, at -> viewModel.scrubClip(uri, at) },
                     onFrameEveryClip = { viewModel.setFrameForEveryClip(it) },
                     onPinForCast = { viewModel.pinGraphForCast(it) },
+                    onFrameClip = { uri, placement -> viewModel.frameClip(uri, placement) },
                     onSetFilmedAt = { uri, at -> viewModel.setClipFilmedAt(uri, at) },
                     onResetFilmedAt = { viewModel.resetClipFilmedAt(it) },
                     onPickOverlay = { pickOverlayLauncher.launch(arrayOf("video/*")) },
-                    onApplyPreset = { viewModel.applyPreset(it) },
-                    onSaveAs = { viewModel.savePresetAs(it) },
-                    onUpdatePreset = { viewModel.updatePreset(it) },
+                    onApplyPreset = { viewModel.applyPreset(it, lookScope, previewingClip?.clip?.uri) },
+                    onSaveAs = { viewModel.savePresetAs(it, previewingClip?.clip?.uri) },
+                    onUpdatePreset = { viewModel.updatePreset(it, previewingClip?.clip?.uri) },
                     onDeletePreset = { viewModel.deletePreset(it) },
                     onExportPresetFile = { presetToExport = it },
                     onImportPresetFile = { importPresetLauncher.launch(arrayOf("*/*")) }
@@ -712,10 +731,11 @@ private fun queueBatch(
                 photos = photos,
                 title = caption,
                 clip = job.clip,
-                placement = job.graph
+                placement = job.graph,
+                clipLook = job.look
             ),
             null,
-            presetName = presetName,
+            presetName = viewModel.presetLabel(job),
             sourceLabel = name
         )
     }
@@ -878,6 +898,9 @@ private fun formatMinutes(ms: Long): String {
 @Composable
 private fun LookStep(
     records: List<inga.bpmetrics.library.BpmRecordWithPoints>,
+    /** Which clips a change reaches. See [LookScopeMenu]. */
+    scope: FramingScope,
+    onScope: (FramingScope) -> Unit,
     isImage: Boolean,
     renderImagePreview: () -> android.graphics.Bitmap?,
     imageRevision: Any,
@@ -899,10 +922,15 @@ private fun LookStep(
     ticked: List<ClipSelection>,
     previewing: ClipSelection?,
     onSelectClip: (Uri) -> Unit,
+    /** Whether the clip thumbnails are folded to one line. Remembered between exports. */
+    clipStripCollapsed: Boolean,
+    onClipStripCollapse: (Boolean) -> Unit,
     onPlacementChange: (Uri, GraphPlacement) -> Unit,
     onScrubClip: (Uri, Float) -> Unit,
     /** Pins this clip's framing on the preset, for every clip with the same number of people. */
     onPinForCast: (Uri) -> Unit,
+    /** Frames one clip, in its own look ("This clip"). */
+    onFrameClip: (Uri, GraphPlacement) -> Unit,
     /** Sets the look's frame and makes every clip use it. */
     onFrameEveryClip: (GraphPlacement) -> Unit,
     /** Says when a clip was really filmed. See [ClipRetiming]. */
@@ -916,15 +944,15 @@ private fun LookStep(
     onExportPresetFile: (inga.bpmetrics.library.ExportPresetEntity) -> Unit,
     onImportPresetFile: () -> Unit
 ) {
-    var tab by rememberSaveable { mutableStateOf(LookTab.LAYOUT) }
-    var scope by rememberSaveable { mutableStateOf(FramingScope.CLIP) }
+    var tab by rememberSaveable { mutableStateOf(LookTab.CANVAS) }
+    var timingOpen by rememberSaveable { mutableStateOf(false) }
 
     // Where a change to the frame goes, said on screen by the scope switch rather than decided out
     // of sight (S14B.3). With no clip in hand there is only the look to change.
     val applyFraming: (GraphPlacement) -> Unit = { placement ->
         when {
             previewing == null -> onPresetChange(placement.into(preset))
-            scope == FramingScope.CLIP -> onPlacementChange(previewing.clip.uri, placement)
+            scope == FramingScope.CLIP -> onFrameClip(previewing.clip.uri, placement)
             scope == FramingScope.CAST -> {
                 onPlacementChange(previewing.clip.uri, placement)
                 onPinForCast(previewing.clip.uri)
@@ -932,6 +960,17 @@ private fun LookStep(
             else -> onFrameEveryClip(placement)
         }
     }
+
+    // Which clips a change reaches: beside the look's name, and in Position's top bar.
+    val scopeMenu: (@Composable () -> Unit)? = if (!isImage && previewing != null && ticked.size > 1) {
+        {
+            LookScopeMenu(
+                scope = scope,
+                onScope = onScope,
+                cast = previewing.recordIds.size.coerceAtLeast(1)
+            )
+        }
+    } else null
 
     Column(modifier = Modifier.fillMaxSize()) {
         // The look in use, above everything it decides. Not a tab: choosing one replaces every
@@ -946,6 +985,7 @@ private fun LookStep(
             onDelete = onDeletePreset,
             onExportFile = onExportPresetFile,
             onImportFile = onImportPresetFile,
+            scope = scopeMenu,
             modifier = Modifier
                 .background(MaterialTheme.colorScheme.surface)
                 .padding(start = 16.dp, end = 4.dp)
@@ -985,16 +1025,22 @@ private fun LookStep(
                     onScrub = { at ->
                         previewing?.let { onScrubClip(it.clip.uri, at) } ?: onScrub(at)
                     },
-                    onTapRegion = { region ->
-                        tab = when (region) {
-                            inga.bpmetrics.export.VideoFrameRenderer.Region.READOUTS -> LookTab.READOUTS
-                            inga.bpmetrics.export.VideoFrameRenderer.Region.TITLE -> LookTab.TEXT
-                            inga.bpmetrics.export.VideoFrameRenderer.Region.CLOCK -> LookTab.TIME
-                            inga.bpmetrics.export.VideoFrameRenderer.Region.PLOT -> LookTab.GRAPH
-                            inga.bpmetrics.export.VideoFrameRenderer.Region.WORDMARK -> LookTab.SIGNATURE
-                            null -> LookTab.LAYOUT
+                    onTapRegion = { tab = LookTab.of(it) },
+                    onPresetChange = onPresetChange,
+                    positionScope = scopeMenu,
+                    positionClips = if (ticked.size > 1) {
+                        {
+                            ClipSelectorStrip(
+                                clockFor = { ClipRetiming.clockFor(it, records) },
+                                clips = ticked,
+                                selectedUri = previewing?.clip?.uri,
+                                onSelect = onSelectClip,
+                                collapsed = true,
+                                foldable = false
+                            )
                         }
-                    },
+                    } else null,
+                    onClipTime = if (previewing != null) { { timingOpen = true } } else null,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -1004,12 +1050,14 @@ private fun LookStep(
         // Which clip is being previewed, when there's more than one. It decides what every tab
         // below shows, so it sits above them.
         if (!isImage && records.isNotEmpty() && ticked.size > 1) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Box(Modifier.padding(start = 16.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)) {
                 ClipSelectorStrip(
                     clockFor = { ClipRetiming.clockFor(it, records) },
                     clips = ticked,
                     selectedUri = previewing?.clip?.uri,
-                    onSelect = onSelectClip
+                    onSelect = onSelectClip,
+                    collapsed = clipStripCollapsed,
+                    onCollapse = onClipStripCollapse
                 )
             }
         }
@@ -1018,8 +1066,8 @@ private fun LookStep(
         if (!isImage && previewing != null && !previewing.selected) {
             Text(
                 if (!ClipRetiming.drawsSomething(previewing.clip, previewing.recordIds, records)) {
-                    "Not exported: nobody was recording at this clip's time. Correct it under Time " +
-                        "and it's ticked again."
+                    "Not exported: nobody was recording at this clip's time. Correct when it was " +
+                        "filmed with the clock on the preview, and it's ticked again."
                 } else {
                     "Not exported: this clip isn't ticked."
                 },
@@ -1034,27 +1082,23 @@ private fun LookStep(
             onChange = onPresetChange,
             tab = tab,
             onTab = { tab = it },
-            framing = framing,
-            onFramingChange = applyFraming,
             modifier = Modifier.weight(1f),
             isImage = isImage,
             title = graphTitle,
             onTitleChange = onGraphTitleChange,
-            framingScope = if (!isImage && previewing != null) {
-                {
-                    val cast = previewing.recordIds.size.coerceAtLeast(1)
-                    val sameCast = ticked.count { it.recordIds.size.coerceAtLeast(1) == cast }
-                    FramingScopeRow(
-                        scope = scope,
-                        onScope = { scope = it },
-                        cast = cast,
-                        sameCast = sameCast,
-                        clips = ticked.size
-                    )
-                }
-            } else null,
-            clipTime = if (!isImage && previewing != null && records.isNotEmpty()) {
-                {
+            onPickVideo = if (!isImage && jobCount == 0) onPickOverlay else null,
+            clipSize = previewing?.clip?.takeIf { it.widthPx > 0 && it.heightPx > 0 }?.let { it.widthPx to it.heightPx }
+        )
+    }
+
+    // When the clip was filmed, and the nudge (UX Audit E7). About the clip, not the look, so it
+    // opens from the clip's preview rather than sitting in a tab of settings.
+    if (timingOpen && previewing != null && records.isNotEmpty()) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { timingOpen = false },
+            confirmButton = { TextButton(onClick = { timingOpen = false }) { Text("Done") } },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     FilmedAtControl(
                         clip = previewing,
                         // The clock the render prints, file offset included.
@@ -1067,60 +1111,76 @@ private fun LookStep(
                         onReset = { onResetFilmedAt(previewing.clip.uri) }
                     )
                 }
-            } else null,
-            onPickVideo = if (!isImage && jobCount == 0) onPickOverlay else null
+            }
         )
     }
 }
 
 /**
- * Who a change to the frame applies to, said before it's made (S14B.3).
+ * Which clips a change to the look reaches, said before it's made: everything in the editor,
+ * the frame and the saved look included (S14B.3, every change since).
  *
- * Framing a previewed clip used to write that clip's own frame with nothing on screen saying so,
- * from inside a section about the look.
+ * In the look's own row, between its name and its overflow, so what it scopes is right beside it
+ * and it costs no line of its own. Shown rather than tucked in the overflow because it changes
+ * what every edit does. With a single clip there is nothing to choose between, so it isn't shown.
  */
 @Composable
-private fun FramingScopeRow(
+private fun LookScopeMenu(
     scope: FramingScope,
     onScope: (FramingScope) -> Unit,
-    cast: Int,
-    sameCast: Int,
-    clips: Int
+    cast: Int
 ) {
-    Text("Changes apply to", style = MaterialTheme.typography.labelMedium)
-    inga.bpmetrics.ui.components.FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        FramingScope.entries.forEach { entry ->
-            androidx.compose.material3.FilterChip(
-                selected = scope == entry,
-                onClick = { onScope(entry) },
-                label = {
-                    Text(
-                        when (entry) {
-                            FramingScope.CLIP -> "This clip"
-                            FramingScope.CAST -> if (cast == 1) "1-person clips" else "$cast-person clips"
-                            FramingScope.EVERY -> "Every clip"
-                        }
-                    )
-                }
+    var open by remember { mutableStateOf(false) }
+    fun name(entry: FramingScope) = when (entry) {
+        FramingScope.CLIP -> "This clip"
+        FramingScope.CAST -> "$cast-person"
+        FramingScope.EVERY -> "All clips"
+    }
+    Box {
+        OutlinedButton(
+            onClick = { open = true },
+            contentPadding = PaddingValues(start = 10.dp, end = 4.dp),
+            modifier = Modifier.height(32.dp)
+        ) {
+            Text(name(scope), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Icon(
+                Icons.Default.ArrowDropDown,
+                contentDescription = "Choose which clips a change reaches",
+                modifier = Modifier.size(18.dp)
             )
         }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Text(
+                "Changes apply to",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+            listOf(
+                FramingScope.CLIP to "Only the clip on screen",
+                FramingScope.CAST to if (cast == 1) "Every clip with one person" else "Every clip with $cast people",
+                FramingScope.EVERY to "Every clip in this export"
+            ).forEach { (entry, detail) ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(name(entry))
+                            Text(
+                                detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    leadingIcon = {
+                        if (entry == scope) Icon(Icons.Default.Check, contentDescription = "Chosen")
+                        else Spacer(Modifier.size(24.dp))
+                    },
+                    onClick = { open = false; onScope(entry) }
+                )
+            }
+        }
     }
-    Text(
-        when (scope) {
-            FramingScope.CLIP -> "Only this clip. The look and the other clips keep their frame."
-            FramingScope.CAST -> "Every clip with $cast ${if (cast == 1) "person" else "people"} " +
-                "($sameCast of $clips here), and saved with the look for next time."
-            FramingScope.EVERY -> "The look's own frame, for all $clips clips, replacing any set for " +
-                "one clip or a number of people."
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    Spacer(Modifier.height(8.dp))
 }
 
 /**

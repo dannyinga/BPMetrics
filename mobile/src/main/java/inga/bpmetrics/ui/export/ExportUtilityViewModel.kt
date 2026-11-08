@@ -251,6 +251,13 @@ data class ClipSelection(
      * that was never made.
      */
     val graph: GraphPlacement? = null,
+    /**
+     * This clip's own look, when a change was made to it alone, or to clips with its cast, rather
+     * than to all of them. Null means the batch's look. See [ExportUtilityViewModel.setLook].
+     */
+    val look: ExportPreset? = null,
+    /** The saved look [look] started from, for the picker's name and "edited". */
+    val lookPresetId: Long? = null,
     /** Where this clip's preview is scrubbed to, 0..1. Its own, because each clip is its own shot. */
     val scrubAt: Float = 0f,
     /**
@@ -278,6 +285,30 @@ enum class GraphHandle {
     LEFT, RIGHT, TOP, BOTTOM
 }
 
+/**
+ * The three spots along one side of the canvas that Position's dot pad offers: against the start
+ * with a margin, in the middle, against the end with a margin. In fractions of that side.
+ */
+internal object Anchor {
+    /** The gap kept from the canvas edge, so nothing sits flush against the frame. */
+    const val MARGIN = 0.04f
+
+    /** Where a box [size] long starts for spot [index] (0, 1 or 2). */
+    fun start(index: Int, size: Float): Float {
+        val room = (1f - size).coerceAtLeast(0f)
+        val margin = MARGIN.coerceAtMost(room / 2f)
+        return when (index) {
+            0 -> margin
+            1 -> room / 2f
+            else -> room - margin
+        }
+    }
+
+    /** Which spot a box starting at [start] is in, or null where it's between them. */
+    fun indexOf(start: Float, size: Float): Int? =
+        (0..2).firstOrNull { kotlin.math.abs(start(it, size) - start) < 0.005f }
+}
+
 /** Where the graph sits on the canvas, in fractions so it survives an aspect change. */
 data class GraphPlacement(
     val left: Float,
@@ -298,6 +329,19 @@ data class GraphPlacement(
 
     /** Writes this framing into a preset, so saving one carries what is on screen. */
     fun into(preset: ExportPreset): ExportPreset = preset.withFraming(left, top, right, bottom, readouts)
+
+    /**
+     * Writes this framing into [preset] as the frame for clips with [laneCount] people, so it is
+     * the frame they show. Where the look pins frames by cast it's pinned for this cast, since the
+     * look's own frame is then never what such a clip draws; otherwise it's the look's own frame.
+     */
+    fun intoFor(preset: ExportPreset, laneCount: Int): ExportPreset =
+        if (laneCount > 0 && preset.framesByLaneCount.isNotEmpty()) {
+            preset.copy(
+                framesByLaneCount = preset.framesByLaneCount +
+                    (laneCount to inga.bpmetrics.export.GraphFrame(left, top, right, bottom, readouts))
+            )
+        } else into(preset)
 
     /**
      * The same shape, resized to [newWidth] of the canvas, held on its own centre.
@@ -371,6 +415,31 @@ data class GraphPlacement(
             top = if (movesTop) (top + dy).coerceIn(0f, bottom - MIN_SIZE) else top,
             bottom = if (movesBottom) (bottom + dy).coerceIn(top + MIN_SIZE, 1f) else bottom
         )
+    }
+
+    /**
+     * Put against a side, a corner or the middle: [column] and [row] are 0, 1 or 2 for start,
+     * middle and end, as on Position's dot pad. Keeps the size.
+     */
+    fun anchoredAt(column: Int, row: Int): GraphPlacement =
+        movedTo(Anchor.start(column, width), Anchor.start(row, height))
+
+    /** Where the frame sits on the dot pad, each side on its own: null where it's between dots. */
+    fun anchor(): Pair<Int?, Int?> = Anchor.indexOf(left, width) to Anchor.indexOf(top, height)
+
+    /**
+     * A new width and height. A frame against a side or centered stays there, so a graph put in
+     * the bottom-left corner grows out of it; one anywhere else grows about its middle.
+     */
+    fun resizedTo(newWidth: Float, newHeight: Float): GraphPlacement {
+        val w = newWidth.coerceIn(MIN_SIZE, 1f)
+        val h = newHeight.coerceIn(MIN_SIZE, 1f)
+        val (column, row) = anchor()
+        val x = column?.let { Anchor.start(it, w) } ?: ((left + right) / 2f - w / 2f)
+        val y = row?.let { Anchor.start(it, h) } ?: ((top + bottom) / 2f - h / 2f)
+        val left = x.coerceIn(0f, 1f - w)
+        val top = y.coerceIn(0f, 1f - h)
+        return copy(left = left, top = top, right = left + w, bottom = top + h)
     }
 
     /** Moves without resizing. The graph keeps its size and stops at the edge of the canvas. */
@@ -782,9 +851,19 @@ class ExportUtilityViewModel(
      */
     private var presetRestored = false
 
+    /** Whether the Look step's clip thumbnails are folded down to one line. Kept between exports. */
+    private val _clipStripCollapsed = MutableStateFlow(false)
+    val clipStripCollapsed: StateFlow<Boolean> = _clipStripCollapsed.asStateFlow()
+
+    fun setClipStripCollapsed(collapsed: Boolean) {
+        _clipStripCollapsed.value = collapsed
+        launchGuarded(failure = null) { settingsRepository.setClipStripCollapsed(collapsed) }
+    }
+
     fun restorePreset() {
         if (presetRestored) return
         presetRestored = true
+        launchGuarded(failure = null) { _clipStripCollapsed.value = settingsRepository.clipStripCollapsed() }
         launchGuarded(failure = null) {
             val lastUsedId = settingsRepository.lastUsedExportPresetId()
             val start = startingLook(
@@ -798,12 +877,87 @@ class ExportUtilityViewModel(
         }
     }
 
-    fun applyPreset(entity: ExportPresetEntity) {
-        ExportPreset.fromJson(entity.configJson)?.let {
-            _preset.value = it
+    /**
+     * Puts a saved look to use on the clips [scope] names, counted from the clip [on] screen.
+     *
+     * With every clip, or no clip in hand, it becomes the batch's look and any clip's own look is
+     * dropped: "all clips" means all of them.
+     */
+    fun applyPreset(
+        entity: ExportPresetEntity,
+        scope: FramingScope = FramingScope.EVERY,
+        on: android.net.Uri? = null
+    ) {
+        val saved = ExportPreset.fromJson(entity.configJson) ?: return
+        val targets = clipsIn(scope, on)
+        if (targets == null) {
+            _preset.value = saved
             _selectedPresetId.value = entity.presetId
             _presetTouched.value = false
+            _clips.value = _clips.value.map { it.copy(look = null, lookPresetId = null) }
+        } else {
+            _clips.value = _clips.value.map {
+                if (it.clip.uri in targets) it.copy(look = saved, lookPresetId = entity.presetId) else it
+            }
         }
+    }
+
+    /** The look the clip [on] uses: its own, or the batch's. */
+    fun lookFor(on: android.net.Uri?): ExportPreset =
+        _clips.value.firstOrNull { it.clip.uri == on }?.look ?: _preset.value
+
+    /**
+     * The clips a change in [scope] reaches, counted from the clip [on] screen, or null for the
+     * batch's own look (every clip, or no clip in hand).
+     */
+    private fun clipsIn(scope: FramingScope, on: android.net.Uri?): Set<android.net.Uri>? {
+        val from = _clips.value.firstOrNull { it.clip.uri == on } ?: return null
+        return when (scope) {
+            FramingScope.EVERY -> null
+            FramingScope.CLIP -> setOf(from.clip.uri)
+            FramingScope.CAST -> _clips.value
+                .filter { it.recordIds.size.coerceAtLeast(1) == from.recordIds.size.coerceAtLeast(1) }
+                .map { it.clip.uri }.toSet()
+        }
+    }
+
+    /**
+     * A change to the look, made to the clips [scope] names (S14B.3, every change since).
+     *
+     * The change, not the whole look: what differs between the look on screen and [look] is laid
+     * over each clip's own, so turning names off for every clip doesn't also undo the colors one
+     * clip was given by itself.
+     */
+    fun setLook(
+        look: ExportPreset,
+        scope: FramingScope = FramingScope.EVERY,
+        on: android.net.Uri? = null
+    ) {
+        val before = lookFor(on)
+        if (look == before) return
+        val targets = clipsIn(scope, on)
+        if (targets == null) {
+            _preset.value = _preset.value.withChanges(before, look)
+            _presetTouched.value = true
+            _clips.value = _clips.value.map { clip ->
+                clip.look?.let { clip.copy(look = it.withChanges(before, look)) } ?: clip
+            }
+        } else {
+            _clips.value = _clips.value.map { clip ->
+                if (clip.clip.uri !in targets) clip
+                else clip.copy(
+                    look = (clip.look ?: _preset.value).withChanges(before, look),
+                    lookPresetId = if (clip.look == null) _selectedPresetId.value else clip.lookPresetId
+                )
+            }
+        }
+    }
+
+    /** Which saved look the clip [on] started from, and whether it has changed since. */
+    fun pickerStateFor(on: android.net.Uri?, saved: List<ExportPresetEntity>): Pair<Long?, Boolean> {
+        val clip = _clips.value.firstOrNull { it.clip.uri == on }
+        val own = clip?.look ?: return _selectedPresetId.value to presetEdited.value
+        return clip.lookPresetId to isPresetEdited(saved.firstOrNull { it.presetId == clip.lookPresetId }, own, true)
     }
 
     /**
@@ -812,18 +966,19 @@ class ExportUtilityViewModel(
      * The applied preset's name, marked when it's been changed, or the canvas shape when there's
      * no preset: a queue row saying "1080×1920" is still more use than one saying nothing.
      */
-    fun presetLabel(): String {
+    fun presetLabel(job: ClipSelection? = null): String {
+        job?.look?.let { own ->
+            val (_, edited) = pickerStateFor(job.clip.uri, presets.value)
+            val name = own.name.ifBlank { "Its own look" }
+            return if (edited) "$name (edited)" else name
+        }
         val named = _preset.value.name.takeIf { it.isNotBlank() && _selectedPresetId.value != null }
             ?: return "${_preset.value.width}×${_preset.value.height}"
         return if (presetEdited.value) "$named (edited)" else named
     }
 
-    /** A change to the look. The preset it started from stays selected; see [presetEdited]. */
-    fun setPreset(preset: ExportPreset) {
-        if (preset == _preset.value) return
-        _preset.value = preset
-        _presetTouched.value = true
-    }
+    /** A change to the batch's look. The preset it started from stays selected; see [presetEdited]. */
+    fun setPreset(preset: ExportPreset) = setLook(preset)
 
     /**
      * Saves the current look, including the framing being looked at.
@@ -841,7 +996,10 @@ class ExportUtilityViewModel(
     fun setFrameForEveryClip(placement: GraphPlacement) {
         _preset.value = placement.into(_preset.value).copy(framesByLaneCount = emptyMap())
         _presetTouched.value = true
-        _clips.value = _clips.value.map { it.copy(graph = null) }
+        // A clip with a look of its own takes the frame too, or it would keep the one it had.
+        _clips.value = _clips.value.map { clip ->
+            clip.copy(graph = null, look = clip.look?.let { placement.into(it).copy(framesByLaneCount = emptyMap()) })
+        }
     }
 
     /**
@@ -851,22 +1009,35 @@ class ExportUtilityViewModel(
      * in the preset nobody had changed (UX Audit E2). Framing reaches the look through the scope
      * switch, "Every clip" or "Same number of people".
      */
-    fun savePresetAs(name: String) {
+    fun savePresetAs(name: String, on: android.net.Uri? = null) {
         launchGuarded {
-            val toSave = _preset.value.copy(name = name)
-            _preset.value = toSave
-            _selectedPresetId.value = repository.saveExportPreset(name, toSave.toJson())
+            val toSave = lookFor(on).copy(name = name)
+            val id = repository.saveExportPreset(name, toSave.toJson())
+            keepSaved(on, toSave, id)
+        }
+    }
+
+    /**
+     * Marks the look on screen as saved: the clip's own when it has one, else the batch's. The look
+     * on screen is what was saved, so it is what the picker should name.
+     */
+    private fun keepSaved(on: android.net.Uri?, saved: ExportPreset, id: Long) {
+        if (_clips.value.any { it.clip.uri == on && it.look != null }) {
+            _clips.value = _clips.value.map {
+                if (it.clip.uri == on) it.copy(look = saved, lookPresetId = id) else it
+            }
+        } else {
+            _preset.value = saved
+            _selectedPresetId.value = id
             _presetTouched.value = false
         }
     }
 
-    fun updatePreset(entity: ExportPresetEntity) {
+    fun updatePreset(entity: ExportPresetEntity, on: android.net.Uri? = null) {
         launchGuarded {
-            val toSave = _preset.value.copy(name = entity.name)
-            _preset.value = toSave
+            val toSave = lookFor(on).copy(name = entity.name)
             repository.updateExportPreset(entity.presetId, entity.name, toSave.toJson())
-            _selectedPresetId.value = entity.presetId
-            _presetTouched.value = false
+            keepSaved(on, toSave, entity.presetId)
             inga.bpmetrics.ui.feedback.Feedback.say("Updated ${entity.name}.")
         }
     }
@@ -965,15 +1136,18 @@ class ExportUtilityViewModel(
         title: String?,
         /** The clip this is drawn over, when there is one. Decides the sync and the crop. */
         clip: VideoExporter.VideoClip? = null,
-        placement: GraphPlacement? = null
+        placement: GraphPlacement? = null,
+        /** The clip's own look, when it has one. The batch's otherwise. */
+        clipLook: ExportPreset? = null
     ): inga.bpmetrics.export.ExportRequest.Video {
+        val base = clipLook ?: _preset.value
         // Always clock-aligned. A recording happened at a particular time, and starting it at 0:00
         // of a video only ever looked right when the two happened to begin together.
         val timeline = inga.bpmetrics.export.VideoFrameRenderer.timelineFor(forRecords)
 
         // The clip's own window on the shared timeline. Without this the export spans the whole
         // recording and the footage drifts out of sync within seconds.
-        val window = clip?.windowOn(timeline, _preset.value.syncOffsetMs)
+        val window = clip?.windowOn(timeline, base.syncOffsetMs)
         val startMs = window?.startMs ?: 0L
         val endMs = window?.endMs ?: timeline.durationMs
 
@@ -991,10 +1165,10 @@ class ExportUtilityViewModel(
         // The clip's own framing when it has been given one, otherwise whatever the preset gives
         // for this many curves (one curve and one readout per record). A clip framed by hand still
         // wins: `placement` is that override, and a pin is only ever a better default.
-        val framing = placement ?: GraphPlacement.of(_preset.value, forRecords.size)
+        val framing = placement ?: GraphPlacement.of(base, forRecords.size)
         // At the size it renders over this clip: a canvas matched to the clip takes its shape here,
         // so the render and the queue only ever see a real width and height.
-        val look = framing.into(_preset.value).copy(framesByLaneCount = emptyMap())
+        val look = framing.into(base).copy(framesByLaneCount = emptyMap())
             .let { clip?.canvasFor(it) ?: it }
 
         return inga.bpmetrics.export.ExportRequest.Video(
@@ -1265,6 +1439,24 @@ class ExportUtilityViewModel(
         }
     }
 
+    /**
+     * Moves or resizes the graph on one clip only ("This clip"), as part of that clip's own look.
+     *
+     * In the look rather than beside it, as a frame the look didn't know about: saving or updating a
+     * look from this clip then keeps where its graph and Live BPM are, and the picker shows it as
+     * edited, which a frame kept on the side never did.
+     */
+    fun frameClip(uri: android.net.Uri, placement: GraphPlacement) {
+        _clips.value = _clips.value.map {
+            if (it.clip.uri != uri) it
+            else it.copy(
+                look = placement.intoFor(it.look ?: _preset.value, it.recordIds.size),
+                lookPresetId = if (it.look == null) _selectedPresetId.value else it.lookPresetId,
+                graph = null
+            )
+        }
+    }
+
     /** Moves or resizes the graph on one clip. */
     fun setClipGraph(uri: android.net.Uri, placement: GraphPlacement) {
         _clips.value = _clips.value.map {
@@ -1310,8 +1502,14 @@ class ExportUtilityViewModel(
         // A change to the look like any other: the preset stays selected and shows as edited.
         _presetTouched.value = true
 
+        val pinned = inga.bpmetrics.export.GraphFrame(
+            left = framing.left, top = framing.top, right = framing.right, bottom = framing.bottom,
+            readouts = framing.readouts
+        )
         _clips.value = _clips.value.map {
-            if (it.recordIds.size.coerceAtLeast(1) == cast) it.copy(graph = null) else it
+            if (it.recordIds.size.coerceAtLeast(1) != cast) it
+            // A clip with a look of its own gets the pin in that look, or it would never see it.
+            else it.copy(graph = null, look = it.look?.let { own -> own.copy(framesByLaneCount = own.framesByLaneCount + (cast to pinned)) })
         }
     }
 
@@ -1347,7 +1545,7 @@ class ExportUtilityViewModel(
                 EstimateItem(
                     titles[it.clip.uri.toString()] ?: it.clip.displayName,
                     it.clip.durationMs,
-                    sized(it.clip.canvasFor(preset), true, it.clip.durationMs).bytes
+                    sized(it.clip.canvasFor(it.look ?: preset), true, it.clip.durationMs).bytes
                 )
             }
         }
