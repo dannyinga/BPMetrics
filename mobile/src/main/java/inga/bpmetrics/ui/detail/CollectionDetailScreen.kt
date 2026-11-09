@@ -143,17 +143,12 @@ fun CollectionDetailScreen(
             recordCount = uiState.recordCount,
             filterOptions = filterOptions,
             chipsOf = { libraryViewModel.chipsOf(it, filterOptions) },
-            onRename = { libraryViewModel.renameCollection(collectionId, it) },
-            onSetRule = { libraryViewModel.setCollectionRule(collectionId, it) },
-            onMakeStatic = {
-                libraryViewModel.materialiseCollection(collectionId) { message -> Feedback.say(message) }
-            },
-            onThaw = if (!set.isFrozen) null else {
-                { libraryViewModel.thawCollection(collectionId) { message -> Feedback.say(message) } }
-            },
-            onTogglePin = { libraryViewModel.setCollectionPinned(collectionId, it) },
             onDelete = { editing = false; deleting = true },
-            onDismiss = { editing = false }
+            onDismiss = { editing = false },
+            onSave = { edit ->
+                libraryViewModel.applyCollectionEdit(collectionId, edit) { message -> Feedback.say(message) }
+                editing = false
+            }
         )
     }
 

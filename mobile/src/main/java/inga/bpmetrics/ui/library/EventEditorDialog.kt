@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -15,15 +14,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Rule
-import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -44,11 +40,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import inga.bpmetrics.library.PersonEntity
+import inga.bpmetrics.ui.components.EditorHint
+import inga.bpmetrics.ui.components.ItemEditorDialog
+import inga.bpmetrics.ui.components.LocationField
+import inga.bpmetrics.ui.components.NameField
+import inga.bpmetrics.ui.components.NotesField
 import inga.bpmetrics.ui.components.PersonSwatch
-import java.text.SimpleDateFormat
+import inga.bpmetrics.ui.components.PickerField
+import inga.bpmetrics.ui.components.TagsButton
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 /** What the editor hands back when it is saved. */
 data class EventEdit(
@@ -60,8 +60,23 @@ data class EventEdit(
     /** Which event this sits inside, or null at the top of the timeline. */
     val parentId: Long? = null,
     /** Where it happened, or null to inherit from the event above. */
-    val locationId: Long? = null
+    val locationId: Long? = null,
+    val notes: String = "",
+    /** Its own tags as chosen in the editor, or null when they weren't touched. */
+    val tagIds: List<Long>? = null
 )
+
+/**
+ * A tag picker the editor can open: given what's ticked, it hands back the new choice or nothing.
+ *
+ * A slot because the picker needs the tag registry, which the screen has and the editor doesn't.
+ * What it returns is held by the editor as a draft and saved with everything else.
+ */
+typealias TagPicker = @Composable (
+    selected: List<Long>,
+    onDismiss: () -> Unit,
+    onDone: (List<Long>) -> Unit
+) -> Unit
 
 /**
  * Everything about an event that is set by typing rather than by dragging.
@@ -74,11 +89,12 @@ data class EventEdit(
  * deeper claims it first. Saving one moves recordings, which is why the dialog says so rather than
  * leaving the change to be noticed.
  *
+ * Built on [ItemEditorDialog], so nothing (tags included) is applied until Save.
+ *
  * @param collisionError Set by the caller when the repository refused the window, naming what it
- *   collided with. Shown inline and cleared on the next edit — a toast would vanish while the
- *   person was still looking at the field that caused it.
+ *   collided with. Shown at the top and beside the window, and cleared on the next edit.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EventEditorDialog(
     initialName: String,
@@ -86,6 +102,7 @@ fun EventEditorDialog(
     initialStart: Long? = null,
     initialEnd: Long? = null,
     initialPeople: Set<Long> = emptySet(),
+    initialNotes: String = "",
     /**
      * The span of what the event already holds, earliest start to latest end.
      *
@@ -134,9 +151,9 @@ fun EventEditorDialog(
     knownTypes: List<String> = emptyList(),
     people: List<PersonEntity> = emptyList(),
     collisionError: String? = null,
-    /** How many tags it carries, and the way through to changing them. */
-    tagCount: Int = 0,
-    onEditTags: (() -> Unit)? = null,
+    /** Its own tags as they stand, and the picker to change them. No picker, no tags row. */
+    initialTagIds: List<Long> = emptyList(),
+    tagPicker: TagPicker? = null,
     /**
      * Choosing, framing and softening its picture — see [inga.bpmetrics.ui.components.CoverEditor].
      *
@@ -149,12 +166,9 @@ fun EventEditorDialog(
      * The way through to "What's included", and whether anything currently is not.
      *
      * Here because deciding what an event's numbers are computed over is an edit to the event's
-     * analysis, and this dialog is where the edits are. It was a text button in the middle of the
-     * Summary, next to the "Where the time went" heading, which is a place for a figure rather
-     * than for a control.
-     *
-     * Null everywhere the caller has no analysis behind it — the timeline's inline editor, and the
-     * create-event flow, where there is nothing yet to leave out.
+     * analysis, and this dialog is where the edits are. Null everywhere the caller has no analysis
+     * behind it — the timeline's inline editor, and the create-event flow, where there is nothing
+     * yet to leave out.
      */
     excludedCount: Int = 0,
     onRefineScope: (() -> Unit)? = null,
@@ -170,6 +184,7 @@ fun EventEditorDialog(
 ) {
     var name by rememberSaveable { mutableStateOf(initialName) }
     var type by rememberSaveable { mutableStateOf(initialType.orEmpty()) }
+    var notes by rememberSaveable { mutableStateOf(initialNotes) }
     var start by rememberSaveable { mutableStateOf(initialStart) }
     var end by rememberSaveable { mutableStateOf(initialEnd) }
     var chosenPeople by rememberSaveable { mutableStateOf(initialPeople) }
@@ -177,328 +192,204 @@ fun EventEditorDialog(
     var parentId by rememberSaveable { mutableStateOf(initialParentId) }
     var pickingParent by remember { mutableStateOf(false) }
     var locationId by rememberSaveable { mutableStateOf(initialLocationId) }
-    var pickingLocation by remember { mutableStateOf(false) }
+    // Null until the picker hands something back: the tags as they stand may still be loading.
+    var tagIds by rememberSaveable { mutableStateOf<List<Long>?>(null) }
+    var pickingTags by remember { mutableStateOf(false) }
+    // Errors that are only errors once Save has been asked for. A new event's empty name is where
+    // it starts, not a mistake.
+    var tried by rememberSaveable { mutableStateOf(false) }
 
     var picking by remember { mutableStateOf<WindowEdge?>(null) }
 
     // Backwards is caught here as well as in the repository. The repository check is the one that
-    // protects the database; this one is so Save is visibly unavailable rather than tapped and
-    // silently ignored.
+    // protects the database; this one is so the field says so before Save is tapped.
     val backwards = hasWindow && start != null && end != null && end!! < start!!
-    val incomplete = hasWindow && (start == null || end == null)
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (initialName.isBlank()) "New event" else "Edit event") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = type,
-                    onValueChange = { type = it },
-                    label = { Text("Type") },
-                    placeholder = { Text("Concert, Gaming session, Workout…") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (knownTypes.isNotEmpty()) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        knownTypes.take(8).forEach { known ->
-                            FilterChip(
-                                selected = type.equals(known, ignoreCase = true),
-                                onClick = { type = if (type.equals(known, true)) "" else known },
-                                label = { Text(known) }
-                            )
-                        }
-                    }
-                }
-
-                if (parentOptions.isNotEmpty()) {
-                    OutlinedButton(
-                        onClick = { pickingParent = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            "Inside",
-                            modifier = Modifier.weight(1f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Start
-                        )
-                        Text(
-                            parentOptions.firstOrNull { it.first.eventId == parentId }
-                                ?.first?.displayName
-                                ?: "Nothing — top level"
-                        )
-                    }
-                }
-
-                // Always shown, even with an empty registry. Hiding it until a location existed made
-                // the feature invisible to anyone who had not already found the Locations screen —
-                // which is everyone, the first time.
-                run {
-                    OutlinedButton(
-                        onClick = { pickingLocation = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            "Where",
-                            modifier = Modifier.weight(1f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Start
-                        )
-                        Text(
-                            locations.firstOrNull { it.locationId == locationId }?.displayName
-                                // Says what it will inherit rather than "None", so nobody sets a
-                                // venue on a set that already has the right one from its festival.
-                                ?: inheritedLocationName?.let { "$it (inherited)" }
-                                ?: "Not set"
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Time window", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "Recordings made in this window belong to this event.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = hasWindow,
-                        onCheckedChange = {
-                            hasWindow = it
-                            if (it) {
-                                // Filled from what the event holds, and only where nothing has been
-                                // chosen — flicking the switch off and on again must not discard
-                                // times someone just typed.
-                                if (start == null) start = suggestedStart
-                                if (end == null) end = suggestedEnd
-                            } else {
-                                start = null
-                                end = null
-                                chosenPeople = emptySet()
-                            }
-                        }
-                    )
-                }
-
-                if (hasWindow) {
-                    EdgeButton("Starts", start, zone) { picking = WindowEdge.START }
-                    EdgeButton("Ends", end, zone) { picking = WindowEdge.END }
-                    if (zone.id != java.util.TimeZone.getDefault().id) {
-                        Text(
-                            "Typed in ${zone.id} — this event's clock, not yours.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    if (people.isNotEmpty()) {
-                        Text(
-                            "Applies to",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            // The reason overlap is allowed at all: two stages running at the same
-                            // time are two events, told apart by who was at each.
-                            if (chosenPeople.isEmpty()) {
-                                "Everyone. Name people only when another event runs at the same time."
-                            } else {
-                                "Only these recordings will be claimed."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            people.forEach { person ->
-                                FilterChip(
-                                    selected = person.personId in chosenPeople,
-                                    onClick = {
-                                        chosenPeople = if (person.personId in chosenPeople) {
-                                            chosenPeople - person.personId
-                                        } else {
-                                            chosenPeople + person.personId
-                                        }
-                                    },
-                                    leadingIcon = { PersonSwatch(person.colorArgb) },
-                                    label = { Text(person.name) }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // The three doors, on one line.
-                //
-                // Each had a heading, a button and — for one of them — a paragraph explaining
-                // itself, which is three headings and half a screen of editor spent on three
-                // things that are all the same thing: *this opens somewhere else*. They are
-                // buttons; a button with an icon and a count says what it is.
-                if (coverEditor != null || onEditTags != null || onRefineScope != null) {
-                    Spacer(Modifier.height(16.dp))
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        coverEditor?.invoke()
-
-                        onEditTags?.let { edit ->
-                            // A door rather than the picker: choosing tags is its own dialog with
-                            // its own axes, and nesting it here would be a dialog in a dialog.
-                            OutlinedButton(onClick = edit) {
-                                Icon(
-                                    Icons.Default.Sell,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    if (tagCount == 0) "Tags"
-                                    else "$tagCount tag" + if (tagCount == 1) "" else "s"
-                                )
-                            }
-                        }
-
-                        onRefineScope?.let { refine ->
-                            OutlinedButton(onClick = refine) {
-                                Icon(
-                                    Icons.Default.Rule,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    if (excludedCount == 0) "Included"
-                                    else "$excludedCount left out"
-                                )
-                            }
-                        }
-                    }
-                }
-
-                val problem = when {
-                    backwards -> "The end is before the start."
-                    incomplete -> "A window needs both a start and an end."
-                    else -> collisionError
-                }
-                problem?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-
-                // Last, and below a rule. Deleting was the only thing in the page's overflow, so
-                // the overflow was a three-dot menu holding one item — and the one item was the
-                // destructive one, which is a menu whose entire purpose is a mistake waiting to
-                // happen. It belongs at the bottom of the editor with the other things you can do
-                // to an event, furthest from Save.
-                onDelete?.let { delete ->
-                    Spacer(Modifier.height(20.dp))
-                    HorizontalDivider()
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(
-                        onClick = delete,
-                        colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text("Delete event")
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = name.isNotBlank() && !backwards && !incomplete,
-                onClick = {
-                    onConfirm(
-                        EventEdit(
-                            name = name.trim(),
-                            type = type.trim().takeIf { it.isNotBlank() },
-                            windowStart = start.takeIf { hasWindow },
-                            windowEnd = end.takeIf { hasWindow },
-                            windowPeople = if (hasWindow) chosenPeople else emptySet(),
-                            parentId = parentId,
-                            locationId = locationId
-                        )
-                    )
-                }
-            ) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    val nameError = "Give it a name.".takeIf { tried && name.isBlank() }
+    val startError = "Choose when it starts.".takeIf { tried && hasWindow && start == null }
+    val endError = when {
+        backwards -> "This is before the start."
+        tried && hasWindow && end == null -> "Choose when it ends."
+        else -> null
+    }
+    val problems = listOfNotNull(
+        "It needs a name.".takeIf { name.isBlank() },
+        "The window needs both a start and an end.".takeIf { hasWindow && (start == null || end == null) },
+        "The window ends before it starts.".takeIf { backwards }
     )
 
-    if (pickingLocation) {
-        AlertDialog(
-            onDismissRequest = { pickingLocation = false },
-            title = { Text("Where") },
-            text = {
-                Column(
-                    Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())
-                ) {
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = {
-                            Text(
-                                inheritedLocationName?.let { "Inherit — $it" }
-                                    ?: "Not set"
-                            )
-                        },
-                        onClick = { locationId = null; pickingLocation = false }
+    ItemEditorDialog(
+        title = if (initialName.isBlank()) "New event" else "Edit event",
+        onDismiss = onDismiss,
+        problem = if (tried && problems.isNotEmpty()) problems.joinToString(" ") else collisionError,
+        onDelete = onDelete,
+        deleteLabel = "Delete event",
+        onConfirm = {
+            if (problems.isNotEmpty()) {
+                tried = true
+            } else {
+                onConfirm(
+                    EventEdit(
+                        name = name.trim(),
+                        type = type.trim().takeIf { it.isNotBlank() },
+                        windowStart = start.takeIf { hasWindow },
+                        windowEnd = end.takeIf { hasWindow },
+                        windowPeople = if (hasWindow) chosenPeople else emptySet(),
+                        parentId = parentId,
+                        locationId = locationId,
+                        notes = notes.trim(),
+                        tagIds = tagIds
                     )
-                    if (locations.isEmpty()) {
-                        Text(
-                            "No locations yet. Make one under Locations in the menu, then events " +
-                                "can point at it — and recordings there read in its clock.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
+                )
+            }
+        }
+    ) {
+        NameField(name, { name = it }, error = nameError)
+
+        OutlinedTextField(
+            value = type,
+            onValueChange = { type = it },
+            label = { Text("Type") },
+            placeholder = { Text("Concert, Gaming session, Workout…") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (knownTypes.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                knownTypes.take(8).forEach { known ->
+                    FilterChip(
+                        selected = type.equals(known, ignoreCase = true),
+                        onClick = { type = if (type.equals(known, true)) "" else known },
+                        label = { Text(known) }
+                    )
+                }
+            }
+        }
+
+        if (parentOptions.isNotEmpty()) {
+            PickerField(
+                label = "Inside",
+                value = parentOptions.firstOrNull { it.first.eventId == parentId }?.first?.displayName
+                    ?: "Nothing — top level",
+                onClick = { pickingParent = true }
+            )
+        }
+
+        // Always shown, even with an empty registry. Hiding it until a location existed made the
+        // feature invisible to anyone who had not already found the Locations screen — which is
+        // everyone, the first time.
+        LocationField(
+            locations = locations,
+            selectedId = locationId,
+            inheritedName = inheritedLocationName,
+            onSelect = { locationId = it }
+        )
+
+        NotesField(notes) { notes = it }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Time window", style = MaterialTheme.typography.titleSmall)
+                EditorHint("Recordings made in this window belong to this event.")
+            }
+            Switch(
+                checked = hasWindow,
+                onCheckedChange = {
+                    hasWindow = it
+                    if (it) {
+                        // Filled from what the event holds, and only where nothing has been
+                        // chosen — flicking the switch off and on again must not discard times
+                        // someone just typed.
+                        if (start == null) start = suggestedStart
+                        if (end == null) end = suggestedEnd
+                    } else {
+                        start = null
+                        end = null
+                        chosenPeople = emptySet()
                     }
-                    locations.forEach { place ->
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(place.displayName)
-                                    place.timeZoneId?.let {
-                                        Text(
-                                            it,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
+                }
+            )
+        }
+
+        if (hasWindow) {
+            PickerField(
+                label = "Starts",
+                value = start?.let { edgeText(it, zone) } ?: "Choose…",
+                onClick = { picking = WindowEdge.START },
+                error = startError
+            )
+            PickerField(
+                label = "Ends",
+                value = end?.let { edgeText(it, zone) } ?: "Choose…",
+                onClick = { picking = WindowEdge.END },
+                error = endError
+            )
+            if (zone.id != java.util.TimeZone.getDefault().id) {
+                EditorHint("Typed in ${zone.id} — this event's clock, not yours.")
+            }
+
+            if (people.isNotEmpty()) {
+                Text("Applies to", style = MaterialTheme.typography.titleSmall)
+                EditorHint(
+                    // The reason overlap is allowed at all: two stages running at the same time
+                    // are two events, told apart by who was at each.
+                    if (chosenPeople.isEmpty()) {
+                        "Everyone. Name people only when another event runs at the same time."
+                    } else {
+                        "Only these recordings will be claimed."
+                    }
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    people.forEach { person ->
+                        FilterChip(
+                            selected = person.personId in chosenPeople,
+                            onClick = {
+                                chosenPeople = if (person.personId in chosenPeople) {
+                                    chosenPeople - person.personId
+                                } else {
+                                    chosenPeople + person.personId
                                 }
                             },
-                            onClick = { locationId = place.locationId; pickingLocation = false }
+                            leadingIcon = { PersonSwatch(person.colorArgb) },
+                            label = { Text(person.name) }
                         )
                     }
                 }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { pickingLocation = false }) { Text("Cancel") }
             }
+            // Beside the times that caused it, as well as at the top.
+            collisionError?.let { EditorHint(it, isError = true) }
+        }
+
+        // The doors, on one line: each opens somewhere else, and a button with an icon and a
+        // count says what it is.
+        if (coverEditor != null || tagPicker != null || onRefineScope != null) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                coverEditor?.invoke()
+                if (tagPicker != null) {
+                    TagsButton((tagIds ?: initialTagIds).size) { pickingTags = true }
+                }
+                onRefineScope?.let { refine ->
+                    OutlinedButton(onClick = refine) {
+                        Icon(Icons.Default.Rule, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (excludedCount == 0) "Included" else "$excludedCount left out")
+                    }
+                }
+            }
+        }
+    }
+
+    if (pickingTags && tagPicker != null) {
+        tagPicker(
+            tagIds ?: initialTagIds,
+            { pickingTags = false },
+            { chosen -> tagIds = chosen; pickingTags = false }
         )
     }
 
@@ -561,19 +452,6 @@ private fun defaultEdge(edge: WindowEdge, start: Long?, end: Long?): Long =
         WindowEdge.START -> end
         WindowEdge.END -> start
     } ?: System.currentTimeMillis()
-
-@Composable
-private fun EdgeButton(
-    label: String,
-    value: Long?,
-    zone: java.util.TimeZone,
-    onClick: () -> Unit
-) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Text(label, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
-        Text(value?.let { edgeText(it, zone) } ?: "Choose…")
-    }
-}
 
 // Seconds shown as well as stored. A window is a membership rule, so "21:00" and "21:00:47" decide
 // different things and the editor has to let you see which one it holds.
@@ -640,9 +518,8 @@ fun DateTimePicker(
         val state = rememberTimePickerState(
             initialHour = calendar.get(Calendar.HOUR_OF_DAY),
             initialMinute = calendar.get(Calendar.MINUTE),
-            is24Hour = android.text.format.DateFormat.is24HourFormat(
-                androidx.compose.ui.platform.LocalContext.current
-            )
+            // The app's own 12/24-hour setting, as every time it shows is written in.
+            is24Hour = inga.bpmetrics.ui.util.StringFormatHelpers.use24Hour
         )
         AlertDialog(
             onDismissRequest = onDismiss,

@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,13 +17,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,8 +37,15 @@ import inga.bpmetrics.library.displayName
 import inga.bpmetrics.ui.analysis.RecordInsights
 import inga.bpmetrics.ui.analysis.shortDuration
 import inga.bpmetrics.ui.util.StringFormatHelpers.getTimeString
-import inga.bpmetrics.ui.components.FlowRow
 import inga.bpmetrics.ui.components.PersonPicker
+import inga.bpmetrics.ui.components.EditorHeading
+import inga.bpmetrics.ui.components.EditorHint
+import inga.bpmetrics.ui.components.ItemEditorDialog
+import inga.bpmetrics.ui.components.LocationField
+import inga.bpmetrics.ui.components.NameField
+import inga.bpmetrics.ui.components.NotesField
+import inga.bpmetrics.ui.components.PickerField
+import inga.bpmetrics.ui.components.TagsButton
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Save
 import inga.bpmetrics.ui.record.RecordPlacement
@@ -343,12 +350,26 @@ internal fun SplitRecordDialog(
     )
 }
 
+/** What the recording editor hands back when it is saved. */
+internal data class RecordEdit(
+    val title: String,
+    val notes: String,
+    val personId: Long?,
+    val locationId: Long?,
+    val startTime: Long,
+    /** Its own tags as chosen in the editor, or null when they weren't touched. */
+    val tagIds: List<Long>?
+)
+
 /**
- * Title, description and who wore it.
+ * Title, notes, who wore it, where and when.
  *
  * The old screen edited these inline: tapping Edit turned the app bar title into a text field and
  * grew the page underneath it. That app bar now belongs to the analysis as much as to the subject,
  * and a field sprouting from it made the whole page jump. A dialog says what it is doing.
+ *
+ * Built on [inga.bpmetrics.ui.components.ItemEditorDialog]: tags chosen here are saved with the
+ * rest, so Cancel leaves them as they were.
  */
 @Composable
 internal fun RecordEditDialog(
@@ -357,132 +378,68 @@ internal fun RecordEditDialog(
     locations: List<inga.bpmetrics.library.LocationEntity>,
     /** The venue it would inherit, named so "use the event's" is a visible choice. */
     inheritedPlaceName: String?,
-    /** How many tags it carries, and the way through to changing them. */
-    tagCount: Int = 0,
-    onEditTags: (() -> Unit)? = null,
-    /** Its *own* picture, not an inherited one — removing what you did not set makes no sense. */
-    /** See [inga.bpmetrics.ui.components.CoverEditor]. */
-    coverEditor: (@Composable () -> Unit)? = null,
+    /** The picker for its own tags. See [inga.bpmetrics.ui.library.TagPicker]. */
+    tagPicker: inga.bpmetrics.ui.library.TagPicker? = null,
     onDismiss: () -> Unit,
-    onConfirm: (
-        title: String,
-        description: String,
-        deviceId: String,
-        personId: Long?,
-        locationId: Long?,
-        startTime: Long
-    ) -> Unit
+    onConfirm: (RecordEdit) -> Unit
 ) {
-    var title by remember { mutableStateOf(record.metadata.title) }
-    var description by remember { mutableStateOf(record.metadata.description) }
-    var personId by remember { mutableStateOf(record.metadata.personId) }
-    var locationId by remember { mutableStateOf(record.metadata.locationId) }
-    var startTime by remember { mutableStateOf(record.metadata.startTime) }
+    val id = record.metadata.recordId
+    var title by rememberSaveable(id) { mutableStateOf(record.metadata.title) }
+    var notes by rememberSaveable(id) { mutableStateOf(record.metadata.description) }
+    var personId by rememberSaveable(id) { mutableStateOf(record.metadata.personId) }
+    var locationId by rememberSaveable(id) { mutableStateOf(record.metadata.locationId) }
+    var startTime by rememberSaveable(id) { mutableLongStateOf(record.metadata.startTime) }
+    var tagIds by rememberSaveable(id) { mutableStateOf<List<Long>?>(null) }
     var pickingStart by remember { mutableStateOf(false) }
-    val deviceId = record.metadata.deviceId
+    var pickingTags by remember { mutableStateOf(false) }
     val clock = record.metadata.clock
+    val ownTagIds = record.tags.map { it.tagId }
 
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Edit recording") },
-        text = {
-            Column(
-                Modifier
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Title") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    label = { Text("Notes") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(16.dp))
-                Text("Who wore it", style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.height(6.dp))
-                // Everyone listed rather than hidden behind a dropdown: with a handful of friends
-                // the whole set fits, and choosing becomes one tap.
-                inga.bpmetrics.ui.components.PersonPicker(
-                    people = people,
-                    selectedId = personId,
-                    onSelect = { personId = it }
-                )
+    ItemEditorDialog(
+        title = "Edit recording",
+        onDismiss = onDismiss,
+        onConfirm = {
+            onConfirm(RecordEdit(title, notes, personId, locationId, startTime, tagIds))
+        }
+    ) {
+        NameField(title, { title = it }, label = "Title")
+        NotesField(notes) { notes = it }
 
-                Spacer(Modifier.height(16.dp))
-                Text("Where it was", style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.height(6.dp))
-                // In here rather than behind its own menu row. A venue is part of what a
-                // recording *is*, and a menu that grows an entry per property is a menu that
-                // eventually holds the whole editor one field at a time.
-                PlaceChoices(
-                    locations = locations,
-                    selectedId = locationId,
-                    inheritedName = inheritedPlaceName,
-                    onSelect = { locationId = it }
-                )
+        EditorHeading("Who wore it")
+        // Everyone listed rather than hidden behind a dropdown: with a handful of friends the whole
+        // set fits, and choosing becomes one tap.
+        PersonPicker(people = people, selectedId = personId, onSelect = { personId = it })
 
-                Spacer(Modifier.height(16.dp))
-                Text("When it started", style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.height(6.dp))
-                // For a watch whose clock was wrong — one left flat for weeks boots on a stale
-                // date and stamps everything with it. Moving the start moves the whole recording;
-                // the readings are relative to it and keep their shape.
-                androidx.compose.material3.OutlinedButton(
-                    onClick = { pickingStart = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(inga.bpmetrics.ui.library.startText(startTime, clock))
-                }
-                val shift = startTime - record.metadata.startTime
-                if (shift != 0L) {
-                    Text(
-                        inga.bpmetrics.ui.library.describeShift(shift),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+        LocationField(
+            locations = locations,
+            selectedId = locationId,
+            inheritedName = inheritedPlaceName,
+            onSelect = { locationId = it }
+        )
 
-                coverEditor?.let { editor ->
-                    Spacer(Modifier.height(16.dp))
-                    Text("Photo", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(6.dp))
-                    editor()
-                }
+        // For a watch whose clock was wrong — one left flat for weeks boots on a stale date and
+        // stamps everything with it. Moving the start moves the whole recording; the readings are
+        // relative to it and keep their shape.
+        PickerField(
+            label = "Started",
+            value = inga.bpmetrics.ui.library.startText(startTime, clock),
+            onClick = { pickingStart = true }
+        )
+        val shift = startTime - record.metadata.startTime
+        if (shift != 0L) EditorHint(inga.bpmetrics.ui.library.describeShift(shift))
 
-                onEditTags?.let { edit ->
-                    Spacer(Modifier.height(16.dp))
-                    Text("Tags", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(6.dp))
-                    // A door rather than the picker itself: choosing tags is its own dialog with
-                    // its own axes, and nesting that inside this one would be a dialog in a
-                    // dialog. It belongs on this list because a tag is part of what a recording
-                    // is, which is what this editor is for.
-                    androidx.compose.material3.OutlinedButton(onClick = edit) {
-                        Text(
-                            if (tagCount == 0) "Add tags"
-                            else "$tagCount tag" + if (tagCount == 1) "" else "s"
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                onConfirm(title, description, deviceId, personId, locationId, startTime)
-            }) {
-                Text("Save")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
+        if (tagPicker != null) {
+            TagsButton((tagIds ?: ownTagIds).size) { pickingTags = true }
+        }
+    }
+
+    if (pickingTags && tagPicker != null) {
+        tagPicker(
+            tagIds ?: ownTagIds,
+            { pickingTags = false },
+            { chosen -> tagIds = chosen; pickingTags = false }
+        )
+    }
 
     if (pickingStart) {
         inga.bpmetrics.ui.library.DateTimePicker(
@@ -503,46 +460,4 @@ internal fun RecordEditDialog(
 internal fun RecordPlacement.trail(): List<Pair<Long, String>> = buildList {
     group?.let { add(it.eventId to it.displayName) }
     event?.let { add(it.eventId to it.displayName) }
-}
-
-/**
- * Choosing a venue, as a row of chips inside an editor.
- *
- * The dialog this replaced was reachable only from a menu, which put one field behind two taps and
- * its own screen. Chips because the list is short — venues are a registry someone curates, not a
- * search — and because "inherit" has to be visibly one of the choices rather than the absence of
- * one.
- */
-@Composable
-internal fun PlaceChoices(
-    locations: List<inga.bpmetrics.library.LocationEntity>,
-    selectedId: Long?,
-    inheritedName: String?,
-    onSelect: (Long?) -> Unit
-) {
-    inga.bpmetrics.ui.components.FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        androidx.compose.material3.FilterChip(
-            selected = selectedId == null,
-            onClick = { onSelect(null) },
-            label = { Text(inheritedName?.let { "Inherit — $it" } ?: "Not set") }
-        )
-        locations.forEach { place ->
-            androidx.compose.material3.FilterChip(
-                selected = selectedId == place.locationId,
-                onClick = { onSelect(place.locationId) },
-                label = { Text(place.displayName) }
-            )
-        }
-    }
-    if (locations.isEmpty()) {
-        Text(
-            "No venues yet. Make one under Locations in the menu.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
 }

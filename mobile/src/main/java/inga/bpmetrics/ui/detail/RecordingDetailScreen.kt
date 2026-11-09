@@ -110,7 +110,6 @@ fun RecordingDetailScreen(
     }
 
     var editing by remember { mutableStateOf(false) }
-    var tagging by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -241,36 +240,33 @@ fun RecordingDetailScreen(
             people = people,
             locations = knownLocations,
             inheritedPlaceName = place?.takeIf { it.isInherited }?.location?.displayName,
-            tagCount = r.tags.size,
-            onEditTags = { tagging = true },
+            tagPicker = { selected, onCancel, onDone ->
+                val categories by subject.getAllCategories().collectAsStateWithLifecycle(emptyList())
+                TagSelectionDialog(
+                    onDismiss = onCancel,
+                    onSave = onDone,
+                    categories = categories,
+                    getTagsByCategoryFlow = { subject.getTagsByCategory(it) },
+                    onCreateTag = { axis, name, onMade -> subject.createTag(axis, name, onMade) },
+                    // Its own tags only. An inherited one cannot be removed here, so offering it
+                    // pre-ticked would make unticking it look broken.
+                    initialSelectedTagIds = selected
+                )
+            },
             onDismiss = { editing = false },
-            onConfirm = { title, description, deviceId, personId, locationId, startTime ->
-                subject.updateTitle(title)
-                subject.updateDescription(description)
-                subject.updateDeviceAndWearer(deviceId, personId)
-                subject.setLocation(locationId)
-                subject.moveStartTo(startTime)
+            onConfirm = { edit ->
+                subject.updateTitle(edit.title)
+                subject.updateDescription(edit.notes)
+                subject.updateDeviceAndWearer(r.metadata.deviceId, edit.personId)
+                subject.setLocation(edit.locationId)
+                subject.moveStartTo(edit.startTime)
+                edit.tagIds?.let { chosen ->
+                    val current = r.tags.map { it.tagId }
+                    current.forEach { if (it !in chosen) subject.removeTag(it) }
+                    chosen.forEach { if (it !in current) subject.addTag(it) }
+                }
                 editing = false
             }
-        )
-    }
-
-    if (tagging && r != null) {
-        val categories by subject.getAllCategories().collectAsStateWithLifecycle(emptyList())
-        TagSelectionDialog(
-            onDismiss = { tagging = false },
-            onSave = { selected ->
-                val current = r.tags.map { it.tagId }
-                current.forEach { if (it !in selected) subject.removeTag(it) }
-                selected.forEach { if (it !in current) subject.addTag(it) }
-                tagging = false
-            },
-            categories = categories,
-            getTagsByCategoryFlow = { subject.getTagsByCategory(it) },
-            onCreateTag = { axis, name, onMade -> subject.createTag(axis, name, onMade) },
-            // Its own tags only. An inherited one cannot be removed here, so offering it pre-ticked
-            // would make unticking it look broken.
-            initialSelectedTagIds = r.tags.map { it.tagId }
         )
     }
 

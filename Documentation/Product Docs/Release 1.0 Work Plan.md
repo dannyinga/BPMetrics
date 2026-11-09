@@ -783,6 +783,29 @@ Danny went through the look editor tab by tab on real clips (Boogie T at The Gra
 
 **Commit:** `refactor(ui): one editor with shared fields`
 
+**As built:**
+- **S16.1:** `ui/components/ItemEditor.kt` holds `ItemEditorDialog` and the shared fields: `NameField`, `NotesField`, `TagsButton`, `PickerField` (a labeled value that opens a choice) and `LocationField`.
+  - **Each kind adds its own section:** an event its type, parent and window; a collection how it collects and its pin; a recording its wearer and start.
+  - **Callers get an edit back:** `EventEdit`, `CollectionEdit` and `RecordEdit`. New collections use the skeleton too, with "Create".
+  - **No cover slot:** covers are edited from the page header since S15, so the editor has none. The library's inline event editor still passes its own.
+- **S16.2:** events and collections have a Notes field. Saved through `repository.setNotes`, and by `createEvent` and `createCollection` at creation.
+- **S16.3:** `LocationField` is the only venue control: a menu off the field, listing "Inherit — …" or "Not set" and then each venue with its time zone. The event editor's separate dialog and the recording's chips (`PlaceChoices`) are gone.
+- **S16.4, nothing applies until Save:**
+  - **Tags:** reached through a `TagPicker` slot. The picker's choice comes back to the editor as a draft, and the screen applies it with the rest. This covers events as well as recordings.
+  - **Collections:** pin, a new rule, "Keep these N and stop updating" and Unfreeze are drafts. The two that change membership read as "…when you save", with Undo. `LibraryViewModel.applyCollectionEdit` saves them in one go, unfreezing first. `setCollectionRule` and `thawCollection` are removed from the view model.
+- **S16.5, validation:**
+  - **Save stays enabled.** Tapping it with something wrong lists the problems at the top of the editor, scrolls there, and marks each field ("Give it a name.", "Choose when it ends.").
+  - **An end before the start** shows under Ends straight away.
+  - **A refused window** shows at the top and under the window.
+  - **The date-time picker** follows the app's 12/24-hour setting (`StringFormatHelpers.use24Hour`), not the phone's. It's shared with the export's Sync tab.
+- **S16.6, the skeleton:** a `Dialog` laid out against the window's insets, with the title and the Cancel/Save row fixed and the body scrolling between them. The sheet sits between the status bar and the keyboard (`systemBarsPadding`, `imePadding`). A tap outside still dismisses.
+- **Verified:** 850 phone and 6 watch unit tests pass, both apps build, the device tests compile, and lint finds nothing in the files this sprint touched. Lint still fails, on RenderFailure.kt's use of an unstable Media3 API, unchanged since S7. On emulator-5554 (Android 16):
+  - **Keyboard:** typing in an event's notes left Save above the keyboard.
+  - **Cancel:** it discarded the notes, a tag chosen in the picker ("1 tag"), and a collection's pin and "Keep these 11".
+  - **Save:** it kept a collection's note, which was then cleared again.
+  - **Validation:** an empty name showed "It needs a name." at the top and "Give it a name." under the field.
+  - **Recording editor:** the venue menu listed The Gorge and La Cygne with their zones.
+
 ### S16A — Artists from event names *(Danny, 2026-11-05)*
 
 Most Concert events are already named after their artist, but only some carry an Artist tag. In Danny's library, of 76 Concerts, the Bass Canyon sets are tagged and none of the Dancefestopia sets are. Tagging means typing the name a second time. This sprint reads the tag from the name instead. It comes after S16 because the suggestions live in the single editor that sprint builds.

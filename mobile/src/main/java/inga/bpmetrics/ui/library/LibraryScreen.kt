@@ -1055,9 +1055,7 @@ fun LibraryScreen(
             // Whatever is selected goes in as well, rule or no rule — the two combine.
             recordCount = effectiveRecordIds.size,
             onDismiss = { showCreateGroupDialog = false },
-            onCreate = { name, rule, pinned ->
-                viewModel.createCollection(name, effectiveRecordIds, rule, pinned)
-            }
+            onCreate = { viewModel.createCollection(it, effectiveRecordIds) }
         )
     }
 

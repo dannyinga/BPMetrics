@@ -451,6 +451,7 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         launchGuarded {
             val id = repository.createEvent(edit.name)
             repository.setEventType(id, edit.type)
+            if (edit.notes.isNotBlank()) repository.setNotes(ItemRef.Event(id), edit.notes)
             edit.parentId?.let { repository.setEventParent(id, it) }
             repository.setLocation(inga.bpmetrics.library.ItemRef.Event(id), edit.locationId)
             if (recordIds.isNotEmpty()) repository.assignRecordsToEvent(recordIds, id)
@@ -513,6 +514,8 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             repository.rename(inga.bpmetrics.library.ItemRef.Event(eventId), edit.name)
             repository.setEventType(eventId, edit.type)
             repository.setLocation(inga.bpmetrics.library.ItemRef.Event(eventId), edit.locationId)
+            repository.setNotes(ItemRef.Event(eventId), edit.notes)
+            edit.tagIds?.let { replaceTags(ItemRef.Event(eventId), it) }
 
             when (val result = repository.setEventWindow(
                 eventId, edit.windowStart, edit.windowEnd, edit.windowPeople
@@ -615,19 +618,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
         launchGuarded { repository.setCollectionPinned(collectionId, pinned) }
     }
 
-    /**
-     * Gives a collection a rule, or replaces the one it has.
-     *
-     * The half that was missing. A rule could only be created by narrowing the library and pressing
-     * Save, and could only be *changed* by narrowing the library again and re-saving — so a
-     * collection's own page could not answer "what does this ask?", let alone change it.
-     */
-    fun setCollectionRule(collectionId: Long, filter: FilterState) {
-        launchGuarded {
-            repository.setCollectionRule(collectionId, FilterCodec.toJson(filter))
-        }
-    }
-
     /** Living → static, keeping what the rule found. See [LibraryRepository.materialiseCollection]. */
     fun materialiseCollection(collectionId: Long, onResult: (String) -> Unit = {}) {
         launchGuarded {
@@ -635,15 +625,6 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
             onResult("Kept $kept recording${if (kept == 1) "" else "s"}. It no longer updates.")
         }
     }
-
-    /** Frozen → live. See [LibraryRepository.thawCollection]. */
-    fun thawCollection(collectionId: Long, onResult: (String) -> Unit = {}) {
-        launchGuarded {
-            val alive = repository.thawCollection(collectionId)
-            onResult("Unfrozen with $alive recording${if (alive == 1) "" else "s"}.")
-        }
-    }
-
 
     /**
      * Makes a collection, answering everything a collection is asked at creation.
@@ -654,18 +635,43 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * bar; everything else can wait, and a cover genuinely has to, because a cover is stored
      * against an id that does not exist until this returns.
      */
-    fun createCollection(
-        name: String,
-        withRecords: Set<Long> = emptySet(),
-        rule: FilterState? = null,
-        pinned: Boolean = false
-    ) {
+    fun createCollection(edit: CollectionEdit, withRecords: Set<Long> = emptySet()) {
         launchGuarded {
-            val id = repository.createCollection(name)
+            val id = repository.createCollection(edit.name)
+            if (edit.notes.isNotBlank()) repository.setNotes(ItemRef.Collection(id), edit.notes)
             if (withRecords.isNotEmpty()) repository.addRecordsToCollection(id, withRecords)
-            rule?.let { repository.setCollectionRule(id, FilterCodec.toJson(it)) }
-            if (pinned) repository.setCollectionPinned(id, true)
+            (edit.rule as? RuleChange.Set)?.let {
+                repository.setCollectionRule(id, FilterCodec.toJson(it.filter))
+            }
+            if (edit.pinned) repository.setCollectionPinned(id, true)
             clearWholeSelection()
+        }
+    }
+
+    /**
+     * Saves everything the collection editor holds, in one go.
+     *
+     * Unfreezing goes first, since a frozen set can't take a rule. What it did is said through
+     * [onResult] where it changed which recordings are in the set.
+     */
+    fun applyCollectionEdit(collectionId: Long, edit: CollectionEdit, onResult: (String) -> Unit = {}) {
+        val ref = ItemRef.Collection(collectionId)
+        launchGuarded {
+            repository.rename(ref, edit.name)
+            repository.setNotes(ref, edit.notes)
+            repository.setCollectionPinned(collectionId, edit.pinned)
+            if (edit.thaw) {
+                val alive = repository.thawCollection(collectionId)
+                onResult("Unfrozen with $alive recording${if (alive == 1) "" else "s"}.")
+            }
+            when (val rule = edit.rule) {
+                RuleChange.Unchanged -> Unit
+                is RuleChange.Set -> repository.setCollectionRule(collectionId, FilterCodec.toJson(rule.filter))
+                RuleChange.MakeStatic -> {
+                    val kept = repository.materialiseCollection(collectionId)
+                    onResult("Kept $kept recording${if (kept == 1) "" else "s"}. It no longer updates.")
+                }
+            }
         }
     }
 
@@ -1332,11 +1338,14 @@ class LibraryViewModel(val repository: LibraryRepository) : ViewModel() {
      * dialog people open to add one tag, and the same call on the event's page does it this way.
      */
     fun setEventTags(eventId: Long, tagIds: List<Long>) {
-        launchGuarded {
-            val current = repository.tagsOf(ItemRef.Event(eventId)).first().map { it.tagId }
-            current.filterNot { it in tagIds }.forEach { repository.removeTag(ItemRef.Event(eventId), it) }
-            tagIds.filterNot { it in current }.forEach { repository.addTag(ItemRef.Event(eventId), it) }
-        }
+        launchGuarded { replaceTags(ItemRef.Event(eventId), tagIds) }
+    }
+
+    /** Makes [ref]'s own tags exactly [tagIds], adding and removing only what differs. */
+    private suspend fun replaceTags(ref: inga.bpmetrics.library.TreeItemRef, tagIds: List<Long>) {
+        val current = repository.tagsOf(ref).first().map { it.tagId }
+        current.filterNot { it in tagIds }.forEach { repository.removeTag(ref, it) }
+        tagIds.filterNot { it in current }.forEach { repository.addTag(ref, it) }
     }
 
     /**

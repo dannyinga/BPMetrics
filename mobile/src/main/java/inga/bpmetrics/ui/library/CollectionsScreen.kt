@@ -150,9 +150,7 @@ fun CollectionsScreen(
             filterOptions = filterOptions,
             chipsOf = { viewModel.chipsOf(it, filterOptions) },
             onDismiss = { creating = false },
-            onCreate = { name, rule, pinned ->
-                viewModel.createCollection(name, rule = rule, pinned = pinned)
-            }
+            onCreate = { viewModel.createCollection(it) }
         )
     }
 

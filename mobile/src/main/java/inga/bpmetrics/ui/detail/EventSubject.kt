@@ -55,22 +55,7 @@ fun EventEditorLauncher(
     }.collectAsStateWithLifecycle(initialValue = emptyList())
     val categories by libraryViewModel.categories.collectAsStateWithLifecycle()
 
-    var tagging by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
-
-    if (tagging) {
-        inga.bpmetrics.ui.tags.TagSelectionDialog(
-            onDismiss = { tagging = false },
-            onSave = { selected ->
-                libraryViewModel.setEventTags(event.eventId, selected)
-                tagging = false
-            },
-            categories = categories,
-            getTagsByCategoryFlow = { libraryViewModel.tagsInCategory(it) },
-            onCreateTag = { axis, name, onMade -> libraryViewModel.createTag(axis, name, onMade) },
-            initialSelectedTagIds = ownTags.map { it.tagId }
-        )
-    }
 
     if (deleting) {
         inga.bpmetrics.ui.components.DeleteConfirmDialog(
@@ -108,6 +93,7 @@ fun EventEditorLauncher(
         initialStart = event.windowStart,
         initialEnd = event.windowEnd,
         initialPeople = windowPeople,
+        initialNotes = event.notes,
         suggestedStart = span?.startMs,
         suggestedEnd = span?.endMs,
         initialLocationId = event.locationId,
@@ -117,8 +103,17 @@ fun EventEditorLauncher(
         knownTypes = knownTypes,
         people = people,
         collisionError = windowError,
-        tagCount = ownTags.size,
-        onEditTags = { tagging = true },
+        initialTagIds = ownTags.map { it.tagId },
+        tagPicker = { selected, onCancel, onDone ->
+            inga.bpmetrics.ui.tags.TagSelectionDialog(
+                onDismiss = onCancel,
+                onSave = onDone,
+                categories = categories,
+                getTagsByCategoryFlow = { libraryViewModel.tagsInCategory(it) },
+                onCreateTag = { axis, name, onMade -> libraryViewModel.createTag(axis, name, onMade) },
+                initialSelectedTagIds = selected
+            )
+        },
         coverEditor = coverEditor,
         excludedCount = excludedCount,
         onRefineScope = onRefineScope,
